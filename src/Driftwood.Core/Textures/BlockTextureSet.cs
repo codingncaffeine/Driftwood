@@ -51,7 +51,10 @@ public static class BlockTextureSet
         new("vine",        "textures/block/vine.png",             true),
     ];
 
-    public sealed record Result(byte[][] Tiles, int Size, string Summary);
+    /// <param name="GrassMap">Grass colormap, the pack's if it ships one.</param>
+    /// <param name="FoliageMap">Foliage colormap, likewise.</param>
+    public sealed record Result(
+        byte[][] Tiles, int Size, string Summary, byte[] GrassMap, byte[] FoliageMap);
 
     /// <summary>
     /// Draws Driftwood's own tiles, then lets a pack replace the ones it has.
@@ -62,12 +65,15 @@ public static class BlockTextureSet
         var tiles = new byte[Layers.Length][];
         for (var i = 0; i < Layers.Length; i++) tiles[i] = Own(i, size);
 
+        var grass = Colormap.Grass();
+        var foliage = Colormap.Foliage();
+
         if (string.IsNullOrWhiteSpace(packPath))
-            return new Result(tiles, size, $"{Layers.Length} built-in tiles at {size}x{size}");
+            return new Result(tiles, size, $"{Layers.Length} built-in tiles at {size}x{size}", grass, foliage);
 
         using var pack = TexturePack.Open(packPath);
         if (pack is null)
-            return new Result(tiles, size, $"no pack at '{packPath}' — using built-in tiles");
+            return new Result(tiles, size, $"no pack at '{packPath}' — using built-in tiles", grass, foliage);
 
         for (var i = 0; i < Layers.Length; i++)
         {
@@ -77,13 +83,22 @@ public static class BlockTextureSet
             if (replacement is not null) tiles[i] = replacement;
         }
 
+        // Colormaps are loaded at their own fixed size rather than the tile size, because the
+        // lookup indexes them by climate rather than sampling them across a face.
+        var packGrass = pack.TryLoadTile("textures/colormap/grass.png", Colormap.Size);
+        var packFoliage = pack.TryLoadTile("textures/colormap/foliage.png", Colormap.Size);
+
+        var colormaps = (packGrass is not null ? 1 : 0) + (packFoliage is not null ? 1 : 0);
+        if (packGrass is not null) grass = packGrass;
+        if (packFoliage is not null) foliage = packFoliage;
+
         var summary = $"pack '{pack.Name}'"
                     + (pack.Description.Length > 0 ? $" — {pack.Description}" : "")
-                    + $" (format {pack.Format}): {pack.Loaded} of {Layers.Length} layers replaced"
-                    + (pack.Missing > 0 ? $", {pack.Missing} kept" : "")
+                    + $" (format {pack.Format}): {pack.Loaded - colormaps} of {Layers.Length} layers replaced"
+                    + (colormaps > 0 ? $", {colormaps} colormaps" : ", built-in colormaps")
                     + (pack.Faults.Count > 0 ? $", {pack.Faults.Count} unreadable: {pack.Faults[0]}" : "");
 
-        return new Result(tiles, size, summary);
+        return new Result(tiles, size, summary, grass, foliage);
     }
 
     /// <summary>Driftwood's own art for one layer.</summary>

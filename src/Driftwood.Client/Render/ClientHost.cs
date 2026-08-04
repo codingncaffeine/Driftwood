@@ -80,6 +80,7 @@ public sealed class ClientHost : IDisposable
     private PlayerBody _player = null!;
     private BlockOutline _outline = null!;
     private BlockTextureArray _blockTextures = null!;
+    private BlockTextureSet.Result _textures = null!;
     private bool[] _targetable = null!;
 
     /// <summary>The block under the crosshair, if anything is in reach.</summary>
@@ -246,9 +247,9 @@ public sealed class ClientHost : IDisposable
         _chunkShader = new Shader(_gl, ChunkShaders.Vertex, ChunkShaders.Fragment);
         _outline = new BlockOutline(_gl);
 
-        var textures = BlockTextureSet.Build(_options.PackPath, _options.TextureSize);
-        _blockTextures = new BlockTextureArray(_gl, textures.Tiles, textures.Size);
-        Console.WriteLine($"textures    {textures.Summary}");
+        _textures = BlockTextureSet.Build(_options.PackPath, _options.TextureSize);
+        _blockTextures = new BlockTextureArray(_gl, _textures.Tiles, _textures.Size);
+        Console.WriteLine($"textures    {_textures.Summary}");
 
         BuildWorld();
     }
@@ -265,7 +266,13 @@ public sealed class ClientHost : IDisposable
         // the viewer, which is the same dial pointed at a world that no longer has edges.
         var viewRadius = Math.Max(2, _options.ChunksAcross / 2);
         _viewRadius = viewRadius;
-        _streamer = new WorldStreamer(registry, generator, viewRadius);
+
+        // The pack's colormaps if it ships them, ours otherwise — so an imported pack's grass is
+        // the colour its author chose, not the colour we would have chosen for it.
+        var tinter = new BlockTinter(
+            new ClimateField(_options.Seed), _textures.GrassMap, _textures.FoliageMap);
+
+        _streamer = new WorldStreamer(registry, generator, viewRadius, tinter: tinter);
 
         var reach = viewRadius * Chunk.Size;
         _fogEnd = MathF.Min(reach * 0.90f, 700f);
