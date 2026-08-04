@@ -17,8 +17,9 @@ streaming are in. The game itself is not; there is no player, no inventory and n
 | Greedy mesher with ambient occlusion | working |
 | Chunk renderer, frustum culling, fly camera | working |
 | Chunk streaming around the viewer | working |
-| Lighting propagation | not started |
-| Player controller, block break/place | not started |
+| Sunlight and coloured block light | working |
+| Player controller — walk, jump, sneak, collide | working |
+| Block break / place | not started |
 | Inventory, crafting, recipes | not started |
 | Save / load | not started |
 | Controller support | not started |
@@ -50,14 +51,18 @@ and shifts it so the requested share of the surface lands at or below sea level.
 request holds across seeds, so one seed does not hand you a continent and the next an
 archipelago.
 
-| Key | Action |
-| --- | --- |
-| Arrow keys, `WASD` | move |
-| `Space` / `Ctrl` | up / down |
-| `Shift` / `Alt` | boost / slow |
-| `Esc` | release or recapture the mouse |
-| `F1` | wireframe |
-| `F2` | frustum culling on / off |
+You spawn walking. `F3` swaps to a free-flying camera and back.
+
+| Key | Walking | Flying |
+| --- | --- | --- |
+| Arrow keys, `WASD` | move | move |
+| `Space` | jump | up |
+| `Ctrl` | sneak — will not walk off a ledge | down |
+| `Shift` | sprint | boost |
+| `Esc` | release or recapture the mouse | |
+| `F1` | wireframe | |
+| `F2` | frustum culling on / off | |
+| `F3` | walk / fly | |
 
 ## Auditing a world
 

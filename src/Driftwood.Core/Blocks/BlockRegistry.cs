@@ -63,6 +63,18 @@ public sealed class BlockRegistry
     }
 
     /// <summary>
+    /// Flat lookup of <see cref="BlockType.Solid"/> keyed by raw id, for collision. Separate from
+    /// the opacity table on purpose: leaves stop a player and do not stop light, water stops
+    /// neither, and a table that conflated them would put a wall around every pond.
+    /// </summary>
+    public bool[] BuildSolidTable()
+    {
+        var table = new bool[_byId.Count];
+        for (var i = 0; i < _byId.Count; i++) table[i] = _byId[i].Solid;
+        return table;
+    }
+
+    /// <summary>
     /// Light lost per step into each block id. Opaque blocks get <see cref="LightValue.Max"/>,
     /// which drives light to zero in one step without the propagator needing a separate branch
     /// for "blocked" and "dimmed".

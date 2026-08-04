@@ -4,6 +4,7 @@ using Driftwood.Client.Diagnostics;
 using Driftwood.Core.Blocks;
 using Driftwood.Core.Gen;
 using Driftwood.Core.Meshing;
+using Driftwood.Core.Physics;
 using Driftwood.Core.Spatial;
 using Driftwood.Core.World;
 using Silk.NET.Input;
@@ -68,6 +69,22 @@ public sealed class ClientHost : IDisposable
     private readonly FlyCamera _camera = new();
     private WorldStreamer _streamer = null!;
     private int _viewRadius;
+
+    private PlayerBody _player = null!;
+
+    /// <summary>
+    /// Walking rather than flying. The fly camera stays available behind F3 — it is how terrain
+    /// gets inspected, and a bug you can only reach by walking to it is a bug you look at twice.
+    /// </summary>
+    private bool _walking = true;
+
+    /// <summary>
+    /// Physics is held until the ground the player stands on has actually streamed in. Unloaded
+    /// chunks read as air, so a body simulated before its floor arrives falls out of the world in
+    /// the first fraction of a second and never comes back.
+    /// </summary>
+    private bool _spawned;
+    private Vector3 _spawnPoint;
 
     /// <summary>
     /// Ceiling on chunk uploads per frame. Buffer creation blocks the driver, so an unbounded
@@ -230,12 +247,20 @@ public sealed class ClientHost : IDisposable
         _fogStart = _fogEnd * 0.55f;
         _camera.FarPlane = _fogEnd + 200f;
 
-        if (_options.BenchSeconds > 0) SetUpBench(generator, viewRadius);
+        _player = new PlayerBody(registry);
+        _spawnPoint = new Vector3(0.5f, generator.SurfaceHeight(0, 0) + 3f, 0.5f);
+        _player.Teleport(_spawnPoint);
+
+        if (_options.BenchSeconds > 0)
+        {
+            // The benchmark flies a scripted path; a walking body would fight it for the camera.
+            _walking = false;
+            SetUpBench(generator, viewRadius);
+        }
         else
         {
-            var surface = generator.SurfaceHeight(0, 0);
-            _camera.Position = new Vector3(0f, surface + 28f, 0f);
-            _camera.Pitch = -22f;
+            _camera.Position = _player.EyePosition;
+            _camera.Pitch = -8f;
         }
 
         // Prime the pipeline before the first frame so the viewer does not open inside an empty
@@ -255,8 +280,8 @@ public sealed class ClientHost : IDisposable
             return;
         }
 
-        Console.WriteLine("Arrows move (WASD also works), Space/PgUp up, Ctrl/PgDn down, Shift boost, Alt slow");
-        Console.WriteLine("Esc release mouse, F1 wireframe, F2 frustum culling");
+        Console.WriteLine("Arrows move (WASD also works), Space jump, Ctrl sneak, Shift sprint");
+        Console.WriteLine("Esc release mouse, F1 wireframe, F2 frustum culling, F3 walk/fly");
     }
 
     /// <summary>
@@ -337,6 +362,18 @@ public sealed class ClientHost : IDisposable
             case Key.F2:
                 _frustumCulling = !_frustumCulling;
                 break;
+
+            // Leaving the fly camera in reach. It is how terrain gets looked at, and a bug you can
+            // only reach by walking to it is a bug you look at twice.
+            case Key.F3:
+                if (_bench is not null) break;
+                _walking = !_walking;
+                if (_walking)
+                {
+                    _player.Teleport(_camera.Position - new Vector3(0f, _player.CurrentEyeHeight, 0f));
+                    _spawned = false;
+                }
+                break;
         }
     }
 
@@ -385,6 +422,10 @@ public sealed class ClientHost : IDisposable
             _camera.Yaw = yaw;
             _camera.Pitch = pitch;
         }
+        else if (_walking)
+        {
+            StepPlayer((float)dt);
+        }
         else
         {
             _camera.Update((float)dt, _keyboard);
@@ -423,6 +464,61 @@ public sealed class ClientHost : IDisposable
                   + (queued > 0 ? $" | {queued} queued" : "")
                   + (_frustumCulling ? "" : " | CULLING OFF");
         }
+    }
+
+    /// <summary>
+    /// Turns key state into a movement wish, advances the body, and puts the camera in its head.
+    /// </summary>
+    /// <remarks>
+    /// The wish direction comes from where the camera is looking, flattened. Pitch must not feed
+    /// into it or looking at your feet walks you into the floor and looking up walks you into the
+    /// sky, which is exactly what a fly camera should do and exactly what a body should not.
+    /// </remarks>
+    private void StepPlayer(float dt)
+    {
+        // Nothing is simulated until the chunk holding the spawn has arrived. Unloaded space reads
+        // as air, so a body stepped before its floor exists is already falling by the time it does.
+        if (!_spawned)
+        {
+            var feet = ChunkPos.FromWorld(
+                (int)MathF.Floor(_player.Position.X),
+                (int)MathF.Floor(_player.Position.Y),
+                (int)MathF.Floor(_player.Position.Z));
+
+            if (!_streamer.World.TryGetChunk(feet, out _))
+            {
+                _camera.Position = _player.EyePosition;
+                return;
+            }
+
+            _spawned = true;
+        }
+
+        var yaw = float.DegreesToRadians(_camera.Yaw);
+        var forward = new Vector3(MathF.Cos(yaw), 0f, MathF.Sin(yaw));
+        var right = new Vector3(-forward.Z, 0f, forward.X);
+
+        var wish = Vector3.Zero;
+        if (_keyboard.IsKeyPressed(Key.Up) || _keyboard.IsKeyPressed(Key.W)) wish += forward;
+        if (_keyboard.IsKeyPressed(Key.Down) || _keyboard.IsKeyPressed(Key.S)) wish -= forward;
+        if (_keyboard.IsKeyPressed(Key.Right) || _keyboard.IsKeyPressed(Key.D)) wish += right;
+        if (_keyboard.IsKeyPressed(Key.Left) || _keyboard.IsKeyPressed(Key.A)) wish -= right;
+
+        var jump = _keyboard.IsKeyPressed(Key.Space);
+        var sneak = _keyboard.IsKeyPressed(Key.ControlLeft);
+        var sprint = _keyboard.IsKeyPressed(Key.ShiftLeft) && !sneak;
+
+        _player.Step(_streamer.World, dt, wish, jump, sneak, sprint);
+
+        // A body that has fallen out of the world goes back to where it started rather than
+        // falling forever. It can only happen where the ground has not streamed in yet.
+        if (_player.Position.Y < -8f)
+        {
+            _player.Teleport(_spawnPoint);
+            _spawned = false;
+        }
+
+        _camera.Position = _player.EyePosition;
     }
 
     /// <summary>Books the frame that just ended and stops the run once the flight is over.</summary>

@@ -5,6 +5,7 @@ using Driftwood.Core.Blocks;
 using Driftwood.Core.Gen;
 using Driftwood.Core.Lighting;
 using Driftwood.Core.Meshing;
+using Driftwood.Core.Physics;
 using Driftwood.Core.Spatial;
 using Driftwood.Core.World;
 
@@ -324,6 +325,12 @@ public static class WorldAudit
         var lightingConverges = LightingIsOrderIndependent(seed, registry, ids, oceanCoverage, out var lightDetail);
         Check("light ignores load order", lightingConverges, lightDetail);
 
+        var physicsFaults = PhysicsSelfTest(seed, registry, ids, oceanCoverage);
+        Check("player physics holds", physicsFaults.Count == 0,
+            physicsFaults.Count == 0
+                ? "falls, lands, walks, jumps, is stopped by walls, does not sneak off ledges"
+                : $"{physicsFaults.Count} faults: {string.Join("; ", physicsFaults)}");
+
         var relightMatches = RelightMatchesFullPass(
             seed, registry, ids, oceanCoverage, out var relightDetail, out var worstRelightMs);
         Check("edits relight exactly", relightMatches, relightDetail);
@@ -553,6 +560,119 @@ public static class WorldAudit
         }
 
         return world;
+    }
+
+    /// <summary>
+    /// Drops, walks, jumps and crouches a body in a purpose-built room and checks what happened.
+    /// </summary>
+    /// <remarks>
+    /// <para>Built as a flat floor with a wall and a ledge rather than run on generated terrain,
+    /// because every one of these questions has an exact answer only when the geometry is known.
+    /// "Did it land on the ground" over real terrain is a question about the terrain.</para>
+    /// <para>Each case is one that goes wrong quietly. A body that falls through the world at high
+    /// speed looks fine at walking pace. A body that never reports standing on ground can still be
+    /// walked around — it just never jumps again. And a step-up that works while airborne is a
+    /// wall-climbing exploit that will not show up until somebody tries it.</para>
+    /// </remarks>
+    private static List<string> PhysicsSelfTest(
+        WorldSeed seed, BlockRegistry registry, StarterBlocks.Ids ids, float oceanCoverage)
+    {
+        var faults = new List<string>();
+
+        const int floorY = 40;
+        var world = new VoxelWorld(registry);
+
+        // A 32x32 floor at y=40, a wall along x=8, and a ledge: the floor stops at z=12.
+        for (var z = -4; z < 20; z++)
+        for (var x = -4; x < 20; x++)
+        {
+            if (z > 12) continue;
+            world.SetBlock(x, floorY, z, ids.Stone);
+            world.SetBlock(x, floorY - 1, z, ids.Stone);
+        }
+
+        for (var y = 1; y <= 4; y++)
+        for (var z = -4; z < 20; z++)
+            world.SetBlock(8, floorY + y, z, ids.Stone);
+
+        // A single block to step onto, and a two-block wall that must not be climbable.
+        world.SetBlock(3, floorY + 1, 3, ids.Stone);
+
+        var top = floorY + 1f;   // a body standing on the floor has its feet here
+        const float dt = 1f / 60f;
+
+        // Falls and lands.
+        var body = new PlayerBody(registry);
+        body.Teleport(new Vector3(1.5f, floorY + 25f, 1.5f));
+        for (var i = 0; i < 300; i++) body.Step(world, dt, Vector3.Zero, false, false, false);
+
+        if (!body.OnGround) faults.Add("body never landed after a 25-block drop");
+        if (MathF.Abs(body.Position.Y - top) > 0.01f)
+            faults.Add($"landed at y {body.Position.Y:F3}, expected {top:F3}");
+
+        // Terminal velocity must not tunnel it through a two-block floor.
+        var faller = new PlayerBody(registry);
+        faller.Teleport(new Vector3(1.5f, floorY + 120f, 1.5f));
+        for (var i = 0; i < 600; i++) faller.Step(world, dt, Vector3.Zero, false, false, false);
+        if (faller.Position.Y < floorY - 2f)
+            faults.Add($"fell through the floor from 120 blocks up, ended at y {faller.Position.Y:F1}");
+
+        // Walks into a wall and stops short of it. The wall face is at x=8, the body is 0.6 wide.
+        var walker = new PlayerBody(registry);
+        walker.Teleport(new Vector3(1.5f, top, 1.5f));
+        for (var i = 0; i < 240; i++)
+            walker.Step(world, dt, new Vector3(1f, 0f, 0f), false, false, false);
+
+        if (walker.Position.X > 8f - PlayerBody.Width * 0.5f + 0.01f)
+            faults.Add($"walked into the wall at x {walker.Position.X:F3}");
+        if (walker.Position.X < 6.5f)
+            faults.Add($"stopped {8f - walker.Position.X:F2} blocks short of the wall");
+
+        // Cannot climb the wall by jumping into it repeatedly. Measured after letting it settle,
+        // not at whatever point in a jump arc the loop happened to stop — the first version of this
+        // test caught the body mid-hop and reported a wall climb that was just a jump.
+        var climber = new PlayerBody(registry);
+        climber.Teleport(new Vector3(6f, top, 1.5f));
+        for (var i = 0; i < 600; i++)
+            climber.Step(world, dt, new Vector3(1f, 0f, 0f), jump: true, sneak: false, sprint: false);
+        for (var i = 0; i < 120; i++)
+            climber.Step(world, dt, Vector3.Zero, jump: false, sneak: false, sprint: false);
+        if (climber.Position.Y > top + 0.01f)
+            faults.Add($"climbed the wall, settled at y {climber.Position.Y:F2} above {top:F2}");
+
+        // A jump clears one block and not two. One settling frame first: a body that has just been
+        // placed does not yet know it is standing on anything, and refusing to jump in mid-air is
+        // the correct answer to a question the test meant to ask differently.
+        var jumper = new PlayerBody(registry);
+        jumper.Teleport(new Vector3(1.5f, top, 1.5f));
+        jumper.Step(world, dt, Vector3.Zero, jump: false, sneak: false, sprint: false);
+        jumper.Step(world, dt, Vector3.Zero, jump: true, sneak: false, sprint: false);
+        var peak = jumper.Position.Y;
+        for (var i = 0; i < 120; i++)
+        {
+            jumper.Step(world, dt, Vector3.Zero, false, false, false);
+            if (jumper.Position.Y > peak) peak = jumper.Position.Y;
+        }
+        var jumpHeight = peak - top;
+        if (jumpHeight is < 1.0f or >= 2.0f)
+            faults.Add($"jump reaches {jumpHeight:F2} blocks (want 1.0 to just under 2.0)");
+
+        // Crouching at the ledge stops the body walking off it; not crouching does not.
+        var sneaker = new PlayerBody(registry);
+        sneaker.Teleport(new Vector3(1.5f, top, 11f));
+        for (var i = 0; i < 240; i++)
+            sneaker.Step(world, dt, new Vector3(0f, 0f, 1f), jump: false, sneak: true, sprint: false);
+        if (sneaker.Position.Y < top - 0.01f)
+            faults.Add($"crouched off the ledge, fell to y {sneaker.Position.Y:F2}");
+
+        var stroller = new PlayerBody(registry);
+        stroller.Teleport(new Vector3(1.5f, top, 11f));
+        for (var i = 0; i < 240; i++)
+            stroller.Step(world, dt, new Vector3(0f, 0f, 1f), jump: false, sneak: false, sprint: false);
+        if (stroller.Position.Y >= top - 0.01f)
+            faults.Add("walked off the ledge and did not fall — the crouch test proves nothing");
+
+        return faults;
     }
 
     private readonly record struct CanopySurvey(int Clusters, double MeanSize, int Largest);
