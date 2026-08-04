@@ -78,6 +78,7 @@ public static class WorldAudit
         var meshes = new ChunkMeshData?[positions.Count];
         var quadCounts = new int[positions.Count];
         var coveredFaces = new int[positions.Count];
+        var modelQuads = new int[positions.Count];
         Parallel.For(
             0,
             positions.Count,
@@ -87,6 +88,7 @@ public static class WorldAudit
                 meshes[i] = mesher.Build(world, positions[i]);
                 quadCounts[i] = mesher.LastQuadCount;
                 coveredFaces[i] = mesher.LastCoveredFaces;
+                modelQuads[i] = mesher.LastModelQuads;
                 return mesher;
             },
             _ => { });
@@ -108,13 +110,14 @@ public static class WorldAudit
             },
             _ => { });
 
-        long totalQuads = 0, totalCovered = 0, totalNaive = 0;
+        long totalQuads = 0, totalCovered = 0, totalNaive = 0, totalModelQuads = 0;
         var mismatchedChunks = 0;
         for (var i = 0; i < positions.Count; i++)
         {
             totalQuads += quadCounts[i];
             totalCovered += coveredFaces[i];
             totalNaive += naiveFaces[i];
+            totalModelQuads += modelQuads[i];
             if (coveredFaces[i] != naiveFaces[i]) mismatchedChunks++;
         }
 
@@ -180,7 +183,10 @@ public static class WorldAudit
         sb.AppendLine($"mesh          {meshWatch.ElapsedMilliseconds,6} ms   ({positions.Count / Math.Max(meshWatch.Elapsed.TotalSeconds, 0.001):N0} chunks/s)");
         sb.AppendLine();
         sb.AppendLine($"geometry      {verts:N0} verts, {tris:N0} tris, {verts * ChunkVertex.SizeInBytes / (1024.0 * 1024.0):F1} MiB vertex data");
-        sb.AppendLine($"merging       {totalNaive:N0} visible faces -> {totalQuads:N0} quads ({totalNaive / (double)Math.Max(totalQuads, 1):F2}x fewer)");
+        sb.AppendLine($"merging       {totalNaive:N0} visible cube faces -> {totalQuads - totalModelQuads:N0} quads "
+                    + $"({totalNaive / (double)Math.Max(totalQuads - totalModelQuads, 1):F2}x fewer)");
+        sb.AppendLine($"shapes        {totalModelQuads:N0} quads from block models, unmerged "
+                    + $"({totalModelQuads * 100.0 / Math.Max(totalQuads, 1):F1}% of all quads)");
         sb.AppendLine();
         sb.AppendLine($"relief        surface y {surfaceMin}..{surfaceMax} (span {surfaceMax - surfaceMin}), mean {surfaceMean:F1}   [this world]");
         sb.AppendLine($"              surface y {probeMin}..{probeMax} (span {probeMax - probeMin})              [seed over {ReliefProbeSpan} blocks]");
@@ -279,6 +285,69 @@ public static class WorldAudit
             mismatchedChunks == 0
                 ? $"{totalCovered:N0} faces across {positions.Count:N0} chunks"
                 : $"{mismatchedChunks} chunks differ, {totalCovered:N0} merged vs {totalNaive:N0} naive");
+        // Shapes. Everything below is invisible to a block census: a model can be wound inside out,
+        // read the wrong corner of its texture, or never reach the mesh at all, and the world still
+        // generates exactly the same blocks in exactly the same places.
+        var modelQuadTotal = 0;
+        foreach (var type in registry.All) modelQuadTotal += type.Model.Quads.Length;
+
+        var modelFaults = BlockModel.Validate(registry.All);
+        Check("block models are sound", modelFaults.Count == 0,
+            modelFaults.Count == 0
+                ? $"{modelQuadTotal} quads across {registry.Count} shapes"
+                : $"{modelFaults.Count} faults: {modelFaults[0]}");
+
+        var vertexFaults = VertexPackingSelfTest();
+        Check("vertex fields do not collide", vertexFaults.Count == 0,
+            vertexFaults.Count == 0
+                ? $"{ChunkVertex.SizeInBytes} bytes, 1/{ChunkVertex.PositionScale} block, {ChunkVertex.MaxLayer + 1} layers"
+                : $"{vertexFaults.Count} faults: {vertexFaults[0]}");
+
+        Check("texture layers fit the vertex", StarterBlocks.LayerCount - 1 <= ChunkVertex.MaxLayer,
+            $"{StarterBlocks.LayerCount} layers, {ChunkVertex.MaxLayer + 1} addressable");
+
+        // The overlay pass is the whole reason models came first. Its four sides must be there, they
+        // must be tinted, and it must not have a top or a bottom — an overlay over the top face
+        // would double the climate colour on the one face that already carries it.
+        var grassModel = registry[ids.Grass].Model;
+        var overlaySides = 0;
+        var overlayCaps = 0;
+        if (grassModel.PassCount > 1)
+        {
+            for (var face = 0; face < Faces.Count; face++)
+            {
+                if (grassModel.PassLayer(1, face) == BlockModel.NoLayer) continue;
+                if (face is Faces.PosY or Faces.NegY) overlayCaps++;
+                else if (grassModel.PassTinted(1, face)) overlaySides++;
+            }
+        }
+
+        Check(
+            "grass wears its overlay",
+            grassModel.IsFullCube && grassModel.PassCount == 2 && overlaySides == 4 && overlayCaps == 0,
+            $"{grassModel.PassCount} passes, {overlaySides} tinted sides, {overlayCaps} caps");
+
+        // A crossed-plane plant that never got rescaled sits inside the middle 64% of its cell and
+        // reads as a small card rather than as something growing out of the ground. Measuring how
+        // far the planes reach across the block is what tells the two apart; counting quads does not.
+        var tuft = registry[ids.Meadowgrass].Model;
+        var tuftLow = float.MaxValue;
+        var tuftHigh = float.MinValue;
+        foreach (var quad in tuft.Quads)
+        foreach (var corner in quad.Corners)
+        {
+            tuftLow = MathF.Min(tuftLow, MathF.Min(corner.Position.X, corner.Position.Z));
+            tuftHigh = MathF.Max(tuftHigh, MathF.Max(corner.Position.X, corner.Position.Z));
+        }
+
+        Check(
+            "tufts fill their cell",
+            !tuft.IsFullCube && tuft.Quads.Length == 4 && tuftLow < 0.10f && tuftHigh > 0.90f,
+            $"{tuft.Quads.Length} quads spanning {tuftLow:F2}..{tuftHigh:F2} of the block");
+
+        Check("shapes reach the mesh", totalModelQuads > 0,
+            $"{totalModelQuads:N0} unmerged quads from {counts[ids.Meadowgrass.Value]:N0} shaped blocks");
+
         // A material nobody can find is a material that does not exist, and this is the check that
         // says so. It was written after the world turned out to hold two ores and no stone variants
         // at all — every block registered and textured, half of them nowhere in the ground. Anything
@@ -357,7 +426,8 @@ public static class WorldAudit
         // simply cold. What does hold on every seed is the property that actually matters: snow
         // sits above grass. A snow line driven by climate alone with no altitude term fails it flat,
         // and that was a real bug — one seed came out with no snow anywhere at all.
-        var snowfall = SampleSurface(world, minBlock, maxBlock, ids.Snow.Value, ids.Grass.Value);
+        var snowfall = SampleSurface(
+            world, minBlock, maxBlock, ids.Snow.Value, ids.Grass.Value, registry.BuildOpacityTable());
         var snowPct = snowfall.Total > 0 ? snowfall.Snow * 100.0 / snowfall.Total : 0;
         var lift = snowfall.MeanSnowY - snowfall.MeanGrassY;
 
@@ -366,9 +436,24 @@ public static class WorldAudit
             // The floor is barely a floor on purpose: "snow exists at all" is already owned by the
             // material census above, and a warm seed whose only snow is on its highest peaks is
             // right rather than broken — seed 'stonebreak' comes out at 0.8% and should.
-            snowPct is > 0.1 and < 60.0 && lift > 4.0 && maxY[ids.Snow.Value] >= maxY[ids.Grass.Value],
+            //
+            // Both thresholds are measured, not chosen. Taking the altitude term out of the snow
+            // line and reading all five seeds gives lifts of -4.6, 0.8 and 4.8 where snow survives
+            // at all, against 3.2 to 19.5 with it in; and 0%, 0%, 26% and 23% of high ground white,
+            // against 73% to 100%. Two blocks and sixty percent both sit between the two
+            // populations with room on either side. Four blocks did not: it failed seed
+            // 'saltmarsh', which is simply low and warm, for being correct.
+            //
+            // Seed 'tidefall' passes both clauses with the altitude term removed and is a blind
+            // spot for this check — its cold region happens to sit on its high ground already. The
+            // other four are what give this teeth.
+            snowPct is > 0.1 and < 60.0
+                && lift > 2.0
+                && snowfall.HighSnowPct > 60.0
+                && maxY[ids.Snow.Value] >= maxY[ids.Grass.Value],
             $"{snowPct:F1}% of open ground, mean y {snowfall.MeanSnowY:F1} against grass at "
-            + $"{snowfall.MeanGrassY:F1} (want at least 4 higher), tops out at y {maxY[ids.Snow.Value]}");
+            + $"{snowfall.MeanGrassY:F1} (want at least 2 higher), {snowfall.HighSnowPct:F0}% of ground "
+            + $"above y {snowfall.HighFrom} is snow (want over 60), tops out at y {maxY[ids.Snow.Value]}");
 
         var clayPct = counts[ids.Clay.Value] * 100.0 / Math.Max(1.0, counts[ids.Sand.Value]);
         Check(
@@ -394,6 +479,13 @@ public static class WorldAudit
         // still in that neighbourhood means every tree is standing on its own no matter how many
         // of them there are — the orchard look. Banded above as well: a mean in the tens of
         // thousands would mean the whole world is under one unbroken ceiling of foliage.
+        // Tufts against the ground they grow on rather than against the whole volume, which is the
+        // comparison a player makes standing in a field. Banded both ways: a floor alone passes a
+        // world with one tuft in it, and a ceiling alone passes a lawn with no bare ground at all.
+        var meadowPct = counts[ids.Meadowgrass.Value] * 100.0 / Math.Max(counts[ids.Grass.Value], 1);
+        Check("meadowgrass rate in band", meadowPct is > 8.0 and < 45.0,
+            $"{meadowPct:F1}% of grass columns (want 8-45)");
+
         Check("canopies merge", canopy.MeanSize is > 90 and < 40_000,
             $"mean leaf mass {canopy.MeanSize:F0} blocks across {canopy.Clusters:N0} (want 90-40,000)");
 
@@ -789,6 +881,69 @@ public static class WorldAudit
         }
 
         return world;
+    }
+
+    /// <summary>
+    /// Packs a vertex with a distinct value in every field and reads all of them back.
+    /// </summary>
+    /// <remarks>
+    /// <para>The whole vertex is bit fields sharing three words, and the shader unpacks them by
+    /// shift and mask on the other side of a language boundary where nothing checks anything. Two
+    /// fields that overlap by a bit do not fail to compile, do not fail to draw, and do not fail
+    /// any geometry check — they produce a world where occasionally a face is the wrong texture, or
+    /// a corner is the wrong brightness, at whatever coordinate happens to set the shared bit.</para>
+    /// <para>Every field carries a different value on purpose, and each one is near the top of its
+    /// range. A test that packs zeros everywhere passes whatever the layout is.</para>
+    /// </remarks>
+    private static List<string> VertexPackingSelfTest()
+    {
+        var faults = new List<string>();
+
+        static uint Field(uint word, int shift, int bits) => (word >> shift) & ((1u << bits) - 1);
+
+        void Expect(string what, long actual, long want)
+        {
+            if (actual != want) faults.Add($"{what} read back {actual}, expected {want}");
+        }
+
+        // A merged cube face: whole-block coordinates, coordinates derived in the shader.
+        var cube = ChunkVertex.Cube(31, 5, 17, Faces.PosZ, 2, 3, ChunkVertex.MaxLayer, 0xBEEF, 63);
+        Expect("cube x", Field(cube.Packed0, 0, 12), 31 * ChunkVertex.PositionScale + ChunkVertex.PositionBias);
+        Expect("cube y", Field(cube.Packed0, 12, 12), 5 * ChunkVertex.PositionScale + ChunkVertex.PositionBias);
+        Expect("cube z", Field(cube.Packed1, 0, 12), 17 * ChunkVertex.PositionScale + ChunkVertex.PositionBias);
+        Expect("cube face", Field(cube.Packed0, 24, 3), Faces.PosZ);
+        Expect("cube occlusion", Field(cube.Packed0, 27, 2), 2);
+        Expect("cube pass", Field(cube.Packed0, 29, 2), 3);
+        Expect("cube layer", Field(cube.Packed1, 12, 12), ChunkVertex.MaxLayer);
+        Expect("cube tint", Field(cube.Packed1, 24, 6), 63);
+        Expect("cube uv mode", Field(cube.Packed1, 30, 1), 0);
+        Expect("cube light", Field(cube.Packed2, 0, 16), 0xBEEF);
+
+        // A model quad: fractional coordinates, texture coordinates carried along.
+        var model = ChunkVertex.Model(0.05f, 32f, -0.5f, ChunkVertex.UnshadedFace, 3, 1, 0x1234, 7, 0.25f, 1f);
+        Expect("model x", Field(model.Packed0, 0, 12), ChunkVertex.Quantise(0.05f));
+        Expect("model y", Field(model.Packed0, 12, 12), ChunkVertex.Quantise(32f));
+        Expect("model z", Field(model.Packed1, 0, 12), ChunkVertex.Quantise(-0.5f));
+        Expect("model face", Field(model.Packed0, 24, 3), ChunkVertex.UnshadedFace);
+        Expect("model occlusion", Field(model.Packed0, 27, 2), 3);
+        Expect("model pass", Field(model.Packed0, 29, 2), 0);
+        Expect("model layer", Field(model.Packed1, 12, 12), 1);
+        Expect("model tint", Field(model.Packed1, 24, 6), 7);
+        Expect("model uv mode", Field(model.Packed1, 30, 1), 1);
+        Expect("model u", Field(model.Packed2, 16, 6), (long)(0.25f * ChunkVertex.UvScale));
+        Expect("model v", Field(model.Packed2, 22, 6), ChunkVertex.UvScale);
+        Expect("model light", Field(model.Packed2, 0, 16), 0x1234);
+
+        // The extremes the format promises: a block below the chunk, and a model reaching a block
+        // past its far corner.
+        Expect("a block below the chunk", ChunkVertex.Quantise(-1f), 0);
+        Expect("a block past the far corner", ChunkVertex.Quantise(Chunk.Size + 1),
+            (Chunk.Size + 1) * ChunkVertex.PositionScale + ChunkVertex.PositionBias);
+
+        if (ChunkVertex.Quantise(Chunk.Size + 1) > 0xFFF)
+            faults.Add("the position field cannot address a model reaching past the chunk");
+
+        return faults;
     }
 
     /// <summary>
@@ -1575,32 +1730,62 @@ public static class WorldAudit
     /// a count is at the mercy of which climate region the sampled window happened to land in, and
     /// a mean height is not.
     /// </remarks>
-    private static (int Snow, int Total, double MeanSnowY, double MeanGrassY) SampleSurface(
-        VoxelWorld world, int minBlock, int maxBlock, ushort snow, ushort grass)
+    /// <param name="HighSnowPct">Share of the highest tenth of open ground that is snow.</param>
+    /// <param name="HighFrom">The height that tenth starts at.</param>
+    private readonly record struct SurfaceSample(
+        int Snow, int Total, double MeanSnowY, double MeanGrassY, double HighSnowPct, int HighFrom);
+
+    private static SurfaceSample SampleSurface(
+        VoxelWorld world, int minBlock, int maxBlock, ushort snow, ushort grass, bool[] opaque)
     {
         long snowSum = 0, grassSum = 0;
         int snowCount = 0, grassCount = 0;
+        var columns = new List<(int Y, bool Snow)>();
 
         for (var z = minBlock; z <= maxBlock; z += 4)
         for (var x = minBlock; x <= maxBlock; x += 4)
         {
             for (var y = TerrainGenerator.WorldHeight - 1; y >= 0; y--)
             {
+                // Down to the first block that hides what is under it, not the first that is not
+                // air. Anything standing on the ground — a tuft of grass, a canopy, a curtain of
+                // vines — is not the ground, and stopping at it drops that whole column from both
+                // materials' means. That was not hypothetical: the day tufts started growing, a
+                // quarter of every meadow in the world silently left the sample and snow's share of
+                // open ground jumped six points without a single snowflake moving.
                 var id = world.GetBlock(x, y, z).Value;
-                if (id == 0) continue;
+                if (!opaque[id]) continue;
 
-                if (id == snow) { snowSum += y; snowCount++; }
-                else if (id == grass) { grassSum += y; grassCount++; }
+                if (id == snow) { snowSum += y; snowCount++; columns.Add((y, true)); }
+                else if (id == grass) { grassSum += y; grassCount++; columns.Add((y, false)); }
 
                 break;
             }
         }
 
-        return (
+        // What the highest ground is made of. The mean lift says snow sits above grass on average,
+        // which a seed can satisfy by accident wherever climate happens to correlate with altitude —
+        // and one of the five test seeds does exactly that, passing the lift test with the altitude
+        // term taken out entirely. "The top of a mountain is white" is the property the feature
+        // actually promises, and it has no such loophole.
+        columns.Sort((a, b) => a.Y.CompareTo(b.Y));
+        var highFrom = columns.Count > 0 ? columns[columns.Count * 9 / 10].Y : 0;
+
+        int high = 0, highSnow = 0;
+        foreach (var column in columns)
+        {
+            if (column.Y < highFrom) continue;
+            high++;
+            if (column.Snow) highSnow++;
+        }
+
+        return new SurfaceSample(
             snowCount,
             snowCount + grassCount,
             snowCount > 0 ? snowSum / (double)snowCount : 0,
-            grassCount > 0 ? grassSum / (double)grassCount : 0);
+            grassCount > 0 ? grassSum / (double)grassCount : 0,
+            high > 0 ? highSnow * 100.0 / high : 0,
+            highFrom);
     }
 
     /// <summary>

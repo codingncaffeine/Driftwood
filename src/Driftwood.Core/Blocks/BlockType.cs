@@ -63,14 +63,6 @@ public sealed class BlockType
     /// </remarks>
     public TintSource Tint { get; init; } = TintSource.None;
 
-    /// <summary>The face this block's tint applies to, when it does not apply to all of them.</summary>
-    /// <remarks>
-    /// A grass block is tinted on top and plain on the sides, because the green fringe down its
-    /// side belongs to a separate overlay texture we do not draw yet. Tinting the whole block
-    /// instead turns the dirt below the fringe green, which is worse than leaving it plain.
-    /// </remarks>
-    public bool TintTopOnly { get; init; }
-
     /// <summary>
     /// How much work this block is to take, in hardness units. Negative means it never breaks.
     /// </summary>
@@ -94,23 +86,31 @@ public sealed class BlockType
     /// <summary>Nothing takes this block. Bedrock, and the floor of the world.</summary>
     public bool Unbreakable => Hardness < 0f;
 
-    /// <summary>Texture array layer for the +Y face.</summary>
+    /// <summary>Texture array layer for the +Y face of the default cube shape.</summary>
     public ushort TopLayer { get; init; }
 
-    /// <summary>Texture array layer for the four side faces.</summary>
+    /// <summary>Texture array layer for the four side faces of the default cube shape.</summary>
     public ushort SideLayer { get; init; }
 
-    /// <summary>Texture array layer for the -Y face.</summary>
+    /// <summary>Texture array layer for the -Y face of the default cube shape.</summary>
     public ushort BottomLayer { get; init; }
+
+    /// <summary>
+    /// The block's shape. Left null, <see cref="BlockRegistry.Register"/> builds the ordinary cube
+    /// from the three layers above.
+    /// </summary>
+    /// <remarks>
+    /// <para>Shorthand and full form, deliberately. Almost every block in the ground is a cube with
+    /// a top, a side and a bottom, and writing that as a three-line model would bury the handful of
+    /// entries that are genuinely a different shape. The three layer fields are inputs to the
+    /// default; once registered, this is the only thing the mesher reads.</para>
+    /// <para>Only a model that fills its cell may be <see cref="Opaque"/>. A shape with gaps in it
+    /// that claims to hide what is behind it erases its neighbours' faces and leaves holes straight
+    /// through the world, so <see cref="BlockRegistry.Register"/> refuses the combination outright
+    /// rather than leaving it to be noticed.</para>
+    /// </remarks>
+    public BlockModel Model { get; internal set; } = null!;
 
     /// <summary>Assigned by <see cref="BlockRegistry.Register"/>.</summary>
     public BlockId Id { get; internal set; }
-
-    /// <summary>Picks the texture layer for one of the six faces in <see cref="Blocks.Faces"/> order.</summary>
-    public ushort LayerForFace(int face) => face switch
-    {
-        Faces.PosY => TopLayer,
-        Faces.NegY => BottomLayer,
-        _ => SideLayer,
-    };
 }

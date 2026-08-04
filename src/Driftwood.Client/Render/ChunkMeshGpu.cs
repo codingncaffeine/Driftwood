@@ -63,14 +63,16 @@ public sealed class ChunkMeshGpu : IDisposable
                 BufferUsageARB.StaticDraw);
         }
 
-        // Both attributes are bit fields, so both take the integer path. VertexAttribPointer
+        // Every attribute is a bit field, so all three take the integer path. VertexAttribPointer
         // would convert the bits to float on the way in and every unpack would read garbage.
-        // location 0: position, face and ambient occlusion. location 1: texture layer.
-        _gl.EnableVertexAttribArray(0);
-        _gl.VertexAttribIPointer(0, 1, VertexAttribIType.UnsignedInt, ChunkVertex.SizeInBytes, (void*)0);
-
-        _gl.EnableVertexAttribArray(1);
-        _gl.VertexAttribIPointer(1, 1, VertexAttribIType.UnsignedInt, ChunkVertex.SizeInBytes, (void*)4);
+        // location 0: x, y, face, occlusion, coplanar pass. location 1: z, texture layer, tint.
+        // location 2: baked light and model texture coordinates.
+        for (uint slot = 0; slot < 3; slot++)
+        {
+            _gl.EnableVertexAttribArray(slot);
+            _gl.VertexAttribIPointer(
+                slot, 1, VertexAttribIType.UnsignedInt, ChunkVertex.SizeInBytes, (void*)(slot * 4));
+        }
 
         _gl.BindVertexArray(0);
     }

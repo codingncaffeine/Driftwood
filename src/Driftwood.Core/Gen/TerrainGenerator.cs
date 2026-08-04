@@ -67,6 +67,7 @@ public sealed class TerrainGenerator
     private readonly int _seedDiorite;
     private readonly int _seedDeep;
     private readonly int _seedClay;
+    private readonly int _seedMeadow;
 
     /// <summary>
     /// Climate, for the one thing terrain reads out of it: where snow lies.
@@ -114,6 +115,7 @@ public sealed class TerrainGenerator
         _seedDiorite = seed.Derive("rock.diorite");
         _seedDeep = seed.Derive("rock.deepstone");
         _seedClay = seed.Derive("deposit.clay");
+        _seedMeadow = seed.Derive("decor.meadowgrass");
 
         _climate = new ClimateField(seed);
 
@@ -432,6 +434,41 @@ public sealed class TerrainGenerator
             if (highest < oy) continue;
 
             PlantOakInto(chunk, ox, oy, oz, tree);
+        }
+
+        ScatterMeadowgrass(chunk, ox, oy, oz);
+    }
+
+    /// <summary>Sows tufts of grass over open ground, in patches rather than evenly.</summary>
+    /// <remarks>
+    /// <para>Runs after the trees, and only into air, so a trunk standing on a grass column keeps
+    /// the cell it is already in. That ordering is what makes the result chunk-pure: trees are
+    /// decided from the heightmap and land identically however many neighbours exist, so what is
+    /// left as air is identical too.</para>
+    /// <para>Two fields rather than one. A single per-column roll gives an even wash of grass over
+    /// every meadow in the world, which reads as noise; a slow field deciding <em>where</em> grass
+    /// grows and a fast one deciding <em>which</em> columns gives patches with bare ground between
+    /// them, which reads as a meadow.</para>
+    /// </remarks>
+    private void ScatterMeadowgrass(Chunk chunk, int ox, int oy, int oz)
+    {
+        for (var z = 0; z < Chunk.Size; z++)
+        for (var x = 0; x < Chunk.Size; x++)
+        {
+            var wx = ox + x;
+            var wz = oz + z;
+
+            var surface = SurfaceHeight(wx, wz);
+            var y = surface + 1 - oy;
+            if ((uint)y >= Chunk.Size) continue;
+
+            var beach = surface <= SeaLevel + 2;
+            if (TopOf(wx, wz, surface, beach) != _ids.Grass.Value) continue;
+
+            if (Noise.Fbm2(wx / 44f, wz / 44f, _seedMeadow, 2) < -0.04f) continue;
+            if (Noise.Value2(wx, wz, _seedMeadow + 11) > 0.44f) continue;
+
+            PlaceIntoAir(chunk, ox, oy, oz, wx, surface + 1, wz, _ids.Meadowgrass);
         }
     }
 

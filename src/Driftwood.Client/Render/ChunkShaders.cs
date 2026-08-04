@@ -7,7 +7,7 @@ namespace Driftwood.Client.Render;
 public static class ChunkShaders
 {
     /// <summary>
-    /// Unpacks the vertex word and shades from baked light, ambient occlusion and face direction.
+    /// Unpacks the vertex words and shades from baked light, ambient occlusion and face direction.
     /// Positions arrive chunk-local, so the chunk's origin rides in a uniform rather than being
     /// baked into every vertex.
     /// </summary>
@@ -16,6 +16,7 @@ public static class ChunkShaders
 
         layout(location = 0) in uint aPacked0;
         layout(location = 1) in uint aPacked1;
+        layout(location = 2) in uint aPacked2;
 
         uniform mat4 uViewProj;
         uniform vec3 uChunkOrigin;
@@ -33,38 +34,53 @@ public static class ChunkShaders
         out vec3 vUvw;
         out float vFog;
 
-        const vec3 kNormals[6] = vec3[6](
+        // Index 6 is the model format's "do not shade": a plant's two crossed planes face opposite
+        // ways and must not come out one bright and one dark, so both are lit as if facing up.
+        const vec3 kNormals[8] = vec3[8](
             vec3( 1.0, 0.0, 0.0), vec3(-1.0, 0.0, 0.0),
             vec3( 0.0, 1.0, 0.0), vec3( 0.0,-1.0, 0.0),
-            vec3( 0.0, 0.0, 1.0), vec3( 0.0, 0.0,-1.0));
+            vec3( 0.0, 0.0, 1.0), vec3( 0.0, 0.0,-1.0),
+            vec3( 0.0, 1.0, 0.0), vec3( 0.0, 1.0, 0.0));
 
         // Ambient occlusion ramp, 0 = fully enclosed corner.
         const float kAo[4] = float[4](0.42, 0.64, 0.84, 1.00);
 
+        const float kPositionScale = 1.0 / 64.0;   // steps per block, matching ChunkVertex
+        const float kPositionBias  = 64.0;
+        const float kUvScale       = 1.0 / 32.0;   // steps per tile
+
+        // How far each later coplanar pass floats off the one under it. A grass block's tinted
+        // fringe sits in exactly the same plane as the dirt beneath it, and which of two coplanar
+        // quads wins the depth test comes down to rounding unless one of them is lifted. Two
+        // thousandths of a block is a thirtieth of a texel — far below anything visible, and far
+        // above the error in a plane equation.
+        const float kCoplanarLift = 0.002;
+
         void main()
         {
-            vec3 local = vec3(
-                float( aPacked0        & 63u),
-                float((aPacked0 >>  6) & 63u),
-                float((aPacked0 >> 12) & 63u));
+            vec3 local = (vec3(
+                float( aPacked0        & 4095u),
+                float((aPacked0 >> 12) & 4095u),
+                float( aPacked1        & 4095u)) - kPositionBias) * kPositionScale;
 
+            int face  = int((aPacked0 >> 24) & 7u);
+            int ao    = int((aPacked0 >> 27) & 3u);
+            int pass  = int((aPacked0 >> 29) & 3u);
+            int layer = int((aPacked1 >> 12) & 4095u);
+            int tint  = int((aPacked1 >> 24) & 63u);
+            bool explicitUv = ((aPacked1 >> 30) & 1u) != 0u;
+
+            vec3 n = kNormals[face];
             vec3 world = uChunkOrigin + local;
-            gl_Position = uViewProj * vec4(world, 1.0);
-
-            int face  = int((aPacked0 >> 18) & 7u);
-            int ao    = int((aPacked0 >> 21) & 3u);
-            int tint  = int((aPacked0 >> 23) & 63u);
-            int layer = int( aPacked1        & 0xFFFFu);
+            gl_Position = uViewProj * vec4(world + n * (float(pass) * kCoplanarLift), 1.0);
 
             // Baked light: sky in the low nibble, then red, green, blue.
-            uint packedLight = aPacked1 >> 16;
+            uint packedLight = aPacked2 & 0xFFFFu;
             float sky   = float( packedLight        & 15u) / 15.0;
             vec3  block = vec3(
                 float((packedLight >>  4) & 15u),
                 float((packedLight >>  8) & 15u),
                 float((packedLight >> 12) & 15u)) / 15.0;
-
-            vec3 n = kNormals[face];
 
             // Sunlight reaching this corner is the baked visibility of the sky multiplied by how
             // squarely the face meets the sun, plus the sky's own ambient for the faces it misses.
@@ -86,13 +102,20 @@ public static class ChunkShaders
             // one a fragment.
             vLight = max(light, uNightFloor) * kAo[ao] * uTint[tint];
 
-            // Texture coordinates come from where the corner is in the world, projected onto the
-            // two axes lying in its face. Nothing is stored per vertex: a merged quad spanning six
-            // blocks lands on uv 0..6 and the sampler's repeat wrapping tiles it, which is exactly
-            // what a wall of the same block should look like. Storing uvs would have cost eight
-            // more bytes a vertex to say something the position already knows.
+            // A merged cube face takes its texture coordinates from where the corner is in the
+            // world, projected onto the two axes lying in its face. Nothing is stored per vertex: a
+            // quad spanning six blocks lands on uv 0..6 and the sampler's repeat wrapping tiles it,
+            // which is exactly what a wall of the same block should look like.
+            //
+            // A model quad carries its own instead, because a shape has no such projection to fall
+            // back on: a plant's planes are turned forty-five degrees, and a torch reads a strip
+            // out of the middle of its tile. The six expressions below are also what the model
+            // baker uses to work out where an element's default coordinates fall, so both answers
+            // come from one statement of the convention.
             vec2 uv;
-            if (face == 0)      uv = vec2(-world.z, -world.y);   // +X
+            if (explicitUv)     uv = vec2(float((aPacked2 >> 16) & 63u),
+                                          float((aPacked2 >> 22) & 63u)) * kUvScale;
+            else if (face == 0) uv = vec2(-world.z, -world.y);   // +X
             else if (face == 1) uv = vec2( world.z, -world.y);   // -X
             else if (face == 2) uv = vec2( world.x,  world.z);   // +Y
             else if (face == 3) uv = vec2( world.x, -world.z);   // -Y

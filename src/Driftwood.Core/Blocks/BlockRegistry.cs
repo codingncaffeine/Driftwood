@@ -28,6 +28,17 @@ public sealed class BlockRegistry
         if (_byId.Count > ushort.MaxValue)
             throw new InvalidOperationException("block registry exhausted (65536 ids)");
 
+        // Shorthand blocks are cubes. Building the model here rather than lazily means the mesher
+        // never sees a null shape and never has to decide what a block looks like on a worker thread.
+        type.Model ??= BlockModel.Cube(
+            type.TopLayer, type.SideLayer, type.BottomLayer, type.Tint != TintSource.None);
+
+        // A shape with gaps in it cannot hide what is behind it. Left to run, a non-cube opaque
+        // block culls its neighbours' faces and opens a hole straight through the terrain, which
+        // reads as a rendering bug a long way from the table entry that caused it.
+        if (type.Opaque && !type.Model.IsFullCube)
+            throw new InvalidOperationException($"block '{type.Name}' is opaque but its model is not a full cube");
+
         type.Id = new BlockId((ushort)_byId.Count);
         _byId.Add(type);
         _byName[type.Name] = type;
@@ -98,6 +109,59 @@ public sealed class BlockRegistry
         var table = new ushort[_byId.Count];
         for (var i = 0; i < _byId.Count; i++) table[i] = _byId[i].LightEmission;
         return table;
+    }
+
+    /// <summary>Shapes keyed by raw id, for the mesher's per-block path.</summary>
+    public BlockModel[] BuildModelTable()
+    {
+        var table = new BlockModel[_byId.Count];
+        for (var i = 0; i < _byId.Count; i++) table[i] = _byId[i].Model;
+        return table;
+    }
+
+    /// <summary>
+    /// Everything the greedy path needs about one block, flattened: whether it can merge at all,
+    /// how many coplanar passes it draws, and the texture and tint of each face of each pass.
+    /// </summary>
+    /// <remarks>
+    /// Indexed <c>id * MaxPasses * 6 + pass * 6 + face</c>. The mesher reads this once per cell per
+    /// face per pass — several hundred million times over a loaded world — so it is worth the
+    /// flattening. Going through the model object graph for each one is measurable.
+    /// </remarks>
+    public sealed record GreedyTables(bool[] FullCube, int[] PassCount, ushort[] Layer, bool[] Tinted)
+    {
+        public const int Stride = BlockModel.MaxPasses * Faces.Count;
+
+        public ushort LayerFor(int id, int pass, int face) => Layer[id * Stride + pass * Faces.Count + face];
+
+        public bool TintedFor(int id, int pass, int face) => Tinted[id * Stride + pass * Faces.Count + face];
+    }
+
+    public GreedyTables BuildGreedyTables()
+    {
+        var fullCube = new bool[_byId.Count];
+        var passCount = new int[_byId.Count];
+        var layer = new ushort[_byId.Count * GreedyTables.Stride];
+        var tinted = new bool[_byId.Count * GreedyTables.Stride];
+        Array.Fill(layer, BlockModel.NoLayer);
+
+        for (var id = 0; id < _byId.Count; id++)
+        {
+            var model = _byId[id].Model;
+            fullCube[id] = model.IsFullCube;
+            passCount[id] = model.PassCount;
+            if (!model.IsFullCube) continue;
+
+            for (var pass = 0; pass < model.PassCount; pass++)
+            for (var face = 0; face < Faces.Count; face++)
+            {
+                var i = id * GreedyTables.Stride + pass * Faces.Count + face;
+                layer[i] = model.PassLayer(pass, face);
+                tinted[i] = model.PassTinted(pass, face);
+            }
+        }
+
+        return new GreedyTables(fullCube, passCount, layer, tinted);
     }
 
     public IReadOnlyList<BlockType> All => _byId;

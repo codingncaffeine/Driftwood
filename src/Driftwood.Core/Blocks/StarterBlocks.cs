@@ -43,28 +43,12 @@ public static class StarterBlocks
     public const ushort LayerSandstoneTop = 26;
     public const ushort LayerSnow = 27;
 
-    public const int LayerCount = 28;
+    // Model-driven shapes brought their own art with them: the fringe a grass block wears down its
+    // side is a cut-out laid over the dirt, and a tuft of grass is a texture with no cube to sit on.
+    public const ushort LayerGrassSideOverlay = 28;
+    public const ushort LayerMeadowgrass = 29;
 
-    /// <summary>Debug colours standing in for textures until the art pass. RGB, 0..1.</summary>
-    public static readonly float[] PaletteRgb =
-    [
-        0.52f, 0.52f, 0.54f, // stone
-        0.46f, 0.33f, 0.22f, // dirt
-        0.36f, 0.60f, 0.26f, // grass top
-        0.42f, 0.40f, 0.24f, // grass side
-        0.83f, 0.78f, 0.58f, // sand
-        0.16f, 0.36f, 0.62f, // water
-        0.50f, 0.48f, 0.47f, // gravel
-        0.41f, 0.31f, 0.19f, // log side
-        0.58f, 0.46f, 0.30f, // log top
-        0.24f, 0.47f, 0.20f, // leaves
-        0.70f, 0.56f, 0.34f, // planks
-        0.28f, 0.28f, 0.29f, // coal ore
-        0.66f, 0.56f, 0.46f, // iron ore
-        0.12f, 0.12f, 0.13f, // bedrock
-        0.94f, 0.62f, 0.30f, // emberstone
-        0.20f, 0.42f, 0.16f, // vine
-    ];
+    public const int LayerCount = 30;
 
     public sealed record Ids(
         BlockId Stone,
@@ -91,7 +75,8 @@ public static class StarterBlocks
         BlockId AzuriteOre,
         BlockId Clay,
         BlockId Sandstone,
-        BlockId Snow)
+        BlockId Snow,
+        BlockId Meadowgrass)
     {
         /// <summary>Every rock an ore can form in. Ore replaces rock, whichever rock it is.</summary>
         public BlockId[] Rock => [Stone, Deepstone, Coralstone, Driftstone, Saltstone];
@@ -118,10 +103,15 @@ public static class StarterBlocks
             Name = "dirt", Hardness = 0.5f,
             TopLayer = LayerDirt, SideLayer = LayerDirt, BottomLayer = LayerDirt,
         });
+        // The one block that was never really a cube. Its top is the climate colour over a grey
+        // tile, its bottom is plain dirt, and the green rolling over its sides is a second cut-out
+        // laid over the first and tinted the same as the top. Before models there was nowhere to
+        // put that second pass, so grass sides came out as bare dirt in every pack ever imported.
         var grass = registry.Register(new BlockType
         {
-            Name = "grass", Hardness = 0.6f, Tint = TintSource.Grass, TintTopOnly = true,
-            TopLayer = LayerGrassTop, SideLayer = LayerGrassSide, BottomLayer = LayerDirt,
+            Name = "grass", Hardness = 0.6f, Tint = TintSource.Grass,
+            Model = BlockModel.CubeWithSideOverlay(
+                LayerGrassTop, LayerGrassSide, LayerDirt, LayerGrassSideOverlay),
         });
         var sand = registry.Register(new BlockType
         {
@@ -284,9 +274,20 @@ public static class StarterBlocks
             TopLayer = LayerSnow, SideLayer = LayerSnow, BottomLayer = LayerSnow,
         });
 
+        // The first block in the world with a shape rather than a size. Two planes crossed through
+        // the middle of the cell, no collision, no occlusion, and lit flat so both halves match —
+        // the model format's own answer for every small plant, and the thing that proves the
+        // per-block path works against something a player can walk through.
+        var meadowgrass = registry.Register(new BlockType
+        {
+            Name = "meadowgrass", Hardness = 0.05f, Solid = false, Opaque = false,
+            Tint = TintSource.Grass,
+            Model = BlockModel.Cross(LayerMeadowgrass),
+        });
+
         return new Ids(
             stone, dirt, grass, sand, water, gravel, log, leaves, planks, coal, iron, bedrock,
             emberstone, vine, deepstone, coralstone, driftstone, saltstone, copper, gold, stormglass,
-            azurite, clay, sandstone, snow);
+            azurite, clay, sandstone, snow, meadowgrass);
     }
 }

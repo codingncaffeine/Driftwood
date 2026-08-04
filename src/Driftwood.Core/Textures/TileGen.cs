@@ -234,20 +234,80 @@ public static class TileGen
         return t;
     }
 
-    /// <summary>A dirt tile with a band of grass rolling over its top edge.</summary>
-    public static byte[] GrassSide(int seed, byte[] dirt, byte r, byte g, byte b)
+    /// <summary>
+    /// A dirt tile with a band of grass rolling over its top edge, drawn colourless.
+    /// </summary>
+    /// <remarks>
+    /// Grey rather than green, and that is the format's convention rather than a choice. The fringe
+    /// a player actually sees is <see cref="GrassSideOverlay"/> laid over this and multiplied by the
+    /// climate colour; painting this one green as well would put a second, untinted green under the
+    /// first, and every pack in the world would disagree with it.
+    /// </remarks>
+    public static byte[] GrassSide(int seed, byte[] dirt, byte level)
     {
         var t = (byte[])dirt.Clone();
 
         for (var x = 0; x < Size; x++)
+        for (var y = 0; y < FringeDepth(x, seed); y++)
         {
-            // A ragged edge, not a straight line: the join is the most-looked-at edge in the game.
-            var depth = 3 + (int)(Noise(x, 0, seed) * 3f);
+            var d = (int)((Noise(x, y, seed + 29) * 2f - 1f) * 18f);
+            Put(t, x, y, Clamp(level + d), Clamp(level + d), Clamp(level + d), 255);
+        }
 
-            for (var y = 0; y < depth; y++)
+        return t;
+    }
+
+    /// <summary>The same fringe as a cut-out, for the climate colour to run through.</summary>
+    /// <remarks>
+    /// Built from the same edge as <see cref="GrassSide"/> so the two cannot drift apart: every
+    /// pixel this one covers is a pixel that one made grey, and a mismatch would show as a rim of
+    /// untinted grey along the top of every grass block in the world.
+    /// </remarks>
+    public static byte[] GrassSideOverlay(int seed, byte level)
+    {
+        var t = new byte[BytesPerTile];
+
+        for (var x = 0; x < Size; x++)
+        for (var y = 0; y < FringeDepth(x, seed); y++)
+        {
+            var d = (int)((Noise(x, y, seed + 29) * 2f - 1f) * 18f);
+            Put(t, x, y, Clamp(level + d), Clamp(level + d), Clamp(level + d), 255);
+        }
+
+        return t;
+    }
+
+    /// <summary>How far the grass fringe reaches down a block's side at one column.</summary>
+    /// <remarks>Ragged, not a straight line: the join is the most-looked-at edge in the game.</remarks>
+    private static int FringeDepth(int x, int seed) => 3 + (int)(Noise(x, 0, seed) * 3f);
+
+    /// <summary>Blades rising from the bottom edge, everything else empty — a tuft of plant.</summary>
+    /// <remarks>
+    /// Drawn bottom-heavy on purpose. The tile is stretched over two crossed planes standing in the
+    /// block, so a blade that reaches the top edge meets the block above and the tuft reads as a
+    /// column of grass rather than as something growing out of the ground.
+    /// </remarks>
+    public static byte[] Tuft(int seed, byte r, byte g, byte b)
+    {
+        var t = new byte[BytesPerTile];
+
+        for (var x = 0; x < Size; x++)
+        {
+            if (Noise(x, 0, seed) < 0.42f) continue;
+
+            // Height from the bottom, and a slow lean so the blades are not a picket fence.
+            var height = 4 + (int)(Noise(x, 1, seed + 19) * 8f);
+            var lean = Noise(x, 2, seed + 37) * 2f - 1f;
+
+            for (var i = 0; i < height; i++)
             {
-                var d = (int)((Noise(x, y, seed + 29) * 2f - 1f) * 18f);
-                Put(t, x, y, Clamp(r + d), Clamp(g + d), Clamp(b + d), 255);
+                var y = Size - 1 - i;
+                var bx = x + (int)MathF.Round(lean * i * 0.25f);
+                if ((uint)bx >= Size) continue;
+
+                // Paler toward the tip, which is what stops a blade reading as a wire.
+                var d = (int)(i / (float)height * 26f) + (int)((Noise(bx, y, seed + 53) * 2f - 1f) * 10f);
+                Put(t, bx, y, Clamp(r + d), Clamp(g + d), Clamp(b + d), 255);
             }
         }
 

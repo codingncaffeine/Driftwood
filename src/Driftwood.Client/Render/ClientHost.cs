@@ -319,6 +319,14 @@ public sealed class ClientHost : IDisposable
         SetMouseCaptured(_options.BenchSeconds <= 0);
 
         _gl.Enable(EnableCap.DepthTest);
+
+        // Later coplanar passes have to win, not lose. A grass block's tinted fringe sits in the
+        // same plane as the dirt under it and is drawn second; under the default "strictly nearer"
+        // test it would be rejected wherever the shader's small lift rounds away, which is most of
+        // the view at distance. Equal depth going to whatever was drawn last is what the model
+        // format assumes.
+        _gl.DepthFunc(DepthFunction.Lequal);
+
         _gl.Enable(EnableCap.CullFace);
         _gl.CullFace(TriangleFace.Back);
         _gl.FrontFace(FrontFaceDirection.Ccw);
@@ -372,12 +380,18 @@ public sealed class ClientHost : IDisposable
         _heldBlock = ids.Planks;
         _solid = registry.BuildSolidTable();
 
-        // Water is not targetable: a ray should pass through it to the sea bed, or you can never
-        // break anything you swim over. Leaves are, since chopping a canopy is half of gathering.
-        _targetable = registry.BuildOpacityTable();
-        for (var id = 0; id < registry.Count; id++)
-            if (registry[(ushort)id].Name == "driftoak_leaves" || registry[(ushort)id].Name == "vine")
-                _targetable[id] = true;
+        // A ray stops at anything but air and open water. Water is the exception that matters: you
+        // can neither stand on it nor break it, so a ray fired across a lake has to reach the bed or
+        // nothing underwater could ever be mined. Everything else is something a player expects to
+        // be able to point at — bedrock they cannot break, leaves and plants they walk through.
+        // Derived from the flags rather than from a list of names, so a new plant is targetable the
+        // day it is registered instead of the day somebody remembers this line.
+        _targetable = new bool[registry.Count];
+        for (var id = 1; id < registry.Count; id++)
+        {
+            var type = registry[(ushort)id];
+            _targetable[id] = type.Solid || !type.Unbreakable;
+        }
 
         _spawnPoint = new Vector3(0.5f, generator.SurfaceHeight(0, 0) + 3f, 0.5f);
         _player.Teleport(_spawnPoint);

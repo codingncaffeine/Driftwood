@@ -13,7 +13,17 @@ namespace Driftwood.Core.Textures;
 /// <param name="Cutout">
 /// True when the texture has fully transparent pixels that must be discarded rather than blended.
 /// </param>
-public readonly record struct BlockTextureLayer(string Name, string PackPath, bool Cutout);
+/// <param name="PackPathAlt">
+/// An older path for the same texture, tried when <paramref name="PackPath"/> is not in the pack.
+/// </param>
+/// <remarks>
+/// The alternate path is not a nicety. Textures get renamed between game versions — short grass was
+/// <c>grass.png</c> until it became <c>short_grass.png</c> — and a pack written for either side of
+/// that rename is a pack a player owns. Falling back costs one dictionary miss at load and is the
+/// difference between a texture importing and silently keeping ours.
+/// </remarks>
+public readonly record struct BlockTextureLayer(
+    string Name, string PackPath, bool Cutout, string PackPathAlt = "");
 
 /// <summary>
 /// Builds the full set of block tiles, starting from Driftwood's own and letting a pack override
@@ -69,6 +79,14 @@ public static class BlockTextureSet
         new("sandstone",   "textures/block/sandstone.png",        false),
         new("sandstone_top", "textures/block/sandstone_top.png",  false),
         new("snow",        "textures/block/snow.png",             false),
+
+        // The fringe of grass rolling over a block's side, as its own cut-out for the climate
+        // colour to run through. Every pack ships one and until models arrived there was nothing to
+        // hang it on, which is why grass sides were plain dirt no matter what was imported.
+        new("grass_side_overlay", "textures/block/grass_block_side_overlay.png", true),
+
+        // Short grass was called grass.png until it was renamed, so both paths are worth trying.
+        new("meadowgrass", "textures/block/short_grass.png",      true, "textures/block/grass.png"),
     ];
 
     /// <param name="GrassMap">Grass colormap, the pack's if it ships one.</param>
@@ -100,6 +118,8 @@ public static class BlockTextureSet
             if (Layers[i].PackPath.Length == 0) continue;
 
             var replacement = pack.TryLoadTile(Layers[i].PackPath, size);
+            if (replacement is null && Layers[i].PackPathAlt.Length > 0)
+                replacement = pack.TryLoadTile(Layers[i].PackPathAlt, size);
             if (replacement is not null) tiles[i] = replacement;
         }
 
@@ -141,7 +161,10 @@ public static class BlockTextureSet
             StarterBlocks.LayerStone => stone,
             StarterBlocks.LayerDirt => dirt,
             StarterBlocks.LayerGrassTop => TileGen.Speckle(1003, 92, 153, 66, 20, 0.55f),
-            StarterBlocks.LayerGrassSide => TileGen.GrassSide(1004, dirt, 92, 153, 66),
+
+            // Grey, with the green arriving through the overlay below it. See TileGen.GrassSide.
+            StarterBlocks.LayerGrassSide => TileGen.GrassSide(1004, dirt, 138),
+            StarterBlocks.LayerGrassSideOverlay => TileGen.GrassSideOverlay(1004, 138),
             StarterBlocks.LayerSand => TileGen.Speckle(1005, 212, 199, 148, 12, 0.3f),
             StarterBlocks.LayerWater => TileGen.Speckle(1006, 41, 92, 158, 14, 0.6f),
             StarterBlocks.LayerGravel => TileGen.Speckle(1007, 128, 122, 118, 26, 0.7f),
@@ -169,6 +192,7 @@ public static class BlockTextureSet
             StarterBlocks.LayerSandstone => TileGen.Strata(1027, 214, 199, 152),
             StarterBlocks.LayerSandstoneTop => TileGen.Speckle(1028, 219, 205, 160, 10, 0.4f),
             StarterBlocks.LayerSnow => TileGen.Speckle(1029, 243, 246, 250, 7, 0.3f),
+            StarterBlocks.LayerMeadowgrass => TileGen.Tuft(1030, 96, 148, 62),
             _ => TileGen.Solid(255, 0, 255, 255),
         };
     }
