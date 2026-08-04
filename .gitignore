@@ -30,3 +30,9 @@ Desktop.ini
 ## Planning docs stay local and are never pushed.
 /_local/
 *.local.md
+
+## Third-party test assets: texture packs and skins the user supplies for local testing.
+## These are other people's art. They are read from disk at runtime and never committed.
+/assets/texture packs*/
+/assets/skins*/
+*.mcpack
