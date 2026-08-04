@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Numerics;
 using System.Text;
 using Driftwood.Core.Blocks;
+using Driftwood.Core.Entities;
 using Driftwood.Core.Gen;
 using Driftwood.Core.Lighting;
 using Driftwood.Core.Meshing;
@@ -368,6 +369,54 @@ public static class WorldAudit
             physicsFaults.Count == 0
                 ? "falls, lands, walks, jumps, is stopped by walls, does not sneak off ledges"
                 : $"{physicsFaults.Count} faults: {string.Join("; ", physicsFaults)}");
+
+        // The model is drawn from a table of measurements and a UV net worked out on paper. None of
+        // it throws when it is wrong: a reversed winding is an invisible limb, a transposed patch is
+        // an elbow wearing a kneecap, and both draw perfectly happily.
+        var modelWinding = PlayerModel.ValidateWinding();
+        Check("model winds outward", modelWinding.Count == 0,
+            modelWinding.Count == 0
+                ? "12 boxes x 6 faces, classic and slim, modern and legacy"
+                : $"{modelWinding.Count} faults: {modelWinding[0]}");
+
+        var netFaults = PlayerModel.ValidateNet();
+        Check("skin net is well formed", netFaults.Count == 0,
+            netFaults.Count == 0
+                ? "every patch on the sheet, right size, none reused"
+                : $"{netFaults.Count} faults: {netFaults[0]}");
+
+        var mirrorFaults = PlayerModel.ValidateMirror();
+        Check("left limbs mirror", mirrorFaults.Count == 0,
+            mirrorFaults.Count == 0
+                ? "u runs opposite ways on the two arms, both layouts"
+                : $"{mirrorFaults.Count} faults: {mirrorFaults[0]}");
+
+        var (modelTall, modelWide, jointFaults) = MeasureModel();
+        Check(
+            "model is one piece",
+            MathF.Abs(modelTall - PlayerBody.Height) < 1e-3f && modelWide is > 0.6f and < 1.2f && jointFaults.Count == 0,
+            jointFaults.Count > 0
+                ? $"{jointFaults.Count} faults: {jointFaults[0]}"
+                : $"{modelTall:F3} blocks tall (body is {PlayerBody.Height:F2}), {modelWide:F2} across the shoulders, joints meet");
+
+        var defaultSkin = PlayerSkin.Paint(ArmStyle.Classic);
+        var skinFaults = PlayerSkin.Validate(defaultSkin);
+        Check("default skin covers it", skinFaults.Count == 0,
+            skinFaults.Count == 0
+                ? $"{defaultSkin.Size}x{defaultSkin.Size}, all 36 base patches painted"
+                : $"{skinFaults.Count} faults: {skinFaults[0]}");
+
+        var animationFaults = AnimationSelfTest();
+        Check("swing and stride hold", animationFaults.Count == 0,
+            animationFaults.Count == 0
+                ? "swing completes, repeats while held, returns to rest; stride scales with speed"
+                : $"{animationFaults.Count} faults: {string.Join("; ", animationFaults)}");
+
+        var boomFaults = CameraBoom.SelfTest(registry, ids.Stone);
+        Check("camera boom clears walls", boomFaults.Count == 0,
+            boomFaults.Count == 0
+                ? "full length in the open, gives way to a wall, never ends up inside one"
+                : $"{boomFaults.Count} faults: {string.Join("; ", boomFaults)}");
 
         var relightMatches = RelightMatchesFullPass(
             seed, registry, ids, oceanCoverage, out var relightDetail, out var worstRelightMs);
@@ -1297,5 +1346,226 @@ public static class WorldAudit
         }
 
         return (lo, hi, sum / (double)samples, aboveSea * 100.0 / samples);
+    }
+
+    /// <summary>
+    /// Measures the model out of its own emitted geometry rather than out of its constants.
+    /// </summary>
+    /// <remarks>
+    /// <para>The envelope alone is not enough, and finding that out is what control-testing this is
+    /// for: shortening both legs by a unit leaves the model exactly as tall as it was and opens a
+    /// gap at the hips that the height check waved straight through. So the parts are also asked to
+    /// stack — every slice from the soles to the crown has to be inside something.</para>
+    /// <para>Measured off the emitted vertices rather than off <c>UnitsTall</c>, which would only
+    /// check the arithmetic against itself.</para>
+    /// </remarks>
+    private static (float Tall, float Wide, List<string> Faults) MeasureModel()
+    {
+        var vertices = new List<ModelVertex>();
+        var indices = new List<uint>();
+        var spans = new Dictionary<PlayerPart, (float Lo, float Hi)>();
+
+        float lowest = float.MaxValue, highest = float.MinValue;
+        float left = float.MaxValue, right = float.MinValue;
+
+        foreach (var box in PlayerModel.Build(ArmStyle.Classic, legacy: false))
+        {
+            if (box.Overlay) continue;
+
+            vertices.Clear();
+            indices.Clear();
+            PlayerModel.Emit(box, vertices, indices);
+
+            float boxLow = float.MaxValue, boxHigh = float.MinValue;
+
+            foreach (var v in vertices)
+            {
+                var world = v.Position + box.Pivot * PlayerModel.Unit;
+                boxLow = MathF.Min(boxLow, world.Y);
+                boxHigh = MathF.Max(boxHigh, world.Y);
+                left = MathF.Min(left, world.X);
+                right = MathF.Max(right, world.X);
+            }
+
+            spans[box.Part] = (boxLow, boxHigh);
+            lowest = MathF.Min(lowest, boxLow);
+            highest = MathF.Max(highest, boxHigh);
+        }
+
+        var faults = new List<string>();
+
+        void Joint(string what, float a, float b)
+        {
+            if (MathF.Abs(a - b) > 1e-4f) faults.Add($"{what} ({a:F3} vs {b:F3})");
+        }
+
+        var body = spans[PlayerPart.Body];
+        var head = spans[PlayerPart.Head];
+
+        // Asked as joints between separately declared parts rather than as a single envelope. A
+        // model whose right leg is a unit short is exactly as tall as it should be, and its other
+        // leg still covers the slice the missing one left — so neither a height check nor a
+        // "something covers every slice" check notices, which is how both earlier versions of this
+        // passed a visibly broken model.
+        Joint("head does not sit on the shoulders", body.Hi, head.Lo);
+
+        foreach (var leg in (ReadOnlySpan<PlayerPart>)[PlayerPart.RightLeg, PlayerPart.LeftLeg])
+        {
+            Joint($"{leg} does not reach the ground", spans[leg].Lo, lowest);
+            Joint($"{leg} does not reach the hip", spans[leg].Hi, body.Lo);
+        }
+
+        foreach (var arm in (ReadOnlySpan<PlayerPart>)[PlayerPart.RightArm, PlayerPart.LeftArm])
+        {
+            Joint($"{arm} hangs off the shoulder", spans[arm].Hi, body.Hi);
+            Joint($"{arm} does not match the torso", spans[arm].Lo, body.Lo);
+        }
+
+        return (highest - lowest, right - left, faults);
+    }
+
+    /// <summary>
+    /// Steps the animator at a fixed rate and measures what came out.
+    /// </summary>
+    /// <remarks>
+    /// <para>Every check here is two-sided, because each of these has an opposite failure that the
+    /// obvious one-sided version waves through. An arm that never moves passes "the swing finishes";
+    /// an arm that never stops passes "the swing reaches the top". A stride with a floor on its
+    /// period passes a model standing still.</para>
+    /// <para>The stride period is counted from the pose the renderer would actually draw — zero
+    /// crossings of the leg's angle — rather than read back off the phase accumulator, which would
+    /// only prove the accumulator agrees with itself.</para>
+    /// </remarks>
+    private static List<string> AnimationSelfTest()
+    {
+        var faults = new List<string>();
+        const float dt = 1f / 60f;
+        var still = new Vector3(0f, 64f, 0f);
+
+        // One swing, button released immediately: it has to run its course and stop on its own.
+        var single = new PlayerAnimator();
+        single.Strike();
+        var struck = single.TakeStrikes();
+        var peakLift = 0f;
+
+        for (var i = 0; i < 60; i++)
+        {
+            single.Update(dt, still, 0f, PlayerBody.WalkSpeed, false, holding: false);
+            peakLift = MathF.Max(peakLift, MathF.Abs(single.Pose(0f, 0f).RightArm.Pitch));
+            struck += single.TakeStrikes();
+        }
+
+        if (struck != 1) faults.Add($"one click produced {struck} strikes");
+        if (single.Swinging) faults.Add("swing never ended");
+        if (peakLift < 1.2f) faults.Add($"arm only reached {peakLift:F2} rad, wanted past 1.2");
+
+        var settled = MathF.Abs(single.Pose(0f, 0f).RightArm.Pitch);
+        if (settled > 0.2f) faults.Add($"arm settled at {settled:F2} rad instead of near rest");
+
+        // Held down: strikes should arrive at the swing's own cadence, not at the frame rate.
+        var held = new PlayerAnimator();
+        held.Strike();
+        var repeats = held.TakeStrikes();
+        for (var i = 0; i < 60; i++)   // one second
+        {
+            held.Update(dt, still, 0f, PlayerBody.WalkSpeed, false, holding: true);
+            repeats += held.TakeStrikes();
+        }
+
+        var wanted = (int)(1f / PlayerAnimator.SwingSeconds) + 1;
+        if (Math.Abs(repeats - wanted) > 1)
+            faults.Add($"a second of holding gave {repeats} strikes, wanted about {wanted}");
+
+        // Standing still: the legs must be still too. This is the control for the stride check
+        // below — a walk cycle driven by a clock rather than by distance passes that one and fails
+        // this one, and it is the failure a player would see as skating feet.
+        var idle = new PlayerAnimator();
+        for (var i = 0; i < 60; i++) idle.Update(dt, still, 0f, PlayerBody.WalkSpeed, false, false);
+        var idleSwing = MathF.Abs(idle.Pose(0f, 0f).RightLeg.Pitch);
+        if (idleSwing > 0.02f) faults.Add($"legs swing {idleSwing:F3} rad while standing still");
+
+        // Walking in a straight line: count the leg's zero crossings to get the stride period.
+        var peakStride = 0f;
+
+        float MeasurePeriod(float speed)
+        {
+            const float seconds = 6f;
+            const float settle = 0.5f;
+
+            var walker = new PlayerAnimator();
+            var at = still;
+            var wasPositive = false;
+            var counting = false;
+            var crossings = 0;
+
+            for (var i = 0; i < seconds / dt; i++)
+            {
+                at.X += speed * dt;
+                walker.Update(dt, at, 0f, PlayerBody.WalkSpeed, false, false);
+
+                var pitch = walker.Pose(0f, 0f).RightLeg.Pitch;
+                if (speed >= PlayerBody.WalkSpeed) peakStride = MathF.Max(peakStride, MathF.Abs(pitch));
+
+                var positive = pitch > 0f;
+                if (i * dt > settle)
+                {
+                    if (counting && positive != wasPositive) crossings++;
+                    counting = true;
+                }
+
+                wasPositive = positive;
+            }
+
+            return crossings < 2 ? -1f : 2f * (seconds - settle) / crossings;
+        }
+
+        var walkPeriod = MeasurePeriod(PlayerBody.WalkSpeed);
+        var sneakPeriod = MeasurePeriod(PlayerBody.SneakSpeed);
+
+        if (peakStride < 0.5f) faults.Add($"walking legs only reached {peakStride:F2} rad");
+
+        if (walkPeriod < 0f || sneakPeriod < 0f)
+        {
+            faults.Add("legs never crossed zero over six seconds of walking");
+        }
+        else
+        {
+            if (walkPeriod is not (> 0.45f and < 0.85f))
+                faults.Add($"stride period {walkPeriod:F2}s at walking pace, wanted 0.45-0.85");
+
+            // The one that actually discriminates. A stride driven by a clock rather than by
+            // distance gives the same period at every speed, and the absolute check above cannot
+            // tell the difference — it passed a clock-driven walk cycle whose period happened to
+            // land inside the band. Creeping at a third of walking pace has to take three times
+            // as long per stride, or the feet are skating.
+            var ratio = sneakPeriod / walkPeriod;
+            var expected = PlayerBody.WalkSpeed / PlayerBody.SneakSpeed;
+            if (MathF.Abs(ratio - expected) > expected * 0.15f)
+                faults.Add($"stride slowed by {ratio:F2}x when creeping, wanted {expected:F2}x — phase is not distance-driven");
+        }
+
+        // Turning on the spot: the head leads and the shoulders only follow once it runs out of
+        // neck. A body welded to the camera passes nothing here; one that never turns fails the
+        // second half.
+        var turner = new PlayerAnimator();
+        turner.Reset(0f);
+        for (var i = 0; i < 120; i++) turner.Update(dt, still, 90f, PlayerBody.WalkSpeed, false, false);
+
+        var relative = MathF.Abs(PlayerAnimator.Wrap(90f - turner.BodyYawDegrees));
+        if (relative < 1f) faults.Add("body followed the head exactly instead of lagging it");
+        if (relative > 61f) faults.Add($"head twisted {relative:F0} degrees off the body");
+
+        // And walking off in that direction brings the shoulders round the rest of the way.
+        var walkTurn = still;
+        for (var i = 0; i < 120; i++)
+        {
+            walkTurn.Z += PlayerBody.WalkSpeed * dt;
+            turner.Update(dt, walkTurn, 90f, PlayerBody.WalkSpeed, false, false);
+        }
+
+        if (MathF.Abs(PlayerAnimator.Wrap(90f - turner.BodyYawDegrees)) > 2f)
+            faults.Add($"walking left the body at {turner.BodyYawDegrees:F0} instead of 90");
+
+        return faults;
     }
 }

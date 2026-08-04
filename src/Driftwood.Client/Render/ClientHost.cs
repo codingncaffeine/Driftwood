@@ -2,7 +2,9 @@ using System.Diagnostics;
 using System.Numerics;
 using Driftwood.Client.Diagnostics;
 using Driftwood.Core.Blocks;
+using Driftwood.Core.Entities;
 using Driftwood.Core.Gen;
+using Driftwood.Core.Lighting;
 using Driftwood.Core.Meshing;
 using Driftwood.Core.Physics;
 using Driftwood.Core.Spatial;
@@ -33,6 +35,12 @@ public sealed record ClientOptions
     /// <summary>Tile resolution the texture array is built at.</summary>
     public int TextureSize { get; init; } = 16;
 
+    /// <summary>A skin PNG to wear, or null for Driftwood's own.</summary>
+    public string? SkinPath { get; init; }
+
+    /// <summary>Arm width, or null to read it out of the sheet.</summary>
+    public ArmStyle? Arms { get; init; }
+
     /// <summary>Seconds of flight to measure; 0 runs the game normally.</summary>
     public double BenchSeconds { get; init; }
 
@@ -50,6 +58,19 @@ public sealed record ClientOptions
     /// renderer does is not measuring the renderer.
     /// </summary>
     public int MaxUploadsPerFrame { get; init; } = 4;
+}
+
+/// <summary>Where the camera sits relative to the player. Cycled with F5.</summary>
+public enum ViewMode
+{
+    /// <summary>Behind the eyes. The model is not drawn; the arm is.</summary>
+    First,
+
+    /// <summary>Over the shoulder, looking the way the player looks.</summary>
+    ThirdBehind,
+
+    /// <summary>In front, looking back at them.</summary>
+    ThirdFacing,
 }
 
 /// <summary>
@@ -82,6 +103,25 @@ public sealed class ClientHost : IDisposable
     private BlockTextureArray _blockTextures = null!;
     private BlockTextureSet.Result _textures = null!;
     private bool[] _targetable = null!;
+
+    private PlayerRenderer _playerRenderer = null!;
+    private readonly PlayerAnimator _animator = new();
+    private bool[] _solid = null!;
+
+    /// <summary>Where the camera renders from, which is the eye only in first person.</summary>
+    private Vector3 _viewPosition;
+    private Vector3 _viewForward = Vector3.UnitX;
+
+    private ViewMode _view = ViewMode.First;
+
+    /// <summary>
+    /// Whether a strike button is still down. Holding one keeps the arm swinging, and every swing
+    /// takes a block — so the cadence of mining is the cadence of the animation rather than of the
+    /// mouse. Break wins if both are held.
+    /// </summary>
+    private bool _holdingBreak;
+    private bool _holdingPlace;
+    private bool _lastStrikeWasBreak = true;
 
     /// <summary>The block under the crosshair, if anything is in reach.</summary>
     private RayHit? _target;
@@ -233,6 +273,7 @@ public sealed class ClientHost : IDisposable
         _keyboard.KeyDown += OnKeyDown;
         _mouse.MouseMove += OnMouseMove;
         _mouse.MouseDown += OnMouseDown;
+        _mouse.MouseUp += OnMouseUp;
 
         // The benchmark flies itself, so it leaves the cursor alone; stealing the mouse for a
         // measurement run is rude and changes nothing about what is measured.
@@ -250,6 +291,10 @@ public sealed class ClientHost : IDisposable
         _textures = BlockTextureSet.Build(_options.PackPath, _options.TextureSize);
         _blockTextures = new BlockTextureArray(_gl, _textures.Tiles, _textures.Size);
         Console.WriteLine($"textures    {_textures.Summary}");
+
+        var skin = PlayerSkin.Build(_options.SkinPath, _options.Arms);
+        _playerRenderer = new PlayerRenderer(_gl, skin);
+        Console.WriteLine($"skin        {skin.Summary}");
 
         BuildWorld();
     }
@@ -281,6 +326,7 @@ public sealed class ClientHost : IDisposable
 
         _player = new PlayerBody(registry);
         _heldBlock = ids.Planks;
+        _solid = registry.BuildSolidTable();
 
         // Water is not targetable: a ray should pass through it to the sea bed, or you can never
         // break anything you swim over. Leaves are, since chopping a canopy is half of gathering.
@@ -304,6 +350,10 @@ public sealed class ClientHost : IDisposable
             _camera.Pitch = -8f;
         }
 
+        _animator.Reset(_camera.Yaw);
+        _viewPosition = _camera.Position;
+        _viewForward = _camera.Forward;
+
         // Prime the pipeline before the first frame so the viewer does not open inside an empty
         // world, then let the render loop take delivery of the rest as it arrives.
         _streamer.Update(_camera.Position);
@@ -322,7 +372,8 @@ public sealed class ClientHost : IDisposable
         }
 
         Console.WriteLine("Arrows move (WASD also works), Space jump, Ctrl sneak, Shift sprint");
-        Console.WriteLine("Esc release mouse, F1 wireframe, F2 frustum culling, F3 walk/fly");
+        Console.WriteLine("Hold left to mine, right to place — the arm swings and the swing takes the block");
+        Console.WriteLine("Esc release mouse, F1 wireframe, F2 frustum culling, F3 walk/fly, F5 view");
     }
 
     /// <summary>
@@ -415,13 +466,31 @@ public sealed class ClientHost : IDisposable
                     _spawned = false;
                 }
                 break;
+
+            // First, over the shoulder, then facing. The middle one is the reason the model exists;
+            // the third is how you look at your own skin, and every game in the genre has it.
+            case Key.F5:
+                if (_bench is not null) break;
+                _view = _view switch
+                {
+                    ViewMode.First => ViewMode.ThirdBehind,
+                    ViewMode.ThirdBehind => ViewMode.ThirdFacing,
+                    _ => ViewMode.First,
+                };
+                break;
         }
     }
 
     /// <summary>
-    /// Break on the left button, place on the right. Single clicks for now; holding to mine
-    /// through a progress bar arrives with block hardness at P3-5.
+    /// Break on the left button, place on the right, both by swinging at it.
     /// </summary>
+    /// <remarks>
+    /// The button does not edit the world. It starts a swing, and the swing edits the world — see
+    /// <see cref="PlayerAnimator.TakeStrikes"/>. That indirection is the whole fix: a block used to
+    /// vanish the instant a mouse event arrived, with nothing on screen having moved, and holding
+    /// the button did nothing at all. Now the arm comes down and the block goes with it, at the
+    /// animation's pace, for as long as the button is held.
+    /// </remarks>
     private void OnMouseDown(IMouse mouse, MouseButton button)
     {
         if (_bench is not null) return;
@@ -436,8 +505,26 @@ public sealed class ClientHost : IDisposable
 
         switch (button)
         {
-            case MouseButton.Left: BreakTarget(); break;
-            case MouseButton.Right: PlaceOnTarget(); break;
+            case MouseButton.Left:
+                _holdingBreak = true;
+                _lastStrikeWasBreak = true;
+                _animator.Strike();
+                break;
+
+            case MouseButton.Right:
+                _holdingPlace = true;
+                _lastStrikeWasBreak = false;
+                _animator.Strike();
+                break;
+        }
+    }
+
+    private void OnMouseUp(IMouse mouse, MouseButton button)
+    {
+        switch (button)
+        {
+            case MouseButton.Left: _holdingBreak = false; break;
+            case MouseButton.Right: _holdingPlace = false; break;
         }
     }
 
@@ -446,6 +533,10 @@ public sealed class ClientHost : IDisposable
         _mouseCaptured = captured;
         _mouse.Cursor.CursorMode = captured ? CursorMode.Raw : CursorMode.Normal;
         _haveMouseAnchor = false;
+
+        // Letting the cursor go stops the mining. A button-up outside the window never arrives, so
+        // without this, releasing the mouse mid-swing leaves the player digging forever.
+        if (!captured) _holdingBreak = _holdingPlace = false;
     }
 
     private void OnMouseMove(IMouse mouse, Vector2 position)
@@ -496,6 +587,8 @@ public sealed class ClientHost : IDisposable
         }
 
         UpdateTarget();
+        StepAnimation((float)dt);
+        PlaceCamera();
         PumpStreaming();
 
         // Injected fault, off unless --stall asked for it. Burns CPU rather than sleeping, so it
@@ -529,6 +622,84 @@ public sealed class ClientHost : IDisposable
                   + (queued > 0 ? $" | {queued} queued" : "")
                   + (_frustumCulling ? "" : " | CULLING OFF");
         }
+    }
+
+    /// <summary>
+    /// Advances the pose, then lets each swing that came round this frame take its block.
+    /// </summary>
+    /// <remarks>
+    /// The target is re-aimed between strikes. Without that, mining into a wall keeps swinging at
+    /// the hole the first block left rather than at the one now behind it.
+    /// </remarks>
+    private void StepAnimation(float dt)
+    {
+        if (_bench is not null) return;
+
+        var stood = _walking ? _player.Position : _camera.Position;
+        var sneaking = _walking && _player.Sneaking;
+
+        _animator.Update(
+            dt, stood, _camera.Yaw, PlayerBody.WalkSpeed, sneaking, _holdingBreak || _holdingPlace);
+
+        for (var strikes = _animator.TakeStrikes(); strikes > 0; strikes--)
+        {
+            // A click fast enough to be released inside one frame still registered its intent when
+            // it went down, so fall back to that rather than dropping the swing on the floor.
+            var breaking = _holdingBreak || (!_holdingPlace && _lastStrikeWasBreak);
+
+            if (breaking) BreakTarget();
+            else PlaceOnTarget();
+
+            UpdateTarget();
+        }
+    }
+
+    /// <summary>
+    /// Puts the render camera where the current view mode wants it, without letting it into a wall.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="FlyCamera.Position"/> stays the eye in every mode, which is what keeps aiming
+    /// honest: a ray cast from a camera four blocks behind the player would target whatever the
+    /// boom happened to be pointing through, and would reach round corners.
+    /// </remarks>
+    private void PlaceCamera()
+    {
+        var eye = _camera.Position;
+        var look = _camera.Forward;
+
+        // Nothing to stand behind while flying, and the fly camera is an inspection tool — pulling
+        // it back from a body that is not being simulated would only make terrain harder to look at.
+        if (_view == ViewMode.First || _bench is not null || !_walking)
+        {
+            _viewPosition = eye;
+            _viewForward = look;
+            return;
+        }
+
+        var boom = _view == ViewMode.ThirdBehind ? -look : look;
+        var reach = CameraBoom.Reach(_streamer.World, _solid, eye, boom, CameraBoom.Distance);
+
+        _viewPosition = eye + boom * reach;
+        _viewForward = _view == ViewMode.ThirdBehind ? look : -look;
+    }
+
+    /// <summary>Reads the baked light where the player is standing, for shading the model.</summary>
+    private EntityLight SampleLight(Vector3 at)
+    {
+        var x = (int)MathF.Floor(at.X);
+        var y = (int)MathF.Floor(at.Y);
+        var z = (int)MathF.Floor(at.Z);
+
+        // Unloaded space reads as pitch dark, and a model blacked out because its chunk has not
+        // arrived looks like a bug in the lighting. Daylight is the better wrong answer.
+        if (!_streamer.World.TryGetChunk(ChunkPos.FromWorld(x, y, z), out _))
+            return new EntityLight(1f, Vector3.Zero);
+
+        var packed = _streamer.World.GetLight(x, y, z);
+        return new EntityLight(
+            LightValue.Sky(packed) / (float)LightValue.Max,
+            new Vector3(LightValue.Red(packed), LightValue.Green(packed), LightValue.Blue(packed))
+                / LightValue.Max);
     }
 
     /// <summary>Finds the block under the crosshair, if any is within reach.</summary>
@@ -725,12 +896,17 @@ public sealed class ClientHost : IDisposable
         var size = _window.FramebufferSize;
         var aspect = size.Y > 0 ? size.X / (float)size.Y : 1f;
 
-        var viewProj = _camera.ViewProjection(aspect);
+        // Culling and fog run against where the camera actually is, not where the player is: in
+        // third person those are four blocks apart, and using the eye would cull the chunk the
+        // camera has backed into.
+        var view = FlyCamera.View(_viewPosition, _viewForward);
+        var projection = _camera.Projection(aspect);
+        var viewProj = view * projection;
         var frustum = Frustum.FromViewProjection(viewProj);
 
         _chunkShader.Use();
         _chunkShader.SetMatrix4("uViewProj", viewProj);
-        _chunkShader.SetVec3("uCameraPos", _camera.Position);
+        _chunkShader.SetVec3("uCameraPos", _viewPosition);
         _chunkShader.SetVec3("uFogColor", SkyColor);
         _chunkShader.SetVec3("uSunDir", SunDirection);
         _chunkShader.SetVec3("uSunColor", SunColor);
@@ -762,7 +938,47 @@ public sealed class ClientHost : IDisposable
         if (_target is { } hit && !_wireframe)
             _outline.Draw(viewProj, new Vector3(hit.X, hit.Y, hit.Z));
 
+        DrawPlayer(viewProj, projection, view);
+
         _renderMs = (Stopwatch.GetTimestamp() - renderStart) * TicksToMs;
+    }
+
+    /// <summary>
+    /// Draws whichever part of the player this view mode can see: all of them, or just the arm.
+    /// </summary>
+    private void DrawPlayer(Matrix4x4 viewProj, Matrix4x4 projection, Matrix4x4 view)
+    {
+        if (_bench is not null) return;
+
+        var sky = new SkyParams(
+            SunDirection, SunColor, SkyAmbient, GroundAmbient, NightFloor, SkyColor, _fogStart, _fogEnd);
+
+        var light = SampleLight(_camera.Position);
+
+        // Third person only means anything when there is a body to stand behind, which is the same
+        // condition PlaceCamera uses to decide whether to run the boom out. The two have to agree,
+        // or the camera pulls back from a player it is not drawing.
+        if (_view != ViewMode.First && _walking)
+        {
+            if (_spawned)
+            {
+                _playerRenderer.DrawWorld(
+                    viewProj, _viewPosition, sky, light,
+                    _player.Position, _animator.Pose(_camera.Yaw, _camera.Pitch));
+            }
+
+            return;
+        }
+
+        // The arm goes over the world rather than into it. It sits centimetres from the eye, so
+        // against a real depth buffer it would be buried in the first block walked up to.
+        _gl.Clear(ClearBufferMask.DepthBufferBit);
+
+        // The sun has to arrive in the same space the geometry is in, or the arm lights from a
+        // fixed corner of the screen and swings through its own shading as the player turns.
+        _playerRenderer.DrawViewModel(
+            projection, Vector3.TransformNormal(SunDirection, view), sky, light,
+            _animator.Swinging, _animator.SwingProgress);
     }
 
     private void OnResize(Vector2D<int> size) => _gl.Viewport(size);
@@ -781,6 +997,7 @@ public sealed class ClientHost : IDisposable
         _chunkShader?.Dispose();
         _outline?.Dispose();
         _blockTextures?.Dispose();
+        _playerRenderer?.Dispose();
     }
 
     public void Dispose()

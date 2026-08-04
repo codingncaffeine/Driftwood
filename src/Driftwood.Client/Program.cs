@@ -1,5 +1,6 @@
 using Driftwood.Client.Render;
 using Driftwood.Core.Diagnostics;
+using Driftwood.Core.Entities;
 using Driftwood.Core.Gen;
 
 namespace Driftwood.Client;
@@ -75,6 +76,12 @@ public static class Program
                 case "--texture-size":
                     options = options with { TextureSize = ParseInt(Next(args, ref i, "--texture-size"), 16, 512) };
                     break;
+                case "--skin":
+                    options = options with { SkinPath = Next(args, ref i, "--skin") };
+                    break;
+                case "--skin-model":
+                    options = options with { Arms = ParseArms(Next(args, ref i, "--skin-model")) };
+                    break;
                 case "--bench":
                     // Seconds of flight, not frames: the path is flown at a fixed speed so the
                     // streamer meets the same pressure whatever the frame rate turns out to be.
@@ -127,6 +134,22 @@ public static class Program
         return Math.Clamp(value, min, max);
     }
 
+    /// <summary>
+    /// Arm width, when the sheet is not to be trusted about it.
+    /// </summary>
+    /// <remarks>
+    /// Detection reads the sheet for texels only a four-wide arm can use, which is the only signal
+    /// a bare PNG carries — the real answer lives in account metadata that never comes with the
+    /// file. It is right on everything drawn by a normal editor and wrong on a sheet that filled
+    /// its unused columns in, so the override exists rather than the player having to repaint.
+    /// </remarks>
+    private static ArmStyle ParseArms(string text) => text.ToLowerInvariant() switch
+    {
+        "classic" or "wide" or "4" => ArmStyle.Classic,
+        "slim" or "alex" or "3" => ArmStyle.Slim,
+        _ => throw new ArgumentException($"--skin-model wants 'classic' or 'slim', not '{text}'"),
+    };
+
     private static void PrintUsage()
     {
         Console.WriteLine("""
@@ -140,6 +163,8 @@ public static class Program
               --pack <path>     import block textures from a texture pack folder or .zip;
                                 anything the pack does not carry keeps Driftwood's own art
               --texture-size n  tile resolution to build the texture array at (default 16)
+              --skin <path>     wear a skin PNG: 64x64, or 64x32 for an old one, at any scale
+              --skin-model m    'classic' or 'slim' arms, overriding what the sheet looks like
               --vsync           cap to the display refresh rate (off by default so fps is readable)
               --audit           generate and mesh headlessly, print a census and checks, then exit
               --bench [secs]    fly a fixed path once the world has settled, report frame-time
@@ -151,10 +176,14 @@ public static class Program
 
             Controls
               Arrow keys        move (WASD also works)
-              Space / Ctrl      up / down (PgUp / PgDn also work)
-              Shift / Alt       boost / slow
+              Space / Ctrl      jump / sneak — up and down when flying
+              Shift             sprint (boost when flying)
+              Left / right      hold to mine or place; the arm swings and the swing takes the block
               Esc               release or recapture the mouse
               F1                wireframe
+              F2                frustum culling
+              F3                walk or fly
+              F5                first person, over the shoulder, facing
             """);
     }
 }

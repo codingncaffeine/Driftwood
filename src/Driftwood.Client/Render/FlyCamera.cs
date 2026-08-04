@@ -73,11 +73,20 @@ public sealed class FlyCamera
         if (keyboard.IsKeyPressed(Key.ControlLeft) || keyboard.IsKeyPressed(Key.PageDown)) Position -= Vector3.UnitY * speed;
     }
 
-    public Matrix4x4 ViewProjection(float aspect)
-    {
-        var view = Matrix4x4.CreateLookAt(Position, Position + Forward, Vector3.UnitY);
-        var proj = Matrix4x4.CreatePerspectiveFieldOfView(
+    public Matrix4x4 ViewProjection(float aspect) => View(Position, Forward) * Projection(aspect);
+
+    /// <summary>
+    /// The view from an arbitrary place looking an arbitrary way.
+    /// </summary>
+    /// <remarks>
+    /// Split out from <see cref="Position"/> and <see cref="Forward"/> because the third-person
+    /// camera renders from the end of a boom while everything else — aiming, streaming, the
+    /// coordinates in the title bar — still has to mean the player's eye.
+    /// </remarks>
+    public static Matrix4x4 View(Vector3 eye, Vector3 forward) =>
+        Matrix4x4.CreateLookAt(eye, eye + forward, Vector3.UnitY);
+
+    public Matrix4x4 Projection(float aspect) =>
+        Matrix4x4.CreatePerspectiveFieldOfView(
             float.DegreesToRadians(FovDegrees), aspect, NearPlane, FarPlane);
-        return view * proj;
-    }
 }
