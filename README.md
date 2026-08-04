@@ -20,7 +20,7 @@ streaming are in. The game itself is not; there is no player, no inventory and n
 | Sunlight and coloured block light | working |
 | Player controller — walk, jump, sneak, collide | working |
 | Block targeting, break and place | working |
-| Textures — currently a flat colour per block | placeholder |
+| Block textures, alpha cutout, texture pack import | working |
 | Inventory, crafting, recipes | not started |
 | Save / load | not started |
 | Controller support | not started |
@@ -80,6 +80,24 @@ land          41.4% of columns above sea level 62
   [PASS] coal rate in band            0.653% of stone (want 0.30-1.50)
   [PASS] iron rate in band            0.354% of stone (want 0.15-0.80)
 ```
+
+## Texture packs
+
+Driftwood draws its own block textures, so it never needs anything else to look complete. It can
+also read a texture pack you already have and use whatever that pack carries.
+
+```
+Driftwood.exe --pack C:\packs\SomePack.zip
+Driftwood.exe --pack C:\packs\SomePack --texture-size 64
+```
+
+A folder or a `.zip`, either way. A pack is treated as a **sparse set of overrides**: anything it
+does not carry keeps Driftwood's own art, so a half-finished pack still leaves a complete world.
+Nothing is copied, unpacked or written back out — the pack is read where it sits and closed again.
+
+Driftwood's block names are deliberately its own, so the correspondence between them and a pack's
+file names lives in one explicit table in `BlockTextureSet`. That is the only place the two
+vocabularies meet.
 
 ## Measuring frame time
 

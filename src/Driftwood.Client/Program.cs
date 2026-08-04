@@ -69,6 +69,12 @@ public static class Program
                 case "--vsync":
                     options = options with { VSync = true };
                     break;
+                case "--pack":
+                    options = options with { PackPath = Next(args, ref i, "--pack") };
+                    break;
+                case "--texture-size":
+                    options = options with { TextureSize = ParseInt(Next(args, ref i, "--texture-size"), 16, 512) };
+                    break;
                 case "--bench":
                     // Seconds of flight, not frames: the path is flown at a fixed speed so the
                     // streamer meets the same pressure whatever the frame rate turns out to be.
@@ -131,6 +137,9 @@ public static class Program
               --ocean <pct>     percent of the surface under water (default 25)
               --width <n>       window width (default 1600)
               --height <n>      window height (default 900)
+              --pack <path>     import block textures from a texture pack folder or .zip;
+                                anything the pack does not carry keeps Driftwood's own art
+              --texture-size n  tile resolution to build the texture array at (default 16)
               --vsync           cap to the display refresh rate (off by default so fps is readable)
               --audit           generate and mesh headlessly, print a census and checks, then exit
               --bench [secs]    fly a fixed path once the world has settled, report frame-time

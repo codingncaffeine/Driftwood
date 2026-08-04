@@ -6,6 +6,7 @@ using Driftwood.Core.Gen;
 using Driftwood.Core.Meshing;
 using Driftwood.Core.Physics;
 using Driftwood.Core.Spatial;
+using Driftwood.Core.Textures;
 using Driftwood.Core.World;
 using Silk.NET.Input;
 using Silk.NET.Maths;
@@ -25,6 +26,12 @@ public sealed record ClientOptions
     public bool VSync { get; init; }
     public int Width { get; init; } = 1600;
     public int Height { get; init; } = 900;
+
+    /// <summary>A texture pack folder or .zip to import block textures from, or null for our own.</summary>
+    public string? PackPath { get; init; }
+
+    /// <summary>Tile resolution the texture array is built at.</summary>
+    public int TextureSize { get; init; } = 16;
 
     /// <summary>Seconds of flight to measure; 0 runs the game normally.</summary>
     public double BenchSeconds { get; init; }
@@ -72,6 +79,7 @@ public sealed class ClientHost : IDisposable
 
     private PlayerBody _player = null!;
     private BlockOutline _outline = null!;
+    private BlockTextureArray _blockTextures = null!;
     private bool[] _targetable = null!;
 
     /// <summary>The block under the crosshair, if anything is in reach.</summary>
@@ -237,6 +245,10 @@ public sealed class ClientHost : IDisposable
 
         _chunkShader = new Shader(_gl, ChunkShaders.Vertex, ChunkShaders.Fragment);
         _outline = new BlockOutline(_gl);
+
+        var textures = BlockTextureSet.Build(_options.PackPath, _options.TextureSize);
+        _blockTextures = new BlockTextureArray(_gl, textures.Tiles, textures.Size);
+        Console.WriteLine($"textures    {textures.Summary}");
 
         BuildWorld();
     }
@@ -718,9 +730,10 @@ public sealed class ClientHost : IDisposable
         _chunkShader.SetVec3("uSkyAmbient", SkyAmbient);
         _chunkShader.SetVec3("uGroundAmbient", GroundAmbient);
         _chunkShader.SetVec3("uNightFloor", NightFloor);
+        _chunkShader.SetInt("uBlocks", 0);
+        _blockTextures.Bind();
         _chunkShader.SetFloat("uFogStart", _fogStart);
         _chunkShader.SetFloat("uFogEnd", _fogEnd);
-        _chunkShader.SetVec3Array("uPalette", StarterBlocks.PaletteRgb);
 
         var drawn = 0;
         var triangles = 0;
@@ -759,6 +772,7 @@ public sealed class ClientHost : IDisposable
         _meshes.Clear();
         _chunkShader?.Dispose();
         _outline?.Dispose();
+        _blockTextures?.Dispose();
     }
 
     public void Dispose()

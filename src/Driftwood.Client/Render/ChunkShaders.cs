@@ -20,7 +20,6 @@ public static class ChunkShaders
         uniform mat4 uViewProj;
         uniform vec3 uChunkOrigin;
         uniform vec3 uCameraPos;
-        uniform vec3 uPalette[64];
         uniform vec3 uSunDir;         // surface toward sun, normalised
         uniform vec3 uSunColor;       // colour and strength of direct sun at this time of day
         uniform vec3 uSkyAmbient;     // ambient arriving from above
@@ -29,7 +28,8 @@ public static class ChunkShaders
         uniform float uFogStart;
         uniform float uFogEnd;
 
-        out vec3 vColor;
+        out vec3 vLight;
+        out vec3 vUvw;
         out float vFog;
 
         const vec3 kNormals[6] = vec3[6](
@@ -79,7 +79,22 @@ public static class ChunkShaders
             // instead of washing to white wherever the two overlap.
             vec3 light = max(daylight, block);
 
-            vColor = uPalette[layer] * max(light, uNightFloor) * kAo[ao];
+            vLight = max(light, uNightFloor) * kAo[ao];
+
+            // Texture coordinates come from where the corner is in the world, projected onto the
+            // two axes lying in its face. Nothing is stored per vertex: a merged quad spanning six
+            // blocks lands on uv 0..6 and the sampler's repeat wrapping tiles it, which is exactly
+            // what a wall of the same block should look like. Storing uvs would have cost eight
+            // more bytes a vertex to say something the position already knows.
+            vec2 uv;
+            if (face == 0)      uv = vec2(-world.z, -world.y);   // +X
+            else if (face == 1) uv = vec2( world.z, -world.y);   // -X
+            else if (face == 2) uv = vec2( world.x,  world.z);   // +Y
+            else if (face == 3) uv = vec2( world.x, -world.z);   // -Y
+            else if (face == 4) uv = vec2( world.x, -world.y);   // +Z
+            else                uv = vec2(-world.x, -world.y);   // -Z
+
+            vUvw = vec3(uv, float(layer));
 
             float d = length(world - uCameraPos);
             vFog = clamp((d - uFogStart) / max(uFogEnd - uFogStart, 1.0), 0.0, 1.0);
@@ -89,16 +104,24 @@ public static class ChunkShaders
     public const string Fragment = """
         #version 330 core
 
-        in vec3 vColor;
+        in vec3 vLight;
+        in vec3 vUvw;
         in float vFog;
 
+        uniform sampler2DArray uBlocks;
         uniform vec3 uFogColor;
 
         out vec4 FragColor;
 
         void main()
         {
-            FragColor = vec4(mix(vColor, uFogColor, vFog), 1.0);
+            vec4 texel = texture(uBlocks, vUvw);
+
+            // Cutout, not blending. Leaves and vines are mostly holes; discarding them outright
+            // keeps them in the opaque pass, where they need no sorting and still write depth.
+            if (texel.a < 0.5) discard;
+
+            FragColor = vec4(mix(texel.rgb * vLight, uFogColor, vFog), 1.0);
         }
         """;
 }

@@ -7,6 +7,7 @@ using Driftwood.Core.Lighting;
 using Driftwood.Core.Meshing;
 using Driftwood.Core.Physics;
 using Driftwood.Core.Spatial;
+using Driftwood.Core.Textures;
 using Driftwood.Core.World;
 
 namespace Driftwood.Core.Diagnostics;
@@ -325,6 +326,12 @@ public static class WorldAudit
         var lightingConverges = LightingIsOrderIndependent(seed, registry, ids, oceanCoverage, out var lightDetail);
         Check("light ignores load order", lightingConverges, lightDetail);
 
+        var textureFaults = TextureSelfTest();
+        Check("block textures are drawn", textureFaults.Count == 0,
+            textureFaults.Count == 0
+                ? $"{BlockTextureSet.Layers.Length} layers, all painted, cutouts have holes"
+                : $"{textureFaults.Count} faults: {string.Join("; ", textureFaults)}");
+
         var rayFaults = RaycastSelfTest(registry, ids);
         Check("raycast hits the right face", rayFaults.Count == 0,
             rayFaults.Count == 0
@@ -566,6 +573,56 @@ public static class WorldAudit
         }
 
         return world;
+    }
+
+    /// <summary>
+    /// Builds every block tile and checks that each one was actually painted.
+    /// </summary>
+    /// <remarks>
+    /// The magenta test is the one that earns its place. An unhandled layer falls through to a
+    /// loud placeholder, which is obvious the moment anyone looks at that block — and completely
+    /// invisible if the block happens to be one that only spawns underground, or one nobody thought
+    /// to fly past. A layer added without art is exactly the kind of thing that ships.
+    /// <para>Cutout layers are checked for holes for the opposite reason: leaves with no
+    /// transparency render as a solid green cube, which looks deliberate.</para>
+    /// </remarks>
+    private static List<string> TextureSelfTest()
+    {
+        var faults = new List<string>();
+        var built = BlockTextureSet.Build(packPath: null);
+
+        for (var layer = 0; layer < built.Tiles.Length; layer++)
+        {
+            var name = BlockTextureSet.Layers[layer].Name;
+            var tile = built.Tiles[layer];
+
+            if (tile.Length != built.Size * built.Size * 4)
+            {
+                faults.Add($"{name} is {tile.Length} bytes, expected {built.Size * built.Size * 4}");
+                continue;
+            }
+
+            var magenta = 0;
+            var transparent = 0;
+            var distinct = new HashSet<int>();
+
+            for (var i = 0; i < tile.Length; i += 4)
+            {
+                if (tile[i] == 255 && tile[i + 1] == 0 && tile[i + 2] == 255) magenta++;
+                if (tile[i + 3] < 128) transparent++;
+                distinct.Add((tile[i] << 16) | (tile[i + 1] << 8) | tile[i + 2]);
+            }
+
+            var pixels = tile.Length / 4;
+            if (magenta > pixels / 2) faults.Add($"{name} is the missing-texture placeholder");
+            else if (distinct.Count < 4) faults.Add($"{name} has only {distinct.Count} colours — flat, not drawn");
+
+            var cutout = BlockTextureSet.Layers[layer].Cutout;
+            if (cutout && transparent == 0) faults.Add($"{name} is marked cutout but has no holes");
+            if (!cutout && transparent > 0) faults.Add($"{name} is opaque but has {transparent} clear pixels");
+        }
+
+        return faults;
     }
 
     /// <summary>
