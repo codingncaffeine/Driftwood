@@ -47,8 +47,10 @@ public static class StarterBlocks
     // side is a cut-out laid over the dirt, and a tuft of grass is a texture with no cube to sit on.
     public const ushort LayerGrassSideOverlay = 28;
     public const ushort LayerMeadowgrass = 29;
+    public const ushort LayerSeaflax = 30;
+    public const ushort LayerMarshlily = 31;
 
-    public const int LayerCount = 30;
+    public const int LayerCount = 32;
 
     public sealed record Ids(
         BlockId Stone,
@@ -76,13 +78,22 @@ public static class StarterBlocks
         BlockId Clay,
         BlockId Sandstone,
         BlockId Snow,
-        BlockId Meadowgrass)
+        BlockId SnowLayer,
+        BlockId Meadowgrass,
+        BlockId Seaflax,
+        BlockId Marshlily)
     {
         /// <summary>Every rock an ore can form in. Ore replaces rock, whichever rock it is.</summary>
         public BlockId[] Rock => [Stone, Deepstone, Coralstone, Driftstone, Saltstone];
 
         /// <summary>Everything mining is meant to yield, for the census to weigh against rock.</summary>
         public BlockId[] Ores => [CoalOre, IronOre, CopperOre, GoldOre, StormglassOre, AzuriteOre, Emberstone];
+
+        /// <summary>Everything that grows on open ground, for the census to weigh together.</summary>
+        public BlockId[] GroundCover => [Meadowgrass, Seaflax, Marshlily];
+
+        /// <summary>The flowers, which are rarer than the grass they stand in.</summary>
+        public BlockId[] Flowers => [Seaflax, Marshlily];
     }
 
     public static Ids Register(BlockRegistry registry)
@@ -191,11 +202,15 @@ public static class StarterBlocks
         // Vines hang off canopy undersides and overhangs. Neither solid nor opaque — you walk
         // through them and they barely shade what is behind — but they still dim light by a level,
         // which is what makes a curtain of them read as a curtain.
+        //
+        // Crossed planes rather than a cube. Ours hang in open air below a crown rather than
+        // clinging to a wall, and a cube of vine texture floating under a tree reads as a mistake
+        // from every angle — six faces of holes with nothing inside them.
         var vine = registry.Register(new BlockType
         {
             Name = "vine", Hardness = 0.2f, Solid = false, Opaque = false, LightAttenuation = 1,
             Tint = TintSource.Foliage,
-            TopLayer = LayerVine, SideLayer = LayerVine, BottomLayer = LayerVine,
+            Model = BlockModel.Cross(LayerVine),
         });
 
         // Rock below the metals' reach. Harder than stone, and it is what makes going deep read as
@@ -274,6 +289,15 @@ public static class StarterBlocks
             TopLayer = LayerSnow, SideLayer = LayerSnow, BottomLayer = LayerSnow,
         });
 
+        // The first fall of snow, a fifth of a block deep, lying over whatever it settled on. It is
+        // what turns the snow line from a drawn edge into a fade: a band of ground still green
+        // under a dusting, between the meadow and the snowfield proper.
+        var snowLayer = registry.Register(new BlockType
+        {
+            Name = "snow_layer", Hardness = 0.1f, Solid = false, Opaque = false,
+            Model = BlockModel.Layer(LayerSnow, LayerSnow, LayerSnow, 3f),
+        });
+
         // The first block in the world with a shape rather than a size. Two planes crossed through
         // the middle of the cell, no collision, no occlusion, and lit flat so both halves match —
         // the model format's own answer for every small plant, and the thing that proves the
@@ -285,9 +309,23 @@ public static class StarterBlocks
             Model = BlockModel.Cross(LayerMeadowgrass),
         });
 
+        // Flowers take no climate colour. A pack paints grass and leaves near-grey expecting the
+        // multiply, and paints a flower the colour the flower is — running one through the grass
+        // colormap turns every bloom in the world the same green as the field it stands in.
+        var seaflax = registry.Register(new BlockType
+        {
+            Name = "seaflax", Hardness = 0.05f, Solid = false, Opaque = false,
+            Model = BlockModel.Cross(LayerSeaflax, tinted: false),
+        });
+        var marshlily = registry.Register(new BlockType
+        {
+            Name = "marshlily", Hardness = 0.05f, Solid = false, Opaque = false,
+            Model = BlockModel.Cross(LayerMarshlily, tinted: false),
+        });
+
         return new Ids(
             stone, dirt, grass, sand, water, gravel, log, leaves, planks, coal, iron, bedrock,
             emberstone, vine, deepstone, coralstone, driftstone, saltstone, copper, gold, stormglass,
-            azurite, clay, sandstone, snow, meadowgrass);
+            azurite, clay, sandstone, snow, snowLayer, meadowgrass, seaflax, marshlily);
     }
 }

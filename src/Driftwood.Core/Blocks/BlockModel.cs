@@ -278,6 +278,131 @@ public sealed class BlockModel
         return new BlockModel(elements);
     }
 
+    /// <summary>A thin sheet lying on the floor: a carpet, or the first fall of snow.</summary>
+    public static BlockModel Layer(ushort top, ushort side, ushort bottom, float height) =>
+        new([Box(Vector3.Zero, new Vector3(16f, height, 16f), top, side, bottom)]);
+
+    /// <summary>Half a block, lying in either half of the cell.</summary>
+    public static BlockModel Slab(ushort top, ushort side, ushort bottom, bool upper) =>
+        new([upper
+            ? Box(new Vector3(0f, 8f, 0f), new Vector3(16f, 16f, 16f), top, side, bottom)
+            : Box(Vector3.Zero, new Vector3(16f, 8f, 16f), top, side, bottom)]);
+
+    /// <summary>
+    /// A slab with a step raised over one half of it.
+    /// </summary>
+    /// <param name="facing">The side the raised half sits on, in <see cref="Faces"/> order.</param>
+    /// <param name="upper">True for stairs hung the other way up, as if fixed to the ceiling.</param>
+    /// <remarks>
+    /// Built per facing rather than by turning one model four times. Rotating a box means rotating
+    /// which texture is on which face and which direction culls it, and every one of those is a
+    /// chance to be off by a quarter turn in a way that only shows from one side. Four sets of two
+    /// corners each say the same thing and say it plainly.
+    /// </remarks>
+    public static BlockModel Stairs(ushort top, ushort side, ushort bottom, int facing, bool upper)
+    {
+        // The half the solid part fills, and the half the step sits in above or below it.
+        var (slabFrom, slabTo) = upper
+            ? (new Vector3(0f, 8f, 0f), new Vector3(16f, 16f, 16f))
+            : (Vector3.Zero, new Vector3(16f, 8f, 16f));
+
+        var stepLow = upper ? 0f : 8f;
+        var stepHigh = upper ? 8f : 16f;
+
+        var (stepFrom, stepTo) = facing switch
+        {
+            Faces.PosX => (new Vector3(8f, stepLow, 0f), new Vector3(16f, stepHigh, 16f)),
+            Faces.NegX => (new Vector3(0f, stepLow, 0f), new Vector3(8f, stepHigh, 16f)),
+            Faces.PosZ => (new Vector3(0f, stepLow, 8f), new Vector3(16f, stepHigh, 16f)),
+            _ => (new Vector3(0f, stepLow, 0f), new Vector3(16f, stepHigh, 8f)),
+        };
+
+        return new BlockModel(
+        [
+            Box(slabFrom, slabTo, top, side, bottom),
+            Box(stepFrom, stepTo, top, side, bottom),
+        ]);
+    }
+
+    /// <summary>
+    /// A torch: a square post drawn as two crossed full-width planes, with the flame on its cap.
+    /// </summary>
+    /// <remarks>
+    /// The planes are wider than the post they draw. That is not a mistake in the format and it is
+    /// what makes a torch read at a distance: two 2-unit-wide boxes would be nearly invisible edge
+    /// on, so the model stretches the tile across the whole cell and lets the transparent margin do
+    /// the shaping. The cap reads a 2x2 patch out of the middle of the tile, which is the one place
+    /// an explicit <c>uv</c> is doing real work rather than restating the default.
+    /// </remarks>
+    public static BlockModel Torch(ushort layer)
+    {
+        var post = new ModelFace?[Faces.Count];
+        post[Faces.PosY] = new ModelFace { Layer = layer, Uv = new Vector4(7f, 6f, 9f, 8f) };
+        post[Faces.NegY] = new ModelFace { Layer = layer, Uv = new Vector4(7f, 13f, 9f, 15f) };
+
+        var alongX = new ModelFace?[Faces.Count];
+        alongX[Faces.NegX] = new ModelFace { Layer = layer, Uv = new Vector4(0f, 0f, 16f, 16f) };
+        alongX[Faces.PosX] = new ModelFace { Layer = layer, Uv = new Vector4(16f, 0f, 0f, 16f) };
+
+        var alongZ = new ModelFace?[Faces.Count];
+        alongZ[Faces.NegZ] = new ModelFace { Layer = layer, Uv = new Vector4(16f, 0f, 0f, 16f) };
+        alongZ[Faces.PosZ] = new ModelFace { Layer = layer, Uv = new Vector4(0f, 0f, 16f, 16f) };
+
+        return new BlockModel(
+        [
+            new ModelElement
+            {
+                From = new Vector3(7f, 0f, 7f), To = new Vector3(9f, 10f, 9f),
+                Faces = post, Shade = false, AmbientOcclusion = false,
+            },
+            new ModelElement
+            {
+                From = new Vector3(7f, 0f, 0f), To = new Vector3(9f, 16f, 16f),
+                Faces = alongX, Shade = false, AmbientOcclusion = false,
+            },
+            new ModelElement
+            {
+                From = new Vector3(0f, 0f, 7f), To = new Vector3(16f, 16f, 9f),
+                Faces = alongZ, Shade = false, AmbientOcclusion = false,
+            },
+        ]);
+    }
+
+    /// <summary>
+    /// One box with a texture on every face, culled by the sides of the cell it actually touches.
+    /// </summary>
+    /// <remarks>
+    /// The cull rule is derived rather than declared, and it has to be: a face that stops short of
+    /// the block boundary can never be hidden by the neighbour beyond it, and saying it can leaves
+    /// a hole in the top of every slab with something stacked on it. A face flush with the boundary
+    /// is culled by its own direction, which is what every hand-written model in the format says
+    /// too.
+    /// </remarks>
+    private static ModelElement Box(
+        Vector3 from, Vector3 to, ushort top, ushort side, ushort bottom, bool tinted = false)
+    {
+        var element = new ModelElement { From = from, To = to, Faces = new ModelFace?[Faces.Count] };
+
+        for (var face = 0; face < Faces.Count; face++)
+        {
+            var layer = face switch
+            {
+                Faces.PosY => top,
+                Faces.NegY => bottom,
+                _ => side,
+            };
+
+            element.Faces[face] = new ModelFace
+            {
+                Layer = layer,
+                CullFace = IsFlush(element, face) ? face : -1,
+                Tinted = tinted,
+            };
+        }
+
+        return element;
+    }
+
     private static ModelElement WholeBlock(ModelFace?[] faces) => new()
     {
         From = Vector3.Zero,

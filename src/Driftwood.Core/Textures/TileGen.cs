@@ -314,6 +314,54 @@ public static class TileGen
         return t;
     }
 
+    /// <summary>A stem with a bloom on it, most of the tile empty — one small flower.</summary>
+    /// <remarks>
+    /// Drawn on the same footing as <see cref="Tuft"/>: the tile is stretched over two crossed
+    /// planes standing in the cell, so the stem has to start at the bottom edge and the bloom has to
+    /// stop short of the top or the flower grows through the block above it.
+    /// </remarks>
+    public static byte[] Flower(int seed, byte stemR, byte stemG, byte stemB, byte r, byte g, byte b, byte coreR, byte coreG, byte coreB)
+    {
+        var t = new byte[BytesPerTile];
+        const int Centre = Size / 2;
+
+        var height = 8 + (int)(Noise(0, 0, seed) * 3f);
+        for (var i = 0; i < height; i++)
+        {
+            var y = Size - 1 - i;
+            var lean = (int)MathF.Round((Noise(0, i, seed + 7) * 2f - 1f) * 1.2f);
+            var d = (int)((Noise(Centre, y, seed + 13) * 2f - 1f) * 12f);
+            Put(t, Centre + lean, y, Clamp(stemR + d), Clamp(stemG + d), Clamp(stemB + d), 255);
+
+            // A pair of leaves partway up, so the stem is not a bare wire.
+            if (i != height / 2) continue;
+            Put(t, Centre + lean - 1, y, stemR, stemG, stemB, 255);
+            Put(t, Centre + lean + 1, y, stemR, stemG, stemB, 255);
+        }
+
+        // The bloom: a rough disc over the top of the stem with a different colour at its middle.
+        var top = Size - height;
+        for (var dy = -2; dy <= 2; dy++)
+        for (var dx = -2; dx <= 2; dx++)
+        {
+            if (dx * dx + dy * dy > 5) continue;
+
+            var x = Centre + dx;
+            var y = top + dy;
+            if ((uint)x >= Size || (uint)y >= Size) continue;
+
+            var core = dx * dx + dy * dy <= 1;
+            var d = (int)((Noise(x, y, seed + 29) * 2f - 1f) * 14f);
+            Put(t, x, y,
+                Clamp((core ? coreR : r) + d),
+                Clamp((core ? coreG : g) + d),
+                Clamp((core ? coreB : b) + d),
+                255);
+        }
+
+        return t;
+    }
+
     /// <summary>Glowing veins through dark rock.</summary>
     public static byte[] Ember(int seed, byte[] baseTile, byte r, byte g, byte b)
     {

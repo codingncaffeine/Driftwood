@@ -347,16 +347,38 @@ public sealed class TerrainGenerator
     private ushort TopOf(int x, int z, int surface, bool beach)
     {
         if (beach) return _ids.Sand;
-
-        // Altitude counts by the square, which is the only shape that does both jobs at once.
-        // Linear cannot: gentle enough to leave the lowlands alone and a warm seed has no snow
-        // anywhere in it (seed 'stonebreak' had none at all), steep enough to guarantee white peaks
-        // and half the world is a snowfield (seed 'driftwood' reached 50%). Squared, the first
-        // dozen blocks above the sea are worth almost nothing and the last dozen are worth
-        // everything, which is what a snow line actually looks like.
-        var above = MathF.Max(0f, surface - SeaLevel);
-        return _climate.Temperature(x, z) - above * above / 2600f < SnowLine ? _ids.Snow : _ids.Grass;
+        return SnowDepth(x, z, surface) > 0f ? _ids.Snow : _ids.Grass;
     }
+
+    /// <summary>
+    /// How far past the snow line a column sits. Positive is snow, and the more positive the deeper
+    /// into the cold.
+    /// </summary>
+    /// <remarks>
+    /// Altitude counts by the square, which is the only shape that does both jobs at once. Linear
+    /// cannot: gentle enough to leave the lowlands alone and a warm seed has no snow anywhere in it
+    /// (seed 'stonebreak' had none at all), steep enough to guarantee white peaks and half the world
+    /// is a snowfield (seed 'driftwood' reached 50%). Squared, the first dozen blocks above the sea
+    /// are worth almost nothing and the last dozen are worth everything, which is what a snow line
+    /// actually looks like.
+    /// </remarks>
+    private float SnowDepth(int x, int z, int surface)
+    {
+        var above = MathF.Max(0f, surface - SeaLevel);
+        return SnowLine - (_climate.Temperature(x, z) - above * above / 2600f);
+    }
+
+    /// <summary>
+    /// How far short of the snow line a column may sit and still carry a dusting of it.
+    /// </summary>
+    /// <remarks>
+    /// The band exists because a snow line drawn as a line looks drawn. Ground just too warm to
+    /// hold snow keeps its grass and wears a layer over it, so the snowfield has an edge that fades
+    /// rather than a contour you could trace. Sized against the field it is measured in, not in
+    /// blocks: temperature runs about 0.31 to 0.69 across a world, so a band of 0.03 is a fringe
+    /// rather than a second biome.
+    /// </remarks>
+    private const float SnowDusting = 0.03f;
 
     /// <summary>
     /// Warmth below which snow lies rather than grass.
@@ -436,21 +458,24 @@ public sealed class TerrainGenerator
             PlantOakInto(chunk, ox, oy, oz, tree);
         }
 
-        ScatterMeadowgrass(chunk, ox, oy, oz);
+        ScatterGroundCover(chunk, ox, oy, oz);
     }
 
-    /// <summary>Sows tufts of grass over open ground, in patches rather than evenly.</summary>
+    /// <summary>Puts something on top of every open column that has earned it.</summary>
     /// <remarks>
     /// <para>Runs after the trees, and only into air, so a trunk standing on a grass column keeps
     /// the cell it is already in. That ordering is what makes the result chunk-pure: trees are
     /// decided from the heightmap and land identically however many neighbours exist, so what is
     /// left as air is identical too.</para>
-    /// <para>Two fields rather than one. A single per-column roll gives an even wash of grass over
-    /// every meadow in the world, which reads as noise; a slow field deciding <em>where</em> grass
-    /// grows and a fast one deciding <em>which</em> columns gives patches with bare ground between
-    /// them, which reads as a meadow.</para>
+    /// <para>Two fields rather than one for the tufts. A single per-column roll gives an even wash
+    /// of grass over every meadow in the world, which reads as noise; a slow field deciding
+    /// <em>where</em> grass grows and a fast one deciding <em>which</em> columns gives patches with
+    /// bare ground between them, which reads as a meadow.</para>
+    /// <para>One cell, one thing: snow first, then flowers, then grass. Anything else needs the
+    /// order written down somewhere, and a column that grew a flower and then had it overwritten by
+    /// a tuft would be invisible in every count.</para>
     /// </remarks>
-    private void ScatterMeadowgrass(Chunk chunk, int ox, int oy, int oz)
+    private void ScatterGroundCover(Chunk chunk, int ox, int oy, int oz)
     {
         for (var z = 0; z < Chunk.Size; z++)
         for (var x = 0; x < Chunk.Size; x++)
@@ -465,8 +490,29 @@ public sealed class TerrainGenerator
             var beach = surface <= SeaLevel + 2;
             if (TopOf(wx, wz, surface, beach) != _ids.Grass.Value) continue;
 
+            // Cold enough to hold a dusting but not to hold a snowfield. Nothing grows through it.
+            if (SnowDepth(wx, wz, surface) > -SnowDusting)
+            {
+                PlaceIntoAir(chunk, ox, oy, oz, wx, surface + 1, wz, _ids.SnowLayer);
+                continue;
+            }
+
             if (Noise.Fbm2(wx / 44f, wz / 44f, _seedMeadow, 2) < -0.04f) continue;
-            if (Noise.Value2(wx, wz, _seedMeadow + 11) > 0.44f) continue;
+
+            var roll = Noise.Value2(wx, wz, _seedMeadow + 11);
+            if (roll > 0.44f) continue;
+
+            // Flowers come out of the same roll as the grass rather than a second one, so a meadow
+            // is a meadow with flowers in it instead of two unrelated scatterings that sometimes
+            // agree. Which flower is a slow field of its own, so a patch is one kind or the other.
+            if (roll < 0.03f)
+            {
+                var kind = Noise.Fbm2(wx / 96f, wz / 96f, _seedMeadow + 23, 2) < 0f
+                    ? _ids.Seaflax
+                    : _ids.Marshlily;
+                PlaceIntoAir(chunk, ox, oy, oz, wx, surface + 1, wz, kind);
+                continue;
+            }
 
             PlaceIntoAir(chunk, ox, oy, oz, wx, surface + 1, wz, _ids.Meadowgrass);
         }

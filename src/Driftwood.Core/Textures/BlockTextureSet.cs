@@ -87,6 +87,11 @@ public static class BlockTextureSet
 
         // Short grass was called grass.png until it was renamed, so both paths are worth trying.
         new("meadowgrass", "textures/block/short_grass.png",      true, "textures/block/grass.png"),
+
+        // Ours are seaflax and marshlily; a pack has painted a small blue flower and a small white
+        // one whatever anybody calls them, and those are the two nearest.
+        new("seaflax",     "textures/block/cornflower.png",       true),
+        new("marshlily",   "textures/block/oxeye_daisy.png",      true),
     ];
 
     /// <param name="GrassMap">Grass colormap, the pack's if it ships one.</param>
@@ -193,6 +198,8 @@ public static class BlockTextureSet
             StarterBlocks.LayerSandstoneTop => TileGen.Speckle(1028, 219, 205, 160, 10, 0.4f),
             StarterBlocks.LayerSnow => TileGen.Speckle(1029, 243, 246, 250, 7, 0.3f),
             StarterBlocks.LayerMeadowgrass => TileGen.Tuft(1030, 96, 148, 62),
+            StarterBlocks.LayerSeaflax => TileGen.Flower(1031, 74, 118, 58, 78, 116, 208, 226, 232, 118),
+            StarterBlocks.LayerMarshlily => TileGen.Flower(1032, 82, 126, 62, 236, 238, 232, 236, 196, 84),
             _ => TileGen.Solid(255, 0, 255, 255),
         };
     }

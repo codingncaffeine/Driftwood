@@ -486,6 +486,42 @@ public static class WorldAudit
         Check("meadowgrass rate in band", meadowPct is > 8.0 and < 45.0,
             $"{meadowPct:F1}% of grass columns (want 8-45)");
 
+        long flowers = 0;
+        foreach (var id in ids.Flowers) flowers += counts[id.Value];
+
+        long cover = 0;
+        foreach (var id in ids.GroundCover) cover += counts[id.Value];
+
+        // Flowers are the exception in a meadow, not the meadow. A share rather than a count,
+        // because the count follows how much open ground the sampled window happened to contain and
+        // the share does not — and banded at both ends, since a field that is more bloom than grass
+        // is as wrong as one with none.
+        var flowerPct = flowers * 100.0 / Math.Max(cover, 1);
+        Check(
+            "meadows carry flowers",
+            flowers > 0 && flowerPct is > 2.0 and < 25.0
+                && counts[ids.Seaflax.Value] > 0 && counts[ids.Marshlily.Value] > 0,
+            $"{flowers:N0} blooms, {flowerPct:F1}% of ground cover (want 2-25), "
+            + $"{counts[ids.Seaflax.Value]:N0} seaflax and {counts[ids.Marshlily.Value]:N0} marshlily");
+
+        // The dusting has to be a fringe on the snowfield rather than a second one. Measured as its
+        // share of all the white ground: with no band the edge either vanishes (a snow line drawn
+        // as a line, which is what this replaced) or swallows the meadows below it, and neither
+        // shows up in any count of snow itself.
+        //
+        // The ceiling is set where it can be. Correct worlds read 12.4 to 23.9 across the five test
+        // seeds; widening the band five times over gives 43.0 and is caught. Doubling it gives 31.4
+        // on one seed and 22.6 on another — below what a third seed reads when it is right — so a
+        // doubling is not separable by any single number, and this check does not claim to catch
+        // one. It catches the band being turned off, or opened wide enough to be a second biome.
+        var whiteGround = counts[ids.Snow.Value] + counts[ids.SnowLayer.Value];
+        var dustPct = counts[ids.SnowLayer.Value] * 100.0 / Math.Max(whiteGround, 1);
+        Check(
+            "snow fades at its edge",
+            dustPct is > 8.0 and < 33.0 && maxY[ids.SnowLayer.Value] < maxY[ids.Snow.Value],
+            $"{dustPct:F1}% of white ground is a dusting (want 8-33), "
+            + $"topping out at y {maxY[ids.SnowLayer.Value]} under snow at y {maxY[ids.Snow.Value]}");
+
         Check("canopies merge", canopy.MeanSize is > 90 and < 40_000,
             $"mean leaf mass {canopy.MeanSize:F0} blocks across {canopy.Clusters:N0} (want 90-40,000)");
 
