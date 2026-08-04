@@ -58,6 +58,25 @@ public sealed class TerrainGenerator
     private readonly int _seedEmber;
     private readonly int _seedTree;
     private readonly int _seedForest;
+    private readonly int _seedCopper;
+    private readonly int _seedGold;
+    private readonly int _seedDiamond;
+    private readonly int _seedAzurite;
+    private readonly int _seedGranite;
+    private readonly int _seedAndesite;
+    private readonly int _seedDiorite;
+    private readonly int _seedDeep;
+    private readonly int _seedClay;
+
+    /// <summary>
+    /// Climate, for the one thing terrain reads out of it: where snow lies.
+    /// </summary>
+    /// <remarks>
+    /// The same fields the tinter uses, derived from the same seed, so a region whose grass is
+    /// painted cold is the region that has snow on it. Two independent climates would put a
+    /// snowfield in the middle of a lush green valley.
+    /// </remarks>
+    private readonly ClimateField _climate;
 
     /// <summary>Default share of the surface that sits at or below sea level.</summary>
     public const float DefaultOceanCoverage = 0.25f;
@@ -86,6 +105,17 @@ public sealed class TerrainGenerator
         _seedEmber = seed.Derive("ore.emberstone");
         _seedTree = seed.Derive("decor.tree");
         _seedForest = seed.Derive("decor.forest");
+        _seedCopper = seed.Derive("ore.copper");
+        _seedGold = seed.Derive("ore.gold");
+        _seedDiamond = seed.Derive("ore.diamond");
+        _seedAzurite = seed.Derive("ore.azurite");
+        _seedGranite = seed.Derive("rock.granite");
+        _seedAndesite = seed.Derive("rock.andesite");
+        _seedDiorite = seed.Derive("rock.diorite");
+        _seedDeep = seed.Derive("rock.deepstone");
+        _seedClay = seed.Derive("deposit.clay");
+
+        _climate = new ClimateField(seed);
 
         _heightBias = CalibrateHeightBias(OceanCoverage);
     }
@@ -197,9 +227,11 @@ public sealed class TerrainGenerator
                 else
                 {
                     var depth = surface - wy;
-                    if (depth == 0) id = beach ? _ids.Sand.Value : _ids.Grass.Value;
-                    else if (depth <= 3) id = beach ? _ids.Sand.Value : _ids.Dirt.Value;
-                    else id = _ids.Stone;
+
+                    if (depth == 0) id = TopOf(wx, wz, surface, beach);
+                    else if (depth <= 3) id = beach ? SoftBeach(wx, wy, wz) : _ids.Dirt.Value;
+                    else if (beach && depth <= 7) id = _ids.Sandstone;   // every beach stands on it
+                    else id = RockAt(wx, wy, wz);
 
                     // Caves cut through everything but bedrock and the seabed. Two independent
                     // fields intersected gives connected tunnels; a single field gives flat sheets.
@@ -209,7 +241,7 @@ public sealed class TerrainGenerator
                         id = wy <= SeaLevel && surface <= SeaLevel ? id : (ushort)0;
                     }
 
-                    if (id == _ids.Stone.Value) id = OreAt(wx, wy, wz);
+                    if (IsRock(id)) id = OreAt(wx, wy, wz, id);
                 }
 
                 raw[Chunk.Index(x, y, z)] = id;
@@ -236,27 +268,113 @@ public sealed class TerrainGenerator
     /// band and grow each one — which is how a designer sets "iron should be twice as common as
     /// gold" and gets it. The census in <c>--audit</c> is what keeps either method honest.</para>
     /// </remarks>
-    private ushort OreAt(int x, int y, int z)
+    private ushort OreAt(int x, int y, int z, ushort rock)
     {
-        // Emberstone is deeper and rarer than anything else, and it is placed before the metals so
-        // a cell that qualifies for both becomes the interesting one. Caves are carved before ore
-        // is assigned, so a vein only ever forms in the rock that survived — which is why one shows
-        // up as a glow in a cave wall rather than as a lamp sealed inside a mountain.
+        // Deepest and rarest first, because the first match wins and a cell that qualifies for two
+        // veins should become the one worth walking to. Caves are carved before ore is assigned, so
+        // a vein only ever forms in rock that survived — which is why a seam shows up in a cave wall
+        // rather than sealed inside a mountain where nobody would ever see it.
+        //
+        // Every threshold is calibrated against what two-octave fBm actually produces, which peaks
+        // near +/-0.5 rather than +/-1, and rate falls off as roughly exp(-26 * threshold). The
+        // bands in --audit are what keep the whole ladder honest: each tier has to be rarer than the
+        // one above it, and no tier may be so rare it never gates anything or so common it stops
+        // being a find.
+        if (y is >= 2 and <= 16 && Noise.Fbm3(x / 6f, y / 6f, z / 6f, _seedDiamond, 2) > 0.545f)
+            return _ids.StormglassOre;
+        if (y is >= 2 and <= 30 && Noise.Fbm3(x / 7f, y / 7f, z / 7f, _seedAzurite, 2) > 0.535f)
+            return _ids.AzuriteOre;
+        if (y is >= 2 and <= 32 && Noise.Fbm3(x / 7f, y / 7f, z / 7f, _seedGold, 2) > 0.535f)
+            return _ids.GoldOre;
         if (y is >= 4 and <= 40 && Noise.Fbm3(x / 7f, y / 7f, z / 7f, _seedEmber, 2) > 0.53f)
             return _ids.Emberstone;
 
-        // Iron sits deeper and rarer than coal, which is the first progression gate the
-        // survival loop leans on.
-        // Target mix, checked by the audit: coal near 0.8% of stone, iron near 0.35%, coal
-        // roughly twice as common as iron so the first tool tier is the easy one.
+        // Iron sits deeper and rarer than coal, which is the first progression gate the survival
+        // loop leans on. Copper is shallower and commoner than either — the metal you trip over
+        // before you have gone looking for anything.
         if (y is >= 4 and <= 58 && Noise.Fbm3(x / 9f, y / 9f, z / 9f, _seedIron, 2) > 0.50f)
             return _ids.IronOre;
+        if (y is >= 8 and <= 72 && Noise.Fbm3(x / 10f, y / 10f, z / 10f, _seedCopper, 2) > 0.49f)
+            return _ids.CopperOre;
         if (y is >= 4 and <= 92 && Noise.Fbm3(x / 12f, y / 12f, z / 12f, _seedCoal, 2) > 0.475f)
             return _ids.CoalOre;
         if (Noise.Fbm3(x / 14f, y / 14f, z / 14f, _seedGravel, 2) > 0.50f)
             return _ids.Gravel;
+
+        return rock;
+    }
+
+    /// <summary>Which rock fills a cell: deepstone at depth, three intrusions, stone otherwise.</summary>
+    /// <remarks>
+    /// The transition to deepstone is a noise field rather than a flat plane, so descending into it
+    /// is a change of country rather than crossing a line somebody drew at a round number.
+    /// </remarks>
+    private ushort RockAt(int x, int y, int z)
+    {
+        const int DeepFrom = 12;
+        const int DeepBy = 22;
+
+        if (y < DeepBy)
+        {
+            var blend = (y - DeepFrom) / (float)(DeepBy - DeepFrom);
+            if (Noise.Fbm3(x / 18f, y / 6f, z / 18f, _seedDeep, 2) * 1.6f + 0.5f > blend)
+                return _ids.Deepstone;
+        }
+
+        // Big soft blobs, far coarser than an ore vein. At this scale they read as bodies of rock
+        // the tunnels cut through rather than as speckle.
+        if (Noise.Fbm3(x / 26f, y / 20f, z / 26f, _seedGranite, 2) > 0.36f) return _ids.Coralstone;
+        if (Noise.Fbm3(x / 26f, y / 20f, z / 26f, _seedAndesite, 2) > 0.36f) return _ids.Driftstone;
+        if (Noise.Fbm3(x / 26f, y / 20f, z / 26f, _seedDiorite, 2) > 0.36f) return _ids.Saltstone;
+
         return _ids.Stone;
     }
+
+    private bool IsRock(ushort id) =>
+        id == _ids.Stone.Value || id == _ids.Deepstone.Value || id == _ids.Coralstone.Value
+        || id == _ids.Driftstone.Value || id == _ids.Saltstone.Value;
+
+    /// <summary>
+    /// What lies on top of a column: snow where it is cold, sand at the shore, grass otherwise.
+    /// </summary>
+    /// <remarks>
+    /// Altitude counts for far more here than it does in the colour lookup, and on purpose. A gentle
+    /// lapse rate is right for tinting, where the point is that a highland meadow is a slightly
+    /// different green; it is wrong for snow, where the point is that a mountain has a white top.
+    /// </remarks>
+    private ushort TopOf(int x, int z, int surface, bool beach)
+    {
+        if (beach) return _ids.Sand;
+
+        // Altitude counts by the square, which is the only shape that does both jobs at once.
+        // Linear cannot: gentle enough to leave the lowlands alone and a warm seed has no snow
+        // anywhere in it (seed 'stonebreak' had none at all), steep enough to guarantee white peaks
+        // and half the world is a snowfield (seed 'driftwood' reached 50%). Squared, the first
+        // dozen blocks above the sea are worth almost nothing and the last dozen are worth
+        // everything, which is what a snow line actually looks like.
+        var above = MathF.Max(0f, surface - SeaLevel);
+        return _climate.Temperature(x, z) - above * above / 2600f < SnowLine ? _ids.Snow : _ids.Grass;
+    }
+
+    /// <summary>
+    /// Warmth below which snow lies rather than grass.
+    /// </summary>
+    /// <remarks>
+    /// Measured, not guessed, and it moves fast: 0.30 buried a third of all open ground, 0.22 left
+    /// it on nothing but the highest peaks. Rate goes as roughly exp(25 * line), which is what a
+    /// two-point measurement converged on. Banded in the audit against grass rather than against the
+    /// whole volume, since that is the comparison a player actually makes.
+    /// </remarks>
+    private const float SnowLine = 0.33f;
+
+    /// <summary>Shore material: sand, with clay in patches where the water is shallow.</summary>
+    /// <remarks>
+    /// The threshold looks generous next to an ore's and is not: this only ever runs on the top
+    /// three blocks of a shore column, so the field is being sampled across a sheet rather than
+    /// through a volume. At an ore-like 0.42 the whole world held under a thousand clay.
+    /// </remarks>
+    private ushort SoftBeach(int x, int y, int z) =>
+        Noise.Fbm3(x / 11f, y / 5f, z / 11f, _seedClay, 2) > 0.30f ? _ids.Clay : _ids.Sand;
 
     /// <summary>
     /// Plants every tree that reaches into this chunk, writing only the blocks that land inside it.

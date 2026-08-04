@@ -159,6 +159,36 @@ public static class TileGen
         return t;
     }
 
+    /// <summary>Horizontal bands of varying tone — sedimentary rock seen from the side.</summary>
+    /// <remarks>
+    /// Bands rather than speckle because that is the whole visual difference between sandstone and
+    /// sand: the same grains, but laid down over time and readable as layers. Only for side faces —
+    /// a top face wearing this shows the strata on edge.
+    /// </remarks>
+    public static byte[] Strata(int seed, byte r, byte g, byte b)
+    {
+        var t = new byte[BytesPerTile];
+
+        for (var y = 0; y < Size; y++)
+        {
+            // A band every few rows, each its own tone, with the boundary between two of them
+            // darker than either — that line is what the eye reads as a layer.
+            var band = y / 3;
+            var tone = (int)((Noise(0, band, seed) * 2f - 1f) * 16f);
+            var boundary = y % 3 == 0;
+
+            for (var x = 0; x < Size; x++)
+            {
+                var d = tone + (int)((Noise(x, y, seed + 23) * 2f - 1f) * 6f);
+                if (boundary) d -= 18;
+
+                Put(t, x, y, Clamp(r + d), Clamp(g + d), Clamp(b + d), 255);
+            }
+        }
+
+        return t;
+    }
+
     /// <summary>Foliage: clumped colour with holes punched right through.</summary>
     /// <remarks>
     /// The holes are the point. Opaque leaves read as a solid green cube no matter how good the

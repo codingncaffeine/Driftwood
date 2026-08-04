@@ -279,15 +279,107 @@ public static class WorldAudit
             mismatchedChunks == 0
                 ? $"{totalCovered:N0} faces across {positions.Count:N0} chunks"
                 : $"{mismatchedChunks} chunks differ, {totalCovered:N0} merged vs {totalNaive:N0} naive");
+        // A material nobody can find is a material that does not exist, and this is the check that
+        // says so. It was written after the world turned out to hold two ores and no stone variants
+        // at all — every block registered and textured, half of them nowhere in the ground. Anything
+        // that is only ever built rather than dug is named here on purpose, so adding a block and
+        // forgetting to place it fails rather than quietly joining the list.
+        string[] craftOnly = ["air", "driftoak_planks"];
+        var missing = new List<string>();
+        for (ushort id = 0; id < registry.Count; id++)
+        {
+            var name = registry[id].Name;
+            if (counts[id] > 0 || Array.IndexOf(craftOnly, name) >= 0) continue;
+            missing.Add(name);
+        }
+
+        Check("every material is in the world", missing.Count == 0,
+            missing.Count == 0
+                ? $"{registry.Count - craftOnly.Length} of {registry.Count} blocks generate; {string.Join(", ", craftOnly[1..])} are built, not dug"
+                : $"never generated: {string.Join(", ", missing)}");
+
         // Ore gets a band, not a floor. Too little and mining never gates progression; too much
         // and it stops being a reward. A floor-only check passes a world where one stone block
         // in fifty is coal, which is how the first calibration pass slipped through.
-        var stone = (double)counts[ids.Stone.Value];
-        var coalPct = counts[ids.CoalOre.Value] * 100.0 / stone;
-        var ironPct = counts[ids.IronOre.Value] * 100.0 / stone;
-        Check("coal rate in band", coalPct is > 0.30 and < 1.50, $"{coalPct:F3}% of stone (want 0.30-1.50)");
-        Check("iron rate in band", ironPct is > 0.15 and < 0.80, $"{ironPct:F3}% of stone (want 0.15-0.80)");
-        Check("coal beats iron", counts[ids.CoalOre.Value] > counts[ids.IronOre.Value], $"{counts[ids.CoalOre.Value]:N0} vs {counts[ids.IronOre.Value]:N0}");
+        //
+        // Measured against all rock rather than against stone alone. Once ore could form in
+        // deepstone and in the three intrusions, "percent of stone" was counting a numerator the
+        // denominator no longer covered — the classic way a rate drifts without anything looking
+        // wrong. See the block census above for the split.
+        double rock = 0;
+        foreach (var block in ids.Rock) rock += counts[block.Value];
+
+        double Rate(BlockId ore) => counts[ore.Value] * 100.0 / rock;
+
+        var coalPct = Rate(ids.CoalOre);
+        var copperPct = Rate(ids.CopperOre);
+        var ironPct = Rate(ids.IronOre);
+        var goldPct = Rate(ids.GoldOre);
+        var azuritePct = Rate(ids.AzuriteOre);
+        var stormglassPct = Rate(ids.StormglassOre);
+
+        Check("coal rate in band", coalPct is > 0.30 and < 1.20, $"{coalPct:F3}% of rock (want 0.30-1.20)");
+        Check("copper rate in band", copperPct is > 0.20 and < 0.90, $"{copperPct:F3}% of rock (want 0.20-0.90)");
+        Check("iron rate in band", ironPct is > 0.15 and < 0.70, $"{ironPct:F3}% of rock (want 0.15-0.70)");
+        Check("gold rate in band", goldPct is > 0.04 and < 0.30, $"{goldPct:F3}% of rock (want 0.04-0.30)");
+        Check("azurite rate in band", azuritePct is > 0.03 and < 0.28, $"{azuritePct:F3}% of rock (want 0.03-0.28)");
+        Check("stormglass rate in band", stormglassPct is > 0.015 and < 0.12, $"{stormglassPct:F3}% of rock (want 0.015-0.12)");
+
+        // The ladder, which is the check the individual bands cannot make. Every tier could sit
+        // inside its own band and still come out in the wrong order, and the order is the whole
+        // point: what makes stormglass worth going deep for is that it is rarer than everything
+        // above it, not that it is rare in absolute terms.
+        var deepest = Math.Min(goldPct, azuritePct);
+        var ladder = coalPct > copperPct && copperPct > ironPct
+                  && ironPct > Math.Max(goldPct, azuritePct) && deepest > stormglassPct;
+
+        Check("the ore ladder holds", ladder,
+            $"coal {coalPct:F2} > copper {copperPct:F2} > iron {ironPct:F2} > gold {goldPct:F2}/azurite {azuritePct:F2} > stormglass {stormglassPct:F3}");
+
+        // Rock variety. One uniform grey underground is the failure this catches, and it looks
+        // exactly like a working world in every other check here.
+        var deepPct = counts[ids.Deepstone.Value] * 100.0 / rock;
+        Check("deepstone owns the depths", deepPct is > 10.0 and < 50.0 && maxY[ids.Deepstone.Value] < 30,
+            $"{deepPct:F1}% of rock (want 10-50), top at y {maxY[ids.Deepstone.Value]} (want under 30)");
+
+        var intrusions = new[] { ids.Coralstone, ids.Driftstone, ids.Saltstone }
+            .Select(b => (Name: registry[b].Name, Pct: Rate(b))).ToArray();
+
+        Check("intrusions break up the rock", Array.TrueForAll(intrusions, i => i.Pct is > 1.0 and < 8.0),
+            string.Join(", ", intrusions.Select(i => $"{i.Name} {i.Pct:F2}%")) + " of rock (want 1-8 each)");
+
+        // Snow is gated on where it lies, not on how much of it there is.
+        //
+        // Coverage looked like the obvious measure and is nearly useless here: climate runs on a
+        // 1,400-block wavelength and the audit samples a few hundred, so a run legitimately lands
+        // inside one cold region or one warm one. Measured across five seeds the same constant gave
+        // between 4% and 38%, and every band tight enough to be worth having failed a seed that was
+        // simply cold. What does hold on every seed is the property that actually matters: snow
+        // sits above grass. A snow line driven by climate alone with no altitude term fails it flat,
+        // and that was a real bug — one seed came out with no snow anywhere at all.
+        var snowfall = SampleSurface(world, minBlock, maxBlock, ids.Snow.Value, ids.Grass.Value);
+        var snowPct = snowfall.Total > 0 ? snowfall.Snow * 100.0 / snowfall.Total : 0;
+        var lift = snowfall.MeanSnowY - snowfall.MeanGrassY;
+
+        Check(
+            "snow lies high and cold",
+            // The floor is barely a floor on purpose: "snow exists at all" is already owned by the
+            // material census above, and a warm seed whose only snow is on its highest peaks is
+            // right rather than broken — seed 'stonebreak' comes out at 0.8% and should.
+            snowPct is > 0.1 and < 60.0 && lift > 4.0 && maxY[ids.Snow.Value] >= maxY[ids.Grass.Value],
+            $"{snowPct:F1}% of open ground, mean y {snowfall.MeanSnowY:F1} against grass at "
+            + $"{snowfall.MeanGrassY:F1} (want at least 4 higher), tops out at y {maxY[ids.Snow.Value]}");
+
+        var clayPct = counts[ids.Clay.Value] * 100.0 / Math.Max(1.0, counts[ids.Sand.Value]);
+        Check(
+            "clay sits in the shallows",
+            clayPct is > 1.0 and < 15.0 && maxY[ids.Clay.Value] <= TerrainGenerator.SeaLevel + 2,
+            $"{clayPct:F1}% of shore (want 1-15), highest at y {maxY[ids.Clay.Value]}");
+
+        Check(
+            "sandstone lies under the sand",
+            counts[ids.Sandstone.Value] > 0 && maxY[ids.Sandstone.Value] < maxY[ids.Sand.Value],
+            $"{counts[ids.Sandstone.Value]:N0} blocks, top at y {maxY[ids.Sandstone.Value]} under sand at y {maxY[ids.Sand.Value]}");
 
         // Tree size gets a band like everything else calibrated. "Trees planted" above only proves
         // logs exist; a forest of four-block stumps passes it without complaint, and the difference
@@ -326,9 +418,9 @@ public static class WorldAudit
         Check("block light is coloured", light.ColouredCells > 0,
             $"{light.ColouredCells:N0} cells where the channels differ");
 
-        var emberPct = counts[ids.Emberstone.Value] * 100.0 / stone;
+        var emberPct = Rate(ids.Emberstone);
         Check("emberstone rate in band", emberPct is > 0.05 and < 0.40,
-            $"{emberPct:F3}% of stone (want 0.05-0.40)");
+            $"{emberPct:F3}% of rock (want 0.05-0.40)");
 
         var lightingConverges = LightingIsOrderIndependent(seed, registry, ids, oceanCoverage, out var lightDetail);
         Check("light ignores load order", lightingConverges, lightDetail);
@@ -998,7 +1090,7 @@ public static class WorldAudit
         var peak = 0;
         var underLeaves = 0;
 
-        var leaves = registry.ByName("oak_leaves").Id.Value;
+        var leaves = registry.ByName("driftoak_leaves").Id.Value;
 
         foreach (var chunk in chunks)
         {
@@ -1436,6 +1528,43 @@ public static class WorldAudit
         }
 
         return (highest - lowest, right - left, faults);
+    }
+
+    /// <summary>
+    /// Finds what is on top of each column and how high it is, for two surface materials.
+    /// </summary>
+    /// <remarks>
+    /// Every fourth column, which is plenty for a mean and cheap enough to run inside the audit.
+    /// The point is to compare where two materials sit rather than how much of each there is —
+    /// a count is at the mercy of which climate region the sampled window happened to land in, and
+    /// a mean height is not.
+    /// </remarks>
+    private static (int Snow, int Total, double MeanSnowY, double MeanGrassY) SampleSurface(
+        VoxelWorld world, int minBlock, int maxBlock, ushort snow, ushort grass)
+    {
+        long snowSum = 0, grassSum = 0;
+        int snowCount = 0, grassCount = 0;
+
+        for (var z = minBlock; z <= maxBlock; z += 4)
+        for (var x = minBlock; x <= maxBlock; x += 4)
+        {
+            for (var y = TerrainGenerator.WorldHeight - 1; y >= 0; y--)
+            {
+                var id = world.GetBlock(x, y, z).Value;
+                if (id == 0) continue;
+
+                if (id == snow) { snowSum += y; snowCount++; }
+                else if (id == grass) { grassSum += y; grassCount++; }
+
+                break;
+            }
+        }
+
+        return (
+            snowCount,
+            snowCount + grassCount,
+            snowCount > 0 ? snowSum / (double)snowCount : 0,
+            grassCount > 0 ? grassSum / (double)grassCount : 0);
     }
 
     /// <summary>

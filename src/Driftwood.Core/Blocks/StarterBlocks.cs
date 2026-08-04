@@ -27,7 +27,23 @@ public static class StarterBlocks
     public const ushort LayerEmberstone = 14;
     public const ushort LayerVine = 15;
 
-    public const int LayerCount = 16;
+    // Everything below arrived with the material pass: a texture pack ships art for a whole
+    // vocabulary of rock, ore and ground, and until these existed there was nothing for most of it
+    // to attach to. Each one also has to be somewhere in the world, or it is only a name.
+    public const ushort LayerDeepstone = 16;
+    public const ushort LayerCoralstone = 17;
+    public const ushort LayerDriftstone = 18;
+    public const ushort LayerSaltstone = 19;
+    public const ushort LayerCopperOre = 20;
+    public const ushort LayerGoldOre = 21;
+    public const ushort LayerStormglassOre = 22;
+    public const ushort LayerAzuriteOre = 23;
+    public const ushort LayerClay = 24;
+    public const ushort LayerSandstone = 25;
+    public const ushort LayerSandstoneTop = 26;
+    public const ushort LayerSnow = 27;
+
+    public const int LayerCount = 28;
 
     /// <summary>Debug colours standing in for textures until the art pass. RGB, 0..1.</summary>
     public static readonly float[] PaletteRgb =
@@ -64,7 +80,25 @@ public static class StarterBlocks
         BlockId IronOre,
         BlockId Bedrock,
         BlockId Emberstone,
-        BlockId Vine);
+        BlockId Vine,
+        BlockId Deepstone,
+        BlockId Coralstone,
+        BlockId Driftstone,
+        BlockId Saltstone,
+        BlockId CopperOre,
+        BlockId GoldOre,
+        BlockId StormglassOre,
+        BlockId AzuriteOre,
+        BlockId Clay,
+        BlockId Sandstone,
+        BlockId Snow)
+    {
+        /// <summary>Every rock an ore can form in. Ore replaces rock, whichever rock it is.</summary>
+        public BlockId[] Rock => [Stone, Deepstone, Coralstone, Driftstone, Saltstone];
+
+        /// <summary>Everything mining is meant to yield, for the census to weigh against rock.</summary>
+        public BlockId[] Ores => [CoalOre, IronOre, CopperOre, GoldOre, StormglassOre, AzuriteOre, Emberstone];
+    }
 
     public static Ids Register(BlockRegistry registry)
     {
@@ -116,7 +150,7 @@ public static class StarterBlocks
         });
         var log = registry.Register(new BlockType
         {
-            Name = "oak_log", Hardness = 2f,
+            Name = "driftoak_log", Hardness = 2f,
             TopLayer = LayerLogTop, SideLayer = LayerLogSide, BottomLayer = LayerLogTop,
         });
 
@@ -125,14 +159,14 @@ public static class StarterBlocks
         // hole and the forest floor is darker than the field beside it.
         var leaves = registry.Register(new BlockType
         {
-            Name = "oak_leaves", Hardness = 0.2f, Opaque = false, LightAttenuation = 1,
+            Name = "driftoak_leaves", Hardness = 0.2f, Opaque = false, LightAttenuation = 1,
             Tint = TintSource.Foliage,
             TopLayer = LayerLeaves, SideLayer = LayerLeaves, BottomLayer = LayerLeaves,
         });
 
         var planks = registry.Register(new BlockType
         {
-            Name = "oak_planks", Hardness = 2f,
+            Name = "driftoak_planks", Hardness = 2f,
             TopLayer = LayerPlanks, SideLayer = LayerPlanks, BottomLayer = LayerPlanks,
         });
         var coal = registry.Register(new BlockType
@@ -174,8 +208,85 @@ public static class StarterBlocks
             TopLayer = LayerVine, SideLayer = LayerVine, BottomLayer = LayerVine,
         });
 
+        // Rock below the metals' reach. Harder than stone, and it is what makes going deep read as
+        // going somewhere rather than as more of the same grey.
+        var deepstone = registry.Register(new BlockType
+        {
+            Name = "deepstone", Hardness = 3f, NeedsTool = true,
+            TopLayer = LayerDeepstone, SideLayer = LayerDeepstone, BottomLayer = LayerDeepstone,
+        });
+
+        // Three intrusions through the stone. Our own names for them, in the same register as
+        // emberstone: plain compound nouns that say what the rock looks like, in the game's own
+        // coastal vocabulary. One uniform grey underground reads as a texture rather than as
+        // geology, and a pack has art for three kinds of rock whatever anyone calls them.
+        var coralstone = registry.Register(new BlockType
+        {
+            Name = "coralstone", Hardness = 1.5f, NeedsTool = true,
+            TopLayer = LayerCoralstone, SideLayer = LayerCoralstone, BottomLayer = LayerCoralstone,
+        });
+        var driftstone = registry.Register(new BlockType
+        {
+            Name = "driftstone", Hardness = 1.5f, NeedsTool = true,
+            TopLayer = LayerDriftstone, SideLayer = LayerDriftstone, BottomLayer = LayerDriftstone,
+        });
+        var saltstone = registry.Register(new BlockType
+        {
+            Name = "saltstone", Hardness = 1.5f, NeedsTool = true,
+            TopLayer = LayerSaltstone, SideLayer = LayerSaltstone, BottomLayer = LayerSaltstone,
+        });
+
+        // The rest of the ore ladder. Real metals keep their real names — nobody owns the word
+        // copper, and a player knows what gold is worth on sight. The top tier is ours: stormglass,
+        // a cold gem found only at the floor of the world.
+        var copper = registry.Register(new BlockType
+        {
+            Name = "copper_ore", Hardness = 3f, NeedsTool = true,
+            TopLayer = LayerCopperOre, SideLayer = LayerCopperOre, BottomLayer = LayerCopperOre,
+        });
+        var gold = registry.Register(new BlockType
+        {
+            Name = "gold_ore", Hardness = 3f, NeedsTool = true,
+            TopLayer = LayerGoldOre, SideLayer = LayerGoldOre, BottomLayer = LayerGoldOre,
+        });
+        var stormglass = registry.Register(new BlockType
+        {
+            Name = "stormglass_ore", Hardness = 3f, NeedsTool = true,
+            TopLayer = LayerStormglassOre, SideLayer = LayerStormglassOre, BottomLayer = LayerStormglassOre,
+        });
+
+        // Azurite is a real blue copper mineral, and ours rather than anybody's coined name.
+        var azurite = registry.Register(new BlockType
+        {
+            Name = "azurite_ore", Hardness = 3f, NeedsTool = true,
+            TopLayer = LayerAzuriteOre, SideLayer = LayerAzuriteOre, BottomLayer = LayerAzuriteOre,
+        });
+
+        var clay = registry.Register(new BlockType
+        {
+            Name = "clay", Hardness = 0.6f,
+            TopLayer = LayerClay, SideLayer = LayerClay, BottomLayer = LayerClay,
+        });
+
+        // Under every beach. The top face is its own texture because a stratified side and a
+        // stratified top would put the bands on edge when seen from above.
+        var sandstone = registry.Register(new BlockType
+        {
+            Name = "sandstone", Hardness = 0.8f, NeedsTool = true,
+            TopLayer = LayerSandstoneTop, SideLayer = LayerSandstone, BottomLayer = LayerSandstoneTop,
+        });
+
+        // Lies on cold ground and on high ground. Soft — it is the one thing in the world that
+        // comes away in a single blow.
+        var snow = registry.Register(new BlockType
+        {
+            Name = "snow", Hardness = 0.2f,
+            TopLayer = LayerSnow, SideLayer = LayerSnow, BottomLayer = LayerSnow,
+        });
+
         return new Ids(
             stone, dirt, grass, sand, water, gravel, log, leaves, planks, coal, iron, bedrock,
-            emberstone, vine);
+            emberstone, vine, deepstone, coralstone, driftstone, saltstone, copper, gold, stormglass,
+            azurite, clay, sandstone, snow);
     }
 }

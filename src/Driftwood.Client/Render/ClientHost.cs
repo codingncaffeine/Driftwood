@@ -340,7 +340,7 @@ public sealed class ClientHost : IDisposable
         // break anything you swim over. Leaves are, since chopping a canopy is half of gathering.
         _targetable = registry.BuildOpacityTable();
         for (var id = 0; id < registry.Count; id++)
-            if (registry[(ushort)id].Name == "oak_leaves" || registry[(ushort)id].Name == "vine")
+            if (registry[(ushort)id].Name == "driftoak_leaves" || registry[(ushort)id].Name == "vine")
                 _targetable[id] = true;
 
         _spawnPoint = new Vector3(0.5f, generator.SurfaceHeight(0, 0) + 3f, 0.5f);
