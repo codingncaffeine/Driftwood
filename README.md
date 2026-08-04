@@ -7,18 +7,19 @@ everything is destructible. Every world is procedurally generated from a seed.
 
 ## Status
 
-**P0 — engine spike.** Voxel core, seeded worldgen and the chunk renderer are in.
-The game itself is not; there is no player, no inventory and no crafting yet.
+**P1 — streaming and meshing.** Voxel core, seeded worldgen, greedy meshing and chunk
+streaming are in. The game itself is not; there is no player, no inventory and no crafting yet.
 
 | System | State |
 | --- | --- |
 | Chunk storage, block registry | working |
 | Seeded procedural worldgen | working — terrain, caves, ore, trees |
-| Face-culling mesher with ambient occlusion | working |
-| Chunk renderer, fly camera | working |
+| Greedy mesher with ambient occlusion | working |
+| Chunk renderer, frustum culling, fly camera | working |
+| Chunk streaming around the viewer | working |
+| Lighting propagation | not started |
 | Player controller, block break/place | not started |
 | Inventory, crafting, recipes | not started |
-| Lighting propagation | not started |
 | Save / load | not started |
 | Controller support | not started |
 
@@ -39,8 +40,9 @@ Or `dotnet build Driftwood.sln -c Release`. Output lands at
 Driftwood.exe                          random seed
 Driftwood.exe --seed driftwood         named seed; words are hashed, digits are literal
 Driftwood.exe --ocean 10               less water; default is 25% of the surface
-Driftwood.exe --chunks 24 --vsync      wider world, capped to display refresh
+Driftwood.exe --chunks 24 --vsync      wider view, capped to display refresh
 Driftwood.exe --audit --seed 12345     headless: generate, mesh, print a census, exit
+Driftwood.exe --bench                  fly a fixed path, report frame-time percentiles, exit
 ```
 
 Ocean coverage is calibrated rather than emergent: the generator samples its own height field
@@ -50,11 +52,12 @@ archipelago.
 
 | Key | Action |
 | --- | --- |
-| `WASD` | move |
+| Arrow keys, `WASD` | move |
 | `Space` / `Ctrl` | up / down |
 | `Shift` / `Alt` | boost / slow |
 | `Esc` | release or recapture the mouse |
 | `F1` | wireframe |
+| `F2` | frustum culling on / off |
 
 ## Auditing a world
 
@@ -69,6 +72,34 @@ land          41.4% of columns above sea level 62
   [PASS] coal rate in band            0.653% of stone (want 0.30-1.50)
   [PASS] iron rate in band            0.354% of stone (want 0.15-0.80)
 ```
+
+## Measuring frame time
+
+`--audit` proves the world is correct. It says nothing about whether looking at that world is
+smooth, so `--bench` answers the other half: it waits for the world to finish streaming in, flies
+a fixed circular path at a fixed speed, and reports where the time went.
+
+```
+Driftwood.exe --bench                  15 seconds on the default path
+Driftwood.exe --bench 60 --vsync       longer run, synchronised to the display
+Driftwood.exe --bench --uploads 1      starve the per-frame upload budget
+Driftwood.exe --bench --stall 20       inject a known 20 ms hitch every 200th frame
+```
+
+The gates are on wall-clock time, not on percentiles of frames. A control run with a 20 ms stall
+injected every 200th frame — twenty hitches a second, four tenths of the run spent stalled — sailed
+through a p99 gate untouched, because 305 bad frames out of 60,862 is only p99.5. When a frame
+costs a tenth of a millisecond, frame count stops being a denominator anybody lives in.
+
+```
+hitches       1 frames over 4.12 ms (2x p50 or +4 ms) — 0.1/s, 0.0% of the wall clock
+dropped       0 frames over 16.67 ms — 0.0/s a 60 Hz display would miss
+  [PASS] time lost to hitches         0.0% of the run in 1 frames over 4.12 ms (want < 2%)
+  [PASS] holds 60 Hz                  0.0 frames/s over 16.67 ms (want < 0.5)
+```
+
+`--stall` exists so those gates can be shown a fault of known size: 5 ms trips the wall-clock
+gate alone, 20 ms trips both, and a clean build trips neither.
 
 ## Layout
 

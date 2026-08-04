@@ -6,6 +6,12 @@ namespace Driftwood.Client;
 
 public static class Program
 {
+    /// <summary>
+    /// Long enough that the flight ends further from its start than the streaming drop radius, so
+    /// the whole loaded set turns over at least once.
+    /// </summary>
+    private const int DefaultBenchSeconds = 15;
+
     public static int Main(string[] args)
     {
         if (args.Contains("--help") || args.Contains("-h"))
@@ -26,8 +32,7 @@ public static class Program
             }
 
             using var host = new ClientHost(options);
-            host.Run();
-            return 0;
+            return host.Run();
         }
         catch (Exception ex)
         {
@@ -39,6 +44,7 @@ public static class Program
     private static ClientOptions ParseArgs(string[] args)
     {
         var options = new ClientOptions();
+        var seedGiven = false;
 
         for (var i = 0; i < args.Length; i++)
         {
@@ -46,6 +52,7 @@ public static class Program
             {
                 case "--seed":
                     options = options with { Seed = WorldSeed.Parse(Next(args, ref i, "--seed")) };
+                    seedGiven = true;
                     break;
                 case "--chunks":
                     options = options with { ChunksAcross = ParseInt(Next(args, ref i, "--chunks"), 2, 64) };
@@ -62,6 +69,20 @@ public static class Program
                 case "--vsync":
                     options = options with { VSync = true };
                     break;
+                case "--bench":
+                    // Seconds of flight, not frames: the path is flown at a fixed speed so the
+                    // streamer meets the same pressure whatever the frame rate turns out to be.
+                    options = options with
+                    {
+                        BenchSeconds = TryTakeInt(args, ref i, out var seconds) ? Math.Clamp(seconds, 1, 600) : DefaultBenchSeconds,
+                    };
+                    break;
+                case "--uploads":
+                    options = options with { MaxUploadsPerFrame = ParseInt(Next(args, ref i, "--uploads"), 1, 4096) };
+                    break;
+                case "--stall":
+                    options = options with { StallMs = ParseInt(Next(args, ref i, "--stall"), 0, 1000) };
+                    break;
                 case "--audit":
                     break;   // handled in Main; listed here so it is not an unknown argument
                 default:
@@ -69,7 +90,22 @@ public static class Program
             }
         }
 
+        // A benchmark on a random world compares nothing to nothing. Anything unseeded gets pinned
+        // so two runs of the same build are the same test.
+        if (options.BenchSeconds > 0 && !seedGiven)
+            options = options with { Seed = WorldSeed.Parse("driftwood") };
+
         return options;
+    }
+
+    /// <summary>Consumes the next argument as an integer if there is one and it looks like a number.</summary>
+    private static bool TryTakeInt(string[] args, ref int i, out int value)
+    {
+        value = 0;
+        if (i + 1 >= args.Length) return false;
+        if (!int.TryParse(args[i + 1], out value)) return false;
+        i++;
+        return true;
     }
 
     private static string Next(string[] args, ref int i, string flag)
@@ -97,6 +133,11 @@ public static class Program
               --height <n>      window height (default 900)
               --vsync           cap to the display refresh rate (off by default so fps is readable)
               --audit           generate and mesh headlessly, print a census and checks, then exit
+              --bench [secs]    fly a fixed path once the world has settled, report frame-time
+                                percentiles, then exit (default 15 s, seed defaults to 'driftwood')
+              --uploads <n>     chunk uploads allowed per frame (default 4)
+              --stall <ms>      with --bench, burn this long every 200th frame — the control that
+                                proves the benchmark can see a hitch it is known to contain
               --help            this text
 
             Controls

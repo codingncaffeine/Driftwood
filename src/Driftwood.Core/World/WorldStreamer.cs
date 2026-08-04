@@ -53,6 +53,7 @@ public sealed class WorldStreamer : IDisposable
 
     public VoxelWorld World => _world;
 
+    public int WorkerCount => _workers.Length;
     public int LoadedChunks => _world.ChunkCount;
     public int PendingGenerate => _generateQueue.Count + Volatile.Read(ref _generatingCount);
     public int PendingMesh => _meshQueue.Count + Volatile.Read(ref _meshingCount);
