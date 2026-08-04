@@ -743,6 +743,7 @@ public sealed class ClientHost : IDisposable
             else if (!frustum.IntersectsBox(mesh.BoundsMin, mesh.BoundsMax)) continue;
 
             _chunkShader.SetVec3("uChunkOrigin", mesh.Origin);
+            _chunkShader.SetVec3Array("uTint", mesh.TintPalette);
             mesh.Draw();
             drawn++;
             triangles += mesh.IndexCount / 3;

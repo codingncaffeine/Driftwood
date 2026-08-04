@@ -1,5 +1,21 @@
 namespace Driftwood.Core.Blocks;
 
+/// <summary>Which colour lookup, if any, a block's texture is multiplied by.</summary>
+public enum TintSource
+{
+    /// <summary>The texture's own colours, untouched.</summary>
+    None = 0,
+
+    /// <summary>Climate lookup through the grass colormap.</summary>
+    Grass = 1,
+
+    /// <summary>Climate lookup through the foliage colormap — darker, for canopies.</summary>
+    Foliage = 2,
+
+    /// <summary>A flat colour rather than a colormap, which is how water is coloured.</summary>
+    Water = 3,
+}
+
 /// <summary>
 /// Static description of one block kind. Registered once at startup and never mutated,
 /// so the mesher and (later) the lighting pass can read these from many threads.
@@ -36,6 +52,24 @@ public sealed class BlockType
     /// everything.
     /// </summary>
     public ushort LightEmission { get; init; }
+
+    /// <summary>
+    /// Where this block's colour comes from, if it is not simply the texture's own.
+    /// </summary>
+    /// <remarks>
+    /// Texture packs paint grass and leaves almost colourless on purpose, because the game is
+    /// expected to multiply a climate colour over them. Without this every imported pack's foliage
+    /// comes out grey, and it looks like the pack is broken rather than the engine.
+    /// </remarks>
+    public TintSource Tint { get; init; } = TintSource.None;
+
+    /// <summary>The face this block's tint applies to, when it does not apply to all of them.</summary>
+    /// <remarks>
+    /// A grass block is tinted on top and plain on the sides, because the green fringe down its
+    /// side belongs to a separate overlay texture we do not draw yet. Tinting the whole block
+    /// instead turns the dirt below the fringe green, which is worse than leaving it plain.
+    /// </remarks>
+    public bool TintTopOnly { get; init; }
 
     /// <summary>Texture array layer for the +Y face.</summary>
     public ushort TopLayer { get; init; }

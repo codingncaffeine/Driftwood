@@ -18,6 +18,9 @@ public sealed class ChunkMeshGpu : IDisposable
     public int IndexCount { get; }
     public int VertexCount { get; }
 
+    /// <summary>Climate colours this chunk's vertices index into, as rgb triplets.</summary>
+    public float[] TintPalette { get; }
+
     /// <summary>World-space bounds of the chunk this mesh belongs to, for frustum rejection.</summary>
     public Vector3 BoundsMin { get; }
     public Vector3 BoundsMax { get; }
@@ -28,6 +31,7 @@ public sealed class ChunkMeshGpu : IDisposable
         Position = data.Position;
         IndexCount = data.IndexCount;
         VertexCount = data.VertexCount;
+        TintPalette = data.TintPalette;
 
         var (ox, oy, oz) = data.Position.Origin;
         Origin = new Vector3(ox, oy, oz);

@@ -25,6 +25,7 @@ public static class ChunkShaders
         uniform vec3 uSkyAmbient;     // ambient arriving from above
         uniform vec3 uGroundAmbient;  // bounce arriving from below
         uniform vec3 uNightFloor;     // what a cell with no light at all is allowed to keep
+        uniform vec3 uTint[64];       // this chunk's climate colours; entry 0 is white
         uniform float uFogStart;
         uniform float uFogEnd;
 
@@ -52,6 +53,7 @@ public static class ChunkShaders
 
             int face  = int((aPacked0 >> 18) & 7u);
             int ao    = int((aPacked0 >> 21) & 3u);
+            int tint  = int((aPacked0 >> 23) & 63u);
             int layer = int( aPacked1        & 0xFFFFu);
 
             // Baked light: sky in the low nibble, then red, green, blue.
@@ -79,7 +81,10 @@ public static class ChunkShaders
             // instead of washing to white wherever the two overlap.
             vec3 light = max(daylight, block);
 
-            vLight = max(light, uNightFloor) * kAo[ao];
+            // Climate colour folds into the light term rather than being sent on separately: both
+            // end up multiplying the texel, and doing it here costs one lookup a vertex instead of
+            // one a fragment.
+            vLight = max(light, uNightFloor) * kAo[ao] * uTint[tint];
 
             // Texture coordinates come from where the corner is in the world, projected onto the
             // two axes lying in its face. Nothing is stored per vertex: a merged quad spanning six

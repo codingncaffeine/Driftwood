@@ -1,4 +1,5 @@
 using Driftwood.Core.Blocks;
+using Driftwood.Core.Textures;
 using Driftwood.Core.Lighting;
 using Driftwood.Core.World;
 
@@ -22,6 +23,12 @@ public sealed class ChunkMesher
     private readonly BlockRegistry _registry;
     private readonly bool[] _opaque;
     private readonly ChunkSnapshot _snapshot = new();
+    private readonly TintSource[] _tintSource;
+    private readonly bool[] _tintTopOnly;
+    private readonly BlockTinter? _tinter;
+
+    /// <summary>The tint colours this chunk uses, interned as they are met.</summary>
+    private readonly List<int> _tintPalette = new(ChunkVertex.MaxTints);
 
     /// <summary>Merge key per cell of the current slice: 0 is empty, else (layer+1) &lt;&lt; 8 | packed AO.</summary>
     private readonly int[] _mask = new int[Chunk.Size * Chunk.Size];
@@ -48,10 +55,52 @@ public sealed class ChunkMesher
     /// </summary>
     public int LastCoveredFaces { get; private set; }
 
-    public ChunkMesher(BlockRegistry registry)
+    /// <param name="tinter">
+    /// Supplies climate colours. Null leaves every face untinted, which is what the headless
+    /// geometry checks want — they are asking about faces, not about colour.
+    /// </param>
+    public ChunkMesher(BlockRegistry registry, BlockTinter? tinter = null)
     {
         _registry = registry;
         _opaque = registry.BuildOpacityTable();
+        _tinter = tinter;
+
+        _tintSource = new TintSource[registry.Count];
+        _tintTopOnly = new bool[registry.Count];
+        for (var id = 0; id < registry.Count; id++)
+        {
+            _tintSource[id] = registry[(ushort)id].Tint;
+            _tintTopOnly[id] = registry[(ushort)id].TintTopOnly;
+        }
+    }
+
+    /// <summary>
+    /// Finds this face's tint colour and returns its index in the chunk's palette.
+    /// </summary>
+    /// <remarks>
+    /// Index 0 is always plain white, so an untinted face costs a multiply by one rather than a
+    /// branch in the shader. Colours are quantised on the way in: climate is continuous, and
+    /// without rounding, neighbouring blocks would each want their own entry and the palette would
+    /// overflow within a few metres.
+    /// </remarks>
+    private int TintIndexFor(ushort block, int face, int wx, int wy, int wz)
+    {
+        if (_tinter is null) return 0;
+
+        var source = _tintSource[block];
+        if (source == TintSource.None) return 0;
+        if (_tintTopOnly[block] && face != Faces.PosY) return 0;
+
+        var packed = _tinter.Quantised(source, wx, wy, wz);
+        if (packed == 0xFFFFFF) return 0;
+
+        for (var i = 0; i < _tintPalette.Count; i++)
+            if (_tintPalette[i] == packed) return i;
+
+        if (_tintPalette.Count >= ChunkVertex.MaxTints) return 0;
+
+        _tintPalette.Add(packed);
+        return _tintPalette.Count - 1;
     }
 
     /// <summary>
@@ -70,16 +119,29 @@ public sealed class ChunkMesher
         _vertexCount = 0;
         _indexCount = 0;
 
+        // Index 0 is white so an untinted face needs no special case in the shader.
+        _tintPalette.Clear();
+        _tintPalette.Add(BlockTinter.NoTint);
+
         for (var face = 0; face < Faces.Count; face++)
             MeshDirection(face);
 
         if (_indexCount == 0) return null;
+
+        var palette = new float[_tintPalette.Count * 3];
+        for (var i = 0; i < _tintPalette.Count; i++)
+        {
+            palette[i * 3] = ((_tintPalette[i] >> 16) & 0xFF) / 255f;
+            palette[i * 3 + 1] = ((_tintPalette[i] >> 8) & 0xFF) / 255f;
+            palette[i * 3 + 2] = (_tintPalette[i] & 0xFF) / 255f;
+        }
 
         return new ChunkMeshData
         {
             Position = pos,
             Vertices = _vertices.AsSpan(0, _vertexCount).ToArray(),
             Indices = _indices.AsSpan(0, _indexCount).ToArray(),
+            TintPalette = palette,
         };
     }
 
@@ -163,8 +225,11 @@ public sealed class ChunkMesher
                 light |= (ulong)CornerLight(offsets[c], nx, ny, nz) << (c * 16);
             }
 
+            var (ox, oy, oz) = _snapshot.Position.Origin;
+            var tint = TintIndexFor(here, face, ox + x, oy + y, oz + z);
+
             var layer = _registry[here].LayerForFace(face);
-            _mask[v * Chunk.Size + u] = ((layer + 1) << 8) | ao;
+            _mask[v * Chunk.Size + u] = ((layer + 1) << 14) | (tint << 8) | ao;
             _maskLight[v * Chunk.Size + u] = light;
         }
     }
@@ -277,7 +342,8 @@ public sealed class ChunkMesher
     {
         EnsureCapacity();
 
-        var layer = (ushort)((key >> 8) - 1);
+        var layer = (ushort)((key >> 14) - 1);
+        var tint = (key >> 8) & 0x3F;
         var corners = Faces.Corners[face];
 
         Span<int> ao = stackalloc int[4];
@@ -303,7 +369,7 @@ public sealed class ChunkMesher
             p[av] = v + unit[av] * height;
 
             var cornerLight = (ushort)((light >> (c * 16)) & 0xFFFF);
-            _vertices[_vertexCount++] = new ChunkVertex(p[0], p[1], p[2], face, ao[c], layer, cornerLight);
+            _vertices[_vertexCount++] = new ChunkVertex(p[0], p[1], p[2], face, ao[c], layer, cornerLight, tint);
         }
 
         // Split the quad along whichever diagonal keeps the shading gradient smooth. Without this

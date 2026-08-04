@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Numerics;
 using Driftwood.Core.Blocks;
+using Driftwood.Core.Textures;
 using Driftwood.Core.Gen;
 using Driftwood.Core.Lighting;
 using Driftwood.Core.Meshing;
@@ -27,6 +28,7 @@ public sealed class WorldStreamer : IDisposable
 {
     private readonly TerrainGenerator _generator;
     private readonly BlockRegistry _registry;
+    private readonly BlockTinter _tinter;
     private readonly int _chunksTall;
     private readonly int _meshRadius;
 
@@ -103,10 +105,12 @@ public sealed class WorldStreamer : IDisposable
         BlockRegistry registry,
         TerrainGenerator generator,
         int meshRadius,
-        int workerCount = 0)
+        int workerCount = 0,
+        BlockTinter? tinter = null)
     {
         _registry = registry;
         _generator = generator;
+        _tinter = tinter ?? new BlockTinter(new ClimateField(generator.Seed));
         _meshRadius = Math.Max(1, meshRadius);
 
         // Generation leads lighting by a ring and lighting leads meshing by another; chunks are
@@ -229,7 +233,7 @@ public sealed class WorldStreamer : IDisposable
 
     private async Task WorkerLoop()
     {
-        var mesher = new ChunkMesher(_registry);
+        var mesher = new ChunkMesher(_registry, _tinter);
         var token = _cancel.Token;
 
         while (!token.IsCancellationRequested)

@@ -81,7 +81,8 @@ public static class StarterBlocks
         });
         var grass = registry.Register(new BlockType
         {
-            Name = "grass", TopLayer = LayerGrassTop, SideLayer = LayerGrassSide, BottomLayer = LayerDirt,
+            Name = "grass", Tint = TintSource.Grass, TintTopOnly = true,
+            TopLayer = LayerGrassTop, SideLayer = LayerGrassSide, BottomLayer = LayerDirt,
         });
         var sand = registry.Register(new BlockType
         {
@@ -94,7 +95,7 @@ public static class StarterBlocks
         // water, so a shallow sandbar stays bright while a trench goes black.
         var water = registry.Register(new BlockType
         {
-            Name = "water", Solid = false, Opaque = false, LightAttenuation = 1,
+            Name = "water", Solid = false, Opaque = false, LightAttenuation = 1, Tint = TintSource.Water,
             TopLayer = LayerWater, SideLayer = LayerWater, BottomLayer = LayerWater,
         });
 
@@ -112,7 +113,7 @@ public static class StarterBlocks
         // hole and the forest floor is darker than the field beside it.
         var leaves = registry.Register(new BlockType
         {
-            Name = "oak_leaves", Opaque = false, LightAttenuation = 1,
+            Name = "oak_leaves", Opaque = false, LightAttenuation = 1, Tint = TintSource.Foliage,
             TopLayer = LayerLeaves, SideLayer = LayerLeaves, BottomLayer = LayerLeaves,
         });
 
@@ -149,7 +150,7 @@ public static class StarterBlocks
         // which is what makes a curtain of them read as a curtain.
         var vine = registry.Register(new BlockType
         {
-            Name = "vine", Solid = false, Opaque = false, LightAttenuation = 1,
+            Name = "vine", Solid = false, Opaque = false, LightAttenuation = 1, Tint = TintSource.Foliage,
             TopLayer = LayerVine, SideLayer = LayerVine, BottomLayer = LayerVine,
         });
 

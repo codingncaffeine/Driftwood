@@ -67,6 +67,12 @@ public static class WorldAudit
         lightEngine.LightAll(world);
         lightWatch.Stop();
 
+        // Meshed with a tinter, because that is what the game ships. An audit that measures an
+        // untinted mesh is measuring a build nobody runs — and it will report the same geometry
+        // however much the tint path costs, which is exactly the sort of quiet blindness these
+        // reports exist to prevent.
+        var tinter = new BlockTinter(new ClimateField(seed));
+
         var meshWatch = Stopwatch.StartNew();
         var meshes = new ChunkMeshData?[positions.Count];
         var quadCounts = new int[positions.Count];
@@ -74,7 +80,7 @@ public static class WorldAudit
         Parallel.For(
             0,
             positions.Count,
-            () => new ChunkMesher(registry),
+            () => new ChunkMesher(registry, tinter),
             (i, _, mesher) =>
             {
                 meshes[i] = mesher.Build(world, positions[i]);
@@ -325,6 +331,25 @@ public static class WorldAudit
 
         var lightingConverges = LightingIsOrderIndependent(seed, registry, ids, oceanCoverage, out var lightDetail);
         Check("light ignores load order", lightingConverges, lightDetail);
+
+        // Climate colour has to actually vary, and the two colormaps have to disagree. A tint path
+        // wired to a constant field is indistinguishable from no tint path at all, and it would
+        // pass every check that only asks whether tinting happened.
+        var tintShades = new HashSet<int>();
+        var tintDiffers = 0;
+        for (var wz = -6000; wz <= 6000; wz += 250)
+        for (var wx = -6000; wx <= 6000; wx += 250)
+        {
+            var grassTint = tinter.Quantised(TintSource.Grass, wx, 70, wz);
+            var foliageTint = tinter.Quantised(TintSource.Foliage, wx, 70, wz);
+            tintShades.Add(grassTint);
+            if (grassTint != foliageTint) tintDiffers++;
+        }
+
+        Check("climate colours the world", tintShades.Count is > 8 and < 2000,
+            $"{tintShades.Count} distinct grass shades over 12,000 blocks (want 8-2,000)");
+        Check("foliage differs from grass", tintDiffers > 2000,
+            $"{tintDiffers:N0} of 2,401 samples where the two colormaps disagree");
 
         var textureFaults = TextureSelfTest();
         Check("block textures are drawn", textureFaults.Count == 0,
@@ -1151,7 +1176,10 @@ public static class WorldAudit
         // column-at-a-time version has to reproduce.
         new LightEngine(registry).LightAll(batchWorld);
 
-        var mesher = new ChunkMesher(registry);
+        // The reference has to be tinted the same way too. Tint is part of a face's merge key, so a
+        // reference built without it merges differently and the comparison fails for a reason that
+        // has nothing to do with streaming — which is exactly what it did the first time.
+        var mesher = new ChunkMesher(registry, new BlockTinter(new ClimateField(seed)));
         foreach (var (pos, streamed) in produced)
         {
             var reference = mesher.Build(batchWorld, pos);
