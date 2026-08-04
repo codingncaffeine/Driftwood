@@ -6,13 +6,16 @@ namespace Driftwood.Core.Lighting;
 
 /// <summary>
 /// Fills the world's light arrays: sunlight down from the sky, coloured light out from emitters,
-/// both carried onward by a breadth-first flood.
+/// both carried onward by a breadth-first flood — and takes it away again when a block changes.
 /// </summary>
 /// <remarks>
 /// <para>Two seeds, one flood. Sunlight is seeded by walking each column down from the top of the
 /// world, which is exact and costs one pass; the flood then only has to carry it sideways into
 /// whatever the column pass left dark — under overhangs, into cave mouths, through doorways. Block
 /// light has no column structure at all and is seeded straight from its emitters.</para>
+/// <para>All four channels — sun, red, green, blue — run through the same code with a channel
+/// index. They obey one rule each way and only sunlight has an exception to it, so writing them
+/// out four times would be four places for that exception to be got wrong.</para>
 /// <para>Everything here works in world coordinates through <see cref="VoxelWorld"/> rather than
 /// inside a single chunk, because light does not respect chunk seams and pretending otherwise is
 /// how you get a bright chunk against a dark one along a line the player can see. Chunks whose
@@ -25,18 +28,37 @@ namespace Driftwood.Core.Lighting;
 /// </remarks>
 public sealed class LightEngine
 {
+    public const int ChannelSky = 0;
+    public const int ChannelRed = 1;
+    public const int ChannelGreen = 2;
+    public const int ChannelBlue = 3;
+    public const int ChannelCount = 4;
+
     private readonly byte[] _attenuation;
     private readonly ushort[] _emission;
 
-    private readonly Queue<Node> _skyQueue = new();
-    private readonly Queue<Node> _blockQueue = new();
+    private readonly Queue<Node>[] _additions;
+    private readonly Queue<Removal> _removals = new();
+
+    /// <summary>
+    /// The chunk the last cell was in. A flood walks neighbours, and thirty-one cells in
+    /// thirty-two share their neighbour's chunk, so remembering one turns almost every read into
+    /// an array index instead of a dictionary lookup. Worth doing here specifically: an
+    /// interactive relight is a few thousand cells and the lookups were most of its cost.
+    /// </summary>
+    private ChunkPos _cachedPos = new(int.MinValue, int.MinValue, int.MinValue);
+    private Chunk? _cachedChunk;
 
     private readonly record struct Node(int X, int Y, int Z);
+    private readonly record struct Removal(int X, int Y, int Z, int Level);
 
     public LightEngine(BlockRegistry registry)
     {
         _attenuation = registry.BuildLightAttenuationTable();
         _emission = registry.BuildLightEmissionTable();
+
+        _additions = new Queue<Node>[ChannelCount];
+        for (var c = 0; c < ChannelCount; c++) _additions[c] = new Queue<Node>();
     }
 
     /// <summary>Cells taken off a queue by the last flood, for reporting propagation cost.</summary>
@@ -48,13 +70,15 @@ public sealed class LightEngine
     /// </summary>
     public void LightAll(VoxelWorld world)
     {
+        ResetChunkCache();
+        LastCellsVisited = 0;
         var columns = new HashSet<(int X, int Z)>();
         foreach (var chunk in world.Chunks) columns.Add((chunk.Position.X, chunk.Position.Z));
 
         foreach (var (x, z) in columns) SeedColumn(world, x, z);
         foreach (var chunk in world.Chunks) SeedEmitters(world, chunk);
 
-        Flood(world);
+        FloodAll(world);
 
         foreach (var chunk in world.Chunks) chunk.Lit = true;
     }
@@ -65,6 +89,8 @@ public sealed class LightEngine
     /// </summary>
     public void LightColumn(VoxelWorld world, int cx, int cz)
     {
+        ResetChunkCache();
+        LastCellsVisited = 0;
         SeedColumn(world, cx, cz);
 
         // Light already standing in the neighbours has to be re-offered to the new column, or a
@@ -77,10 +103,63 @@ public sealed class LightEngine
         for (var cy = 0; cy < chunksTall; cy++)
             if (world.TryGetChunk(new ChunkPos(cx, cy, cz), out var chunk)) SeedEmitters(world, chunk);
 
-        Flood(world);
+        FloodAll(world);
 
         for (var cy = 0; cy < chunksTall; cy++)
             if (world.TryGetChunk(new ChunkPos(cx, cy, cz), out var chunk)) chunk.Lit = true;
+    }
+
+    /// <summary>
+    /// Brings light back into agreement with the world after one block changed. The block must
+    /// already have been written.
+    /// </summary>
+    /// <remarks>
+    /// <para>Re-lighting the whole column instead would be simpler and wrong. Light that spilled out
+    /// of this column into its neighbours survives the clear, and the shell pass carries it straight
+    /// back in — so walling off a shaft would leave the shaft lit by its own reflection. Light that
+    /// has to <em>go away</em> is the case a from-scratch pass cannot do, and going away is half of
+    /// what block editing is.</para>
+    /// <para>So each channel is torn down before it is rebuilt: everything the old cell was feeding
+    /// is zeroed, and any cell found to be at least as bright as the wave passing it is set aside as
+    /// a source that will fill the hole back in. The second half is then the ordinary flood.</para>
+    /// </remarks>
+    public void UpdateBlock(VoxelWorld world, int wx, int wy, int wz)
+    {
+        if (wy < 0 || wy >= TerrainGenerator.WorldHeight) return;
+        ResetChunkCache();
+        LastCellsVisited = 0;
+
+        var block = BlockAt(world, wx, wy, wz);
+        var loss = _attenuation[block];
+        var emission = _emission[block];
+
+        for (var channel = 0; channel < ChannelCount; channel++)
+        {
+            var existing = Channel(GetLight(world, wx, wy, wz), channel);
+            if (existing > 0)
+            {
+                SetChannel(world, wx, wy, wz, channel, 0);
+                _removals.Enqueue(new Removal(wx, wy, wz, existing));
+                Unfill(world, channel);
+            }
+
+            // Whatever stands around the cell now gets the chance to fill it in again. Offering the
+            // neighbours rather than the cell itself is what lets sunlight fall into a hole that was
+            // just opened: the cell above is already at full strength and knows the rule for down.
+            if (loss >= LightValue.Max) continue;
+
+            for (var face = 0; face < Faces.Count; face++)
+            {
+                var n = Faces.Normals[face];
+                var ny = wy + n.Y;
+                if (ny < 0 || ny >= TerrainGenerator.WorldHeight) continue;
+                _additions[channel].Enqueue(new Node(wx + n.X, ny, wz + n.Z));
+            }
+        }
+
+        if (emission != 0) SeedEmitterAt(world, wx, wy, wz, emission);
+
+        FloodAll(world);
     }
 
     /// <summary>
@@ -119,20 +198,17 @@ public sealed class LightEngine
 
             for (var wy = top; wy >= 0; wy--)
             {
-                var loss = _attenuation[world.GetBlock(wx, wy, wz).Value];
+                var loss = _attenuation[BlockAt(world, wx, wy, wz)];
                 if (loss >= LightValue.Max) break;   // opaque: everything below stays dark
 
                 // Deliberately the same arithmetic the flood uses one step downward, not a second
                 // rule that happens to agree. Two formulas for the same physical step is how a
                 // seeded column and a flooded one end up differing by a level along a seam.
-                level = level == LightValue.Max && loss == 0
-                    ? LightValue.Max
-                    : level - 1 - loss;
-
+                level = Attenuate(level, loss, ChannelSky, down: true);
                 if (level <= 0) break;
 
-                SetSky(world, wx, wy, wz, level);
-                _skyQueue.Enqueue(new Node(wx, wy, wz));
+                SetChannel(world, wx, wy, wz, ChannelSky, level);
+                _additions[ChannelSky].Enqueue(new Node(wx, wy, wz));
             }
         }
     }
@@ -145,14 +221,12 @@ public sealed class LightEngine
         var top = TerrainGenerator.WorldHeight - 1;
 
         for (var wy = 0; wy <= top; wy++)
+        for (var i = 0; i < Chunk.Size; i++)
         {
-            for (var i = 0; i < Chunk.Size; i++)
-            {
-                Offer(ox + i, wy, oz - 1);
-                Offer(ox + i, wy, oz + Chunk.Size);
-                Offer(ox - 1, wy, oz + i);
-                Offer(ox + Chunk.Size, wy, oz + i);
-            }
+            Offer(ox + i, wy, oz - 1);
+            Offer(ox + i, wy, oz + Chunk.Size);
+            Offer(ox - 1, wy, oz + i);
+            Offer(ox + Chunk.Size, wy, oz + i);
         }
 
         void Offer(int wx, int wy, int wz)
@@ -160,8 +234,8 @@ public sealed class LightEngine
             var light = GetLight(world, wx, wy, wz);
             if (light == 0) return;
 
-            if (LightValue.Sky(light) > 0) _skyQueue.Enqueue(new Node(wx, wy, wz));
-            if (LightValue.BlockPeak(light) > 0) _blockQueue.Enqueue(new Node(wx, wy, wz));
+            for (var channel = 0; channel < ChannelCount; channel++)
+                if (Channel(light, channel) > 0) _additions[channel].Enqueue(new Node(wx, wy, wz));
         }
     }
 
@@ -169,140 +243,179 @@ public sealed class LightEngine
     {
         var (ox, oy, oz) = chunk.Position.Origin;
         var raw = chunk.Raw;
-        var light = chunk.RawLight;
 
         for (var y = 0; y < Chunk.Size; y++)
         for (var z = 0; z < Chunk.Size; z++)
         for (var x = 0; x < Chunk.Size; x++)
         {
-            var i = Chunk.Index(x, y, z);
-            var emission = _emission[raw[i]];
+            var emission = _emission[raw[Chunk.Index(x, y, z)]];
             if (emission == 0) continue;
 
-            light[i] = (ushort)(LightValue.Sky(light[i])
-                     | LightValue.MaxBlock((ushort)(light[i] & LightValue.BlockMask), emission));
-            chunk.Dirty = true;
-
-            _blockQueue.Enqueue(new Node(ox + x, oy + y, oz + z));
+            SeedEmitterAt(world, ox + x, oy + y, oz + z, emission);
         }
     }
 
-    /// <summary>Drains both queues, spreading whatever is brighter into whatever is darker.</summary>
-    private void Flood(VoxelWorld world)
+    private void SeedEmitterAt(VoxelWorld world, int wx, int wy, int wz, ushort emission)
     {
-        LastCellsVisited = 0;
+        var light = GetLight(world, wx, wy, wz);
 
-        while (_skyQueue.Count > 0)
+        for (var channel = ChannelRed; channel < ChannelCount; channel++)
         {
+            var level = Math.Max(Channel(light, channel), Channel(emission, channel));
+            if (level == 0) continue;
+
+            SetChannel(world, wx, wy, wz, channel, level);
+            _additions[channel].Enqueue(new Node(wx, wy, wz));
+        }
+    }
+
+    /// <summary>Drains every channel's queue, spreading whatever is brighter into whatever is darker.</summary>
+    /// <remarks>
+    /// The visit counter is not cleared here. It used to be, which meant it was cleared after the
+    /// removal pass had already run and before the refill — so a relight that tore out two thousand
+    /// cells reported one. An instrument that resets in the middle of the thing it is measuring
+    /// reads as a constant overhead with no work behind it, which is exactly how it looked.
+    /// </remarks>
+    private void FloodAll(VoxelWorld world)
+    {
+        for (var channel = 0; channel < ChannelCount; channel++) Fill(world, channel);
+    }
+
+    private void Fill(VoxelWorld world, int channel)
+    {
+        var queue = _additions[channel];
+
+        while (queue.Count > 0)
+        {
+            var node = queue.Dequeue();
             LastCellsVisited++;
-            SpreadSky(world, _skyQueue.Dequeue());
-        }
 
-        while (_blockQueue.Count > 0)
+            var level = Channel(GetLight(world, node.X, node.Y, node.Z), channel);
+            if (level <= 0) continue;
+
+            for (var face = 0; face < Faces.Count; face++)
+            {
+                var n = Faces.Normals[face];
+                var nx = node.X + n.X;
+                var ny = node.Y + n.Y;
+                var nz = node.Z + n.Z;
+                if (ny < 0 || ny >= TerrainGenerator.WorldHeight) continue;
+
+                var loss = _attenuation[BlockAt(world, nx, ny, nz)];
+                if (loss >= LightValue.Max) continue;
+
+                var target = Attenuate(level, loss, channel, n.Y < 0);
+                if (target <= 0) continue;
+                if (Channel(GetLight(world, nx, ny, nz), channel) >= target) continue;
+
+                SetChannel(world, nx, ny, nz, channel, target);
+                queue.Enqueue(new Node(nx, ny, nz));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Tears out everything one darkened cell was feeding, collecting the brighter cells that will
+    /// fill the hole back in.
+    /// </summary>
+    private void Unfill(VoxelWorld world, int channel)
+    {
+        while (_removals.Count > 0)
         {
+            var node = _removals.Dequeue();
             LastCellsVisited++;
-            SpreadBlock(world, _blockQueue.Dequeue());
+
+            for (var face = 0; face < Faces.Count; face++)
+            {
+                var n = Faces.Normals[face];
+                var nx = node.X + n.X;
+                var ny = node.Y + n.Y;
+                var nz = node.Z + n.Z;
+                if (ny < 0 || ny >= TerrainGenerator.WorldHeight) continue;
+
+                var level = Channel(GetLight(world, nx, ny, nz), channel);
+                if (level <= 0) continue;
+
+                // Dimmer than the wave passing it means this cell was lit by the wave and has to
+                // go. Equal or brighter means something else feeds it, so it stays and becomes a
+                // source for the refill. Sunlight going straight down is the exception: a full beam
+                // hands on its full value, so an equally bright cell below is still one we fed.
+                var fed = level < node.Level
+                       || (channel == ChannelSky && n.Y < 0
+                           && node.Level == LightValue.Max && level == LightValue.Max);
+
+                if (fed)
+                {
+                    SetChannel(world, nx, ny, nz, channel, 0);
+                    _removals.Enqueue(new Removal(nx, ny, nz, level));
+                }
+                else
+                {
+                    _additions[channel].Enqueue(new Node(nx, ny, nz));
+                }
+            }
         }
     }
 
-    private void SpreadSky(VoxelWorld world, Node node)
+    /// <summary>What one step of light costs, given what it is stepping into.</summary>
+    private static int Attenuate(int level, int loss, int channel, bool down) =>
+        channel == ChannelSky && down && level == LightValue.Max && loss == 0
+            ? LightValue.Max
+            : level - 1 - loss;
+
+    private static int Channel(ushort packed, int channel) => (packed >> (channel * 4)) & 0xF;
+
+    /// <summary>Chunk holding a world cell, remembering the last one asked for.</summary>
+    /// <remarks>
+    /// Reset at every public entry point rather than held across calls: streaming drops chunks
+    /// between them, and a cached reference to a forgotten chunk would write light into memory
+    /// nothing reads and read light from a world that has moved on.
+    /// </remarks>
+    private Chunk? ChunkAt(VoxelWorld world, int wx, int wy, int wz)
     {
-        var level = LightValue.Sky(GetLight(world, node.X, node.Y, node.Z));
-        if (level <= 0) return;
+        var pos = ChunkPos.FromWorld(wx, wy, wz);
+        if (pos == _cachedPos) return _cachedChunk;
 
-        for (var face = 0; face < Faces.Count; face++)
-        {
-            var n = Faces.Normals[face];
-            var nx = node.X + n.X;
-            var ny = node.Y + n.Y;
-            var nz = node.Z + n.Z;
-            if (ny < 0 || ny >= TerrainGenerator.WorldHeight) continue;
-
-            var loss = _attenuation[world.GetBlock(nx, ny, nz).Value];
-            if (loss >= LightValue.Max) continue;
-
-            // Sunlight falling straight down through clear air keeps its full value; every other
-            // direction, and any dimming block, costs the usual level.
-            var target = n.Y < 0 && level == LightValue.Max && loss == 0
-                ? LightValue.Max
-                : level - 1 - loss;
-
-            if (target <= 0) continue;
-            if (LightValue.Sky(GetLight(world, nx, ny, nz)) >= target) continue;
-
-            SetSky(world, nx, ny, nz, target);
-            _skyQueue.Enqueue(new Node(nx, ny, nz));
-        }
+        _cachedPos = pos;
+        _cachedChunk = world.TryGetChunk(pos, out var chunk) ? chunk : null;
+        return _cachedChunk;
     }
 
-    private void SpreadBlock(VoxelWorld world, Node node)
+    private void ResetChunkCache()
     {
-        var here = GetLight(world, node.X, node.Y, node.Z);
-        var r = LightValue.Red(here);
-        var g = LightValue.Green(here);
-        var b = LightValue.Blue(here);
-        if (r <= 0 && g <= 0 && b <= 0) return;
-
-        for (var face = 0; face < Faces.Count; face++)
-        {
-            var n = Faces.Normals[face];
-            var nx = node.X + n.X;
-            var ny = node.Y + n.Y;
-            var nz = node.Z + n.Z;
-            if (ny < 0 || ny >= TerrainGenerator.WorldHeight) continue;
-
-            var loss = _attenuation[world.GetBlock(nx, ny, nz).Value];
-            if (loss >= LightValue.Max) continue;
-
-            var step = 1 + loss;
-            var tr = Math.Max(r - step, 0);
-            var tg = Math.Max(g - step, 0);
-            var tb = Math.Max(b - step, 0);
-            if (tr == 0 && tg == 0 && tb == 0) continue;
-
-            var current = GetLight(world, nx, ny, nz);
-            var updated = LightValue.Pack(
-                LightValue.Sky(current),
-                Math.Max(LightValue.Red(current), tr),
-                Math.Max(LightValue.Green(current), tg),
-                Math.Max(LightValue.Blue(current), tb));
-
-            if (updated == current) continue;
-
-            SetLight(world, nx, ny, nz, updated);
-            _blockQueue.Enqueue(new Node(nx, ny, nz));
-        }
+        _cachedPos = new ChunkPos(int.MinValue, int.MinValue, int.MinValue);
+        _cachedChunk = null;
     }
 
-    private static ushort GetLight(VoxelWorld world, int wx, int wy, int wz)
+    private ushort BlockAt(VoxelWorld world, int wx, int wy, int wz)
+    {
+        var chunk = ChunkAt(world, wx, wy, wz);
+        return chunk is null
+            ? (ushort)0
+            : chunk.Raw[Chunk.Index(wx & Chunk.SizeMask, wy & Chunk.SizeMask, wz & Chunk.SizeMask)];
+    }
+
+    private ushort GetLight(VoxelWorld world, int wx, int wy, int wz)
     {
         if (wy < 0 || wy >= TerrainGenerator.WorldHeight) return 0;
 
-        var pos = ChunkPos.FromWorld(wx, wy, wz);
-        return world.TryGetChunk(pos, out var chunk)
-            ? chunk.GetLight(wx & Chunk.SizeMask, wy & Chunk.SizeMask, wz & Chunk.SizeMask)
-            : (ushort)0;
+        var chunk = ChunkAt(world, wx, wy, wz);
+        return chunk?.GetLight(wx & Chunk.SizeMask, wy & Chunk.SizeMask, wz & Chunk.SizeMask) ?? 0;
     }
 
-    private static void SetLight(VoxelWorld world, int wx, int wy, int wz, ushort value)
+    private void SetChannel(VoxelWorld world, int wx, int wy, int wz, int channel, int value)
     {
-        var pos = ChunkPos.FromWorld(wx, wy, wz);
-        if (!world.TryGetChunk(pos, out var chunk)) return;
-
-        if (chunk.SetLight(wx & Chunk.SizeMask, wy & Chunk.SizeMask, wz & Chunk.SizeMask, value))
-            chunk.Dirty = true;
-    }
-
-    private static void SetSky(VoxelWorld world, int wx, int wy, int wz, int sky)
-    {
-        var pos = ChunkPos.FromWorld(wx, wy, wz);
-        if (!world.TryGetChunk(pos, out var chunk)) return;
+        var chunk = ChunkAt(world, wx, wy, wz);
+        if (chunk is null) return;
 
         var lx = wx & Chunk.SizeMask;
         var ly = wy & Chunk.SizeMask;
         var lz = wz & Chunk.SizeMask;
 
-        var updated = LightValue.WithSky(chunk.GetLight(lx, ly, lz), sky);
+        var shift = channel * 4;
+        var current = chunk.GetLight(lx, ly, lz);
+        var updated = (ushort)((current & ~(0xF << shift)) | ((value & 0xF) << shift));
+
         if (chunk.SetLight(lx, ly, lz, updated)) chunk.Dirty = true;
     }
 }

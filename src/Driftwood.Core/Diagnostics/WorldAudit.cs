@@ -313,6 +313,15 @@ public static class WorldAudit
         var lightingConverges = LightingIsOrderIndependent(seed, registry, ids, oceanCoverage, out var lightDetail);
         Check("light ignores load order", lightingConverges, lightDetail);
 
+        var relightMatches = RelightMatchesFullPass(
+            seed, registry, ids, oceanCoverage, out var relightDetail, out var worstRelightMs);
+        Check("edits relight exactly", relightMatches, relightDetail);
+
+        // The ceiling is on the light thread, not on a frame: nothing here blocks drawing. What it
+        // bounds is how long after a swing the world looks right, and a tenth of a frame is far
+        // below noticing.
+        Check("relight is interactive", worstRelightMs < 2.0, $"worst single edit {worstRelightMs:F2} ms (want under 2)");
+
         return new Result(sb.ToString(), passed);
     }
 
@@ -384,6 +393,136 @@ public static class WorldAudit
 
         detail = $"{compared:N0} cells identical whole-region and column by column";
         return true;
+    }
+
+    /// <summary>
+    /// Makes a series of block edits, relights each one incrementally, and compares the result with
+    /// lighting the whole modified region from scratch.
+    /// </summary>
+    /// <remarks>
+    /// <para>The edits are chosen to exercise both directions, because they are different
+    /// algorithms and only one of them is easy. Digging a shaft down from the surface is light
+    /// <em>arriving</em>: a flood into cells that were dark. Sealing that shaft, or walling off a
+    /// glowing block, is light <em>leaving</em> — and a flood cannot do that at all, since every
+    /// cell around the hole still holds a value that would happily fill it straight back in.</para>
+    /// <para>Comparing against a from-scratch pass rather than against expected numbers is what
+    /// makes this worth having. Nobody can write down what sunlight in a cave should be; but the
+    /// two ways of computing it have to agree, and when they do not, the from-scratch answer is
+    /// the one to trust.</para>
+    /// </remarks>
+    private static bool RelightMatchesFullPass(
+        WorldSeed seed, BlockRegistry registry, StarterBlocks.Ids ids, float oceanCoverage,
+        out string detail, out double worstMs)
+    {
+        const int radius = 1;
+
+        var generator = new TerrainGenerator(seed, ids, oceanCoverage);
+        var world = BuildRegion(seed, registry, ids, oceanCoverage, radius);
+        var engine = new LightEngine(registry);
+        engine.LightAll(world);
+
+        var surface = generator.SurfaceHeight(4, 4);
+
+        // Dig a shaft, seal it again, drop a light down a hole, then bury it.
+        var edits = new List<(int X, int Y, int Z, BlockId Block, string What)>();
+        for (var d = 0; d < 8; d++) edits.Add((4, surface - d, 4, BlockId.Air, $"dig {d + 1} down"));
+        for (var d = 7; d >= 0; d--) edits.Add((4, surface - d, 4, ids.Stone, $"backfill {8 - d}"));
+        edits.Add((-6, surface - 4, 6, BlockId.Air, "open a pocket"));
+        edits.Add((-6, surface - 4, 6, ids.Emberstone, "light the pocket"));
+        edits.Add((-6, surface - 3, 6, ids.Stone, "cap the pocket"));
+        edits.Add((-6, surface - 4, 6, ids.Stone, "bury the light"));
+
+        // Warm the code paths on a throwaway copy first. The removal half only runs when there is
+        // light to take away, so its first execution lands on whichever edit happens to darken
+        // something — and that edit then wears the JIT cost as if it were propagation. Measured
+        // cold, one edit reported 2.45 ms over 440 cells: five microseconds a cell, which is not
+        // a plausible price for six array reads.
+        {
+            var warm = BuildRegion(seed, registry, ids, oceanCoverage, radius);
+            var warmEngine = new LightEngine(registry);
+            warmEngine.LightAll(warm);
+            foreach (var (x, y, z, block, _) in edits)
+            {
+                warm.SetBlock(x, y, z, block);
+                warmEngine.UpdateBlock(warm, x, y, z);
+            }
+        }
+
+        worstMs = 0;
+        var worstWhat = "none";
+        var worstCells = 0L;
+        long totalCells = 0;
+        var watch = new Stopwatch();
+
+        foreach (var (x, y, z, block, what) in edits)
+        {
+            world.SetBlock(x, y, z, block);
+
+            watch.Restart();
+            engine.UpdateBlock(world, x, y, z);
+            watch.Stop();
+
+            totalCells += engine.LastCellsVisited;
+
+            var ms = watch.Elapsed.TotalMilliseconds;
+            if (ms > worstMs)
+            {
+                worstMs = ms;
+                worstWhat = what;
+                worstCells = engine.LastCellsVisited;
+            }
+
+            if (Matches(world, seed, registry, ids, oceanCoverage, radius, edits, what, out detail)) continue;
+            return false;
+        }
+
+        // Naming the worst edit and its cell count, not just its time: "slow" and "large" are
+        // different problems and the fix for one does nothing for the other.
+        detail = $"{edits.Count} edits over {totalCells:N0} cells, worst '{worstWhat}' "
+               + $"at {worstMs:F2} ms over {worstCells:N0} cells";
+        return true;
+
+        static bool Matches(
+            VoxelWorld edited, WorldSeed seed, BlockRegistry registry, StarterBlocks.Ids ids,
+            float oceanCoverage, int radius, List<(int X, int Y, int Z, BlockId Block, string What)> _,
+            string what, out string detail)
+        {
+            // Reference: the same blocks, lit from nothing.
+            var reference = new VoxelWorld(registry);
+            foreach (var chunk in edited.Chunks)
+            {
+                var copy = reference.GetOrCreateChunk(chunk.Position);
+                Array.Copy(chunk.Raw, copy.Raw, chunk.Raw.Length);
+                copy.RecountSolid();
+            }
+
+            new LightEngine(registry).LightAll(reference);
+
+            foreach (var chunk in edited.Chunks)
+            {
+                if (!reference.TryGetChunk(chunk.Position, out var other)) continue;
+
+                var a = chunk.RawLight;
+                var b = other.RawLight;
+                for (var i = 0; i < a.Length; i++)
+                {
+                    if (a[i] == b[i]) continue;
+
+                    var x = i & Chunk.SizeMask;
+                    var y = i >> (Chunk.SizeLog2 * 2);
+                    var z = (i >> Chunk.SizeLog2) & Chunk.SizeMask;
+                    detail = $"after '{what}', chunk {chunk.Position} local ({x},{y},{z}): "
+                           + $"relit sky {LightValue.Sky(a[i])} rgb {LightValue.Red(a[i])},"
+                           + $"{LightValue.Green(a[i])},{LightValue.Blue(a[i])} vs "
+                           + $"full sky {LightValue.Sky(b[i])} rgb {LightValue.Red(b[i])},"
+                           + $"{LightValue.Green(b[i])},{LightValue.Blue(b[i])}";
+                    return false;
+                }
+            }
+
+            detail = string.Empty;
+            return true;
+        }
     }
 
     private static VoxelWorld BuildRegion(
