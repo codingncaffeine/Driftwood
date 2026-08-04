@@ -168,6 +168,10 @@ public static class WorldAudit
         sb.AppendLine($"              surface y {probeMin}..{probeMax} (span {probeMax - probeMin})              [seed over {ReliefProbeSpan} blocks]");
         sb.AppendLine($"land          {aboveSeaPct:F1}% of columns above sea level {TerrainGenerator.SeaLevel}");
         sb.AppendLine($"ocean         {100 - probeLandPct:F1}% measured, {generator.OceanCoverage * 100:F0}% requested");
+
+        var trees = SurveyTrees(world, chunks, ids);
+        sb.AppendLine($"trees         {trees.Count:N0} trunks, {trees.MinTrunk}..{trees.MaxTrunk} logs "
+                    + $"(mean {trees.MeanTrunk:F1}), crown reaches {trees.MinCrown}..{trees.MaxCrown} above ground");
         sb.AppendLine();
         sb.AppendLine("block census");
 
@@ -257,7 +261,87 @@ public static class WorldAudit
         Check("iron rate in band", ironPct is > 0.15 and < 0.80, $"{ironPct:F3}% of stone (want 0.15-0.80)");
         Check("coal beats iron", counts[ids.CoalOre.Value] > counts[ids.IronOre.Value], $"{counts[ids.CoalOre.Value]:N0} vs {counts[ids.IronOre.Value]:N0}");
 
+        // Tree size gets a band like everything else calibrated. "Trees planted" above only proves
+        // logs exist; a forest of four-block stumps passes it without complaint, and the difference
+        // between a wood and a shrubbery is invisible in a block census. Reported after a player
+        // said the trees looked short — which they were, at the very bottom of the range.
+        Check("trees are tree-sized", trees.MeanTrunk is > 5.5 and < 8.5,
+            $"mean trunk {trees.MeanTrunk:F1} logs over {trees.Count:N0} trees (want 5.5-8.5)");
+        Check("tree heights vary", trees.MaxTrunk - trees.MinTrunk >= 3,
+            $"{trees.MinTrunk}..{trees.MaxTrunk} logs");
+
         return new Result(sb.ToString(), passed);
+    }
+
+    private readonly record struct TreeSurvey(
+        int Count, int MinTrunk, int MaxTrunk, double MeanTrunk, int MinCrown, int MaxCrown);
+
+    /// <summary>
+    /// Finds every trunk in the volume and measures how tall it stands.
+    /// </summary>
+    /// <remarks>
+    /// A trunk is a vertical run of logs whose lowest block sits on something that is not a log.
+    /// The crown is measured separately by walking up through the leaves directly above it, because
+    /// the two can disagree: a tall trunk under a thin canopy and a short one under a fat one look
+    /// nothing alike from the ground and are the same number of logs.
+    /// <para>Trunks touching the top or bottom of the sampled volume are skipped rather than
+    /// counted short — an edge-clipped tree would drag the mean down and read as a generator fault.</para>
+    /// </remarks>
+    private static TreeSurvey SurveyTrees(VoxelWorld world, Chunk[] chunks, StarterBlocks.Ids ids)
+    {
+        // Find the columns worth walking first. Scanning every column of the volume through
+        // world-space reads would be twenty million dictionary lookups to find a few hundred trees.
+        var columns = new HashSet<(int X, int Z)>();
+        foreach (var chunk in chunks)
+        {
+            var (ox, _, oz) = chunk.Position.Origin;
+            var raw = chunk.Raw;
+            for (var y = 0; y < Chunk.Size; y++)
+            for (var z = 0; z < Chunk.Size; z++)
+            for (var x = 0; x < Chunk.Size; x++)
+            {
+                if (raw[Chunk.Index(x, y, z)] == ids.Log.Value) columns.Add((ox + x, oz + z));
+            }
+        }
+
+        var count = 0;
+        var min = int.MaxValue;
+        var max = int.MinValue;
+        long sum = 0;
+        var minCrown = int.MaxValue;
+        var maxCrown = int.MinValue;
+
+        var top = TerrainGenerator.WorldHeight - 1;
+
+        foreach (var (wx, wz) in columns)
+        {
+            for (var wy = 1; wy < top; wy++)
+            {
+                if (world.GetBlock(wx, wy, wz) != ids.Log) continue;
+                if (world.GetBlock(wx, wy - 1, wz) == ids.Log) continue;   // mid-trunk
+
+                var trunk = 0;
+                var y = wy;
+                while (y <= top && world.GetBlock(wx, y, wz) == ids.Log) { trunk++; y++; }
+
+                if (y > top) break;   // clipped by the top of the volume, not a real measurement
+
+                var crown = trunk;
+                while (y <= top && world.GetBlock(wx, y, wz) == ids.Leaves) { crown++; y++; }
+
+                count++;
+                sum += trunk;
+                if (trunk < min) min = trunk;
+                if (trunk > max) max = trunk;
+                if (crown < minCrown) minCrown = crown;
+                if (crown > maxCrown) maxCrown = crown;
+
+                wy = y;   // nothing else in this column belongs to the same tree
+            }
+        }
+
+        if (count == 0) return new TreeSurvey(0, 0, 0, 0, 0, 0);
+        return new TreeSurvey(count, min, max, sum / (double)count, minCrown, maxCrown);
     }
 
     /// <summary>

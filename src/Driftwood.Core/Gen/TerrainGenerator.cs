@@ -310,7 +310,12 @@ public sealed class TerrainGenerator
         if (surface <= SeaLevel + 2) return false;   // beaches and water stay bare
 
         baseY = surface + 1;
-        height = 4 + (int)(Noise.Value2(cellX, cellZ, _seedTree + 53) * 3f);
+
+        // Trunk length in logs. Was 4-6, which is the shortest species in the genre and read as
+        // scrub from the ground — the whole world was at the bottom of one range. 5-8 with a crown
+        // one layer deeper gives a wood rather than a shrubbery, and the audit holds the mean to a
+        // band so a later tweak cannot quietly walk it back down.
+        height = 5 + (int)(Noise.Value2(cellX, cellZ, _seedTree + 53) * 4f);
         return true;
     }
 
@@ -322,7 +327,9 @@ public sealed class TerrainGenerator
         var topY = baseY + trunkHeight - 1;
 
         // Canopy first, so the trunk overwrites any leaf that lands in its column.
-        for (var dy = -2; dy <= 1; dy++)
+        // Three wide layers under two narrow ones: the crown has to grow with the trunk or a
+        // taller tree just reads as a longer stick.
+        for (var dy = -3; dy <= 1; dy++)
         {
             var y = topY + dy;
             var radius = dy >= 0 ? 1 : CanopyRadius;
