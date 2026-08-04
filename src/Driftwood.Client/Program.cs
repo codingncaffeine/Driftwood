@@ -20,7 +20,7 @@ public static class Program
 
             if (args.Contains("--audit"))
             {
-                var result = WorldAudit.Run(options.Seed, options.ChunksAcross);
+                var result = WorldAudit.Run(options.Seed, options.ChunksAcross, options.OceanCoverage);
                 Console.WriteLine(result.Report);
                 return result.Passed ? 0 : 1;
             }
@@ -49,6 +49,9 @@ public static class Program
                     break;
                 case "--chunks":
                     options = options with { ChunksAcross = ParseInt(Next(args, ref i, "--chunks"), 2, 64) };
+                    break;
+                case "--ocean":
+                    options = options with { OceanCoverage = ParseInt(Next(args, ref i, "--ocean"), 0, 90) / 100f };
                     break;
                 case "--width":
                     options = options with { Width = ParseInt(Next(args, ref i, "--width"), 320, 7680) };
@@ -89,6 +92,7 @@ public static class Program
 
               --seed <text>     world seed; digits are literal, words are hashed, omit for random
               --chunks <n>      chunks across the generated square (default 16, so 512 blocks)
+              --ocean <pct>     percent of the surface under water (default 25)
               --width <n>       window width (default 1600)
               --height <n>      window height (default 900)
               --vsync           cap to the display refresh rate (off by default so fps is readable)

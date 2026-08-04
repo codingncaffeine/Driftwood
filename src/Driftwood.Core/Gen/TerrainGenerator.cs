@@ -37,12 +37,21 @@ public sealed class TerrainGenerator
     private readonly int _seedGravel;
     private readonly int _seedTree;
 
+    /// <summary>Default share of the surface that sits at or below sea level.</summary>
+    public const float DefaultOceanCoverage = 0.25f;
+
+    private readonly float _heightBias;
+
     public WorldSeed Seed { get; }
 
-    public TerrainGenerator(WorldSeed seed, StarterBlocks.Ids ids)
+    /// <summary>The ocean coverage this generator was calibrated to hit.</summary>
+    public float OceanCoverage { get; }
+
+    public TerrainGenerator(WorldSeed seed, StarterBlocks.Ids ids, float oceanCoverage = DefaultOceanCoverage)
     {
         Seed = seed;
         _ids = ids;
+        OceanCoverage = Math.Clamp(oceanCoverage, 0f, 0.9f);
 
         _seedContinent = seed.Derive("terrain.continent");
         _seedHills = seed.Derive("terrain.hills");
@@ -53,6 +62,39 @@ public sealed class TerrainGenerator
         _seedIron = seed.Derive("ore.iron");
         _seedGravel = seed.Derive("deposit.gravel");
         _seedTree = seed.Derive("decor.tree");
+
+        _heightBias = CalibrateHeightBias(OceanCoverage);
+    }
+
+    /// <summary>
+    /// Finds the vertical offset that puts the requested share of the surface under water.
+    /// </summary>
+    /// <remarks>
+    /// Ocean coverage is a design target, so it should not be an emergent accident of whichever
+    /// noise constants happened to be chosen. Sampling the raw height field and taking the
+    /// quantile that ought to sit at sea level pins the number exactly, and pins it per seed —
+    /// otherwise one seed spawns a continent and the next an archipelago, both nominally "25%".
+    /// <para>Sampling is over a fixed grid, so this stays deterministic and the same seed keeps
+    /// producing the same world.</para>
+    /// </remarks>
+    private float CalibrateHeightBias(float oceanCoverage)
+    {
+        // Wide enough to cross several continents at a 640-block wavelength.
+        const int Span = 8192;
+        const int Stride = 128;
+
+        var side = Span / Stride;
+        var samples = new float[side * side];
+
+        var i = 0;
+        for (var z = -Span / 2; z < Span / 2; z += Stride)
+        for (var x = -Span / 2; x < Span / 2; x += Stride)
+            samples[i++] = RawHeight(x, z);
+
+        Array.Sort(samples);
+
+        var index = Math.Clamp((int)(oceanCoverage * samples.Length), 0, samples.Length - 1);
+        return SeaLevel - samples[index];
     }
 
     /// <summary>Surface height for a world column: the Y of its topmost terrain block.</summary>
@@ -67,7 +109,14 @@ public sealed class TerrainGenerator
     /// octave amplitudes leaves the output at roughly +/-0.4, not +/-1, so a constant that reads
     /// like "44 blocks of relief" would otherwise deliver about 17.</para>
     /// </remarks>
-    public int SurfaceHeight(int wx, int wz)
+    public int SurfaceHeight(int wx, int wz) =>
+        Math.Clamp((int)MathF.Round(RawHeight(wx, wz) + _heightBias), 1, WorldHeight - 8);
+
+    /// <summary>
+    /// Surface height before the ocean-coverage bias is applied. Kept separate because the
+    /// calibration pass has to sample it while the bias is still being computed.
+    /// </summary>
+    private float RawHeight(int wx, int wz)
     {
         var x = wx;
         var z = wz;
@@ -81,8 +130,7 @@ public sealed class TerrainGenerator
         // Hills flatten out over deep ocean so the seabed does not mirror the mountains.
         var landness = Math.Clamp(shaped * 2f + 0.6f, 0.15f, 1f);
 
-        var h = SeaLevel + shaped * 44f + hills * 16f * landness + detail * 4f;
-        return Math.Clamp((int)MathF.Round(h), 1, WorldHeight - 8);
+        return SeaLevel + shaped * 44f + hills * 16f * landness + detail * 4f;
     }
 
     /// <summary>Fills one chunk with stone, soil, ore, water and caves. Neighbour-free.</summary>

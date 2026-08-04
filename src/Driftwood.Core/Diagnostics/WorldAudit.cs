@@ -21,14 +21,14 @@ public static class WorldAudit
 {
     public sealed record Result(string Report, bool Passed);
 
-    public static Result Run(WorldSeed seed, int chunksAcross)
+    public static Result Run(WorldSeed seed, int chunksAcross, float oceanCoverage = TerrainGenerator.DefaultOceanCoverage)
     {
         var sb = new StringBuilder();
         var registry = new BlockRegistry();
         var ids = StarterBlocks.Register(registry);
         registry.Seal();
 
-        var generator = new TerrainGenerator(seed, ids);
+        var generator = new TerrainGenerator(seed, ids, oceanCoverage);
         var world = new VoxelWorld(registry);
 
         var half = chunksAcross / 2;
@@ -132,6 +132,7 @@ public static class WorldAudit
         sb.AppendLine($"relief        surface y {surfaceMin}..{surfaceMax} (span {surfaceMax - surfaceMin}), mean {surfaceMean:F1}   [this world]");
         sb.AppendLine($"              surface y {probeMin}..{probeMax} (span {probeMax - probeMin})              [seed over {ReliefProbeSpan} blocks]");
         sb.AppendLine($"land          {aboveSeaPct:F1}% of columns above sea level {TerrainGenerator.SeaLevel}");
+        sb.AppendLine($"ocean         {100 - probeLandPct:F1}% measured, {generator.OceanCoverage * 100:F0}% requested");
         sb.AppendLine();
         sb.AppendLine("block census");
 
@@ -177,7 +178,21 @@ public static class WorldAudit
         // still be a featureless plain, or be 98% ocean, or have ore so rare it never gates
         // anything. These are the checks that notice.
         Check("terrain has relief", probeMax - probeMin >= 55, $"span {probeMax - probeMin} blocks over {ReliefProbeSpan}");
-        Check("both land and sea", probeLandPct is > 15 and < 85, $"{probeLandPct:F1}% land over {ReliefProbeSpan}");
+
+        // Ocean coverage is calibrated, not emergent, so it gets held to the number it was asked
+        // for. The tolerance covers the probe sampling a different grid than the calibration did.
+        var oceanMeasured = (100 - probeLandPct) / 100.0;
+        Check(
+            "ocean hits its target",
+            Math.Abs(oceanMeasured - generator.OceanCoverage) < 0.06,
+            $"{oceanMeasured * 100:F1}% vs {generator.OceanCoverage * 100:F0}% requested");
+
+        // Face winding is invisible to a block census: geometry exists, the wrong side of it is
+        // drawn. Shipped inverted on the horizontal faces once already, which read as see-through
+        // ground.
+        var windingFaults = Faces.ValidateWinding();
+        Check("face winding is outward", windingFaults.Count == 0,
+            windingFaults.Count == 0 ? "all 6 faces" : string.Join("; ", windingFaults));
         // Ore gets a band, not a floor. Too little and mining never gates progression; too much
         // and it stops being a reward. A floor-only check passes a world where one stone block
         // in fifty is coal, which is how the first calibration pass slipped through.

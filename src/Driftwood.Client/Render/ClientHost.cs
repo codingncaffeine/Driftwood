@@ -15,6 +15,10 @@ public sealed record ClientOptions
 {
     public WorldSeed Seed { get; init; } = WorldSeed.Random();
     public int ChunksAcross { get; init; } = 16;
+
+    /// <summary>Share of the surface at or below sea level, 0..0.9.</summary>
+    public float OceanCoverage { get; init; } = TerrainGenerator.DefaultOceanCoverage;
+
     public bool VSync { get; init; }
     public int Width { get; init; } = 1600;
     public int Height { get; init; } = 900;
@@ -113,7 +117,7 @@ public sealed class ClientHost : IDisposable
         var ids = StarterBlocks.Register(registry);
         registry.Seal();
 
-        var generator = new TerrainGenerator(_options.Seed, ids);
+        var generator = new TerrainGenerator(_options.Seed, ids, _options.OceanCoverage);
         var world = new VoxelWorld(registry);
 
         var across = _options.ChunksAcross;
@@ -182,6 +186,7 @@ public sealed class ClientHost : IDisposable
 
         Console.WriteLine($"seed        {_options.Seed}");
         Console.WriteLine($"world       {extent}x{TerrainGenerator.WorldHeight}x{extent} blocks, {positions.Count} chunks");
+        Console.WriteLine($"ocean       {generator.OceanCoverage * 100:F0}% of surface at or below sea level {TerrainGenerator.SeaLevel}");
         Console.WriteLine($"generate    {genWatch.ElapsedMilliseconds} ms");
         Console.WriteLine($"decorate    {decorWatch.ElapsedMilliseconds} ms");
         Console.WriteLine($"mesh        {meshWatch.ElapsedMilliseconds} ms  ({_meshes.Count} chunks with geometry)");

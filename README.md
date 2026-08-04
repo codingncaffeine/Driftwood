@@ -38,9 +38,15 @@ Or `dotnet build Driftwood.sln -c Release`. Output lands at
 ```
 Driftwood.exe                          random seed
 Driftwood.exe --seed driftwood         named seed; words are hashed, digits are literal
+Driftwood.exe --ocean 10               less water; default is 25% of the surface
 Driftwood.exe --chunks 24 --vsync      wider world, capped to display refresh
 Driftwood.exe --audit --seed 12345     headless: generate, mesh, print a census, exit
 ```
+
+Ocean coverage is calibrated rather than emergent: the generator samples its own height field
+and shifts it so the requested share of the surface lands at or below sea level. The same
+request holds across seeds, so one seed does not hand you a continent and the next an
+archipelago.
 
 | Key | Action |
 | --- | --- |

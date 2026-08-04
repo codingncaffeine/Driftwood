@@ -31,16 +31,22 @@ public static class Faces
     /// counter-clockwise as seen from outside the block. Front faces are CCW, so the renderer
     /// can cull back faces without a per-face orientation test.
     /// </summary>
+    /// <remarks>
+    /// Verified by <see cref="ValidateWinding"/>, not by eye. Deriving these from "screen right
+    /// is +X, screen up is +Z" reasoning is how the +Y and -Y faces first shipped inverted: the
+    /// horizontal faces have no natural screen-up, so the mental camera silently flipped between
+    /// them. The cross-product test has no such ambiguity.
+    /// </remarks>
     public static readonly (int X, int Y, int Z)[][] Corners =
     [
         // +X, viewed from +X: screen right is -Z, screen up is +Y.
         [(1, 0, 1), (1, 0, 0), (1, 1, 0), (1, 1, 1)],
         // -X, viewed from -X: screen right is +Z, screen up is +Y.
         [(0, 0, 0), (0, 0, 1), (0, 1, 1), (0, 1, 0)],
-        // +Y, viewed from above: screen right is +X, screen up is +Z.
-        [(0, 1, 0), (1, 1, 0), (1, 1, 1), (0, 1, 1)],
-        // -Y, viewed from below: screen right is +X, screen up is -Z.
-        [(0, 0, 1), (1, 0, 1), (1, 0, 0), (0, 0, 0)],
+        // +Y, seen from above.
+        [(0, 1, 1), (1, 1, 1), (1, 1, 0), (0, 1, 0)],
+        // -Y, seen from below.
+        [(0, 0, 0), (1, 0, 0), (1, 0, 1), (0, 0, 1)],
         // +Z, viewed from +Z: screen right is +X, screen up is +Y.
         [(0, 0, 1), (1, 0, 1), (1, 1, 1), (0, 1, 1)],
         // -Z, viewed from -Z: screen right is -X, screen up is +Y.
@@ -59,6 +65,56 @@ public static class Faces
     /// the face centre. Transcribing 72 offsets by hand is how sign errors get in.
     /// </remarks>
     public static readonly (int X, int Y, int Z)[][][] AoOffsets = BuildAoOffsets();
+
+    /// <summary>
+    /// Checks every face's winding against its declared normal, returning one line per fault and
+    /// nothing when the table is sound.
+    /// </summary>
+    /// <remarks>
+    /// A quad wound counter-clockwise as seen from outside has a right-hand-rule normal — the
+    /// cross product of two consecutive edges — that points outward. If it points inward, the
+    /// renderer culls the face you were meant to see and keeps the one you were not. There is no
+    /// visual tell beyond "things look see-through", and it is invisible to a block census, so it
+    /// needs its own check.
+    /// </remarks>
+    public static IReadOnlyList<string> ValidateWinding()
+    {
+        var faults = new List<string>();
+
+        for (var face = 0; face < Count; face++)
+        {
+            var c = Corners[face];
+            if (c.Length != 4)
+            {
+                faults.Add($"face {face}: {c.Length} corners, expected 4");
+                continue;
+            }
+
+            var e1 = (X: c[1].X - c[0].X, Y: c[1].Y - c[0].Y, Z: c[1].Z - c[0].Z);
+            var e2 = (X: c[2].X - c[1].X, Y: c[2].Y - c[1].Y, Z: c[2].Z - c[1].Z);
+
+            var cross = (
+                X: e1.Y * e2.Z - e1.Z * e2.Y,
+                Y: e1.Z * e2.X - e1.X * e2.Z,
+                Z: e1.X * e2.Y - e1.Y * e2.X);
+
+            var n = Normals[face];
+            if (cross.X != n.X || cross.Y != n.Y || cross.Z != n.Z)
+                faults.Add($"face {face}: winding normal ({cross.X},{cross.Y},{cross.Z}) != declared ({n.X},{n.Y},{n.Z})");
+
+            // All four corners must sit on the face's own plane, or the quad is not flat.
+            var axis = n.X != 0 ? 0 : n.Y != 0 ? 1 : 2;
+            var expected = (n.X + n.Y + n.Z) > 0 ? 1 : 0;
+            for (var i = 0; i < 4; i++)
+            {
+                var v = axis == 0 ? c[i].X : axis == 1 ? c[i].Y : c[i].Z;
+                if (v != expected)
+                    faults.Add($"face {face} corner {i}: off-plane on axis {axis} ({v}, expected {expected})");
+            }
+        }
+
+        return faults;
+    }
 
     private static (int X, int Y, int Z)[][][] BuildAoOffsets()
     {
