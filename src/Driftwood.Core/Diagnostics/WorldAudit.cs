@@ -643,45 +643,81 @@ public static class WorldAudit
         edits.Add((-6, surface - 3, 6, ids.Stone, "cap the pocket"));
         edits.Add((-6, surface - 4, 6, ids.Stone, "bury the light"));
 
-        // Warm the code paths on a throwaway copy first. The removal half only runs when there is
-        // light to take away, so its first execution lands on whichever edit happens to darken
-        // something — and that edit then wears the JIT cost as if it were propagation. Measured
-        // cold, one edit reported 2.45 ms over 440 cells: five microseconds a cell, which is not
-        // a plausible price for six array reads.
-        {
-            var warm = BuildRegion(seed, registry, ids, oceanCoverage, radius);
-            var warmEngine = new LightEngine(registry);
-            warmEngine.LightAll(warm);
-            foreach (var (x, y, z, block, _) in edits)
-            {
-                warm.SetBlock(x, y, z, block);
-                warmEngine.UpdateBlock(warm, x, y, z);
-            }
-        }
-
         worstMs = 0;
         var worstWhat = "none";
         var worstCells = 0L;
+        var worstBreakdown = "nothing measured";
         long totalCells = 0;
-        var watch = new Stopwatch();
+
+        // Timing runs on its own world, and only after that world has been edited once already.
+        //
+        // Both halves of that were bought with a wrong answer. Timing used to share a loop with the
+        // verification, which generates and lights a whole region per edit; the watch was stopped
+        // first, which looked like enough. And a warm-up pass existed, but it ran on a *different*
+        // world with a *different* engine, so it warmed the JIT and nothing else.
+        //
+        // What was actually being measured was warm-up. The proof is direct and does not depend on
+        // knowing which warm-up: the identical edit, on the same world and engine, visiting the same
+        // 458 cells with the same 2,736 neighbour tests and 800 chunk lookups, costs 2.48 ms the
+        // first time and 0.074 ms the second, with no collection inside either window. Thirty times
+        // apart for byte-identical work rules out the algorithm, which is what mattered — whether
+        // the remaining cost is tiered JIT promoting the flood to optimised code or first touch of
+        // freshly allocated chunk memory was not worth separating, since the fix is the same and
+        // neither is a number a player can ever meet. In a running game chunks are long-lived and a
+        // swing lands on the second case.
+        {
+            var timed = BuildRegion(seed, registry, ids, oceanCoverage, radius);
+            var timedEngine = new LightEngine(registry);
+            timedEngine.LightAll(timed);
+
+            // Run the whole sequence, put every block back the way it was, and relight. What
+            // survives is a world whose pages are committed and whose light is where it started.
+            var before = new List<BlockId>(edits.Count);
+            foreach (var (x, y, z, block, _) in edits)
+            {
+                before.Add(timed.GetBlock(x, y, z));
+                timed.SetBlock(x, y, z, block);
+                timedEngine.UpdateBlock(timed, x, y, z);
+            }
+
+            for (var i = edits.Count - 1; i >= 0; i--)
+            {
+                var (x, y, z, _, _) = edits[i];
+                timed.SetBlock(x, y, z, before[i]);
+                timedEngine.UpdateBlock(timed, x, y, z);
+            }
+
+            var watch = new Stopwatch();
+
+            foreach (var (x, y, z, block, what) in edits)
+            {
+                timed.SetBlock(x, y, z, block);
+
+                watch.Restart();
+                timedEngine.UpdateBlock(timed, x, y, z);
+                watch.Stop();
+
+                totalCells += timedEngine.LastCellsVisited;
+
+                var ms = watch.Elapsed.TotalMilliseconds;
+                if (ms <= worstMs) continue;
+
+                worstMs = ms;
+                worstWhat = what;
+                worstCells = timedEngine.LastCellsVisited;
+                worstBreakdown = $"{timedEngine.LastUnfillPasses} unfill passes taking "
+                               + $"{timedEngine.LastUnfillMs:F2} ms, "
+                               + $"{timedEngine.LastRemovalCells:N0} torn out in {timedEngine.LastRemovalMs:F2} ms, "
+                               + $"{timedEngine.LastFillCells:N0} refilled in {timedEngine.LastFillMs:F2} ms, "
+                               + $"{timedEngine.LastNeighbourTests:N0} neighbour tests, "
+                               + $"{timedEngine.LastChunkMisses:N0} chunk lookups";
+            }
+        }
 
         foreach (var (x, y, z, block, what) in edits)
         {
             world.SetBlock(x, y, z, block);
-
-            watch.Restart();
             engine.UpdateBlock(world, x, y, z);
-            watch.Stop();
-
-            totalCells += engine.LastCellsVisited;
-
-            var ms = watch.Elapsed.TotalMilliseconds;
-            if (ms > worstMs)
-            {
-                worstMs = ms;
-                worstWhat = what;
-                worstCells = engine.LastCellsVisited;
-            }
 
             if (Matches(world, seed, registry, ids, oceanCoverage, radius, edits, what, out detail)) continue;
             return false;
@@ -690,7 +726,7 @@ public static class WorldAudit
         // Naming the worst edit and its cell count, not just its time: "slow" and "large" are
         // different problems and the fix for one does nothing for the other.
         detail = $"{edits.Count} edits over {totalCells:N0} cells, worst '{worstWhat}' "
-               + $"at {worstMs:F2} ms over {worstCells:N0} cells";
+               + $"at {worstMs:F2} ms over {worstCells:N0} cells ({worstBreakdown})";
         return true;
 
         static bool Matches(

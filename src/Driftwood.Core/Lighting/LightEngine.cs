@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Driftwood.Core.Blocks;
 using Driftwood.Core.Gen;
 using Driftwood.Core.World;
@@ -65,6 +66,65 @@ public sealed class LightEngine
     public long LastCellsVisited { get; private set; }
 
     /// <summary>
+    /// The same work split by where it went, because "slow" and "large" are different problems and
+    /// a single total cannot tell them apart.
+    /// </summary>
+    /// <remarks>
+    /// Added while chasing an edit that took 2.5 ms to visit 458 cells — a hundred times the
+    /// per-cell cost of every other edit in the same run. Two plausible explanations were wrong
+    /// before these existed: collections provoked by the verification pass, and measurement noise.
+    /// Both were ruled out by experiment, and neither would have been ruled out by argument.
+    /// </remarks>
+    public long LastRemovalCells { get; private set; }
+
+    public long LastFillCells { get; private set; }
+
+    /// <summary>Neighbour cells examined, which is the real inner loop.</summary>
+    public long LastNeighbourTests { get; private set; }
+
+    /// <summary>Times the one-chunk cache missed and the world dictionary had to be asked.</summary>
+    public long LastChunkMisses { get; private set; }
+
+    /// <summary>Where the last edit's time actually went, split at the phase boundary.</summary>
+    /// <remarks>
+    /// Four timestamp reads per edit, which is nothing against the work being measured. Counting
+    /// cells was not enough: one edit was thirty times slower than another that visited three times
+    /// as many, so the cost was not in any loop the counters watch and only a clock could say where
+    /// it was instead.
+    /// </remarks>
+    public double LastRemovalMs { get; private set; }
+
+    public double LastFillMs { get; private set; }
+
+    /// <summary>How much of the removal phase was inside <see cref="Unfill"/>, and how many passes.</summary>
+    public double LastUnfillMs => _unfillTicks * 1000.0 / Stopwatch.Frequency;
+
+    public int LastUnfillPasses { get; private set; }
+
+    /// <summary>Which single channel's teardown was the most expensive, and what it cost.</summary>
+    public double LastSlowestUnfillMs { get; private set; }
+
+    public int LastSlowestUnfillChannel { get; private set; } = -1;
+
+    public long LastSlowestUnfillCells { get; private set; }
+
+    private long _unfillTicks;
+
+    private void ResetCounters()
+    {
+        LastCellsVisited = 0;
+        LastRemovalCells = 0;
+        LastFillCells = 0;
+        LastNeighbourTests = 0;
+        LastChunkMisses = 0;
+        _unfillTicks = 0;
+        LastUnfillPasses = 0;
+        LastSlowestUnfillMs = 0;
+        LastSlowestUnfillChannel = -1;
+        LastSlowestUnfillCells = 0;
+    }
+
+    /// <summary>
     /// Lights every column in the world at once. Used by the audit and by anything that has the
     /// whole region in hand up front.
     /// </summary>
@@ -79,6 +139,7 @@ public sealed class LightEngine
         foreach (var chunk in world.Chunks) SeedEmitters(world, chunk);
 
         FloodAll(world);
+        ReleaseBulkCapacity();
 
         foreach (var chunk in world.Chunks) chunk.Lit = true;
     }
@@ -104,6 +165,7 @@ public sealed class LightEngine
             if (world.TryGetChunk(new ChunkPos(cx, cy, cz), out var chunk)) SeedEmitters(world, chunk);
 
         FloodAll(world);
+        ReleaseBulkCapacity();
 
         for (var cy = 0; cy < chunksTall; cy++)
             if (world.TryGetChunk(new ChunkPos(cx, cy, cz), out var chunk)) chunk.Lit = true;
@@ -127,8 +189,9 @@ public sealed class LightEngine
     {
         if (wy < 0 || wy >= TerrainGenerator.WorldHeight) return;
         ResetChunkCache();
-        LastCellsVisited = 0;
+        ResetCounters();
 
+        var started = Stopwatch.GetTimestamp();
         var block = BlockAt(world, wx, wy, wz);
         var loss = _attenuation[block];
         var emission = _emission[block];
@@ -140,7 +203,22 @@ public sealed class LightEngine
             {
                 SetChannel(world, wx, wy, wz, channel, 0);
                 _removals.Enqueue(new Removal(wx, wy, wz, existing));
+
+                var before = Stopwatch.GetTimestamp();
+                var cellsBefore = LastRemovalCells;
                 Unfill(world, channel);
+
+                var spent = Stopwatch.GetTimestamp() - before;
+                _unfillTicks += spent;
+                LastUnfillPasses++;
+
+                var ms = spent * 1000.0 / Stopwatch.Frequency;
+                if (ms > LastSlowestUnfillMs)
+                {
+                    LastSlowestUnfillMs = ms;
+                    LastSlowestUnfillChannel = channel;
+                    LastSlowestUnfillCells = LastRemovalCells - cellsBefore;
+                }
             }
 
             // Whatever stands around the cell now gets the chance to fill it in again. Offering the
@@ -159,7 +237,12 @@ public sealed class LightEngine
 
         if (emission != 0) SeedEmitterAt(world, wx, wy, wz, emission);
 
+        var split = Stopwatch.GetTimestamp();
         FloodAll(world);
+        var done = Stopwatch.GetTimestamp();
+
+        LastRemovalMs = (split - started) * 1000.0 / Stopwatch.Frequency;
+        LastFillMs = (done - split) * 1000.0 / Stopwatch.Frequency;
     }
 
     /// <summary>
@@ -289,6 +372,7 @@ public sealed class LightEngine
         {
             var node = queue.Dequeue();
             LastCellsVisited++;
+            LastFillCells++;
 
             var level = Channel(GetLight(world, node.X, node.Y, node.Z), channel);
             if (level <= 0) continue;
@@ -301,6 +385,7 @@ public sealed class LightEngine
                 var nz = node.Z + n.Z;
                 if (ny < 0 || ny >= TerrainGenerator.WorldHeight) continue;
 
+                LastNeighbourTests++;
                 var loss = _attenuation[BlockAt(world, nx, ny, nz)];
                 if (loss >= LightValue.Max) continue;
 
@@ -324,6 +409,7 @@ public sealed class LightEngine
         {
             var node = _removals.Dequeue();
             LastCellsVisited++;
+            LastRemovalCells++;
 
             for (var face = 0; face < Faces.Count; face++)
             {
@@ -333,6 +419,7 @@ public sealed class LightEngine
                 var nz = node.Z + n.Z;
                 if (ny < 0 || ny >= TerrainGenerator.WorldHeight) continue;
 
+                LastNeighbourTests++;
                 var level = Channel(GetLight(world, nx, ny, nz), channel);
                 if (level <= 0) continue;
 
@@ -376,9 +463,30 @@ public sealed class LightEngine
         var pos = ChunkPos.FromWorld(wx, wy, wz);
         if (pos == _cachedPos) return _cachedChunk;
 
+        LastChunkMisses++;
         _cachedPos = pos;
         _cachedChunk = world.TryGetChunk(pos, out var chunk) ? chunk : null;
         return _cachedChunk;
+    }
+
+    /// <summary>
+    /// Gives back the queue capacity a bulk pass needed, so an interactive edit does not inherit it.
+    /// </summary>
+    /// <remarks>
+    /// <para>Lighting a region seeds sunlight for every column in it, which for a 3x3 region is
+    /// over a million nodes and grows the sky queue to some tens of megabytes. <see cref="Queue{T}"/>
+    /// never gives that back. The next edit then enqueues its four hundred nodes into a buffer whose
+    /// pages have not been touched since, and pays first-touch costs on all of them — deterministic,
+    /// invisible to any counter of cells or neighbours, and proportional to how much sunlight the
+    /// region needed rather than to anything the edit did.</para>
+    /// <para>That is exactly the shape of the bug this was written for: one edit reporting 2.5 ms
+    /// for 458 cells while another seed did 1,435 cells in 0.08 ms with three times the neighbour
+    /// tests. The work counters ruled out the flood; nothing about the flood was ever wrong.</para>
+    /// </remarks>
+    private void ReleaseBulkCapacity()
+    {
+        for (var c = 0; c < ChannelCount; c++) _additions[c].TrimExcess();
+        _removals.TrimExcess();
     }
 
     private void ResetChunkCache()
