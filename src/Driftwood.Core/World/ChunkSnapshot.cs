@@ -23,6 +23,7 @@ public sealed class ChunkSnapshot
     public const int PadVolume = PadSize * PadSize * PadSize;
 
     private readonly ushort[] _blocks = new ushort[PadVolume];
+    private readonly ushort[] _light = new ushort[PadVolume];
 
     public ChunkPos Position { get; private set; }
 
@@ -32,6 +33,9 @@ public sealed class ChunkSnapshot
     /// <summary>Reads a block by chunk-local coordinate, valid from -1 to <see cref="Chunk.Size"/>.</summary>
     public ushort Get(int x, int y, int z) => _blocks[PadIndex(x, y, z)];
 
+    /// <summary>Reads packed light by chunk-local coordinate, over the same padded range.</summary>
+    public ushort GetLight(int x, int y, int z) => _light[PadIndex(x, y, z)];
+
     /// <summary>
     /// Refills this snapshot from the world. Copies the chunk body in whole rows, then walks the
     /// six skirt faces, twelve edges and eight corners as a single sweep over the padded shell.
@@ -40,18 +44,21 @@ public sealed class ChunkSnapshot
     {
         Position = pos;
         Array.Clear(_blocks);
+        Array.Clear(_light);
 
         var (ox, oy, oz) = pos.Origin;
 
-        if (world.TryGetChunk(pos, out var chunk) && !chunk.IsEmpty)
+        if (world.TryGetChunk(pos, out var chunk))
         {
             var src = chunk.Raw;
+            var srcLight = chunk.RawLight;
             for (var y = 0; y < Chunk.Size; y++)
             for (var z = 0; z < Chunk.Size; z++)
             {
                 var srcOffset = Chunk.Index(0, y, z);
                 var dstOffset = PadIndex(0, y, z);
                 Array.Copy(src, srcOffset, _blocks, dstOffset, Chunk.Size);
+                Array.Copy(srcLight, srcOffset, _light, dstOffset, Chunk.Size);
             }
         }
 
@@ -62,7 +69,12 @@ public sealed class ChunkSnapshot
         {
             var inside = (uint)x < Chunk.Size && (uint)y < Chunk.Size && (uint)z < Chunk.Size;
             if (inside) continue;
-            _blocks[PadIndex(x, y, z)] = world.GetBlock(ox + x, oy + y, oz + z).Value;
+
+            var wx = ox + x;
+            var wy = oy + y;
+            var wz = oz + z;
+            _blocks[PadIndex(x, y, z)] = world.GetBlock(wx, wy, wz).Value;
+            _light[PadIndex(x, y, z)] = world.GetLight(wx, wy, wz);
         }
     }
 }

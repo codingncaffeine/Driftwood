@@ -43,6 +43,14 @@ public sealed class VoxelWorld
         return chunk.Get(wx & Chunk.SizeMask, wy & Chunk.SizeMask, wz & Chunk.SizeMask);
     }
 
+    /// <summary>Reads packed light at a world position. Unloaded space reads as dark.</summary>
+    public ushort GetLight(int wx, int wy, int wz)
+    {
+        var pos = ChunkPos.FromWorld(wx, wy, wz);
+        if (!_chunks.TryGetValue(pos, out var chunk)) return 0;
+        return chunk.GetLight(wx & Chunk.SizeMask, wy & Chunk.SizeMask, wz & Chunk.SizeMask);
+    }
+
     /// <summary>
     /// Writes a world block, creating the chunk if needed. Also dirties any neighbouring chunk
     /// whose mesh this edit could change — a block on a chunk seam is a face-culling input for

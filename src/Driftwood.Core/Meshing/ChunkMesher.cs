@@ -1,4 +1,5 @@
 using Driftwood.Core.Blocks;
+using Driftwood.Core.Lighting;
 using Driftwood.Core.World;
 
 namespace Driftwood.Core.Meshing;
@@ -24,6 +25,14 @@ public sealed class ChunkMesher
 
     /// <summary>Merge key per cell of the current slice: 0 is empty, else (layer+1) &lt;&lt; 8 | packed AO.</summary>
     private readonly int[] _mask = new int[Chunk.Size * Chunk.Size];
+
+    /// <summary>
+    /// The same slice's four corner light values, sixteen bits each. Kept beside the key rather
+    /// than inside it because sixty-four bits of light plus the layer no longer fit in one word,
+    /// and hashing them down would let two differently-lit faces merge on a collision — a seam of
+    /// wrong shading that no geometry check would ever notice.
+    /// </summary>
+    private readonly ulong[] _maskLight = new ulong[Chunk.Size * Chunk.Size];
 
     private ChunkVertex[] _vertices = new ChunkVertex[16 * 1024];
     private uint[] _indices = new uint[24 * 1024];
@@ -123,6 +132,7 @@ public sealed class ChunkMesher
     private void BuildMask(int face, int axis, int au, int av, int slice)
     {
         Array.Clear(_mask);
+        Array.Clear(_maskLight);
 
         var n = Faces.Normals[face];
         var offsets = Faces.AoOffsets[face];
@@ -146,11 +156,53 @@ public sealed class ChunkMesher
             var nz = z + n.Z;
 
             var ao = 0;
+            ulong light = 0;
             for (var c = 0; c < 4; c++)
+            {
                 ao |= AmbientOcclusion(offsets[c], nx, ny, nz) << (c * 2);
+                light |= (ulong)CornerLight(offsets[c], nx, ny, nz) << (c * 16);
+            }
 
             var layer = _registry[here].LayerForFace(face);
             _mask[v * Chunk.Size + u] = ((layer + 1) << 8) | ao;
+            _maskLight[v * Chunk.Size + u] = light;
+        }
+    }
+
+    /// <summary>
+    /// Averages light over the four cells that touch this corner from the lit side of the face.
+    /// </summary>
+    /// <remarks>
+    /// The same four cells ambient occlusion samples, for the same reason: a corner's brightness is
+    /// what reaches it, and what reaches it is whatever is standing in the space around it. Taking
+    /// the face's single neighbour instead gives every corner of a quad the same value, and light
+    /// steps in visible blocks across a wall rather than sliding.
+    /// <para>Opaque cells are skipped rather than averaged in as zero. They hold no light to give,
+    /// and counting them would ring every wall corner with a dark halo that has nothing to do with
+    /// how lit the wall is — occlusion is ambient occlusion's job and it is already doing it.</para>
+    /// </remarks>
+    private ushort CornerLight((int X, int Y, int Z)[] offsets, int nx, int ny, int nz)
+    {
+        int sky = 0, red = 0, green = 0, blue = 0, taken = 0;
+
+        Accumulate(nx, ny, nz);
+        for (var i = 0; i < 3; i++)
+            Accumulate(nx + offsets[i].X, ny + offsets[i].Y, nz + offsets[i].Z);
+
+        if (taken == 0) return 0;
+
+        return LightValue.Pack(sky / taken, red / taken, green / taken, blue / taken);
+
+        void Accumulate(int x, int y, int z)
+        {
+            if (_opaque[_snapshot.Get(x, y, z)]) return;
+
+            var packed = _snapshot.GetLight(x, y, z);
+            sky += LightValue.Sky(packed);
+            red += LightValue.Red(packed);
+            green += LightValue.Green(packed);
+            blue += LightValue.Blue(packed);
+            taken++;
         }
     }
 
@@ -182,8 +234,10 @@ public sealed class ChunkMesher
                 continue;
             }
 
+            var light = _maskLight[v * Chunk.Size + u];
+
             var width = 1;
-            while (u + width < Chunk.Size && _mask[v * Chunk.Size + u + width] == key)
+            while (u + width < Chunk.Size && Matches(v, u + width, key, light))
                 width++;
 
             var height = 1;
@@ -192,7 +246,7 @@ public sealed class ChunkMesher
             {
                 for (var i = 0; i < width; i++)
                 {
-                    if (_mask[(v + height) * Chunk.Size + u + i] == key) continue;
+                    if (Matches(v + height, u + i, key, light)) continue;
                     grew = false;
                     break;
                 }
@@ -203,14 +257,23 @@ public sealed class ChunkMesher
             for (var du = 0; du < width; du++)
                 _mask[(v + dv) * Chunk.Size + u + du] = 0;
 
-            EmitQuad(face, axis, au, av, slice, u, v, width, height, key);
+            EmitQuad(face, axis, au, av, slice, u, v, width, height, key, light);
 
             u += width;
         }
     }
 
+    /// <summary>Two faces may only join when they agree on texture, occlusion and all four
+    /// corner lights.</summary>
+    private bool Matches(int v, int u, int key, ulong light)
+    {
+        var i = v * Chunk.Size + u;
+        return _mask[i] == key && _maskLight[i] == light;
+    }
+
     private void EmitQuad(
-        int face, int axis, int au, int av, int slice, int u, int v, int width, int height, int key)
+        int face, int axis, int au, int av, int slice, int u, int v, int width, int height,
+        int key, ulong light)
     {
         EnsureCapacity();
 
@@ -239,7 +302,8 @@ public sealed class ChunkMesher
             p[au] = u + unit[au] * width;
             p[av] = v + unit[av] * height;
 
-            _vertices[_vertexCount++] = new ChunkVertex(p[0], p[1], p[2], face, ao[c], layer);
+            var cornerLight = (ushort)((light >> (c * 16)) & 0xFFFF);
+            _vertices[_vertexCount++] = new ChunkVertex(p[0], p[1], p[2], face, ao[c], layer, cornerLight);
         }
 
         // Split the quad along whichever diagonal keeps the shading gradient smooth. Without this

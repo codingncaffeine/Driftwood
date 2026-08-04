@@ -7,7 +7,7 @@ namespace Driftwood.Client.Render;
 public static class ChunkShaders
 {
     /// <summary>
-    /// Unpacks the vertex word and shades from face direction and baked ambient occlusion.
+    /// Unpacks the vertex word and shades from baked light, ambient occlusion and face direction.
     /// Positions arrive chunk-local, so the chunk's origin rides in a uniform rather than being
     /// baked into every vertex.
     /// </summary>
@@ -22,9 +22,10 @@ public static class ChunkShaders
         uniform vec3 uCameraPos;
         uniform vec3 uPalette[64];
         uniform vec3 uSunDir;         // surface toward sun, normalised
-        uniform vec3 uSunColor;
+        uniform vec3 uSunColor;       // colour and strength of direct sun at this time of day
         uniform vec3 uSkyAmbient;     // ambient arriving from above
         uniform vec3 uGroundAmbient;  // bounce arriving from below
+        uniform vec3 uNightFloor;     // what a cell with no light at all is allowed to keep
         uniform float uFogStart;
         uniform float uFogEnd;
 
@@ -53,17 +54,32 @@ public static class ChunkShaders
             int ao    = int((aPacked0 >> 21) & 3u);
             int layer = int( aPacked1        & 0xFFFFu);
 
+            // Baked light: sky in the low nibble, then red, green, blue.
+            uint packedLight = aPacked1 >> 16;
+            float sky   = float( packedLight        & 15u) / 15.0;
+            vec3  block = vec3(
+                float((packedLight >>  4) & 15u),
+                float((packedLight >>  8) & 15u),
+                float((packedLight >> 12) & 15u)) / 15.0;
+
             vec3 n = kNormals[face];
 
-            // Hemisphere ambient: sky light from above, bounce from the ground below. This is
-            // what keeps the two faces the sun cannot reach from collapsing into one flat tone,
-            // which a plain N.L term would do.
+            // Sunlight reaching this corner is the baked visibility of the sky multiplied by how
+            // squarely the face meets the sun, plus the sky's own ambient for the faces it misses.
+            // Both are gated on the same baked term, which is what puts a cave in the dark while
+            // the hillside above it stays lit.
             float upness = 0.5 + 0.5 * n.y;
-            vec3 ambient = mix(uGroundAmbient, uSkyAmbient, upness);
-
+            vec3 skyAmbient = mix(uGroundAmbient, uSkyAmbient, upness);
             vec3 sun = uSunColor * max(dot(n, uSunDir), 0.0);
+            vec3 daylight = (skyAmbient + sun) * sky;
 
-            vColor = uPalette[layer] * (ambient + sun) * kAo[ao];
+            // Block light and daylight do not add: a torch in a lit room is invisible, exactly as
+            // it should be, and a torch in a cave is the only thing there. Taking the brighter of
+            // the two per channel is what keeps a warm source reading warm against cold daylight
+            // instead of washing to white wherever the two overlap.
+            vec3 light = max(daylight, block);
+
+            vColor = uPalette[layer] * max(light, uNightFloor) * kAo[ao];
 
             float d = length(world - uCameraPos);
             vFog = clamp((d - uFogStart) / max(uFogEnd - uFogStart, 1.0), 0.0, 1.0);

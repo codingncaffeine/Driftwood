@@ -649,6 +649,12 @@ public static class WorldAudit
             batchGenerator.DecorateChunk(chunk);
         }
 
+        // The reference has to be lit too, or the comparison is between meshes that baked light and
+        // meshes that baked nothing, and it fails for a reason that has nothing to do with
+        // streaming. Lighting the region whole is the point: it is the answer the streamed,
+        // column-at-a-time version has to reproduce.
+        new LightEngine(registry).LightAll(batchWorld);
+
         var mesher = new ChunkMesher(registry);
         foreach (var (pos, streamed) in produced)
         {

@@ -131,6 +131,13 @@ public sealed class ClientHost : IDisposable
     private static readonly Vector3 SkyAmbient = new(0.44f, 0.50f, 0.62f);
     private static readonly Vector3 GroundAmbient = new(0.22f, 0.20f, 0.17f);
 
+    /// <summary>
+    /// What a cell reached by no light at all still shows. Not zero: a cave lit to pure black is
+    /// technically correct and unplayable, and every game in the genre keeps a floor for exactly
+    /// that reason. Cool and very dim, so it reads as "your eyes adjusting" rather than as fog.
+    /// </summary>
+    private static readonly Vector3 NightFloor = new(0.045f, 0.050f, 0.065f);
+
     public ClientHost(ClientOptions options)
     {
         _options = options;
@@ -404,10 +411,10 @@ public sealed class ClientHost : IDisposable
             _framesSinceTitle = 0;
 
             var p = _camera.Position;
-            var queued = _streamer.PendingGenerate + _streamer.PendingMesh;
+            var queued = _streamer.PendingGenerate + _streamer.PendingLight + _streamer.PendingMesh;
             _window.Title = _bench is not null
                 ? (_benchWarmingUp
-                    ? $"Driftwood bench — settling ({_streamer.PendingGenerate + _streamer.PendingMesh} queued) | {_fps:F0} fps"
+                    ? $"Driftwood bench — settling ({_streamer.PendingGenerate + _streamer.PendingLight + _streamer.PendingMesh} queued) | {_fps:F0} fps"
                     : $"Driftwood bench — {_bench.ElapsedSeconds:F1}/{_bench.DurationSeconds:F0} s | {_fps:F0} fps | "
                       + $"{_drawnChunks}/{_meshes.Count} drawn")
                 : $"Driftwood — {_fps:F0} fps | seed {_options.Seed} | "
@@ -440,7 +447,7 @@ public sealed class ClientHost : IDisposable
             LoadedChunks: _meshes.Count,
             Triangles: _drawnTriangles,
             Uploads: _uploadsThisFrame,
-            QueueDepth: _streamer.PendingGenerate + _streamer.PendingMesh,
+            QueueDepth: _streamer.PendingGenerate + _streamer.PendingLight + _streamer.PendingMesh,
             ReadyBacklog: _streamer.ReadyMeshes));
 
         if (!_bench.Complete) return;
@@ -482,6 +489,7 @@ public sealed class ClientHost : IDisposable
         if (frameMs > _benchWarmupPeakMs) _benchWarmupPeakMs = frameMs;
 
         var quiet = _streamer.PendingGenerate == 0
+                 && _streamer.PendingLight == 0
                  && _streamer.PendingMesh == 0
                  && _streamer.ReadyMeshes == 0
                  && _meshes.Count > 0;
@@ -522,6 +530,7 @@ public sealed class ClientHost : IDisposable
         _chunkShader.SetVec3("uSunColor", SunColor);
         _chunkShader.SetVec3("uSkyAmbient", SkyAmbient);
         _chunkShader.SetVec3("uGroundAmbient", GroundAmbient);
+        _chunkShader.SetVec3("uNightFloor", NightFloor);
         _chunkShader.SetFloat("uFogStart", _fogStart);
         _chunkShader.SetFloat("uFogEnd", _fogEnd);
         _chunkShader.SetVec3Array("uPalette", StarterBlocks.PaletteRgb);
