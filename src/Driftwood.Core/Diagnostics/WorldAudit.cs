@@ -109,21 +109,15 @@ public static class WorldAudit
         // Relief measured directly off the heightmap. Inferring it from the y-range of grass and
         // stone conflates "how tall is the terrain" with "where does each material sit", and the
         // two answers diverge exactly when the shaping curve is wrong.
-        var surfaceMin = int.MaxValue;
-        var surfaceMax = int.MinValue;
-        long surfaceSum = 0;
-        var samples = 0;
-        var aboveSea = 0;
-        for (var wz = minBlock; wz <= maxBlock; wz += 4)
-        for (var wx = minBlock; wx <= maxBlock; wx += 4)
-        {
-            var h = generator.SurfaceHeight(wx, wz);
-            if (h < surfaceMin) surfaceMin = h;
-            if (h > surfaceMax) surfaceMax = h;
-            surfaceSum += h;
-            samples++;
-            if (h > TerrainGenerator.SeaLevel) aboveSea++;
-        }
+        var (surfaceMin, surfaceMax, surfaceMean, aboveSeaPct) = SampleRelief(generator, minBlock, maxBlock, 4);
+
+        // The generator gets judged over a fixed span, not over whatever box --chunks asked for.
+        // Continent wavelength is 640 blocks, so a 384-block window can sit entirely inside one
+        // continent's flat interior and read as broken terrain when the generator is fine. Those
+        // are different questions and only the wide sample answers "can this seed make mountains".
+        const int ReliefProbeSpan = 4096;
+        var (probeMin, probeMax, _, probeLandPct) =
+            SampleRelief(generator, -ReliefProbeSpan / 2, ReliefProbeSpan / 2, 16);
 
         sb.AppendLine($"seed          {seed}");
         sb.AppendLine($"volume        {extent} x {TerrainGenerator.WorldHeight} x {extent} blocks ({totalBlocks:N0} total)");
@@ -135,8 +129,9 @@ public static class WorldAudit
         sb.AppendLine();
         sb.AppendLine($"geometry      {verts:N0} verts, {tris:N0} tris, {verts * ChunkVertex.SizeInBytes / (1024.0 * 1024.0):F1} MiB vertex data");
         sb.AppendLine();
-        sb.AppendLine($"relief        surface y {surfaceMin}..{surfaceMax} (span {surfaceMax - surfaceMin}), mean {surfaceSum / (double)samples:F1}");
-        sb.AppendLine($"land          {aboveSea * 100.0 / samples:F1}% of columns above sea level {TerrainGenerator.SeaLevel}");
+        sb.AppendLine($"relief        surface y {surfaceMin}..{surfaceMax} (span {surfaceMax - surfaceMin}), mean {surfaceMean:F1}   [this world]");
+        sb.AppendLine($"              surface y {probeMin}..{probeMax} (span {probeMax - probeMin})              [seed over {ReliefProbeSpan} blocks]");
+        sb.AppendLine($"land          {aboveSeaPct:F1}% of columns above sea level {TerrainGenerator.SeaLevel}");
         sb.AppendLine();
         sb.AppendLine("block census");
 
@@ -181,8 +176,8 @@ public static class WorldAudit
         // Relief and mix gates. A world can pass every "does this block exist" check above and
         // still be a featureless plain, or be 98% ocean, or have ore so rare it never gates
         // anything. These are the checks that notice.
-        Check("terrain has relief", surfaceMax - surfaceMin >= 45, $"span {surfaceMax - surfaceMin} blocks");
-        Check("both land and sea", aboveSea > samples / 10 && aboveSea < samples * 9 / 10, $"{aboveSea * 100.0 / samples:F1}% land");
+        Check("terrain has relief", probeMax - probeMin >= 55, $"span {probeMax - probeMin} blocks over {ReliefProbeSpan}");
+        Check("both land and sea", probeLandPct is > 15 and < 85, $"{probeLandPct:F1}% land over {ReliefProbeSpan}");
         // Ore gets a band, not a floor. Too little and mining never gates progression; too much
         // and it stops being a reward. A floor-only check passes a world where one stone block
         // in fifty is coal, which is how the first calibration pass slipped through.
@@ -194,5 +189,32 @@ public static class WorldAudit
         Check("coal beats iron", counts[ids.CoalOre.Value] > counts[ids.IronOre.Value], $"{counts[ids.CoalOre.Value]:N0} vs {counts[ids.IronOre.Value]:N0}");
 
         return new Result(sb.ToString(), passed);
+    }
+
+    /// <summary>
+    /// Walks the heightmap over a square block range and reports its extremes, mean, and the
+    /// share of columns standing above sea level.
+    /// </summary>
+    private static (int Min, int Max, double Mean, double AboveSeaPct) SampleRelief(
+        TerrainGenerator generator, int min, int max, int step)
+    {
+        var lo = int.MaxValue;
+        var hi = int.MinValue;
+        long sum = 0;
+        var samples = 0;
+        var aboveSea = 0;
+
+        for (var wz = min; wz <= max; wz += step)
+        for (var wx = min; wx <= max; wx += step)
+        {
+            var h = generator.SurfaceHeight(wx, wz);
+            if (h < lo) lo = h;
+            if (h > hi) hi = h;
+            sum += h;
+            samples++;
+            if (h > TerrainGenerator.SeaLevel) aboveSea++;
+        }
+
+        return (lo, hi, sum / (double)samples, aboveSea * 100.0 / samples);
     }
 }
