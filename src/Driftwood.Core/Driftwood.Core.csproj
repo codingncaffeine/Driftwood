@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Pure voxel logic: storage, generation, meshing. No graphics API here so
+       the whole simulation stays runnable from a headless CLI for audits. -->
+
+  <PropertyGroup>
+    <RootNamespace>Driftwood.Core</RootNamespace>
+  </PropertyGroup>
+
+</Project>
