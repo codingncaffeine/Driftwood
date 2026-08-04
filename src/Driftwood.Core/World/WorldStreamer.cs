@@ -49,6 +49,7 @@ public sealed class WorldStreamer : IDisposable
 
     private readonly ConcurrentQueue<ChunkPos> _generateQueue = new();
     private readonly ConcurrentQueue<(int X, int Z)> _lightQueue = new();
+    private readonly ConcurrentQueue<(int X, int Y, int Z)> _editQueue = new();
     private readonly ConcurrentQueue<ChunkPos> _meshQueue = new();
     private readonly ConcurrentQueue<ChunkMeshData> _finishedMeshes = new();
     private readonly ConcurrentQueue<ChunkPos> _dropped = new();
@@ -94,7 +95,7 @@ public sealed class WorldStreamer : IDisposable
     public int WorkerCount => _workers.Length;
     public int LoadedChunks => _world.ChunkCount;
     public int PendingGenerate => _generateQueue.Count + Volatile.Read(ref _generatingCount);
-    public int PendingLight => _lightQueue.Count + Volatile.Read(ref _lightingCount);
+    public int PendingLight => _lightQueue.Count + _editQueue.Count + Volatile.Read(ref _lightingCount);
     public int PendingMesh => _meshQueue.Count + Volatile.Read(ref _meshingCount);
     public int ReadyMeshes => _finishedMeshes.Count;
 
@@ -125,6 +126,27 @@ public sealed class WorldStreamer : IDisposable
             _workers[i] = Task.Factory.StartNew(WorkerLoop, TaskCreationOptions.LongRunning).Unwrap();
 
         _lightWorker = Task.Factory.StartNew(LightLoop, TaskCreationOptions.LongRunning).Unwrap();
+    }
+
+    /// <summary>
+    /// Changes one block and schedules the light and mesh work that follows from it.
+    /// </summary>
+    /// <remarks>
+    /// The write happens here, on the caller's thread, so the change is visible to the next
+    /// raycast immediately — a player who breaks a block and swings again must not hit it a second
+    /// time. Everything expensive is handed to the lighting thread, which owns relighting and which
+    /// dirties whatever chunks the new light reached; the mesh queue picks those up on its own.
+    /// </remarks>
+    public void EditBlock(int wx, int wy, int wz, BlockId id)
+    {
+        if (wy < 0 || wy >= TerrainGenerator.WorldHeight) return;
+
+        var pos = ChunkPos.FromWorld(wx, wy, wz);
+        if (!_world.TryGetChunk(pos, out _)) return;
+
+        _world.SetBlock(wx, wy, wz, id);
+        _editQueue.Enqueue((wx, wy, wz));
+        _lightWork.Release();
     }
 
     /// <summary>
@@ -279,6 +301,23 @@ public sealed class WorldStreamer : IDisposable
             catch (OperationCanceledException)
             {
                 return;
+            }
+
+            // Player edits jump the queue. A column arriving in the background can wait a few
+            // milliseconds; a block the player just swung at cannot, and the whole point of the
+            // incremental relight is that it is fast enough to feel immediate.
+            if (_editQueue.TryDequeue(out var edit))
+            {
+                Interlocked.Increment(ref _lightingCount);
+                try
+                {
+                    lighter.UpdateBlock(_world, edit.X, edit.Y, edit.Z);
+                }
+                finally
+                {
+                    Interlocked.Decrement(ref _lightingCount);
+                }
+                continue;
             }
 
             if (!_lightQueue.TryDequeue(out var column)) continue;

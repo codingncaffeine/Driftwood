@@ -71,6 +71,17 @@ public sealed class ClientHost : IDisposable
     private int _viewRadius;
 
     private PlayerBody _player = null!;
+    private BlockOutline _outline = null!;
+    private bool[] _targetable = null!;
+
+    /// <summary>The block under the crosshair, if anything is in reach.</summary>
+    private RayHit? _target;
+
+    /// <summary>How far a player can reach to break or place. Genre-standard.</summary>
+    private const float Reach = 5f;
+
+    /// <summary>What gets placed on right-click until an inventory decides otherwise.</summary>
+    private BlockId _heldBlock;
 
     /// <summary>
     /// Walking rather than flying. The fly camera stays available behind F3 — it is how terrain
@@ -212,6 +223,7 @@ public sealed class ClientHost : IDisposable
 
         _keyboard.KeyDown += OnKeyDown;
         _mouse.MouseMove += OnMouseMove;
+        _mouse.MouseDown += OnMouseDown;
 
         // The benchmark flies itself, so it leaves the cursor alone; stealing the mouse for a
         // measurement run is rude and changes nothing about what is measured.
@@ -224,6 +236,7 @@ public sealed class ClientHost : IDisposable
         _gl.ClearColor(SkyColor.X, SkyColor.Y, SkyColor.Z, 1f);
 
         _chunkShader = new Shader(_gl, ChunkShaders.Vertex, ChunkShaders.Fragment);
+        _outline = new BlockOutline(_gl);
 
         BuildWorld();
     }
@@ -248,6 +261,15 @@ public sealed class ClientHost : IDisposable
         _camera.FarPlane = _fogEnd + 200f;
 
         _player = new PlayerBody(registry);
+        _heldBlock = ids.Planks;
+
+        // Water is not targetable: a ray should pass through it to the sea bed, or you can never
+        // break anything you swim over. Leaves are, since chopping a canopy is half of gathering.
+        _targetable = registry.BuildOpacityTable();
+        for (var id = 0; id < registry.Count; id++)
+            if (registry[(ushort)id].Name == "oak_leaves" || registry[(ushort)id].Name == "vine")
+                _targetable[id] = true;
+
         _spawnPoint = new Vector3(0.5f, generator.SurfaceHeight(0, 0) + 3f, 0.5f);
         _player.Teleport(_spawnPoint);
 
@@ -377,6 +399,29 @@ public sealed class ClientHost : IDisposable
         }
     }
 
+    /// <summary>
+    /// Break on the left button, place on the right. Single clicks for now; holding to mine
+    /// through a progress bar arrives with block hardness at P3-5.
+    /// </summary>
+    private void OnMouseDown(IMouse mouse, MouseButton button)
+    {
+        if (_bench is not null) return;
+
+        // A click into a released cursor takes the mouse back rather than editing the world —
+        // otherwise clicking the window to focus it digs a hole in whatever was under the crosshair.
+        if (!_mouseCaptured)
+        {
+            SetMouseCaptured(true);
+            return;
+        }
+
+        switch (button)
+        {
+            case MouseButton.Left: BreakTarget(); break;
+            case MouseButton.Right: PlaceOnTarget(); break;
+        }
+    }
+
     private void SetMouseCaptured(bool captured)
     {
         _mouseCaptured = captured;
@@ -431,6 +476,7 @@ public sealed class ClientHost : IDisposable
             _camera.Update((float)dt, _keyboard);
         }
 
+        UpdateTarget();
         PumpStreaming();
 
         // Injected fault, off unless --stall asked for it. Burns CPU rather than sleeping, so it
@@ -464,6 +510,51 @@ public sealed class ClientHost : IDisposable
                   + (queued > 0 ? $" | {queued} queued" : "")
                   + (_frustumCulling ? "" : " | CULLING OFF");
         }
+    }
+
+    /// <summary>Finds the block under the crosshair, if any is within reach.</summary>
+    private void UpdateTarget()
+    {
+        _target = _bench is not null
+            ? null
+            : BlockRay.TryCast(_streamer.World, _targetable, _camera.Position, _camera.Forward, Reach, out var hit)
+                ? hit
+                : null;
+    }
+
+    /// <summary>Removes the targeted block.</summary>
+    private void BreakTarget()
+    {
+        if (_target is not { } hit) return;
+        _streamer.EditBlock(hit.X, hit.Y, hit.Z, BlockId.Air);
+    }
+
+    /// <summary>
+    /// Puts a block against the face being looked at, unless the player is standing there.
+    /// </summary>
+    /// <remarks>
+    /// The occupancy test is not a nicety. Without it the first thing anyone does is place a block
+    /// into their own feet, which leaves them inside solid geometry with the collision resolver
+    /// having no free direction to push them out of — the classic way to get stuck in a voxel game.
+    /// </remarks>
+    private void PlaceOnTarget()
+    {
+        if (_target is not { } hit) return;
+
+        var (x, y, z) = hit.Adjacent;
+        if (!_streamer.World.GetBlock(x, y, z).IsAir) return;
+
+        if (_walking)
+        {
+            var probe = _streamer.World;
+            var before = probe.GetBlock(x, y, z);
+            probe.SetBlock(x, y, z, _heldBlock);
+            var blocked = _player.Collides(probe, _player.Position);
+            probe.SetBlock(x, y, z, before);
+            if (blocked) return;
+        }
+
+        _streamer.EditBlock(x, y, z, _heldBlock);
     }
 
     /// <summary>
@@ -646,6 +737,10 @@ public sealed class ClientHost : IDisposable
 
         _drawnChunks = drawn;
         _drawnTriangles = triangles;
+
+        if (_target is { } hit && !_wireframe)
+            _outline.Draw(viewProj, new Vector3(hit.X, hit.Y, hit.Z));
+
         _renderMs = (Stopwatch.GetTimestamp() - renderStart) * TicksToMs;
     }
 
@@ -663,6 +758,7 @@ public sealed class ClientHost : IDisposable
         foreach (var mesh in _meshes.Values) mesh.Dispose();
         _meshes.Clear();
         _chunkShader?.Dispose();
+        _outline?.Dispose();
     }
 
     public void Dispose()

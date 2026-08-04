@@ -325,6 +325,12 @@ public static class WorldAudit
         var lightingConverges = LightingIsOrderIndependent(seed, registry, ids, oceanCoverage, out var lightDetail);
         Check("light ignores load order", lightingConverges, lightDetail);
 
+        var rayFaults = RaycastSelfTest(registry, ids);
+        Check("raycast hits the right face", rayFaults.Count == 0,
+            rayFaults.Count == 0
+                ? "6 axis directions, a diagonal, a miss, and a ray starting inside a block"
+                : $"{rayFaults.Count} faults: {string.Join("; ", rayFaults)}");
+
         var physicsFaults = PhysicsSelfTest(seed, registry, ids, oceanCoverage);
         Check("player physics holds", physicsFaults.Count == 0,
             physicsFaults.Count == 0
@@ -560,6 +566,70 @@ public static class WorldAudit
         }
 
         return world;
+    }
+
+    /// <summary>
+    /// Fires rays at a single block from every side and checks which face each one reports.
+    /// </summary>
+    /// <remarks>
+    /// The face is the half of the answer that is easy to get subtly wrong and hard to notice.
+    /// A hit position alone looks correct in every screenshot; the face is what decides where a
+    /// placed block goes, and an off-by-one there puts it inside the block you were aiming at
+    /// — which reads as "placing sometimes does nothing" rather than as a maths error.
+    /// </remarks>
+    private static List<string> RaycastSelfTest(BlockRegistry registry, StarterBlocks.Ids ids)
+    {
+        var faults = new List<string>();
+        var stops = registry.BuildSolidTable();
+
+        var world = new VoxelWorld(registry);
+        world.SetBlock(0, 0, 0, ids.Stone);
+
+        // Fire at the block from each side; the face reported must be the one facing the shooter.
+        (Vector3 From, Vector3 Dir, int Face, string Name)[] cases =
+        [
+            (new Vector3(5.5f, 0.5f, 0.5f), -Vector3.UnitX, Faces.PosX, "from +X"),
+            (new Vector3(-5.5f, 0.5f, 0.5f), Vector3.UnitX, Faces.NegX, "from -X"),
+            (new Vector3(0.5f, 5.5f, 0.5f), -Vector3.UnitY, Faces.PosY, "from +Y"),
+            (new Vector3(0.5f, -5.5f, 0.5f), Vector3.UnitY, Faces.NegY, "from -Y"),
+            (new Vector3(0.5f, 0.5f, 5.5f), -Vector3.UnitZ, Faces.PosZ, "from +Z"),
+            (new Vector3(0.5f, 0.5f, -5.5f), Vector3.UnitZ, Faces.NegZ, "from -Z"),
+        ];
+
+        foreach (var (from, dir, face, name) in cases)
+        {
+            if (!BlockRay.TryCast(world, stops, from, dir, 20f, out var hit))
+            {
+                faults.Add($"{name} missed");
+                continue;
+            }
+
+            if (hit.X != 0 || hit.Y != 0 || hit.Z != 0)
+                faults.Add($"{name} hit ({hit.X},{hit.Y},{hit.Z}), expected the origin block");
+            else if (hit.Face != face)
+                faults.Add($"{name} reported face {hit.Face}, expected {face}");
+            else if (world.GetBlock(hit.Adjacent.X, hit.Adjacent.Y, hit.Adjacent.Z) != BlockId.Air)
+                faults.Add($"{name} placement cell is not empty");
+        }
+
+        // A diagonal must still land on the block rather than slipping past its corner.
+        if (!BlockRay.TryCast(world, stops, new Vector3(4.5f, 4.5f, 4.5f), new Vector3(-1, -1, -1), 20f, out _))
+            faults.Add("diagonal ray slipped past the corner");
+
+        // A ray pointed at nothing must report a miss, not the last cell it walked through.
+        if (BlockRay.TryCast(world, stops, new Vector3(0.5f, 0.5f, 5.5f), Vector3.UnitZ, 20f, out _))
+            faults.Add("ray fired away from the block still reported a hit");
+
+        // Range is a range: just past it is a miss, just inside it is a hit.
+        if (BlockRay.TryCast(world, stops, new Vector3(20.5f, 0.5f, 0.5f), -Vector3.UnitX, 5f, out _))
+            faults.Add("hit a block 20 blocks away on a 5-block reach");
+
+        // Standing inside a block targets that block.
+        if (!BlockRay.TryCast(world, stops, new Vector3(0.5f, 0.5f, 0.5f), Vector3.UnitX, 5f, out var inside)
+            || inside.X != 0 || inside.Y != 0 || inside.Z != 0)
+            faults.Add("a ray starting inside a block did not target it");
+
+        return faults;
     }
 
     /// <summary>

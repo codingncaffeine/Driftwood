@@ -19,7 +19,8 @@ streaming are in. The game itself is not; there is no player, no inventory and n
 | Chunk streaming around the viewer | working |
 | Sunlight and coloured block light | working |
 | Player controller — walk, jump, sneak, collide | working |
-| Block break / place | not started |
+| Block targeting, break and place | working |
+| Textures — currently a flat colour per block | placeholder |
 | Inventory, crafting, recipes | not started |
 | Save / load | not started |
 | Controller support | not started |
@@ -59,6 +60,8 @@ You spawn walking. `F3` swaps to a free-flying camera and back.
 | `Space` | jump | up |
 | `Ctrl` | sneak — will not walk off a ledge | down |
 | `Shift` | sprint | boost |
+| Left click | break the outlined block | |
+| Right click | place a block against it | |
 | `Esc` | release or recapture the mouse | |
 | `F1` | wireframe | |
 | `F2` | frustum culling on / off | |
