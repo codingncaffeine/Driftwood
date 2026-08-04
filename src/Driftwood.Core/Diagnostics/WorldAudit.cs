@@ -55,6 +55,8 @@ public static class WorldAudit
 
         var meshWatch = Stopwatch.StartNew();
         var meshes = new ChunkMeshData?[positions.Count];
+        var quadCounts = new int[positions.Count];
+        var coveredFaces = new int[positions.Count];
         Parallel.For(
             0,
             positions.Count,
@@ -62,10 +64,38 @@ public static class WorldAudit
             (i, _, mesher) =>
             {
                 meshes[i] = mesher.Build(world, positions[i]);
+                quadCounts[i] = mesher.LastQuadCount;
+                coveredFaces[i] = mesher.LastCoveredFaces;
                 return mesher;
             },
             _ => { });
         meshWatch.Stop();
+
+        // Independent count of visible unit faces, taken one block at a time without any merging.
+        // Greedy meshing is easy to get subtly wrong — a run that stops one short leaves a seam,
+        // one that runs long double-covers — and neither shows up in a block census or a vertex
+        // total. Summing width by height over the merged quads has to land on exactly this number.
+        var naiveFaces = new int[positions.Count];
+        Parallel.For(
+            0,
+            positions.Count,
+            () => new ChunkMesher(registry),
+            (i, _, mesher) =>
+            {
+                naiveFaces[i] = mesher.CountVisibleFaces(world, positions[i]);
+                return mesher;
+            },
+            _ => { });
+
+        long totalQuads = 0, totalCovered = 0, totalNaive = 0;
+        var mismatchedChunks = 0;
+        for (var i = 0; i < positions.Count; i++)
+        {
+            totalQuads += quadCounts[i];
+            totalCovered += coveredFaces[i];
+            totalNaive += naiveFaces[i];
+            if (coveredFaces[i] != naiveFaces[i]) mismatchedChunks++;
+        }
 
         // Block census across the whole generated volume.
         var counts = new long[registry.Count];
@@ -128,6 +158,7 @@ public static class WorldAudit
         sb.AppendLine($"mesh          {meshWatch.ElapsedMilliseconds,6} ms   ({positions.Count / Math.Max(meshWatch.Elapsed.TotalSeconds, 0.001):N0} chunks/s)");
         sb.AppendLine();
         sb.AppendLine($"geometry      {verts:N0} verts, {tris:N0} tris, {verts * ChunkVertex.SizeInBytes / (1024.0 * 1024.0):F1} MiB vertex data");
+        sb.AppendLine($"merging       {totalNaive:N0} visible faces -> {totalQuads:N0} quads ({totalNaive / (double)Math.Max(totalQuads, 1):F2}x fewer)");
         sb.AppendLine();
         sb.AppendLine($"relief        surface y {surfaceMin}..{surfaceMax} (span {surfaceMax - surfaceMin}), mean {surfaceMean:F1}   [this world]");
         sb.AppendLine($"              surface y {probeMin}..{probeMax} (span {probeMax - probeMin})              [seed over {ReliefProbeSpan} blocks]");
@@ -193,6 +224,13 @@ public static class WorldAudit
         var windingFaults = Faces.ValidateWinding();
         Check("face winding is outward", windingFaults.Count == 0,
             windingFaults.Count == 0 ? "all 6 faces" : string.Join("; ", windingFaults));
+
+        Check(
+            "merged area == naive area",
+            mismatchedChunks == 0 && totalCovered == totalNaive,
+            mismatchedChunks == 0
+                ? $"{totalCovered:N0} faces across {positions.Count:N0} chunks"
+                : $"{mismatchedChunks} chunks differ, {totalCovered:N0} merged vs {totalNaive:N0} naive");
         // Ore gets a band, not a floor. Too little and mining never gates progression; too much
         // and it stops being a reward. A floor-only check passes a world where one stone block
         // in fifty is coal, which is how the first calibration pass slipped through.

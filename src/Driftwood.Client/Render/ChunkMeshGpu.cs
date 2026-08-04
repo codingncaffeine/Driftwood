@@ -53,14 +53,14 @@ public sealed class ChunkMeshGpu : IDisposable
                 BufferUsageARB.StaticDraw);
         }
 
-        // location 0: chunk-local position.
+        // Both attributes are bit fields, so both take the integer path. VertexAttribPointer
+        // would convert the bits to float on the way in and every unpack would read garbage.
+        // location 0: position, face and ambient occlusion. location 1: texture layer.
         _gl.EnableVertexAttribArray(0);
-        _gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, ChunkVertex.SizeInBytes, (void*)0);
+        _gl.VertexAttribIPointer(0, 1, VertexAttribIType.UnsignedInt, ChunkVertex.SizeInBytes, (void*)0);
 
-        // location 1: the packed face/ao/layer word. Integer attributes need the "I" form —
-        // the float path would silently convert the bits and the unpack maths would read garbage.
         _gl.EnableVertexAttribArray(1);
-        _gl.VertexAttribIPointer(1, 1, VertexAttribIType.UnsignedInt, ChunkVertex.SizeInBytes, (void*)12);
+        _gl.VertexAttribIPointer(1, 1, VertexAttribIType.UnsignedInt, ChunkVertex.SizeInBytes, (void*)4);
 
         _gl.BindVertexArray(0);
     }

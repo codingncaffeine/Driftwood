@@ -3,31 +3,36 @@ using System.Runtime.InteropServices;
 namespace Driftwood.Core.Meshing;
 
 /// <summary>
-/// One meshed corner: 16 bytes, laid out to go straight to the GPU with no repacking.
+/// One meshed corner: 8 bytes, laid out to go straight to the GPU with no repacking.
 /// </summary>
 /// <remarks>
-/// Position is chunk-local (0..32), so it stays small and the chunk's world origin rides in a
-/// uniform instead of being baked into every vertex. Face index, ambient occlusion and texture
-/// layer share one word — the shader unpacks them, which costs a few ALU cycles and saves a third
-/// of the bandwidth. Greedy meshing at P1 changes how many of these get emitted, not their shape.
+/// <para>Everything a corner needs fits in bits. Position is chunk-local and integral — greedy
+/// quads only ever land on block boundaries, so 0..32 per axis costs six bits rather than a
+/// float's thirty-two, and the chunk's world origin rides in a uniform instead of being repeated
+/// across every vertex.</para>
+/// <para>Layer keeps a full sixteen bits in its own word rather than being squeezed alongside the
+/// rest. Packing it down to nine would fit the whole vertex in four bytes, but it would also cap
+/// the game at 512 distinct block textures, and "hundreds of ores and woods" is close enough to
+/// that ceiling to make the trade a bad one.</para>
 /// </remarks>
 [StructLayout(LayoutKind.Sequential, Pack = 4)]
 public readonly struct ChunkVertex
 {
-    public const int SizeInBytes = 16;
+    public const int SizeInBytes = 8;
 
-    public readonly float X;
-    public readonly float Y;
-    public readonly float Z;
+    /// <summary>bits 0-5 x, 6-11 y, 12-17 z, 18-20 face, 21-22 ambient occlusion.</summary>
+    public readonly uint Packed0;
 
-    /// <summary>bits 0-2 face, bits 3-4 ambient occlusion (0 darkest, 3 unoccluded), bits 8-23 texture layer.</summary>
-    public readonly uint Packed;
+    /// <summary>bits 0-15 texture layer.</summary>
+    public readonly uint Packed1;
 
-    public ChunkVertex(float x, float y, float z, int face, int ao, ushort layer)
+    public ChunkVertex(int x, int y, int z, int face, int ao, ushort layer)
     {
-        X = x;
-        Y = y;
-        Z = z;
-        Packed = (uint)(face & 0x7) | ((uint)(ao & 0x3) << 3) | ((uint)layer << 8);
+        Packed0 = (uint)(x & 0x3F)
+                | ((uint)(y & 0x3F) << 6)
+                | ((uint)(z & 0x3F) << 12)
+                | ((uint)(face & 0x7) << 18)
+                | ((uint)(ao & 0x3) << 21);
+        Packed1 = layer;
     }
 }

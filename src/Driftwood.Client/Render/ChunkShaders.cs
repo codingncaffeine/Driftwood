@@ -14,8 +14,8 @@ public static class ChunkShaders
     public const string Vertex = """
         #version 330 core
 
-        layout(location = 0) in vec3 aPos;
-        layout(location = 1) in uint aPacked;
+        layout(location = 0) in uint aPacked0;
+        layout(location = 1) in uint aPacked1;
 
         uniform mat4 uViewProj;
         uniform vec3 uChunkOrigin;
@@ -41,12 +41,17 @@ public static class ChunkShaders
 
         void main()
         {
-            vec3 world = uChunkOrigin + aPos;
+            vec3 local = vec3(
+                float( aPacked0        & 63u),
+                float((aPacked0 >>  6) & 63u),
+                float((aPacked0 >> 12) & 63u));
+
+            vec3 world = uChunkOrigin + local;
             gl_Position = uViewProj * vec4(world, 1.0);
 
-            int face  = int(aPacked & 7u);
-            int ao    = int((aPacked >> 3) & 3u);
-            int layer = int((aPacked >> 8) & 0xFFFFu);
+            int face  = int((aPacked0 >> 18) & 7u);
+            int ao    = int((aPacked0 >> 21) & 3u);
+            int layer = int( aPacked1        & 0xFFFFu);
 
             vec3 n = kNormals[face];
 
