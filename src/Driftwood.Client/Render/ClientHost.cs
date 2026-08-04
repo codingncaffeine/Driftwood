@@ -45,8 +45,16 @@ public sealed class ClientHost : IDisposable
     private IMouse _mouse = null!;
 
     private Shader _chunkShader = null!;
-    private readonly List<ChunkMeshGpu> _meshes = [];
+    private readonly Dictionary<ChunkPos, ChunkMeshGpu> _meshes = [];
     private readonly FlyCamera _camera = new();
+    private WorldStreamer _streamer = null!;
+
+    /// <summary>
+    /// Ceiling on chunk uploads per frame. Buffer creation blocks the driver, so an unbounded
+    /// drain turns a burst of finished meshes into a visible hitch exactly when the player is
+    /// moving fast enough to have caused it.
+    /// </summary>
+    private const int MaxUploadsPerFrame = 4;
 
     private Vector2 _lastMousePos;
     private bool _haveMouseAnchor;
@@ -129,82 +137,66 @@ public sealed class ClientHost : IDisposable
         registry.Seal();
 
         var generator = new TerrainGenerator(_options.Seed, ids, _options.OceanCoverage);
-        var world = new VoxelWorld(registry);
 
-        var across = _options.ChunksAcross;
-        var half = across / 2;
-        var chunksTall = TerrainGenerator.WorldHeight / Chunk.Size;
+        // --chunks used to size a fixed box; it now sets how far the world is kept loaded around
+        // the viewer, which is the same dial pointed at a world that no longer has edges.
+        var viewRadius = Math.Max(2, _options.ChunksAcross / 2);
+        _streamer = new WorldStreamer(registry, generator, viewRadius);
 
-        var positions = new List<ChunkPos>(across * across * chunksTall);
-        for (var cy = 0; cy < chunksTall; cy++)
-        for (var cz = -half; cz < across - half; cz++)
-        for (var cx = -half; cx < across - half; cx++)
-            positions.Add(new ChunkPos(cx, cy, cz));
-
-        var total = Stopwatch.StartNew();
-
-        // Create every chunk on this thread first: the dictionary is not concurrent, and the
-        // parallel pass below must only ever touch chunks that already exist.
-        var chunks = new Chunk[positions.Count];
-        for (var i = 0; i < positions.Count; i++)
-            chunks[i] = world.GetOrCreateChunk(positions[i]);
-
-        var genWatch = Stopwatch.StartNew();
-        Parallel.For(0, chunks.Length, i => generator.GenerateChunk(chunks[i]));
-        genWatch.Stop();
-
-        // Each chunk claims its own share of every tree that reaches it, so decoration needs no
-        // completed world and parallelises like generation.
-        var decorWatch = Stopwatch.StartNew();
-        Parallel.For(0, chunks.Length, i => generator.DecorateChunk(chunks[i]));
-        decorWatch.Stop();
-
-        var meshWatch = Stopwatch.StartNew();
-        var meshed = new ChunkMeshData?[positions.Count];
-        Parallel.For(
-            0,
-            positions.Count,
-            () => new ChunkMesher(registry),
-            (i, _, mesher) =>
-            {
-                meshed[i] = mesher.Build(world, positions[i]);
-                return mesher;
-            },
-            _ => { });
-        meshWatch.Stop();
-
-        var uploadWatch = Stopwatch.StartNew();
-        foreach (var data in meshed)
-        {
-            if (data is null) continue;
-            _meshes.Add(new ChunkMeshGpu(_gl, data));
-            _totalVertices += data.VertexCount;
-            _totalTriangles += data.TriangleCount;
-        }
-        uploadWatch.Stop();
-        total.Stop();
-
-        var extent = across * Chunk.Size;
-        _fogEnd = MathF.Min(extent * 0.45f, 700f);
+        var reach = viewRadius * Chunk.Size;
+        _fogEnd = MathF.Min(reach * 0.90f, 700f);
         _fogStart = _fogEnd * 0.55f;
         _camera.FarPlane = _fogEnd + 200f;
 
-        // Drop the camera above the terrain at the centre of the generated box.
         var surface = generator.SurfaceHeight(0, 0);
         _camera.Position = new Vector3(0f, surface + 28f, 0f);
         _camera.Pitch = -22f;
 
+        // Prime the pipeline before the first frame so the viewer does not open inside an empty
+        // world, then let the render loop take delivery of the rest as it arrives.
+        _streamer.Update(_camera.Position);
+
         Console.WriteLine($"seed        {_options.Seed}");
-        Console.WriteLine($"world       {extent}x{TerrainGenerator.WorldHeight}x{extent} blocks, {positions.Count} chunks");
+        Console.WriteLine($"view        {viewRadius} chunks ({reach} blocks), streaming");
         Console.WriteLine($"ocean       {generator.OceanCoverage * 100:F0}% of surface at or below sea level {TerrainGenerator.SeaLevel}");
-        Console.WriteLine($"generate    {genWatch.ElapsedMilliseconds} ms");
-        Console.WriteLine($"decorate    {decorWatch.ElapsedMilliseconds} ms");
-        Console.WriteLine($"mesh        {meshWatch.ElapsedMilliseconds} ms  ({_meshes.Count} chunks with geometry)");
-        Console.WriteLine($"upload      {uploadWatch.ElapsedMilliseconds} ms");
-        Console.WriteLine($"total       {total.ElapsedMilliseconds} ms");
-        Console.WriteLine($"geometry    {_totalVertices:N0} verts, {_totalTriangles:N0} tris");
         Console.WriteLine();
-        Console.WriteLine("Arrows move (WASD also works), Space/PgUp up, Ctrl/PgDn down, Shift boost, Alt slow, Esc release mouse, F1 wireframe");
+        Console.WriteLine("Arrows move (WASD also works), Space/PgUp up, Ctrl/PgDn down, Shift boost, Alt slow");
+        Console.WriteLine("Esc release mouse, F1 wireframe, F2 frustum culling");
+    }
+
+    /// <summary>
+    /// Takes delivery of finished meshes and releases the buffers of chunks that streamed out.
+    /// Upload count is capped per frame; see <see cref="MaxUploadsPerFrame"/>.
+    /// </summary>
+    private void PumpStreaming()
+    {
+        _streamer.Update(_camera.Position);
+        _streamer.PromoteReadyChunks();
+
+        while (_streamer.TryDequeueDropped(out var dropped))
+        {
+            if (!_meshes.Remove(dropped, out var stale)) continue;
+            _totalVertices -= stale.VertexCount;
+            _totalTriangles -= stale.IndexCount / 3;
+            stale.Dispose();
+        }
+
+        for (var i = 0; i < MaxUploadsPerFrame; i++)
+        {
+            if (!_streamer.TryDequeueMesh(out var data)) break;
+
+            // A remesh replaces the previous buffers for that chunk rather than leaking them.
+            if (_meshes.Remove(data.Position, out var previous))
+            {
+                _totalVertices -= previous.VertexCount;
+                _totalTriangles -= previous.IndexCount / 3;
+                previous.Dispose();
+            }
+
+            _meshes[data.Position] = new ChunkMeshGpu(_gl, data);
+            _totalVertices += data.VertexCount;
+            _totalTriangles += data.TriangleCount;
+        }
     }
 
     private void OnKeyDown(IKeyboard keyboard, Key key, int _)
@@ -255,6 +247,7 @@ public sealed class ClientHost : IDisposable
     private void OnUpdate(double dt)
     {
         _camera.Update((float)dt, _keyboard);
+        PumpStreaming();
 
         _titleTimer += dt;
         _framesSinceTitle++;
@@ -265,10 +258,12 @@ public sealed class ClientHost : IDisposable
             _framesSinceTitle = 0;
 
             var p = _camera.Position;
+            var queued = _streamer.PendingGenerate + _streamer.PendingMesh;
             _window.Title =
                 $"Driftwood — {_fps:F0} fps | seed {_options.Seed} | " +
                 $"xyz {p.X:F0} {p.Y:F0} {p.Z:F0} | " +
-                $"{_drawnChunks}/{_meshes.Count} chunks, {_drawnTriangles:N0}/{_totalTriangles:N0} tris" +
+                $"{_drawnChunks}/{_meshes.Count} drawn, {_drawnTriangles:N0} tris" +
+                (queued > 0 ? $" | {queued} queued" : "") +
                 (_frustumCulling ? "" : " | CULLING OFF");
         }
     }
@@ -297,7 +292,7 @@ public sealed class ClientHost : IDisposable
 
         var drawn = 0;
         var triangles = 0;
-        foreach (var mesh in _meshes)
+        foreach (var mesh in _meshes.Values)
         {
             if (!_frustumCulling) { }
             else if (!frustum.IntersectsBox(mesh.BoundsMin, mesh.BoundsMax)) continue;
@@ -316,7 +311,11 @@ public sealed class ClientHost : IDisposable
 
     private void OnClosing()
     {
-        foreach (var mesh in _meshes) mesh.Dispose();
+        // Stop the workers before tearing down GL state, or a mesh can land in the queue after
+        // the context it was destined for is gone.
+        _streamer?.Dispose();
+
+        foreach (var mesh in _meshes.Values) mesh.Dispose();
         _meshes.Clear();
         _chunkShader.Dispose();
     }

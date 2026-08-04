@@ -220,15 +220,21 @@ public sealed class ChunkMesher
         Span<int> ao = stackalloc int[4];
         for (var c = 0; c < 4; c++) ao[c] = (key >> (c * 2)) & 0x3;
 
+        // Hoisted: a stackalloc inside the loop would not be released until the method returned,
+        // so the frame would grow with every corner rather than being reused across them.
+        Span<int> unit = stackalloc int[3];
+        Span<int> p = stackalloc int[3];
+
         var baseIndex = (uint)_vertexCount;
         for (var c = 0; c < 4; c++)
         {
             var corner = corners[c];
-            Span<int> unit = [corner.X, corner.Y, corner.Z];
+            unit[0] = corner.X;
+            unit[1] = corner.Y;
+            unit[2] = corner.Z;
 
             // The corner's offset along the normal picks the near or far plane and stays a unit
             // step; its offsets in the plane stretch to the merged rectangle's extent.
-            Span<int> p = stackalloc int[3];
             p[axis] = slice + unit[axis];
             p[au] = u + unit[au] * width;
             p[av] = v + unit[av] * height;

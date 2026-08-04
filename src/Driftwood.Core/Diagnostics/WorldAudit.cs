@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Numerics;
 using System.Text;
 using Driftwood.Core.Blocks;
 using Driftwood.Core.Gen;
@@ -231,6 +232,9 @@ public static class WorldAudit
         var neighbourIndependent = ChunksAreNeighbourIndependent(seed, registry, ids, oceanCoverage, out var neighbourDetail);
         Check("chunk ignores neighbours", neighbourIndependent, neighbourDetail);
 
+        var streamingMatches = StreamingMatchesBatch(seed, registry, ids, oceanCoverage, out var streamDetail);
+        Check("streamed == batch meshes", streamingMatches, streamDetail);
+
         var frustumFaults = Frustum.SelfTest();
         Check("frustum culls correctly", frustumFaults.Count == 0,
             frustumFaults.Count == 0
@@ -254,6 +258,108 @@ public static class WorldAudit
         Check("coal beats iron", counts[ids.CoalOre.Value] > counts[ids.IronOre.Value], $"{counts[ids.CoalOre.Value]:N0} vs {counts[ids.IronOre.Value]:N0}");
 
         return new Result(sb.ToString(), passed);
+    }
+
+    /// <summary>
+    /// Runs the streamer to quiescence and checks every mesh it produced against the mesh the
+    /// batch path builds for the same chunk.
+    /// </summary>
+    /// <remarks>
+    /// The failure this exists for: meshing a chunk before its neighbours have generated. Absent
+    /// neighbours read as air, so the chunk grows a wall of faces along the seam — geometry that is
+    /// perfectly valid, passes every other check, and disappears the moment the neighbour arrives.
+    /// <para>The test compares vertex counts against a fully-generated reference and reports any
+    /// difference, without assuming a direction. It would be natural to expect an early mesh to
+    /// hold strictly more geometry, since it emits faces the finished world hides — but greedy
+    /// merging is not monotonic in face count. A flat wall against absent-neighbour air merges into
+    /// a handful of large quads, while the correct broken surface needs more. Verified: forcing the
+    /// streamer to mesh without waiting reports 4788 verts against 4792.</para>
+    /// </remarks>
+    private static bool StreamingMatchesBatch(
+        WorldSeed seed, BlockRegistry registry, StarterBlocks.Ids ids, float oceanCoverage, out string detail)
+    {
+        const int radius = 3;
+        const int settleTimeoutMs = 30_000;
+
+        var produced = new Dictionary<ChunkPos, (int Verts, int Indices)>();
+
+        using (var streamer = new WorldStreamer(registry, new TerrainGenerator(seed, ids, oceanCoverage), radius))
+        {
+            streamer.Update(Vector3.Zero);
+
+            var watch = Stopwatch.StartNew();
+            var idleSweeps = 0;
+            while (watch.ElapsedMilliseconds < settleTimeoutMs)
+            {
+                streamer.PromoteReadyChunks();
+
+                var drained = false;
+                while (streamer.TryDequeueMesh(out var data))
+                {
+                    produced[data.Position] = (data.VertexCount, data.IndexCount);
+                    drained = true;
+                }
+
+                var busy = streamer.PendingGenerate > 0 || streamer.PendingMesh > 0;
+                if (busy || drained)
+                {
+                    idleSweeps = 0;
+                    Thread.Sleep(2);
+                    continue;
+                }
+
+                // Quiet for several consecutive sweeps means the pipeline has genuinely drained,
+                // not that a worker happened to be between jobs.
+                if (++idleSweeps >= 25) break;
+                Thread.Sleep(2);
+            }
+
+            if (produced.Count == 0)
+            {
+                detail = "streamer produced no meshes";
+                return false;
+            }
+        }
+
+        // Reference world: everything the streamed chunks could sample, generated up front.
+        var batchWorld = new VoxelWorld(registry);
+        var batchGenerator = new TerrainGenerator(seed, ids, oceanCoverage);
+        var chunksTall = TerrainGenerator.WorldHeight / Chunk.Size;
+
+        var needed = new HashSet<ChunkPos>();
+        foreach (var pos in produced.Keys)
+        for (var dy = -1; dy <= 1; dy++)
+        for (var dz = -1; dz <= 1; dz++)
+        for (var dx = -1; dx <= 1; dx++)
+        {
+            var n = pos.Offset(dx, dy, dz);
+            if (n.Y < 0 || n.Y >= chunksTall) continue;
+            needed.Add(n);
+        }
+
+        foreach (var pos in needed)
+        {
+            var chunk = batchWorld.GetOrCreateChunk(pos);
+            batchGenerator.GenerateChunk(chunk);
+            batchGenerator.DecorateChunk(chunk);
+        }
+
+        var mesher = new ChunkMesher(registry);
+        foreach (var (pos, streamed) in produced)
+        {
+            var reference = mesher.Build(batchWorld, pos);
+            var refVerts = reference?.VertexCount ?? 0;
+            var refIndices = reference?.IndexCount ?? 0;
+
+            if (streamed.Verts == refVerts && streamed.Indices == refIndices) continue;
+
+            detail = $"chunk {pos} differs: streamed {streamed.Verts} verts / {streamed.Indices} indices, "
+                   + $"batch {refVerts} / {refIndices} — likely meshed before a neighbour generated";
+            return false;
+        }
+
+        detail = $"{produced.Count} streamed meshes identical to batch";
+        return true;
     }
 
     /// <summary>

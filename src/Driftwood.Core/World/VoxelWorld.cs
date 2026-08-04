@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Driftwood.Core.Blocks;
 
 namespace Driftwood.Core.World;
@@ -6,13 +7,18 @@ namespace Driftwood.Core.World;
 /// The set of loaded chunks and world-coordinate access across them.
 /// </summary>
 /// <remarks>
-/// P0 fills a fixed box up front on one thread and then only reads, so a plain dictionary is
-/// safe. Streaming at P1 turns this into a concurrent store with a generation queue; keeping
-/// every world-coordinate read behind these accessors is what makes that swap local.
+/// <para>The store is concurrent because streaming generates and meshes on worker threads while
+/// the main thread walks the same map. Safety does not come from the dictionary alone: a chunk is
+/// written once during generation and only read afterwards, and meshing of a chunk never begins
+/// until every neighbour it samples has finished generating. The dictionary protects the shape of
+/// the map; that ordering protects the contents.</para>
+/// <para>Player edits at P3 break that assumption — they write a chunk that is already being
+/// meshed — and will need the mesh job to work from its own snapshot, which
+/// <see cref="ChunkSnapshot"/> already takes.</para>
 /// </remarks>
 public sealed class VoxelWorld
 {
-    private readonly Dictionary<ChunkPos, Chunk> _chunks = [];
+    private readonly ConcurrentDictionary<ChunkPos, Chunk> _chunks = new();
 
     public BlockRegistry Registry { get; }
 
@@ -24,13 +30,10 @@ public sealed class VoxelWorld
 
     public bool TryGetChunk(ChunkPos pos, out Chunk chunk) => _chunks.TryGetValue(pos, out chunk!);
 
-    public Chunk GetOrCreateChunk(ChunkPos pos)
-    {
-        if (_chunks.TryGetValue(pos, out var existing)) return existing;
-        var chunk = new Chunk(pos);
-        _chunks[pos] = chunk;
-        return chunk;
-    }
+    public Chunk GetOrCreateChunk(ChunkPos pos) => _chunks.GetOrAdd(pos, static p => new Chunk(p));
+
+    /// <summary>Drops a chunk from the store. Used by streaming when it leaves the load radius.</summary>
+    public bool RemoveChunk(ChunkPos pos) => _chunks.TryRemove(pos, out _);
 
     /// <summary>Reads a world block. Unloaded space reads as air.</summary>
     public BlockId GetBlock(int wx, int wy, int wz)
