@@ -36,3 +36,9 @@ Desktop.ini
 /assets/texture packs*/
 /assets/skins*/
 *.mcpack
+
+## Source artwork. tools/IconForge derives driftwood.ico, banner.png and the window icons from
+## these and those derivatives are committed; the originals are megabytes apiece and nothing at
+## build or run time reads them. Keep them locally to regenerate after an art change.
+/assets/driftwood icon.png
+/assets/driftwood banner.png

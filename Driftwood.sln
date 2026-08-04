@@ -7,6 +7,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Driftwood.Core", "src\Drift
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Driftwood.Client", "src\Driftwood.Client\Driftwood.Client.csproj", "{745B40D1-FD66-47DF-9861-B58CC0CEBF73}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "IconForge", "tools\IconForge\IconForge.csproj", "{F30D1078-238B-4534-A90E-4FFB14B08BEC}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -41,6 +43,18 @@ Global
 		{745B40D1-FD66-47DF-9861-B58CC0CEBF73}.Release|x64.Build.0 = Release|Any CPU
 		{745B40D1-FD66-47DF-9861-B58CC0CEBF73}.Release|x86.ActiveCfg = Release|Any CPU
 		{745B40D1-FD66-47DF-9861-B58CC0CEBF73}.Release|x86.Build.0 = Release|Any CPU
+		{F30D1078-238B-4534-A90E-4FFB14B08BEC}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F30D1078-238B-4534-A90E-4FFB14B08BEC}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F30D1078-238B-4534-A90E-4FFB14B08BEC}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{F30D1078-238B-4534-A90E-4FFB14B08BEC}.Debug|x64.Build.0 = Debug|Any CPU
+		{F30D1078-238B-4534-A90E-4FFB14B08BEC}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{F30D1078-238B-4534-A90E-4FFB14B08BEC}.Debug|x86.Build.0 = Debug|Any CPU
+		{F30D1078-238B-4534-A90E-4FFB14B08BEC}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F30D1078-238B-4534-A90E-4FFB14B08BEC}.Release|Any CPU.Build.0 = Release|Any CPU
+		{F30D1078-238B-4534-A90E-4FFB14B08BEC}.Release|x64.ActiveCfg = Release|Any CPU
+		{F30D1078-238B-4534-A90E-4FFB14B08BEC}.Release|x64.Build.0 = Release|Any CPU
+		{F30D1078-238B-4534-A90E-4FFB14B08BEC}.Release|x86.ActiveCfg = Release|Any CPU
+		{F30D1078-238B-4534-A90E-4FFB14B08BEC}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

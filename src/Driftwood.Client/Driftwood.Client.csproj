@@ -4,7 +4,19 @@
     <OutputType>Exe</OutputType>
     <RootNamespace>Driftwood.Client</RootNamespace>
     <AssemblyName>Driftwood</AssemblyName>
+
+    <!-- Dresses the file itself: Explorer, shortcuts, the alt-tab list. Deliberately not the whole
+         story — the taskbar button of a running window belongs to the window, and GLFW creates one
+         without an icon, so ClientHost sets that separately from the embedded PNGs below. -->
+    <ApplicationIcon>..\..\assets\driftwood.ico</ApplicationIcon>
   </PropertyGroup>
+
+  <!-- Carried inside the assembly rather than shipped beside it, so the artifact stays an exe with
+       no art folder to lose. -->
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\assets\window-icon-32.png" LogicalName="Driftwood.Client.window-icon-32.png" />
+    <EmbeddedResource Include="..\..\assets\window-icon-64.png" LogicalName="Driftwood.Client.window-icon-64.png" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Silk.NET.Input" Version="2.23.0" />

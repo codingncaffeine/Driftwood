@@ -24,6 +24,92 @@ public static class Png
 {
     private static ReadOnlySpan<byte> Signature => [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
 
+    /// <summary>
+    /// Writes an 8-bit RGBA image. The plainest PNG the format allows: no interlacing, no palette,
+    /// no filtering.
+    /// </summary>
+    /// <remarks>
+    /// Filter type 0 on every scanline. Choosing filters per row is where most of a PNG encoder's
+    /// size win lives, and none of it is worth having here — this exists to derive project art and
+    /// to save screenshots, not to compete with an optimiser. Deflate does the real work and .NET
+    /// already ships it.
+    /// </remarks>
+    public static byte[] Encode(Image image)
+    {
+        var raw = new byte[(image.Width * 4 + 1) * image.Height];
+        for (var y = 0; y < image.Height; y++)
+        {
+            var src = y * image.Width * 4;
+            var dst = y * (image.Width * 4 + 1);
+            raw[dst] = 0;   // filter: none
+            Array.Copy(image.Pixels, src, raw, dst + 1, image.Width * 4);
+        }
+
+        byte[] compressed;
+        using (var buffer = new MemoryStream())
+        {
+            using (var deflate = new ZLibStream(buffer, CompressionLevel.SmallestSize, leaveOpen: true))
+                deflate.Write(raw, 0, raw.Length);
+
+            compressed = buffer.ToArray();
+        }
+
+        var header = new byte[13];
+        BinaryPrimitives.WriteUInt32BigEndian(header, (uint)image.Width);
+        BinaryPrimitives.WriteUInt32BigEndian(header.AsSpan(4), (uint)image.Height);
+        header[8] = 8;    // bit depth
+        header[9] = 6;    // colour type: RGBA
+        header[10] = 0;   // deflate
+        header[11] = 0;   // adaptive filtering
+        header[12] = 0;   // no interlace
+
+        using var output = new MemoryStream();
+        output.Write(Signature);
+        WriteChunk(output, "IHDR", header);
+        WriteChunk(output, "IDAT", compressed);
+        WriteChunk(output, "IEND", []);
+        return output.ToArray();
+    }
+
+    private static void WriteChunk(Stream stream, string type, byte[] body)
+    {
+        Span<byte> length = stackalloc byte[4];
+        BinaryPrimitives.WriteUInt32BigEndian(length, (uint)body.Length);
+        stream.Write(length);
+
+        var typed = System.Text.Encoding.ASCII.GetBytes(type);
+        stream.Write(typed);
+        stream.Write(body);
+
+        var crc = Crc32(typed, body);
+        Span<byte> tail = stackalloc byte[4];
+        BinaryPrimitives.WriteUInt32BigEndian(tail, crc);
+        stream.Write(tail);
+    }
+
+    private static readonly uint[] CrcTable = BuildCrcTable();
+
+    private static uint[] BuildCrcTable()
+    {
+        var table = new uint[256];
+        for (uint n = 0; n < 256; n++)
+        {
+            var c = n;
+            for (var k = 0; k < 8; k++) c = (c & 1) != 0 ? 0xEDB88320u ^ (c >> 1) : c >> 1;
+            table[n] = c;
+        }
+
+        return table;
+    }
+
+    private static uint Crc32(byte[] type, byte[] body)
+    {
+        var c = 0xFFFFFFFFu;
+        foreach (var b in type) c = CrcTable[(c ^ b) & 0xFF] ^ (c >> 8);
+        foreach (var b in body) c = CrcTable[(c ^ b) & 0xFF] ^ (c >> 8);
+        return c ^ 0xFFFFFFFFu;
+    }
+
     public static bool TryDecode(ReadOnlySpan<byte> data, out Image image, out string error)
     {
         image = null!;

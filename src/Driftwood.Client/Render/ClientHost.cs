@@ -1,5 +1,7 @@
 using System.Diagnostics;
 using System.Numerics;
+using System.Runtime.InteropServices;
+using Silk.NET.Core;
 using Driftwood.Client.Diagnostics;
 using Driftwood.Core.Blocks;
 using Driftwood.Core.Entities;
@@ -266,9 +268,43 @@ public sealed class ClientHost : IDisposable
         return _exitCode;
     }
 
+    /// <summary>
+    /// Puts the game's icon on the window, and with it on the taskbar button.
+    /// </summary>
+    /// <remarks>
+    /// <c>ApplicationIcon</c> in the project file dresses the executable, which is what Explorer
+    /// and a shortcut show — and it is not what a running window shows. The taskbar button takes
+    /// its icon from the window, and a window GLFW created has none, so without this the game runs
+    /// under a blank default however well the file is dressed.
+    /// <para>Two sizes are offered and the platform picks; handing over one and letting Windows
+    /// scale it is how a taskbar icon ends up soft or, at 16 pixels, unreadable.</para>
+    /// </remarks>
+    private void ApplyWindowIcon()
+    {
+        var icons = new List<RawImage>(2);
+
+        foreach (var size in (ReadOnlySpan<int>)[32, 64])
+        {
+            using var stream = typeof(ClientHost).Assembly
+                .GetManifestResourceStream($"Driftwood.Client.window-icon-{size}.png");
+
+            if (stream is null) continue;
+
+            using var buffer = new MemoryStream();
+            stream.CopyTo(buffer);
+
+            if (!Png.TryDecode(buffer.ToArray(), out var image, out _)) continue;
+            icons.Add(new RawImage(image.Width, image.Height, image.Pixels));
+        }
+
+        if (icons.Count == 0) return;
+        _window.SetWindowIcon(CollectionsMarshal.AsSpan(icons));
+    }
+
     private void OnLoad()
     {
         _gl = GL.GetApi(_window);
+        ApplyWindowIcon();
         _input = _window.CreateInput();
         _keyboard = _input.Keyboards[0];
         _mouse = _input.Mice[0];

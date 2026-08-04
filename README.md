@@ -1,4 +1,4 @@
-# Driftwood
+![Driftwood](assets/banner.png)
 
 An open-world survival crafting game, built from scratch in C# on .NET 11 and OpenGL.
 
@@ -7,23 +7,43 @@ everything is destructible. Every world is procedurally generated from a seed.
 
 ## Status
 
-**P1 — streaming and meshing.** Voxel core, seeded worldgen, greedy meshing and chunk
-streaming are in. The game itself is not; there is no player, no inventory and no crafting yet.
+**P3 — the gathering loop.** You can walk into a world, look at a block, work it loose over as
+long as its material deserves, and watch it go. There is no inventory to put it in yet, so nothing
+is kept and nothing can be crafted.
 
 | System | State |
 | --- | --- |
 | Chunk storage, block registry | working |
-| Seeded procedural worldgen | working — terrain, caves, ore, trees |
+| Seeded procedural worldgen | working — terrain, caves, ore tiers, rock variety, trees |
 | Greedy mesher with ambient occlusion | working |
-| Chunk renderer, frustum culling, fly camera | working |
-| Chunk streaming around the viewer | working |
+| Chunk renderer, frustum culling | working |
+| Chunk streaming around the player | working |
 | Sunlight and coloured block light | working |
 | Player controller — walk, jump, sneak, collide | working |
-| Block targeting, break and place | working |
+| Block hardness, hold to mine, cracking overlay | working |
+| Player model, third-person camera, skin import | working |
 | Block textures, alpha cutout, texture pack import | working |
-| Inventory, crafting, recipes | not started |
+| Item drops, inventory, crafting, recipes | not started |
 | Save / load | not started |
+| Sound | not started |
 | Controller support | not started |
+
+## The world
+
+Twenty-six materials, all of which generate somewhere a player will meet them. Names are ours
+where a name is worth having, and plain where a real material already has one — nobody owns the
+word copper.
+
+| | |
+| --- | --- |
+| Ground | grass, dirt, sand, gravel, clay, snow, sandstone |
+| Rock | stone, deepstone, and the coralstone / driftstone / saltstone intrusions |
+| Ore | coal, copper, iron, gold, azurite, stormglass, emberstone |
+| Growth | driftoak logs, leaves and planks, vines |
+
+Snow lies on cold ground and on high ground, deepstone takes over below roughly y 20, and the ore
+ladder runs from coal at about 0.6% of all rock down to stormglass at 0.04%. Every one of those
+rates is a banded check in `--audit` rather than a number somebody liked the look of.
 
 ## Building
 
@@ -52,7 +72,7 @@ and shifts it so the requested share of the surface lands at or below sea level.
 request holds across seeds, so one seed does not hand you a continent and the next an
 archipelago.
 
-You spawn walking. `F3` swaps to a free-flying camera and back.
+You spawn walking. `F3` swaps to a free-flying camera and back, `F5` cycles the view.
 
 | Key | Walking | Flying |
 | --- | --- | --- |
@@ -60,12 +80,31 @@ You spawn walking. `F3` swaps to a free-flying camera and back.
 | `Space` | jump | up |
 | `Ctrl` | sneak — will not walk off a ledge | down |
 | `Shift` | sprint | boost |
-| Left click | break the outlined block | |
-| Right click | place a block against it | |
+| Hold left | swing at the outlined block until it gives | |
+| Hold right | place a block against it, once per swing | |
 | `Esc` | release or recapture the mouse | |
 | `F1` | wireframe | |
 | `F2` | frustum culling on / off | |
 | `F3` | walk / fly | |
+| `F5` | first person, over the shoulder, facing | |
+
+The button does not edit the world; it starts a swing, and the swing edits the world. That is why
+holding one mines at a readable pace rather than at the speed of the event queue, and why there is
+always something on screen causing the block to go.
+
+## Skins
+
+The player model reads a skin sheet you already have, in either layout the format has used.
+
+```
+Driftwood.exe --skin C:\skins\somebody.png
+Driftwood.exe --skin C:\skins\somebody.png --skin-model classic
+```
+
+64×64 or the older 64×32, at any multiple of 64. Arm width is detected by looking for the texels
+only a four-wide arm can reach, since a bare PNG carries that nowhere else; `--skin-model` says so
+outright when a sheet is drawn ambiguously. Driftwood paints its own skin in code, so a build with
+no art folder still has a player in it.
 
 ## Auditing a world
 
@@ -77,9 +116,18 @@ fails, so a seed plus its report is a receipt that survives into later phases.
 relief        surface y 35..101 (span 66), mean 62.7
 land          41.4% of columns above sea level 62
 ...
-  [PASS] coal rate in band            0.653% of stone (want 0.30-1.50)
-  [PASS] iron rate in band            0.354% of stone (want 0.15-0.80)
+  [PASS] every material is in the world 25 of 26 blocks generate
+  [PASS] coal rate in band            0.624% of rock (want 0.30-1.20)
+  [PASS] the ore ladder holds         coal 0.62 > copper 0.42 > iron 0.32 > gold 0.11 > stormglass 0.044
+  [PASS] snow lies high and cold      15.3% of open ground, mean y 77.5 against grass at 70.3
 ```
+
+Bands rather than floors, and relations rather than absolutes wherever an absolute can be
+satisfied by a broken world. Every tier of ore can sit inside its own band and still come out in
+the wrong order, so the ladder is checked as an ordering too. Snow coverage swung between 4% and
+38% across five seeds on one unchanged constant — climate runs on a 1,400-block wavelength and the
+audit samples a few hundred — so what is gated is that snow sits *higher* than grass, which held on
+every seed.
 
 ## Texture packs
 
@@ -130,9 +178,15 @@ gate alone, 20 ms trips both, and a clean build trips neither.
 ## Layout
 
 ```
-src/Driftwood.Core     voxel storage, worldgen, meshing — no graphics API, runs headless
-src/Driftwood.Client   window, GL context, renderer, input
+src/Driftwood.Core     voxel storage, worldgen, meshing, lighting, physics, the player model
+                       and animator — no graphics API, runs headless
+src/Driftwood.Client   window, GL context, renderers, input
+tools/IconForge        derives the committed icon and banner from the source artwork
 ```
 
-Core carries no rendering dependency on purpose: everything about how the world is built
-stays testable from the command line.
+Core carries no rendering dependency on purpose: everything about how the world is built stays
+testable from the command line. The player's pose and the camera boom live there too, so a walk
+cycle and a swing can be stepped at a fixed rate and measured without opening a window.
+
+No third-party packages beyond Silk.NET. PNG encoding and decoding are ours, which is what lets
+the game read a texture pack and a skin sheet without taking on a licence to answer for.
