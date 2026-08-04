@@ -9,6 +9,11 @@ namespace Driftwood.Client.Render;
 /// </summary>
 public sealed class FlyCamera
 {
+    /// <summary>
+    /// Must stay strictly under 90. At exactly straight up or down the forward vector is parallel
+    /// to the world up vector, <see cref="Matrix4x4.CreateLookAt"/> degenerates, and the view
+    /// matrix fills with NaN — taking the frustum planes and every draw with it.
+    /// </summary>
     private const float PitchLimit = 89f;
 
     public Vector3 Position;

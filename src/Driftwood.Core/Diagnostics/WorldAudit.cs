@@ -3,6 +3,7 @@ using System.Text;
 using Driftwood.Core.Blocks;
 using Driftwood.Core.Gen;
 using Driftwood.Core.Meshing;
+using Driftwood.Core.Spatial;
 using Driftwood.Core.World;
 
 namespace Driftwood.Core.Diagnostics;
@@ -224,6 +225,12 @@ public static class WorldAudit
         var windingFaults = Faces.ValidateWinding();
         Check("face winding is outward", windingFaults.Count == 0,
             windingFaults.Count == 0 ? "all 6 faces" : string.Join("; ", windingFaults));
+
+        var frustumFaults = Frustum.SelfTest();
+        Check("frustum culls correctly", frustumFaults.Count == 0,
+            frustumFaults.Count == 0
+                ? "24 yaws + straight down"
+                : $"{frustumFaults.Count} faults: {frustumFaults[0]}");
 
         Check(
             "merged area == naive area",

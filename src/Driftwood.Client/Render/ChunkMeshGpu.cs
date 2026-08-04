@@ -18,6 +18,10 @@ public sealed class ChunkMeshGpu : IDisposable
     public int IndexCount { get; }
     public int VertexCount { get; }
 
+    /// <summary>World-space bounds of the chunk this mesh belongs to, for frustum rejection.</summary>
+    public Vector3 BoundsMin { get; }
+    public Vector3 BoundsMax { get; }
+
     public unsafe ChunkMeshGpu(GL gl, ChunkMeshData data)
     {
         _gl = gl;
@@ -27,6 +31,8 @@ public sealed class ChunkMeshGpu : IDisposable
 
         var (ox, oy, oz) = data.Position.Origin;
         Origin = new Vector3(ox, oy, oz);
+        BoundsMin = Origin;
+        BoundsMax = Origin + new Vector3(Chunk.Size);
 
         _vao = _gl.GenVertexArray();
         _gl.BindVertexArray(_vao);

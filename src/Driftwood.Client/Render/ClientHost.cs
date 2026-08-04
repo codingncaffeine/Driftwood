@@ -3,6 +3,7 @@ using System.Numerics;
 using Driftwood.Core.Blocks;
 using Driftwood.Core.Gen;
 using Driftwood.Core.Meshing;
+using Driftwood.Core.Spatial;
 using Driftwood.Core.World;
 using Silk.NET.Input;
 using Silk.NET.Maths;
@@ -51,6 +52,9 @@ public sealed class ClientHost : IDisposable
     private bool _haveMouseAnchor;
     private bool _mouseCaptured = true;
     private bool _wireframe;
+    private bool _frustumCulling = true;
+    private int _drawnChunks;
+    private int _drawnTriangles;
 
     private double _titleTimer;
     private int _framesSinceTitle;
@@ -215,6 +219,12 @@ public sealed class ClientHost : IDisposable
                 _wireframe = !_wireframe;
                 _gl.PolygonMode(TriangleFace.FrontAndBack, _wireframe ? PolygonMode.Line : PolygonMode.Fill);
                 break;
+
+            // Toggling culling must change the chunk count in the title and nothing on screen.
+            // If anything pops in or out, the planes are wrong.
+            case Key.F2:
+                _frustumCulling = !_frustumCulling;
+                break;
         }
     }
 
@@ -259,7 +269,8 @@ public sealed class ClientHost : IDisposable
             _window.Title =
                 $"Driftwood — {_fps:F0} fps | seed {_options.Seed} | " +
                 $"xyz {p.X:F0} {p.Y:F0} {p.Z:F0} | " +
-                $"{_meshes.Count} chunks, {_totalTriangles:N0} tris";
+                $"{_drawnChunks}/{_meshes.Count} chunks, {_drawnTriangles:N0}/{_totalTriangles:N0} tris" +
+                (_frustumCulling ? "" : " | CULLING OFF");
         }
     }
 
@@ -270,8 +281,11 @@ public sealed class ClientHost : IDisposable
         var size = _window.FramebufferSize;
         var aspect = size.Y > 0 ? size.X / (float)size.Y : 1f;
 
+        var viewProj = _camera.ViewProjection(aspect);
+        var frustum = Frustum.FromViewProjection(viewProj);
+
         _chunkShader.Use();
-        _chunkShader.SetMatrix4("uViewProj", _camera.ViewProjection(aspect));
+        _chunkShader.SetMatrix4("uViewProj", viewProj);
         _chunkShader.SetVec3("uCameraPos", _camera.Position);
         _chunkShader.SetVec3("uFogColor", SkyColor);
         _chunkShader.SetVec3("uSunDir", SunDirection);
@@ -282,11 +296,21 @@ public sealed class ClientHost : IDisposable
         _chunkShader.SetFloat("uFogEnd", _fogEnd);
         _chunkShader.SetVec3Array("uPalette", StarterBlocks.PaletteRgb);
 
+        var drawn = 0;
+        var triangles = 0;
         foreach (var mesh in _meshes)
         {
+            if (!_frustumCulling) { }
+            else if (!frustum.IntersectsBox(mesh.BoundsMin, mesh.BoundsMax)) continue;
+
             _chunkShader.SetVec3("uChunkOrigin", mesh.Origin);
             mesh.Draw();
+            drawn++;
+            triangles += mesh.IndexCount / 3;
         }
+
+        _drawnChunks = drawn;
+        _drawnTriangles = triangles;
     }
 
     private void OnResize(Vector2D<int> size) => _gl.Viewport(size);
