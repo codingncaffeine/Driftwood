@@ -153,11 +153,10 @@ public sealed class ClientHost : IDisposable
         Parallel.For(0, chunks.Length, i => generator.GenerateChunk(chunks[i]));
         genWatch.Stop();
 
-        // Trees write across chunk seams, so decoration is single-threaded for now.
+        // Each chunk claims its own share of every tree that reaches it, so decoration needs no
+        // completed world and parallelises like generation.
         var decorWatch = Stopwatch.StartNew();
-        var minBlock = -half * Chunk.Size;
-        var maxBlock = (across - half) * Chunk.Size - 1;
-        generator.DecorateRegion(world, minBlock, minBlock, maxBlock, maxBlock);
+        Parallel.For(0, chunks.Length, i => generator.DecorateChunk(chunks[i]));
         decorWatch.Stop();
 
         var meshWatch = Stopwatch.StartNew();

@@ -25,6 +25,13 @@ public sealed class TerrainGenerator
     /// <summary>Trees are rolled once per cell of this grid, which spaces them without clumping.</summary>
     private const int TreeGrid = 7;
 
+    /// <summary>
+    /// How far a canopy reaches sideways from its trunk. Chunk decoration widens its search by
+    /// this much, so it must stay well under <see cref="Chunk.Size"/> — a structure wider than a
+    /// chunk would need a search radius bigger than one neighbour.
+    /// </summary>
+    private const int CanopyRadius = 2;
+
     private readonly StarterBlocks.Ids _ids;
 
     private readonly int _seedContinent;
@@ -228,39 +235,89 @@ public sealed class TerrainGenerator
     }
 
     /// <summary>
-    /// Plants trees across a world-block rectangle. Runs after terrain fill because a canopy can
-    /// reach into a neighbouring chunk.
+    /// Plants every tree that reaches into this chunk, writing only the blocks that land inside it.
     /// </summary>
-    public void DecorateRegion(VoxelWorld world, int minX, int minZ, int maxX, int maxZ)
-    {
-        var cellMinX = (int)MathF.Floor(minX / (float)TreeGrid);
-        var cellMaxX = (int)MathF.Floor(maxX / (float)TreeGrid);
-        var cellMinZ = (int)MathF.Floor(minZ / (float)TreeGrid);
-        var cellMaxZ = (int)MathF.Floor(maxZ / (float)TreeGrid);
+    /// <remarks>
+    /// <para>A chunk is a pure function of seed and position, including its decoration. Rather than
+    /// planting a tree once and queueing the parts that spill across a seam, every chunk
+    /// independently considers each tree whose canopy could reach it and keeps its own share. Two
+    /// neighbours therefore agree on the overlap without either knowing the other exists.</para>
+    /// <para>That is what streaming needs. Chunks arrive in whatever order the player walks, and
+    /// there is no moment when "the world" is complete enough to decorate — so a tree straddling a
+    /// seam must not depend on which side loaded first. The alternative, queueing pending writes
+    /// against chunks that have not loaded yet, needs that queue persisted or the tree half
+    /// vanishes when the world reopens.</para>
+    /// <para>Order independence rests on tree placement being decided entirely from the heightmap.
+    /// The old surface tests read the world, which required terrain to already exist; they were
+    /// also redundant, since the fill never carves the surface block and never floods above
+    /// <see cref="SeaLevel"/>, so "is it grass with air above" is exactly "is the surface above
+    /// sea level plus two".</para>
+    /// </remarks>
+    public void DecorateChunk(Chunk chunk) => DecorateChunk(chunk, CanopyRadius);
 
+    /// <summary>
+    /// Decoration with an explicit search reach, so a test can widen it and prove the production
+    /// value is large enough.
+    /// </summary>
+    /// <remarks>
+    /// A reach that is too small does not crash or look obviously wrong — chunks quietly miss the
+    /// parts of structures whose origin sits just outside them, leaving canopies with bites taken
+    /// out along seams. Nothing in a block census notices. The guard is to decorate twice, once
+    /// normally and once with a deliberately excessive reach, and insist the results match.
+    /// </remarks>
+    public void DecorateChunk(Chunk chunk, int reach)
+    {
+        var (ox, oy, oz) = chunk.Position.Origin;
+
+        var cellMinX = FloorDiv(ox - reach, TreeGrid);
+        var cellMaxX = FloorDiv(ox + Chunk.Size - 1 + reach, TreeGrid);
+        var cellMinZ = FloorDiv(oz - reach, TreeGrid);
+        var cellMaxZ = FloorDiv(oz + Chunk.Size - 1 + reach, TreeGrid);
+
+        // Fixed cell order so overlapping trees resolve the same way no matter which chunk is
+        // asking — the relative order of any two trees is identical in every sub-range.
         for (var cz = cellMinZ; cz <= cellMaxZ; cz++)
         for (var cx = cellMinX; cx <= cellMaxX; cx++)
         {
-            // Roughly half of cells grow a tree; the rest stay clear so forests have gaps.
-            if (Noise.Value2(cx, cz, _seedTree) > 0.45f) continue;
+            if (!TryTreeAt(cx, cz, out var tx, out var tz, out var baseY, out var height)) continue;
 
-            // Jitter inside the cell so the grid never shows through as rows.
-            var jx = (int)(Noise.Value2(cx, cz, _seedTree + 17) * TreeGrid);
-            var jz = (int)(Noise.Value2(cx, cz, _seedTree + 31) * TreeGrid);
-            var wx = cx * TreeGrid + jx;
-            var wz = cz * TreeGrid + jz;
+            // Cheap vertical reject: nothing of this tree reaches this chunk's slab.
+            if (baseY + height > oy + Chunk.Size - 1 + 1 && baseY - 2 >= oy + Chunk.Size) continue;
+            if (baseY + height < oy - 2) continue;
 
-            var surface = SurfaceHeight(wx, wz);
-            if (surface <= SeaLevel + 2) continue;                              // beaches and water stay bare
-            if (world.GetBlock(wx, surface, wz) != _ids.Grass) continue;        // cave mouth or sand
-            if (!world.GetBlock(wx, surface + 1, wz).IsAir) continue;
-
-            var height = 4 + (int)(Noise.Value2(cx, cz, _seedTree + 53) * 3f);
-            PlantOak(world, wx, surface + 1, wz, height);
+            PlantOakInto(chunk, ox, oy, oz, tx, baseY, tz, height);
         }
     }
 
-    private void PlantOak(VoxelWorld world, int x, int baseY, int z, int trunkHeight)
+    /// <summary>
+    /// Decides whether the tree grid cell grows a tree, and where. Pure: depends only on the seed
+    /// and the heightmap, never on world state.
+    /// </summary>
+    private bool TryTreeAt(int cellX, int cellZ, out int x, out int z, out int baseY, out int height)
+    {
+        x = z = baseY = height = 0;
+
+        // Roughly half of cells grow a tree; the rest stay clear so forests have gaps.
+        if (Noise.Value2(cellX, cellZ, _seedTree) > 0.45f) return false;
+
+        // Jitter inside the cell so the grid never shows through as rows.
+        var jx = (int)(Noise.Value2(cellX, cellZ, _seedTree + 17) * TreeGrid);
+        var jz = (int)(Noise.Value2(cellX, cellZ, _seedTree + 31) * TreeGrid);
+        x = cellX * TreeGrid + jx;
+        z = cellZ * TreeGrid + jz;
+
+        var surface = SurfaceHeight(x, z);
+        if (surface <= SeaLevel + 2) return false;   // beaches and water stay bare
+
+        baseY = surface + 1;
+        height = 4 + (int)(Noise.Value2(cellX, cellZ, _seedTree + 53) * 3f);
+        return true;
+    }
+
+    /// <summary>Floor division that keeps working left of the origin, unlike <c>/</c>.</summary>
+    private static int FloorDiv(int a, int b) => a >= 0 ? a / b : -(((-a) + b - 1) / b);
+
+    private void PlantOakInto(Chunk chunk, int ox, int oy, int oz, int x, int baseY, int z, int trunkHeight)
     {
         var topY = baseY + trunkHeight - 1;
 
@@ -268,19 +325,50 @@ public sealed class TerrainGenerator
         for (var dy = -2; dy <= 1; dy++)
         {
             var y = topY + dy;
-            var radius = dy >= 0 ? 1 : 2;
+            var radius = dy >= 0 ? 1 : CanopyRadius;
 
             for (var dz = -radius; dz <= radius; dz++)
             for (var dx = -radius; dx <= radius; dx++)
             {
                 // Clip the outer corners so the canopy reads as round, not as a cube.
-                if (radius == 2 && Math.Abs(dx) == 2 && Math.Abs(dz) == 2) continue;
-                if (!world.GetBlock(x + dx, y, z + dz).IsAir) continue;
-                world.SetBlock(x + dx, y, z + dz, _ids.Leaves);
+                if (radius == CanopyRadius && Math.Abs(dx) == CanopyRadius && Math.Abs(dz) == CanopyRadius)
+                    continue;
+
+                PlaceLeaf(chunk, ox, oy, oz, x + dx, y, z + dz);
             }
         }
 
         for (var i = 0; i < trunkHeight; i++)
-            world.SetBlock(x, baseY + i, z, _ids.Log);
+            Place(chunk, ox, oy, oz, x, baseY + i, z, _ids.Log);
+    }
+
+    /// <summary>Writes a block if it falls inside this chunk, and drops it otherwise.</summary>
+    private static void Place(Chunk chunk, int ox, int oy, int oz, int wx, int wy, int wz, BlockId id)
+    {
+        var lx = wx - ox;
+        var ly = wy - oy;
+        var lz = wz - oz;
+        if ((uint)lx >= Chunk.Size || (uint)ly >= Chunk.Size || (uint)lz >= Chunk.Size) return;
+        chunk.Set(lx, ly, lz, id);
+    }
+
+    /// <summary>
+    /// Writes a leaf only into air, so a canopy never eats terrain or a neighbouring tree's trunk.
+    /// </summary>
+    /// <remarks>
+    /// Reading the chunk back mid-decoration is safe despite the order-independence rule: every
+    /// chunk walks the tree grid in the same cz-then-cx order, so any two trees resolve their
+    /// overlap identically no matter which chunk is asking or how many other trees are in range.
+    /// Testing the heightmap instead would be pure but wrong — it cannot see the trunk that another
+    /// tree already placed, and canopies start carving holes in their neighbours.
+    /// </remarks>
+    private void PlaceLeaf(Chunk chunk, int ox, int oy, int oz, int wx, int wy, int wz)
+    {
+        var lx = wx - ox;
+        var ly = wy - oy;
+        var lz = wz - oz;
+        if ((uint)lx >= Chunk.Size || (uint)ly >= Chunk.Size || (uint)lz >= Chunk.Size) return;
+        if (!chunk.Get(lx, ly, lz).IsAir) return;
+        chunk.Set(lx, ly, lz, _ids.Leaves);
     }
 }

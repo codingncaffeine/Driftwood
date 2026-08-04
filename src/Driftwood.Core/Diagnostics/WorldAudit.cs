@@ -48,10 +48,12 @@ public static class WorldAudit
         Parallel.For(0, chunks.Length, i => generator.GenerateChunk(chunks[i]));
         genWatch.Stop();
 
-        var decorWatch = Stopwatch.StartNew();
         var minBlock = -half * Chunk.Size;
         var maxBlock = (chunksAcross - half) * Chunk.Size - 1;
-        generator.DecorateRegion(world, minBlock, minBlock, maxBlock, maxBlock);
+
+        // Decoration is per-chunk and order-independent now, so it parallelises like generation.
+        var decorWatch = Stopwatch.StartNew();
+        Parallel.For(0, chunks.Length, i => generator.DecorateChunk(chunks[i]));
         decorWatch.Stop();
 
         var meshWatch = Stopwatch.StartNew();
@@ -226,6 +228,9 @@ public static class WorldAudit
         Check("face winding is outward", windingFaults.Count == 0,
             windingFaults.Count == 0 ? "all 6 faces" : string.Join("; ", windingFaults));
 
+        var neighbourIndependent = ChunksAreNeighbourIndependent(seed, registry, ids, oceanCoverage, out var neighbourDetail);
+        Check("chunk ignores neighbours", neighbourIndependent, neighbourDetail);
+
         var frustumFaults = Frustum.SelfTest();
         Check("frustum culls correctly", frustumFaults.Count == 0,
             frustumFaults.Count == 0
@@ -249,6 +254,81 @@ public static class WorldAudit
         Check("coal beats iron", counts[ids.CoalOre.Value] > counts[ids.IronOre.Value], $"{counts[ids.CoalOre.Value]:N0} vs {counts[ids.IronOre.Value]:N0}");
 
         return new Result(sb.ToString(), passed);
+    }
+
+    /// <summary>
+    /// Generates a chunk alone, then generates the same chunk surrounded by its 26 neighbours, and
+    /// compares the two block for block.
+    /// </summary>
+    /// <remarks>
+    /// This is the question streaming actually asks. Chunks arrive in whatever order the player
+    /// walks, and a chunk that comes out differently depending on which neighbours happen to exist
+    /// produces seams that appear and disappear as you move — the worst class of bug to chase,
+    /// because it never reproduces from a fresh load. Trees are the immediate case, since a canopy
+    /// crosses seams, but the same property has to hold for every structure added later.
+    /// </remarks>
+    private static bool ChunksAreNeighbourIndependent(
+        WorldSeed seed, BlockRegistry registry, StarterBlocks.Ids ids, float oceanCoverage, out string detail)
+    {
+        var generator = new TerrainGenerator(seed, ids, oceanCoverage);
+
+        // Spread the samples so they land on different terrain: forest, coast, deep and high.
+        ChunkPos[] targets =
+        [
+            new(0, 2, 0), new(3, 2, -4), new(-7, 1, 5), new(11, 2, 11), new(-13, 2, -9),
+        ];
+
+        foreach (var target in targets)
+        {
+            var alone = new VoxelWorld(registry);
+            var solo = alone.GetOrCreateChunk(target);
+            generator.GenerateChunk(solo);
+            generator.DecorateChunk(solo);
+
+            var surrounded = new VoxelWorld(registry);
+            Chunk? together = null;
+            for (var dy = -1; dy <= 1; dy++)
+            for (var dz = -1; dz <= 1; dz++)
+            for (var dx = -1; dx <= 1; dx++)
+            {
+                var pos = target.Offset(dx, dy, dz);
+                var chunk = surrounded.GetOrCreateChunk(pos);
+                generator.GenerateChunk(chunk);
+                generator.DecorateChunk(chunk);
+                if (pos == target) together = chunk;
+            }
+
+            // Same chunk again, but hunting for structure origins far enough away that nothing
+            // could plausibly be missed. If the production reach is wide enough this changes
+            // nothing; if it is too narrow, the wide pass finds geometry the narrow one dropped.
+            var wide = new VoxelWorld(registry);
+            var generous = wide.GetOrCreateChunk(target);
+            generator.GenerateChunk(generous);
+            generator.DecorateChunk(generous, Chunk.Size * 2);
+
+            if (!Compare(solo.Raw, together!.Raw, target, "alone", "surrounded", out detail)) return false;
+            if (!Compare(solo.Raw, generous.Raw, target, "normal reach", "wide reach", out detail)) return false;
+        }
+
+        detail = $"{targets.Length} chunks stable alone, surrounded, and at 2x search reach";
+        return true;
+
+        static bool Compare(ushort[] a, ushort[] b, ChunkPos target, string nameA, string nameB, out string detail)
+        {
+            for (var i = 0; i < a.Length; i++)
+            {
+                if (a[i] == b[i]) continue;
+
+                var x = i & Chunk.SizeMask;
+                var z = (i >> Chunk.SizeLog2) & Chunk.SizeMask;
+                var y = i >> (Chunk.SizeLog2 * 2);
+                detail = $"chunk {target} local ({x},{y},{z}): {nameA} {a[i]}, {nameB} {b[i]}";
+                return false;
+            }
+
+            detail = string.Empty;
+            return true;
+        }
     }
 
     /// <summary>
