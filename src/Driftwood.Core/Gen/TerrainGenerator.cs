@@ -22,15 +22,28 @@ public sealed class TerrainGenerator
     public const int SeaLevel = 62;
     public const int WorldHeight = 128;
 
-    /// <summary>Trees are rolled once per cell of this grid, which spaces them without clumping.</summary>
-    private const int TreeGrid = 7;
+    /// <summary>
+    /// Trees are rolled once per cell of this grid. Tight on purpose: at 7 the crowns never
+    /// touched and a forest read as an orchard of separate lollipops. At 5, with crowns up to
+    /// three wide, neighbours interlock into a continuous canopy with trunks running up through
+    /// it — which is the shape a wood actually has. How many of those cells grow anything is left
+    /// to the forest-density field, so tightening the grid thickens the woods without carpeting
+    /// the meadows.
+    /// </summary>
+    private const int TreeGrid = 5;
 
     /// <summary>
-    /// How far a canopy reaches sideways from its trunk. Chunk decoration widens its search by
-    /// this much, so it must stay well under <see cref="Chunk.Size"/> — a structure wider than a
-    /// chunk would need a search radius bigger than one neighbour.
+    /// How far anything a tree grows can reach sideways from its cell's trunk position. Chunk
+    /// decoration widens its search by this much, so it must stay well under <see cref="Chunk.Size"/>
+    /// — a structure wider than a chunk would need a search radius bigger than one neighbour.
     /// </summary>
-    private const int CanopyRadius = 2;
+    /// <remarks>
+    /// Adds up as: a crown offset of one plus a crown radius of three, or a branch two long with its
+    /// leaf knot one wider. Five covers both with a block to spare. The audit
+    /// decorates once normally and once at twice this reach and fails if they differ, which is the
+    /// only thing that catches a chunk quietly missing the far edge of a tree.
+    /// </remarks>
+    private const int CanopyRadius = 5;
 
     private readonly StarterBlocks.Ids _ids;
 
@@ -44,6 +57,7 @@ public sealed class TerrainGenerator
     private readonly int _seedGravel;
     private readonly int _seedEmber;
     private readonly int _seedTree;
+    private readonly int _seedForest;
 
     /// <summary>Default share of the surface that sits at or below sea level.</summary>
     public const float DefaultOceanCoverage = 0.25f;
@@ -71,6 +85,7 @@ public sealed class TerrainGenerator
         _seedGravel = seed.Derive("deposit.gravel");
         _seedEmber = seed.Derive("ore.emberstone");
         _seedTree = seed.Derive("decor.tree");
+        _seedForest = seed.Derive("decor.forest");
 
         _heightBias = CalibrateHeightBias(OceanCoverage);
     }
@@ -288,74 +303,236 @@ public sealed class TerrainGenerator
         for (var cz = cellMinZ; cz <= cellMaxZ; cz++)
         for (var cx = cellMinX; cx <= cellMaxX; cx++)
         {
-            if (!TryTreeAt(cx, cz, out var tx, out var tz, out var baseY, out var height)) continue;
+            if (!TryTreeAt(cx, cz, out var tree)) continue;
 
-            // Cheap vertical reject: nothing of this tree reaches this chunk's slab.
-            if (baseY + height > oy + Chunk.Size - 1 + 1 && baseY - 2 >= oy + Chunk.Size) continue;
-            if (baseY + height < oy - 2) continue;
+            // Cheap vertical reject: nothing of this tree reaches this chunk's slab. Vines hang
+            // below the crown, so the lower bound has to allow for the longest strand.
+            const int VineReach = 4;
+            var lowest = tree.BaseY - VineReach - 1;
+            var highest = tree.BaseY + tree.TrunkHeight + 2;
+            if (lowest >= oy + Chunk.Size) continue;
+            if (highest < oy) continue;
 
-            PlantOakInto(chunk, ox, oy, oz, tx, baseY, tz, height);
+            PlantOakInto(chunk, ox, oy, oz, tree);
         }
     }
 
-    /// <summary>
-    /// Decides whether the tree grid cell grows a tree, and where. Pure: depends only on the seed
-    /// and the heightmap, never on world state.
-    /// </summary>
-    private bool TryTreeAt(int cellX, int cellZ, out int x, out int z, out int baseY, out int height)
+    /// <summary>Everything about one tree, decided from its grid cell and nothing else.</summary>
+    /// <remarks>
+    /// The trunk is a straight vertical run, deliberately. A leaning trunk was tried and taken back
+    /// out: shifting the column partway up splits it into two stacks that are visually joined but
+    /// separately rooted, and nothing reading the world back can then tell how tall the tree is.
+    /// The crown offset below buys the same asymmetry without costing that.
+    /// </remarks>
+    private readonly record struct TreeSpec(
+        int X,
+        int Z,
+        int BaseY,
+        int TrunkHeight,
+        int CrownRadius,
+        int CrownOffsetX,
+        int CrownOffsetZ,
+        int CrownDepth,
+        int Branches,
+        int Seed)
     {
-        x = z = baseY = height = 0;
+        /// <summary>Y of the topmost log.</summary>
+        public int TopY => BaseY + TrunkHeight - 1;
+    }
 
-        // Roughly half of cells grow a tree; the rest stay clear so forests have gaps.
-        if (Noise.Value2(cellX, cellZ, _seedTree) > 0.45f) return false;
+    /// <summary>
+    /// Decides whether a tree grid cell grows a tree, and what shape it takes. Pure: depends only
+    /// on the seed and the heightmap, never on world state.
+    /// </summary>
+    /// <remarks>
+    /// Every roll is drawn from the cell coordinate with its own derived offset, so adding a new
+    /// one — a third branch, a wider crown — does not reshuffle the trees that were already there.
+    /// The same reason the generator derives a seed per stage, one level down.
+    /// </remarks>
+    private bool TryTreeAt(int cellX, int cellZ, out TreeSpec spec)
+    {
+        spec = default;
+
+        // Forest density rather than a flat coin flip. A uniform scatter gives every part of the
+        // world the same handful of trees per hectare, which reads as orchard: no thickets to push
+        // through, no clearings to come out into. This makes the odds themselves vary over a few
+        // hundred blocks, so the world has woods and it has meadows.
+        var density = 0.62f + Noise.Fbm2(cellX * TreeGrid / 210f, cellZ * TreeGrid / 210f, _seedForest, 3) * 1.7f;
+        if (Noise.Value2(cellX, cellZ, _seedTree) > density) return false;
 
         // Jitter inside the cell so the grid never shows through as rows.
         var jx = (int)(Noise.Value2(cellX, cellZ, _seedTree + 17) * TreeGrid);
         var jz = (int)(Noise.Value2(cellX, cellZ, _seedTree + 31) * TreeGrid);
-        x = cellX * TreeGrid + jx;
-        z = cellZ * TreeGrid + jz;
+        var x = cellX * TreeGrid + jx;
+        var z = cellZ * TreeGrid + jz;
 
         var surface = SurfaceHeight(x, z);
         if (surface <= SeaLevel + 2) return false;   // beaches and water stay bare
 
-        baseY = surface + 1;
-
         // Trunk length in logs. Was 4-6, which is the shortest species in the genre and read as
         // scrub from the ground — the whole world was at the bottom of one range. 5-8 with a crown
-        // one layer deeper gives a wood rather than a shrubbery, and the audit holds the mean to a
-        // band so a later tweak cannot quietly walk it back down.
-        height = 5 + (int)(Noise.Value2(cellX, cellZ, _seedTree + 53) * 4f);
+        // that grows alongside it gives a wood rather than a shrubbery, and the audit holds the
+        // mean to a band so a later tweak cannot quietly walk it back down.
+        var trunk = 5 + (int)(Noise.Value2(cellX, cellZ, _seedTree + 53) * 4f);
+
+        spec = new TreeSpec(
+            X: x,
+            Z: z,
+            BaseY: surface + 1,
+            TrunkHeight: trunk,
+            CrownRadius: 2 + (int)(Noise.Value2(cellX, cellZ, _seedTree + 103) * 2f),
+            CrownOffsetX: (int)(Noise.Value2(cellX, cellZ, _seedTree + 109) * 3f) - 1,
+            CrownOffsetZ: (int)(Noise.Value2(cellX, cellZ, _seedTree + 113) * 3f) - 1,
+            CrownDepth: 3 + (int)(Noise.Value2(cellX, cellZ, _seedTree + 127) * 2f),
+            Branches: trunk >= 6 ? (int)(Noise.Value2(cellX, cellZ, _seedTree + 131) * 3f) : 0,
+            Seed: Noise.Hash2(cellX, cellZ, _seedTree));
+
         return true;
     }
 
     /// <summary>Floor division that keeps working left of the origin, unlike <c>/</c>.</summary>
     private static int FloorDiv(int a, int b) => a >= 0 ? a / b : -(((-a) + b - 1) / b);
 
-    private void PlantOakInto(Chunk chunk, int ox, int oy, int oz, int x, int baseY, int z, int trunkHeight)
+    /// <summary>
+    /// Writes whatever parts of one tree land inside this chunk: trunk, branches, crown, vines.
+    /// </summary>
+    /// <remarks>
+    /// Crown before trunk, so a log always wins its own column. Branches before the crowns they
+    /// carry, for the same reason.
+    /// <para>Nothing here checks whether a neighbouring tree is in the way, and that is deliberate.
+    /// Leaves only ever write into air, so where two crowns meet they interlock instead of one
+    /// carving the other — which is what makes a stand of trees read as woodland rather than as a
+    /// row of separate lollipops. Trunks pass straight up through a neighbour's foliage.</para>
+    /// </remarks>
+    private void PlantOakInto(Chunk chunk, int ox, int oy, int oz, in TreeSpec tree)
     {
-        var topY = baseY + trunkHeight - 1;
+        PlaceBranches(chunk, ox, oy, oz, tree);
+        PlaceCrown(
+            chunk, ox, oy, oz, tree,
+            tree.X + tree.CrownOffsetX, tree.TopY, tree.Z + tree.CrownOffsetZ,
+            tree.CrownRadius, tree.CrownDepth);
 
-        // Canopy first, so the trunk overwrites any leaf that lands in its column.
-        // Three wide layers under two narrow ones: the crown has to grow with the trunk or a
-        // taller tree just reads as a longer stick.
-        for (var dy = -3; dy <= 1; dy++)
+        for (var i = 0; i < tree.TrunkHeight; i++)
+            Place(chunk, ox, oy, oz, tree.X, tree.BaseY + i, tree.Z, _ids.Log);
+
+        // A flare of logs at the foot, so a trunk meets the ground instead of being planted in it.
+        for (var face = 0; face < 4; face++)
+        {
+            if (Noise.Value3(tree.X, face, tree.Z, tree.Seed + 3) > 0.42f) continue;
+
+            var (dx, dz) = face switch
+            {
+                0 => (1, 0),
+                1 => (-1, 0),
+                2 => (0, 1),
+                _ => (0, -1),
+            };
+            PlaceIntoAir(chunk, ox, oy, oz, tree.X + dx, tree.BaseY, tree.Z + dz, _ids.Log);
+        }
+    }
+
+    /// <summary>
+    /// Grows one to three limbs out of the upper trunk, each ending in a knot of leaves.
+    /// </summary>
+    /// <remarks>
+    /// This is the single change that stops a tree reading as a cylinder with a ball on top. A
+    /// branch also breaks the crown's silhouette from below, which is the angle the player spends
+    /// nearly all their time looking from.
+    /// </remarks>
+    private void PlaceBranches(Chunk chunk, int ox, int oy, int oz, in TreeSpec tree)
+    {
+        for (var b = 0; b < tree.Branches; b++)
+        {
+            // Upper half of the trunk only. Lower down a limb just reads as a fork in the trunk.
+            var span = Math.Max(1, tree.TrunkHeight / 2);
+            var y = tree.BaseY + tree.TrunkHeight / 2 + (int)(Noise.Value3(tree.X, b, tree.Z, tree.Seed + 11) * span);
+            y = Math.Min(y, tree.TopY - 1);
+
+            var dir = (int)(Noise.Value3(tree.X, b, tree.Z, tree.Seed + 17) * 4f) & 3;
+            var (dx, dz) = dir switch
+            {
+                0 => (1, 0),
+                1 => (-1, 0),
+                2 => (0, 1),
+                _ => (0, -1),
+            };
+
+            var length = 1 + (int)(Noise.Value3(tree.X, b, tree.Z, tree.Seed + 23) * 2f);
+            var bx = tree.X;
+            var bz = tree.Z;
+            var by = y;
+
+            for (var step = 1; step <= length; step++)
+            {
+                bx += dx;
+                bz += dz;
+                if (step == length) by++;   // limbs rise as they go out, they do not stick out flat
+                PlaceIntoAir(chunk, ox, oy, oz, bx, by, bz, _ids.Log);
+            }
+
+            PlaceCrown(chunk, ox, oy, oz, tree, bx, by, bz, radius: 1, depth: 2);
+        }
+    }
+
+    /// <summary>
+    /// Lays a rounded knot of leaves around a point, with gaps punched through it.
+    /// </summary>
+    /// <remarks>
+    /// The gaps matter more than the shape. A crown with no holes in it is a solid mass that reads
+    /// as one object; a few missing leaves let sky through, and the lighting pass turns that into
+    /// dapples on the ground underneath for free.
+    /// </remarks>
+    private void PlaceCrown(
+        Chunk chunk, int ox, int oy, int oz, in TreeSpec tree,
+        int cx, int topY, int cz, int radius, int depth)
+    {
+        for (var dy = -(depth - 1); dy <= 1; dy++)
         {
             var y = topY + dy;
-            var radius = dy >= 0 ? 1 : CanopyRadius;
 
-            for (var dz = -radius; dz <= radius; dz++)
-            for (var dx = -radius; dx <= radius; dx++)
+            // Widest through the middle, narrowing to a cap. Layer radius is the crown's shape;
+            // everything else about it is noise on top.
+            var layerRadius = dy >= 0 ? Math.Max(1, radius - 1) : radius;
+            if (dy == -(depth - 1)) layerRadius = Math.Max(1, radius - 1);
+
+            for (var dz = -layerRadius; dz <= layerRadius; dz++)
+            for (var dx = -layerRadius; dx <= layerRadius; dx++)
             {
-                // Clip the outer corners so the canopy reads as round, not as a cube.
-                if (radius == CanopyRadius && Math.Abs(dx) == CanopyRadius && Math.Abs(dz) == CanopyRadius)
-                    continue;
+                // Round off, rather than clipping only the exact corners: at radius 3 a plain
+                // corner clip still leaves a very square crown.
+                if (dx * dx + dz * dz > layerRadius * layerRadius + layerRadius) continue;
 
-                PlaceLeaf(chunk, ox, oy, oz, x + dx, y, z + dz);
+                var lx = cx + dx;
+                var lz = cz + dz;
+
+                // Gaps, but never in the column that holds the crown up.
+                var atCentre = dx == 0 && dz == 0;
+                if (!atCentre && Noise.Value3(lx, y, lz, tree.Seed + 29) > 0.88f) continue;
+
+                PlaceLeaf(chunk, ox, oy, oz, lx, y, lz);
+
+                // Vines hang off the underside only, which is the edge you see them against.
+                if (dy == -(depth - 1)) HangVine(chunk, ox, oy, oz, tree, lx, y, lz);
             }
         }
+    }
 
-        for (var i = 0; i < trunkHeight; i++)
-            Place(chunk, ox, oy, oz, x, baseY + i, z, _ids.Log);
+    /// <summary>Hangs a strand of vine below one leaf of a crown's underside.</summary>
+    /// <remarks>
+    /// Driven from the leaf the tree meant to place, not from the block that ended up there. It has
+    /// to be: a strand starting at the bottom of one chunk carries on into the chunk below, and
+    /// that chunk cannot see the leaf it hangs from. Replaying the same tree from the same spec is
+    /// the only thing both chunks share.
+    /// <para>The length is rolled once, on the leaf, rather than per cell — otherwise a curtain
+    /// flickers in and out down its own length instead of hanging.</para>
+    /// </remarks>
+    private void HangVine(Chunk chunk, int ox, int oy, int oz, in TreeSpec tree, int wx, int wy, int wz)
+    {
+        if (Noise.Value3(wx, wy, wz, tree.Seed + 37) > 0.14f) return;
+
+        var length = 1 + (int)(Noise.Value3(wx, wy, wz, tree.Seed + 41) * 4f);
+        for (var d = 1; d <= length; d++)
+            PlaceIntoAir(chunk, ox, oy, oz, wx, wy - d, wz, _ids.Vine);
     }
 
     /// <summary>Writes a block if it falls inside this chunk, and drops it otherwise.</summary>
@@ -365,6 +542,17 @@ public sealed class TerrainGenerator
         var ly = wy - oy;
         var lz = wz - oz;
         if ((uint)lx >= Chunk.Size || (uint)ly >= Chunk.Size || (uint)lz >= Chunk.Size) return;
+        chunk.Set(lx, ly, lz, id);
+    }
+
+    /// <summary>Writes a block only into air, so nothing a tree grows eats terrain.</summary>
+    private static void PlaceIntoAir(Chunk chunk, int ox, int oy, int oz, int wx, int wy, int wz, BlockId id)
+    {
+        var lx = wx - ox;
+        var ly = wy - oy;
+        var lz = wz - oz;
+        if ((uint)lx >= Chunk.Size || (uint)ly >= Chunk.Size || (uint)lz >= Chunk.Size) return;
+        if (!chunk.Get(lx, ly, lz).IsAir) return;
         chunk.Set(lx, ly, lz, id);
     }
 

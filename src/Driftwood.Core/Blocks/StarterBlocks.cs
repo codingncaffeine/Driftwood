@@ -25,8 +25,9 @@ public static class StarterBlocks
     public const ushort LayerIronOre = 12;
     public const ushort LayerBedrock = 13;
     public const ushort LayerEmberstone = 14;
+    public const ushort LayerVine = 15;
 
-    public const int LayerCount = 15;
+    public const int LayerCount = 16;
 
     /// <summary>Debug colours standing in for textures until the art pass. RGB, 0..1.</summary>
     public static readonly float[] PaletteRgb =
@@ -46,6 +47,7 @@ public static class StarterBlocks
         0.66f, 0.56f, 0.46f, // iron ore
         0.12f, 0.12f, 0.13f, // bedrock
         0.94f, 0.62f, 0.30f, // emberstone
+        0.20f, 0.42f, 0.16f, // vine
     ];
 
     public sealed record Ids(
@@ -61,7 +63,8 @@ public static class StarterBlocks
         BlockId CoalOre,
         BlockId IronOre,
         BlockId Bedrock,
-        BlockId Emberstone);
+        BlockId Emberstone,
+        BlockId Vine);
 
     public static Ids Register(BlockRegistry registry)
     {
@@ -141,7 +144,17 @@ public static class StarterBlocks
             TopLayer = LayerEmberstone, SideLayer = LayerEmberstone, BottomLayer = LayerEmberstone,
         });
 
+        // Vines hang off canopy undersides and overhangs. Neither solid nor opaque — you walk
+        // through them and they barely shade what is behind — but they still dim light by a level,
+        // which is what makes a curtain of them read as a curtain.
+        var vine = registry.Register(new BlockType
+        {
+            Name = "vine", Solid = false, Opaque = false, LightAttenuation = 1,
+            TopLayer = LayerVine, SideLayer = LayerVine, BottomLayer = LayerVine,
+        });
+
         return new Ids(
-            stone, dirt, grass, sand, water, gravel, log, leaves, planks, coal, iron, bedrock, emberstone);
+            stone, dirt, grass, sand, water, gravel, log, leaves, planks, coal, iron, bedrock,
+            emberstone, vine);
     }
 }

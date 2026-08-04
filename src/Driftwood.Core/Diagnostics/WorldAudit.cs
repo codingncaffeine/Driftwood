@@ -182,6 +182,10 @@ public static class WorldAudit
         sb.AppendLine($"trees         {trees.Count:N0} trunks, {trees.MinTrunk}..{trees.MaxTrunk} logs "
                     + $"(mean {trees.MeanTrunk:F1}), crown reaches {trees.MinCrown}..{trees.MaxCrown} above ground");
 
+        var canopy = SurveyCanopy(world, chunks, ids);
+        sb.AppendLine($"canopy        {canopy.Clusters:N0} connected leaf masses, mean {canopy.MeanSize:F0} blocks, "
+                    + $"largest {canopy.Largest:N0}");
+
         var light = SurveyLight(world, chunks, registry);
         sb.AppendLine($"sunlight      {light.SkyFullPct:F1}% of open air at full strength, "
                     + $"{light.SkyDarkPct:F1}% of open air in shadow");
@@ -284,6 +288,13 @@ public static class WorldAudit
             $"mean trunk {trees.MeanTrunk:F1} logs over {trees.Count:N0} trees (want 5.5-8.5)");
         Check("tree heights vary", trees.MaxTrunk - trees.MinTrunk >= 3,
             $"{trees.MinTrunk}..{trees.MaxTrunk} logs");
+
+        // Canopies have to join up. One crown is somewhere near sixty leaves, so a mean cluster
+        // still in that neighbourhood means every tree is standing on its own no matter how many
+        // of them there are — the orchard look. Banded above as well: a mean in the tens of
+        // thousands would mean the whole world is under one unbroken ceiling of foliage.
+        Check("canopies merge", canopy.MeanSize is > 90 and < 40_000,
+            $"mean leaf mass {canopy.MeanSize:F0} blocks across {canopy.Clusters:N0} (want 90-40,000)");
 
         // Lighting gates. Every one of these is a band or a two-sided comparison, because the two
         // ways lighting fails are opposite and each looks fine to the other's check: light that
@@ -544,6 +555,86 @@ public static class WorldAudit
         return world;
     }
 
+    private readonly record struct CanopySurvey(int Clusters, double MeanSize, int Largest);
+
+    /// <summary>
+    /// Flood-fills the leaf blocks into connected clusters and reports how big they get.
+    /// </summary>
+    /// <remarks>
+    /// This is the measurement for "do the trees grow into one another". Crown radius and tree
+    /// spacing are both inputs to that and neither one answers it: widen the crowns and tighten the
+    /// grid all you like, the question is whether the foliage actually joins up. A world of isolated
+    /// trees has every cluster the size of one crown, however many trees there are. A wood has a few
+    /// enormous ones with trunks running up through them.
+    /// </remarks>
+    private static CanopySurvey SurveyCanopy(VoxelWorld world, Chunk[] chunks, StarterBlocks.Ids ids)
+    {
+        var visited = new Dictionary<ChunkPos, bool[]>();
+        var stack = new Stack<(int X, int Y, int Z)>();
+
+        var clusters = 0;
+        var largest = 0;
+        long total = 0;
+
+        bool TryClaim(int wx, int wy, int wz)
+        {
+            if (wy < 0 || wy >= TerrainGenerator.WorldHeight) return false;
+            if (world.GetBlock(wx, wy, wz) != ids.Leaves) return false;
+
+            var pos = ChunkPos.FromWorld(wx, wy, wz);
+            if (!world.TryGetChunk(pos, out _)) return false;
+
+            if (!visited.TryGetValue(pos, out var flags))
+            {
+                flags = new bool[Chunk.Volume];
+                visited[pos] = flags;
+            }
+
+            var i = Chunk.Index(wx & Chunk.SizeMask, wy & Chunk.SizeMask, wz & Chunk.SizeMask);
+            if (flags[i]) return false;
+            flags[i] = true;
+            return true;
+        }
+
+        foreach (var chunk in chunks)
+        {
+            var (ox, oy, oz) = chunk.Position.Origin;
+            var raw = chunk.Raw;
+
+            for (var y = 0; y < Chunk.Size; y++)
+            for (var z = 0; z < Chunk.Size; z++)
+            for (var x = 0; x < Chunk.Size; x++)
+            {
+                if (raw[Chunk.Index(x, y, z)] != ids.Leaves.Value) continue;
+                if (!TryClaim(ox + x, oy + y, oz + z)) continue;
+
+                var size = 0;
+                stack.Push((ox + x, oy + y, oz + z));
+
+                while (stack.Count > 0)
+                {
+                    var (cx, cy, cz) = stack.Pop();
+                    size++;
+
+                    for (var face = 0; face < Faces.Count; face++)
+                    {
+                        var n = Faces.Normals[face];
+                        if (TryClaim(cx + n.X, cy + n.Y, cz + n.Z))
+                            stack.Push((cx + n.X, cy + n.Y, cz + n.Z));
+                    }
+                }
+
+                clusters++;
+                total += size;
+                if (size > largest) largest = size;
+            }
+        }
+
+        return clusters == 0
+            ? new CanopySurvey(0, 0, 0)
+            : new CanopySurvey(clusters, total / (double)clusters, largest);
+    }
+
     private readonly record struct LightSurvey(
         long OpenCells,
         double SkyFullPct,
@@ -640,15 +731,27 @@ public static class WorldAudit
     /// Finds every trunk in the volume and measures how tall it stands.
     /// </summary>
     /// <remarks>
-    /// A trunk is a vertical run of logs whose lowest block sits on something that is not a log.
-    /// The crown is measured separately by walking up through the leaves directly above it, because
-    /// the two can disagree: a tall trunk under a thin canopy and a short one under a fat one look
-    /// nothing alike from the ground and are the same number of logs.
-    /// <para>Trunks touching the top or bottom of the sampled volume are skipped rather than
-    /// counted short — an edge-clipped tree would drag the mean down and read as a generator fault.</para>
+    /// <para>A trunk is a vertical run of logs standing on the ground — the block under it is
+    /// terrain, not air and not another log. That test is doing real work: a tree also grows
+    /// branches, which are logs with nothing beneath them, and a flare of logs at its foot. Counting
+    /// every log run as a trunk reported eight thousand trees averaging 2.3 logs in a world whose
+    /// shortest tree is five, because it was measuring limbs.</para>
+    /// <para>Runs shorter than three are dropped as flare. No real trunk is that short — the
+    /// generator's minimum is five — so this discards nothing the measurement is about.</para>
+    /// <para>The crown is measured separately by walking up through the leaves directly above,
+    /// because the two can disagree: a tall trunk under a thin canopy and a short one under a fat
+    /// one are nothing alike from the ground and are the same number of logs.</para>
+    /// <para>Trunks touching the top of the sampled volume are skipped rather than counted short —
+    /// an edge-clipped tree would drag the mean down and read as a generator fault.</para>
     /// </remarks>
     private static TreeSurvey SurveyTrees(VoxelWorld world, Chunk[] chunks, StarterBlocks.Ids ids)
     {
+        const int MinTrunkLogs = 3;
+
+        static bool IsGround(BlockId id, StarterBlocks.Ids ids) =>
+            id == ids.Grass || id == ids.Dirt || id == ids.Sand
+            || id == ids.Stone || id == ids.Gravel;
+
         // Find the columns worth walking first. Scanning every column of the volume through
         // world-space reads would be twenty million dictionary lookups to find a few hundred trees.
         var columns = new HashSet<(int X, int Z)>();
@@ -685,6 +788,13 @@ public static class WorldAudit
                 while (y <= top && world.GetBlock(wx, y, wz) == ids.Log) { trunk++; y++; }
 
                 if (y > top) break;   // clipped by the top of the volume, not a real measurement
+
+                // A branch has air under it and a flare is one block tall. Neither is a trunk.
+                if (!IsGround(world.GetBlock(wx, wy - 1, wz), ids) || trunk < MinTrunkLogs)
+                {
+                    wy = y;
+                    continue;
+                }
 
                 var crown = trunk;
                 while (y <= top && world.GetBlock(wx, y, wz) == ids.Leaves) { crown++; y++; }

@@ -160,4 +160,20 @@ public static class Noise
         var h = Hash(x, 0, z, seed);
         return (h & 0x00FFFFFF) / (float)0x01000000;
     }
+
+    /// <summary>
+    /// Deterministic 0..1 value from a 3D cell and seed. Used for per-block rolls that have to
+    /// come out the same in every chunk that considers them — a leaf gap, a hanging vine.
+    /// </summary>
+    public static float Value3(int x, int y, int z, int seed)
+    {
+        var h = Hash(x, y, z, seed);
+        return (h & 0x00FFFFFF) / (float)0x01000000;
+    }
+
+    /// <summary>
+    /// A whole hash of a 2D cell, for callers that want to derive further rolls from it rather than
+    /// a value in 0..1 — a structure giving its own parts their own seeds, for instance.
+    /// </summary>
+    public static int Hash2(int x, int z, int seed) => Hash(x, 0, z, seed);
 }
