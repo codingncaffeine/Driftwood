@@ -100,8 +100,8 @@ public static class Program
               --help            this text
 
             Controls
-              WASD              move
-              Space / Ctrl      up / down
+              Arrow keys        move (WASD also works)
+              Space / Ctrl      up / down (PgUp / PgDn also work)
               Shift / Alt       boost / slow
               Esc               release or recapture the mouse
               F1                wireframe

@@ -58,12 +58,14 @@ public sealed class FlyCamera
         var flat = new Vector3(forward.X, 0f, forward.Z);
         if (flat.LengthSquared() > 1e-6f) flat = Vector3.Normalize(flat);
 
-        if (keyboard.IsKeyPressed(Key.W)) Position += flat * speed;
-        if (keyboard.IsKeyPressed(Key.S)) Position -= flat * speed;
-        if (keyboard.IsKeyPressed(Key.D)) Position += right * speed;
-        if (keyboard.IsKeyPressed(Key.A)) Position -= right * speed;
-        if (keyboard.IsKeyPressed(Key.Space)) Position += Vector3.UnitY * speed;
-        if (keyboard.IsKeyPressed(Key.ControlLeft)) Position -= Vector3.UnitY * speed;
+        // Arrows are the primary bind; WASD stays live alongside them. Both are placeholders
+        // until the rebindable input map lands, so neither is worth being precious about.
+        if (keyboard.IsKeyPressed(Key.Up) || keyboard.IsKeyPressed(Key.W)) Position += flat * speed;
+        if (keyboard.IsKeyPressed(Key.Down) || keyboard.IsKeyPressed(Key.S)) Position -= flat * speed;
+        if (keyboard.IsKeyPressed(Key.Right) || keyboard.IsKeyPressed(Key.D)) Position += right * speed;
+        if (keyboard.IsKeyPressed(Key.Left) || keyboard.IsKeyPressed(Key.A)) Position -= right * speed;
+        if (keyboard.IsKeyPressed(Key.Space) || keyboard.IsKeyPressed(Key.PageUp)) Position += Vector3.UnitY * speed;
+        if (keyboard.IsKeyPressed(Key.ControlLeft) || keyboard.IsKeyPressed(Key.PageDown)) Position -= Vector3.UnitY * speed;
     }
 
     public Matrix4x4 ViewProjection(float aspect)

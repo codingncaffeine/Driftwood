@@ -63,6 +63,13 @@ public sealed class ClientHost : IDisposable
 
     private static readonly Vector3 SkyColor = new(0.55f, 0.69f, 0.86f);
 
+    // A fixed mid-morning sun. Becomes a moving light driven by the day/night clock at P9;
+    // the shader already takes it as a direction so that change stays on this side.
+    private static readonly Vector3 SunDirection = Vector3.Normalize(new Vector3(0.42f, 0.80f, 0.30f));
+    private static readonly Vector3 SunColor = new Vector3(0.98f, 0.94f, 0.84f) * 0.62f;
+    private static readonly Vector3 SkyAmbient = new(0.44f, 0.50f, 0.62f);
+    private static readonly Vector3 GroundAmbient = new(0.22f, 0.20f, 0.17f);
+
     public ClientHost(ClientOptions options)
     {
         _options = options;
@@ -194,7 +201,7 @@ public sealed class ClientHost : IDisposable
         Console.WriteLine($"total       {total.ElapsedMilliseconds} ms");
         Console.WriteLine($"geometry    {_totalVertices:N0} verts, {_totalTriangles:N0} tris");
         Console.WriteLine();
-        Console.WriteLine("WASD move, Space/Ctrl up-down, Shift boost, Alt slow, Esc release mouse, F1 wireframe");
+        Console.WriteLine("Arrows move (WASD also works), Space/PgUp up, Ctrl/PgDn down, Shift boost, Alt slow, Esc release mouse, F1 wireframe");
     }
 
     private void OnKeyDown(IKeyboard keyboard, Key key, int _)
@@ -267,6 +274,10 @@ public sealed class ClientHost : IDisposable
         _chunkShader.SetMatrix4("uViewProj", _camera.ViewProjection(aspect));
         _chunkShader.SetVec3("uCameraPos", _camera.Position);
         _chunkShader.SetVec3("uFogColor", SkyColor);
+        _chunkShader.SetVec3("uSunDir", SunDirection);
+        _chunkShader.SetVec3("uSunColor", SunColor);
+        _chunkShader.SetVec3("uSkyAmbient", SkyAmbient);
+        _chunkShader.SetVec3("uGroundAmbient", GroundAmbient);
         _chunkShader.SetFloat("uFogStart", _fogStart);
         _chunkShader.SetFloat("uFogEnd", _fogEnd);
         _chunkShader.SetVec3Array("uPalette", StarterBlocks.PaletteRgb);

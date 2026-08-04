@@ -21,18 +21,23 @@ public static class ChunkShaders
         uniform vec3 uChunkOrigin;
         uniform vec3 uCameraPos;
         uniform vec3 uPalette[64];
+        uniform vec3 uSunDir;         // surface toward sun, normalised
+        uniform vec3 uSunColor;
+        uniform vec3 uSkyAmbient;     // ambient arriving from above
+        uniform vec3 uGroundAmbient;  // bounce arriving from below
         uniform float uFogStart;
         uniform float uFogEnd;
 
         out vec3 vColor;
         out float vFog;
 
-        // Directional keying stands in for real lighting: sky-facing brightest, ground-facing
-        // darkest, the two side axes slightly apart so corners read without any light data.
-        const float kFaceLight[6] = float[6](0.78, 0.78, 1.00, 0.52, 0.92, 0.86);
+        const vec3 kNormals[6] = vec3[6](
+            vec3( 1.0, 0.0, 0.0), vec3(-1.0, 0.0, 0.0),
+            vec3( 0.0, 1.0, 0.0), vec3( 0.0,-1.0, 0.0),
+            vec3( 0.0, 0.0, 1.0), vec3( 0.0, 0.0,-1.0));
 
         // Ambient occlusion ramp, 0 = fully enclosed corner.
-        const float kAo[4] = float[4](0.46, 0.68, 0.86, 1.00);
+        const float kAo[4] = float[4](0.42, 0.64, 0.84, 1.00);
 
         void main()
         {
@@ -43,7 +48,17 @@ public static class ChunkShaders
             int ao    = int((aPacked >> 3) & 3u);
             int layer = int((aPacked >> 8) & 0xFFFFu);
 
-            vColor = uPalette[layer] * kFaceLight[face] * kAo[ao];
+            vec3 n = kNormals[face];
+
+            // Hemisphere ambient: sky light from above, bounce from the ground below. This is
+            // what keeps the two faces the sun cannot reach from collapsing into one flat tone,
+            // which a plain N.L term would do.
+            float upness = 0.5 + 0.5 * n.y;
+            vec3 ambient = mix(uGroundAmbient, uSkyAmbient, upness);
+
+            vec3 sun = uSunColor * max(dot(n, uSunDir), 0.0);
+
+            vColor = uPalette[layer] * (ambient + sun) * kAo[ao];
 
             float d = length(world - uCameraPos);
             vFog = clamp((d - uFogStart) / max(uFogEnd - uFogStart, 1.0), 0.0, 1.0);
