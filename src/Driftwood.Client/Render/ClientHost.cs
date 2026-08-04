@@ -105,8 +105,11 @@ public sealed class ClientHost : IDisposable
     private bool[] _targetable = null!;
 
     private PlayerRenderer _playerRenderer = null!;
+    private BlockCracks _cracks = null!;
     private readonly PlayerAnimator _animator = new();
+    private readonly PlayerMining _mining = new();
     private bool[] _solid = null!;
+    private BlockRegistry _registry = null!;
 
     /// <summary>Where the camera renders from, which is the eye only in first person.</summary>
     private Vector3 _viewPosition;
@@ -296,6 +299,10 @@ public sealed class ClientHost : IDisposable
         _playerRenderer = new PlayerRenderer(_gl, skin);
         Console.WriteLine($"skin        {skin.Summary}");
 
+        var cracks = CrackTextures.Build(_options.PackPath, _options.TextureSize);
+        _cracks = new BlockCracks(_gl, cracks);
+        Console.WriteLine($"cracks      {cracks.Summary}");
+
         BuildWorld();
     }
 
@@ -304,6 +311,7 @@ public sealed class ClientHost : IDisposable
         var registry = new BlockRegistry();
         var ids = StarterBlocks.Register(registry);
         registry.Seal();
+        _registry = registry;
 
         var generator = new TerrainGenerator(_options.Seed, ids, _options.OceanCoverage);
 
@@ -625,11 +633,13 @@ public sealed class ClientHost : IDisposable
     }
 
     /// <summary>
-    /// Advances the pose, then lets each swing that came round this frame take its block.
+    /// Advances the pose, works the target loose, and places on each swing that came round.
     /// </summary>
     /// <remarks>
-    /// The target is re-aimed between strikes. Without that, mining into a wall keeps swinging at
-    /// the hole the first block left rather than at the one now behind it.
+    /// Breaking and placing are paced differently on purpose. Placing is instant and happens once
+    /// per swing, because putting a block down is one motion. Breaking is work: the block gives way
+    /// when enough of it has been done, which for soft ground is inside a single swing and for ore
+    /// is a great many. Both keep the arm moving, so either way something on screen is causing it.
     /// </remarks>
     private void StepAnimation(float dt)
     {
@@ -641,17 +651,25 @@ public sealed class ClientHost : IDisposable
         _animator.Update(
             dt, stood, _camera.Yaw, PlayerBody.WalkSpeed, sneaking, _holdingBreak || _holdingPlace);
 
-        for (var strikes = _animator.TakeStrikes(); strikes > 0; strikes--)
+        var strikes = _animator.TakeStrikes();
+
+        // A click fast enough to be released inside one frame still registered its intent when it
+        // went down, so fall back to that rather than dropping the swing on the floor.
+        var placing = _holdingPlace || (!_holdingBreak && !_lastStrikeWasBreak);
+
+        for (; strikes > 0 && placing; strikes--)
         {
-            // A click fast enough to be released inside one frame still registered its intent when
-            // it went down, so fall back to that rather than dropping the swing on the floor.
-            var breaking = _holdingBreak || (!_holdingPlace && _lastStrikeWasBreak);
-
-            if (breaking) BreakTarget();
-            else PlaceOnTarget();
-
+            PlaceOnTarget();
             UpdateTarget();
         }
+
+        var target = _target is { } hit ? _registry[_streamer.World.GetBlock(hit.X, hit.Y, hit.Z)] : null;
+        var cell = _target is { } at ? (at.X, at.Y, at.Z) : ((int, int, int)?)null;
+
+        if (!_mining.Update(dt, target, cell, _holdingBreak)) return;
+
+        BreakTarget();
+        UpdateTarget();
     }
 
     /// <summary>
@@ -938,6 +956,11 @@ public sealed class ClientHost : IDisposable
         if (_target is { } hit && !_wireframe)
             _outline.Draw(viewProj, new Vector3(hit.X, hit.Y, hit.Z));
 
+        // Keyed off the mining state's own cell rather than the crosshair's, so cracking is never
+        // drawn on a block that is not the one being worked loose.
+        if (_mining.Target is { } cell && _mining.Stage >= 0 && !_wireframe)
+            _cracks.Draw(viewProj, new Vector3(cell.X, cell.Y, cell.Z), _mining.Stage);
+
         DrawPlayer(viewProj, projection, view);
 
         _renderMs = (Stopwatch.GetTimestamp() - renderStart) * TicksToMs;
@@ -998,6 +1021,7 @@ public sealed class ClientHost : IDisposable
         _outline?.Dispose();
         _blockTextures?.Dispose();
         _playerRenderer?.Dispose();
+        _cracks?.Dispose();
     }
 
     public void Dispose()

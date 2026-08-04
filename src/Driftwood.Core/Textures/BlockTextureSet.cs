@@ -107,7 +107,7 @@ public static class BlockTextureSet
         // Drawn at the native tile size and then scaled, so the generators stay written for one
         // size rather than being parameterised over every resolution a pack might arrive at.
         var tile = Draw(layer);
-        return size == TileGen.Size ? tile : Upscale(tile, size);
+        return TileGen.Upscale(tile, size);
     }
 
     private static byte[] Draw(int layer)
@@ -137,26 +137,4 @@ public static class BlockTextureSet
         };
     }
 
-    /// <summary>Nearest-neighbour upscale, so generated art stays as crisp as imported art.</summary>
-    private static byte[] Upscale(byte[] tile, int size)
-    {
-        var scaled = new byte[size * size * 4];
-
-        for (var y = 0; y < size; y++)
-        for (var x = 0; x < size; x++)
-        {
-            var sx = x * TileGen.Size / size;
-            var sy = y * TileGen.Size / size;
-
-            var src = (sy * TileGen.Size + sx) * 4;
-            var dst = (y * size + x) * 4;
-
-            scaled[dst] = tile[src];
-            scaled[dst + 1] = tile[src + 1];
-            scaled[dst + 2] = tile[src + 2];
-            scaled[dst + 3] = tile[src + 3];
-        }
-
-        return scaled;
-    }
 }

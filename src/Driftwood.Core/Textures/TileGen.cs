@@ -246,6 +246,114 @@ public static class TileGen
         return t;
     }
 
+    /// <summary>
+    /// The stages of a block coming apart, drawn as one nested set.
+    /// </summary>
+    /// <remarks>
+    /// <para>Built together rather than one per call, and that is the whole design. Cracking has to
+    /// be <em>cumulative</em> — every fracture visible at one stage must still be there at the next,
+    /// or the block appears to heal between frames as the overlay swaps. Generating each stage
+    /// independently cannot guarantee that however carefully the seeds are chosen.</para>
+    /// <para>So each pixel is stamped with the moment it first fractures, and a stage is simply
+    /// every pixel stamped at or before it. Fractures come from walkers wandering out across the
+    /// face, which gives branching lines rather than the spatter that per-pixel noise produces.</para>
+    /// </remarks>
+    public static byte[][] Cracks(int seed, int stages)
+    {
+        const int Walkers = 16;
+
+        // When each pixel first breaks, 0..1. Above 1 means it never does.
+        var appears = new float[Size * Size];
+        Array.Fill(appears, 2f);
+
+        for (var w = 0; w < Walkers; w++)
+        {
+            var born = w / (float)Walkers;
+
+            var x = Noise(w, 0, seed) * Size;
+            var y = Noise(0, w, seed + 17) * Size;
+            var angle = Noise(w, w, seed + 31) * MathF.Tau;
+            var steps = 4 + (int)(Noise(w, 3, seed + 47) * 10f);
+
+            for (var s = 0; s < steps; s++)
+            {
+                // Wander rather than run straight: a fracture that holds its heading reads as a
+                // scratch, and a whole face of them reads as brushed metal.
+                angle += (Noise(w, s, seed + 61) * 2f - 1f) * 0.9f;
+                x += MathF.Cos(angle);
+                y += MathF.Sin(angle);
+
+                var px = ((int)MathF.Floor(x) % Size + Size) % Size;
+                var py = ((int)MathF.Floor(y) % Size + Size) % Size;
+
+                var i = py * Size + px;
+                if (appears[i] > born) appears[i] = born;
+            }
+        }
+
+        var tiles = new byte[stages][];
+
+        for (var stage = 0; stage < stages; stage++)
+        {
+            var threshold = (stage + 1) / (float)stages;
+            var tile = new byte[BytesPerTile];
+
+            for (var y = 0; y < Size; y++)
+            for (var x = 0; x < Size; x++)
+            {
+                if (appears[y * Size + x] <= threshold)
+                {
+                    Put(tile, x, y, 22, 19, 17, 200);
+                    continue;
+                }
+
+                // A softer edge beside every fracture. Without it the lines read as drawn on rather
+                // than as the surface having given way.
+                var beside = false;
+                for (var dy = -1; dy <= 1 && !beside; dy++)
+                for (var dx = -1; dx <= 1; dx++)
+                {
+                    var nx = ((x + dx) % Size + Size) % Size;
+                    var ny = ((y + dy) % Size + Size) % Size;
+                    if (appears[ny * Size + nx] > threshold) continue;
+                    beside = true;
+                    break;
+                }
+
+                Put(tile, x, y, 34, 30, 27, beside ? (byte)72 : (byte)0);
+            }
+
+            tiles[stage] = tile;
+        }
+
+        return tiles;
+    }
+
+    /// <summary>Nearest-neighbour upscale, so generated art stays as crisp as imported art.</summary>
+    public static byte[] Upscale(byte[] tile, int size)
+    {
+        if (size == Size) return tile;
+
+        var scaled = new byte[size * size * 4];
+
+        for (var y = 0; y < size; y++)
+        for (var x = 0; x < size; x++)
+        {
+            var sx = x * Size / size;
+            var sy = y * Size / size;
+
+            var src = (sy * Size + sx) * 4;
+            var dst = (y * size + x) * 4;
+
+            scaled[dst] = tile[src];
+            scaled[dst + 1] = tile[src + 1];
+            scaled[dst + 2] = tile[src + 2];
+            scaled[dst + 3] = tile[src + 3];
+        }
+
+        return scaled;
+    }
+
     private static void Put(byte[] tile, int x, int y, byte r, byte g, byte b, byte a)
     {
         var i = y * Stride + x * 4;

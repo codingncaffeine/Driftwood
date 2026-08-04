@@ -71,6 +71,29 @@ public sealed class BlockType
     /// </remarks>
     public bool TintTopOnly { get; init; }
 
+    /// <summary>
+    /// How much work this block is to take, in hardness units. Negative means it never breaks.
+    /// </summary>
+    /// <remarks>
+    /// A unitless number rather than a time, because the time depends on what is swinging at it and
+    /// that is not a property of the block. <see cref="MiningRules"/> owns the conversion, so tool
+    /// tiers at P6 change one formula rather than every entry in the table.
+    /// </remarks>
+    public float Hardness { get; init; } = 1f;
+
+    /// <summary>
+    /// True when a tool is the right way to take this block, and bare hands are the wrong way.
+    /// </summary>
+    /// <remarks>
+    /// The distinction is what makes stone feel like it wants a pickaxe while wood does not, and it
+    /// is the hook the whole tool progression hangs off. Nothing can be crafted yet, so today it is
+    /// only a penalty; at P6 it becomes "which tier will actually harvest this".
+    /// </remarks>
+    public bool NeedsTool { get; init; }
+
+    /// <summary>Nothing takes this block. Bedrock, and the floor of the world.</summary>
+    public bool Unbreakable => Hardness < 0f;
+
     /// <summary>Texture array layer for the +Y face.</summary>
     public ushort TopLayer { get; init; }
 

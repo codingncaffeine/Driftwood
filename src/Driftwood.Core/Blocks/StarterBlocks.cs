@@ -71,41 +71,53 @@ public static class StarterBlocks
         // Id 0 must be air; chunk storage treats a zeroed array as empty.
         registry.Register(new BlockType { Name = "air", Solid = false, Opaque = false });
 
+        // Hardness is in the genre's units; MiningRules turns it into seconds. Loose ground is
+        // under a second, timber is a few, and anything that wants a pickaxe says so — which is
+        // what makes the first pickaxe worth crafting at P6 rather than a formality.
         var stone = registry.Register(new BlockType
         {
-            Name = "stone", TopLayer = LayerStone, SideLayer = LayerStone, BottomLayer = LayerStone,
+            Name = "stone", Hardness = 1.5f, NeedsTool = true,
+            TopLayer = LayerStone, SideLayer = LayerStone, BottomLayer = LayerStone,
         });
         var dirt = registry.Register(new BlockType
         {
-            Name = "dirt", TopLayer = LayerDirt, SideLayer = LayerDirt, BottomLayer = LayerDirt,
+            Name = "dirt", Hardness = 0.5f,
+            TopLayer = LayerDirt, SideLayer = LayerDirt, BottomLayer = LayerDirt,
         });
         var grass = registry.Register(new BlockType
         {
-            Name = "grass", Tint = TintSource.Grass, TintTopOnly = true,
+            Name = "grass", Hardness = 0.6f, Tint = TintSource.Grass, TintTopOnly = true,
             TopLayer = LayerGrassTop, SideLayer = LayerGrassSide, BottomLayer = LayerDirt,
         });
         var sand = registry.Register(new BlockType
         {
-            Name = "sand", TopLayer = LayerSand, SideLayer = LayerSand, BottomLayer = LayerSand,
+            Name = "sand", Hardness = 0.5f,
+            TopLayer = LayerSand, SideLayer = LayerSand, BottomLayer = LayerSand,
         });
 
         // Water is non-solid and non-opaque: you fall through it and it does not hide the
         // sea floor. P0 still draws it in the opaque pass; sorted translucency is a later phase.
         // The attenuation is what makes depth read as depth — light falls off twice as fast under
         // water, so a shallow sandbar stays bright while a trench goes black.
+        // Unbreakable because a fluid is not something you mine — a ray passes through it to the
+        // sea bed and it is not targetable at all. Saying so here means that if it ever does become
+        // targetable, the answer is already no rather than a silent hole in the ocean.
         var water = registry.Register(new BlockType
         {
-            Name = "water", Solid = false, Opaque = false, LightAttenuation = 1, Tint = TintSource.Water,
+            Name = "water", Solid = false, Opaque = false, LightAttenuation = 1, Hardness = -1f,
+            Tint = TintSource.Water,
             TopLayer = LayerWater, SideLayer = LayerWater, BottomLayer = LayerWater,
         });
 
         var gravel = registry.Register(new BlockType
         {
-            Name = "gravel", TopLayer = LayerGravel, SideLayer = LayerGravel, BottomLayer = LayerGravel,
+            Name = "gravel", Hardness = 0.6f,
+            TopLayer = LayerGravel, SideLayer = LayerGravel, BottomLayer = LayerGravel,
         });
         var log = registry.Register(new BlockType
         {
-            Name = "oak_log", TopLayer = LayerLogTop, SideLayer = LayerLogSide, BottomLayer = LayerLogTop,
+            Name = "oak_log", Hardness = 2f,
+            TopLayer = LayerLogTop, SideLayer = LayerLogSide, BottomLayer = LayerLogTop,
         });
 
         // Leaves are solid but see-through, which is exactly why the two flags are separate. They
@@ -113,25 +125,32 @@ public static class StarterBlocks
         // hole and the forest floor is darker than the field beside it.
         var leaves = registry.Register(new BlockType
         {
-            Name = "oak_leaves", Opaque = false, LightAttenuation = 1, Tint = TintSource.Foliage,
+            Name = "oak_leaves", Hardness = 0.2f, Opaque = false, LightAttenuation = 1,
+            Tint = TintSource.Foliage,
             TopLayer = LayerLeaves, SideLayer = LayerLeaves, BottomLayer = LayerLeaves,
         });
 
         var planks = registry.Register(new BlockType
         {
-            Name = "oak_planks", TopLayer = LayerPlanks, SideLayer = LayerPlanks, BottomLayer = LayerPlanks,
+            Name = "oak_planks", Hardness = 2f,
+            TopLayer = LayerPlanks, SideLayer = LayerPlanks, BottomLayer = LayerPlanks,
         });
         var coal = registry.Register(new BlockType
         {
-            Name = "coal_ore", TopLayer = LayerCoalOre, SideLayer = LayerCoalOre, BottomLayer = LayerCoalOre,
+            Name = "coal_ore", Hardness = 3f, NeedsTool = true,
+            TopLayer = LayerCoalOre, SideLayer = LayerCoalOre, BottomLayer = LayerCoalOre,
         });
         var iron = registry.Register(new BlockType
         {
-            Name = "iron_ore", TopLayer = LayerIronOre, SideLayer = LayerIronOre, BottomLayer = LayerIronOre,
+            Name = "iron_ore", Hardness = 3f, NeedsTool = true,
+            TopLayer = LayerIronOre, SideLayer = LayerIronOre, BottomLayer = LayerIronOre,
         });
+
+        // The floor of the world. Unbreakable is the whole job.
         var bedrock = registry.Register(new BlockType
         {
-            Name = "bedrock", TopLayer = LayerBedrock, SideLayer = LayerBedrock, BottomLayer = LayerBedrock,
+            Name = "bedrock", Hardness = -1f,
+            TopLayer = LayerBedrock, SideLayer = LayerBedrock, BottomLayer = LayerBedrock,
         });
 
         // The one thing in the world that gives off light. Added so lighting has something to
@@ -140,7 +159,7 @@ public static class StarterBlocks
         // in a way anyone notices. Warm and slightly red, so coloured light is visibly coloured.
         var emberstone = registry.Register(new BlockType
         {
-            Name = "emberstone",
+            Name = "emberstone", Hardness = 0.3f,
             LightEmission = LightValue.PackBlock(15, 10, 4),
             TopLayer = LayerEmberstone, SideLayer = LayerEmberstone, BottomLayer = LayerEmberstone,
         });
@@ -150,7 +169,8 @@ public static class StarterBlocks
         // which is what makes a curtain of them read as a curtain.
         var vine = registry.Register(new BlockType
         {
-            Name = "vine", Solid = false, Opaque = false, LightAttenuation = 1, Tint = TintSource.Foliage,
+            Name = "vine", Hardness = 0.2f, Solid = false, Opaque = false, LightAttenuation = 1,
+            Tint = TintSource.Foliage,
             TopLayer = LayerVine, SideLayer = LayerVine, BottomLayer = LayerVine,
         });
 

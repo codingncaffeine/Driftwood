@@ -418,6 +418,20 @@ public static class WorldAudit
                 ? "full length in the open, gives way to a wall, never ends up inside one"
                 : $"{boomFaults.Count} faults: {string.Join("; ", boomFaults)}");
 
+        var miningFaults = MiningSelfTest(registry, ids);
+        Check("mining takes the right work", miningFaults.Count == 0,
+            miningFaults.Count == 0
+                ? $"soft ground {MiningRules.SecondsToBreak(registry[ids.Dirt]):F2}s, "
+                  + $"stone {MiningRules.SecondsToBreak(registry[ids.Stone]):F2}s, "
+                  + $"ore {MiningRules.SecondsToBreak(registry[ids.IronOre]):F2}s, bedrock never"
+                : $"{miningFaults.Count} faults: {string.Join("; ", miningFaults)}");
+
+        var crackFaults = CrackSelfTest();
+        Check("cracks deepen without healing", crackFaults.Count == 0,
+            crackFaults.Count == 0
+                ? $"{MiningRules.Stages} stages, each a superset of the last"
+                : $"{crackFaults.Count} faults: {string.Join("; ", crackFaults)}");
+
         var relightMatches = RelightMatchesFullPass(
             seed, registry, ids, oceanCoverage, out var relightDetail, out var worstRelightMs);
         Check("edits relight exactly", relightMatches, relightDetail);
@@ -1422,6 +1436,149 @@ public static class WorldAudit
         }
 
         return (highest - lowest, right - left, faults);
+    }
+
+    /// <summary>
+    /// Holds the button down on one block at a time and times how long each takes to give way.
+    /// </summary>
+    /// <remarks>
+    /// <para>The check that matters is the <em>spread</em>, not any one number. A build where every
+    /// block takes the same work passes "dirt breaks in about a second" and every other absolute
+    /// gate here, and is exactly the thing this replaced — a world where punching stone and
+    /// punching leaves feel identical. So the materials are asked to come out in order and to differ
+    /// by an order of magnitude end to end.</para>
+    /// <para>Bedrock gets its own case because "unbreakable" is not "very slow": it must still be
+    /// there after a minute of holding, and it must never show a crack.</para>
+    /// </remarks>
+    private static List<string> MiningSelfTest(BlockRegistry registry, StarterBlocks.Ids ids)
+    {
+        var faults = new List<string>();
+        const float dt = 1f / 60f;
+        var cell = (0, 64, 0);
+
+        float Break(BlockType type, int maxFrames = 7200)
+        {
+            var mining = new PlayerMining();
+            for (var frame = 1; frame <= maxFrames; frame++)
+                if (mining.Update(dt, type, cell, mining: true)) return frame * dt;
+
+            return -1f;
+        }
+
+        var dirt = registry[ids.Dirt];
+        var stone = registry[ids.Stone];
+        var iron = registry[ids.IronOre];
+        var leaves = registry[ids.Leaves];
+
+        foreach (var type in (ReadOnlySpan<BlockType>)[leaves, dirt, stone, iron])
+        {
+            var measured = Break(type);
+            var wanted = MiningRules.SecondsToBreak(type);
+
+            if (measured < 0f) faults.Add($"{type.Name} never broke");
+            else if (MathF.Abs(measured - wanted) > dt * 2f)
+                faults.Add($"{type.Name} took {measured:F2}s, the rule says {wanted:F2}s");
+        }
+
+        var leafTime = Break(leaves);
+        var dirtTime = Break(dirt);
+        var stoneTime = Break(stone);
+        var ironTime = Break(iron);
+
+        if (!(leafTime < dirtTime && dirtTime < stoneTime && stoneTime < ironTime))
+            faults.Add($"materials out of order: leaves {leafTime:F2}, dirt {dirtTime:F2}, stone {stoneTime:F2}, ore {ironTime:F2}");
+
+        if (ironTime / leafTime < 10f)
+            faults.Add($"hardest is only {ironTime / leafTime:F1}x the softest — materials barely differ");
+
+        // Unbreakable means unbreakable, and shows nothing while being hit.
+        var bedrockMining = new PlayerMining();
+        for (var frame = 0; frame < 3600; frame++)
+        {
+            if (!bedrockMining.Update(dt, registry[ids.Bedrock], cell, mining: true)) continue;
+            faults.Add($"bedrock broke after {frame * dt:F1}s");
+            break;
+        }
+
+        if (bedrockMining.Stage >= 0) faults.Add("bedrock showed cracking");
+
+        // Cracking has to climb the whole way and never go backwards, or the overlay flickers
+        // between stages instead of deepening.
+        var staged = new PlayerMining();
+        var highest = -1;
+        var slipped = false;
+        for (var frame = 0; frame < 7200; frame++)
+        {
+            if (staged.Update(dt, stone, cell, mining: true)) break;
+
+            var stage = staged.Stage;
+            if (stage < highest) slipped = true;
+            if (stage > highest) highest = stage;
+        }
+
+        if (slipped) faults.Add("cracking went backwards mid-block");
+        if (highest != MiningRules.Stages - 1)
+            faults.Add($"cracking reached stage {highest}, wanted {MiningRules.Stages - 1}");
+
+        // Looking away and coming back starts the block again. Without this a player can chip at
+        // ten blocks in rotation and have them all fall at once.
+        var moved = new PlayerMining();
+        for (var frame = 0; frame < 20; frame++) moved.Update(dt, stone, cell, mining: true);
+        var earned = moved.Progress;
+        moved.Update(dt, stone, (5, 64, 0), mining: true);
+        if (moved.Progress >= earned)
+            faults.Add($"moving the crosshair kept {moved.Progress:F2} of {earned:F2} progress");
+
+        // And so does letting go.
+        var released = new PlayerMining();
+        for (var frame = 0; frame < 20; frame++) released.Update(dt, stone, cell, mining: true);
+        released.Update(dt, stone, cell, mining: false);
+        if (released.Progress > 0f) faults.Add($"letting go kept {released.Progress:F2} progress");
+
+        return faults;
+    }
+
+    /// <summary>
+    /// Checks the cracking stages grow into each other rather than being ten unrelated pictures.
+    /// </summary>
+    /// <remarks>
+    /// Nesting is the property that cannot be eyeballed: ten stages that each look like cracking
+    /// will still read as a block healing and re-breaking ten times if the later ones are not
+    /// supersets of the earlier. Counting pixels only proves the totals rise, so every stage is
+    /// compared against its predecessor pixel by pixel.
+    /// </remarks>
+    private static List<string> CrackSelfTest()
+    {
+        var faults = new List<string>();
+        var stages = TileGen.Cracks(2001, MiningRules.Stages);
+        var pixels = TileGen.Size * TileGen.Size;
+
+        static bool Broken(byte[] tile, int i) => tile[i * 4 + 3] >= 128;
+
+        var counts = new int[stages.Length];
+        for (var s = 0; s < stages.Length; s++)
+        for (var i = 0; i < pixels; i++)
+            if (Broken(stages[s], i)) counts[s]++;
+
+        if (counts[0] == 0) faults.Add("the first stage shows nothing");
+
+        if (counts[^1] >= pixels * 9 / 10)
+            faults.Add($"the last stage covers {counts[^1] * 100 / pixels}% of the face — it should be cracked, not painted over");
+
+        if (counts[^1] <= counts[0] * 2)
+            faults.Add($"cracking barely grows: {counts[0]} pixels to {counts[^1]}");
+
+        for (var s = 1; s < stages.Length; s++)
+        {
+            for (var i = 0; i < pixels; i++)
+            {
+                if (!Broken(stages[s - 1], i) || Broken(stages[s], i)) continue;
+                faults.Add($"stage {s} healed a fracture stage {s - 1} had");
+                break;
+            }
+        }
+
+        return faults;
     }
 
     /// <summary>

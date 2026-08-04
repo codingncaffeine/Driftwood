@@ -46,11 +46,17 @@ public sealed class PlayerRenderer : IDisposable
     private static readonly Vector3 BodyPivot = new(0f, 12f, 0f);
 
     // Where the first-person arm sits in the camera's own space, and how it moves when it swings.
-    // Chosen so the hand crosses the lower right of the screen without ever reaching the crosshair:
-    // an arm that covers the thing you are aiming at is worse than no arm at all.
-    private const float RestPitch = 1.32f;    // radians; points the arm away from the eye
-    private const float RestRoll = -0.26f;    // and tilts it in toward the centre
-    private static readonly Vector3 RestOffset = new(0.40f, -0.30f, -0.52f);
+    //
+    // Pitch is the value that decides what you are looking at. Near a right angle the arm points
+    // straight away from the eye and you end up staring down the barrel at the flat cap on its end,
+    // which reads as the back of the arm rather than as an arm. Well under that, more of its length
+    // lies across the screen and it reads as a limb. Placed to the right of the eye it will always
+    // show its inner side, which is what looking down at your own arm actually looks like.
+    //
+    // Provisional: to be dialled in together with the swing once mining takes more than one blow.
+    private const float RestPitch = 1.05f;    // radians; how far the arm points away from the eye
+    private const float RestRoll = -0.30f;    // and how far it tilts in toward the centre
+    private static readonly Vector3 RestOffset = new(0.52f, -0.20f, -0.42f);
 
     public ArmStyle Arms { get; }
 
