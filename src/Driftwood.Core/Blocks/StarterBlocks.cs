@@ -1,3 +1,5 @@
+using Driftwood.Core.Lighting;
+
 namespace Driftwood.Core.Blocks;
 
 /// <summary>
@@ -22,8 +24,9 @@ public static class StarterBlocks
     public const ushort LayerCoalOre = 11;
     public const ushort LayerIronOre = 12;
     public const ushort LayerBedrock = 13;
+    public const ushort LayerEmberstone = 14;
 
-    public const int LayerCount = 14;
+    public const int LayerCount = 15;
 
     /// <summary>Debug colours standing in for textures until the art pass. RGB, 0..1.</summary>
     public static readonly float[] PaletteRgb =
@@ -42,6 +45,7 @@ public static class StarterBlocks
         0.28f, 0.28f, 0.29f, // coal ore
         0.66f, 0.56f, 0.46f, // iron ore
         0.12f, 0.12f, 0.13f, // bedrock
+        0.94f, 0.62f, 0.30f, // emberstone
     ];
 
     public sealed record Ids(
@@ -56,7 +60,8 @@ public static class StarterBlocks
         BlockId Planks,
         BlockId CoalOre,
         BlockId IronOre,
-        BlockId Bedrock);
+        BlockId Bedrock,
+        BlockId Emberstone);
 
     public static Ids Register(BlockRegistry registry)
     {
@@ -82,9 +87,11 @@ public static class StarterBlocks
 
         // Water is non-solid and non-opaque: you fall through it and it does not hide the
         // sea floor. P0 still draws it in the opaque pass; sorted translucency is a later phase.
+        // The attenuation is what makes depth read as depth — light falls off twice as fast under
+        // water, so a shallow sandbar stays bright while a trench goes black.
         var water = registry.Register(new BlockType
         {
-            Name = "water", Solid = false, Opaque = false,
+            Name = "water", Solid = false, Opaque = false, LightAttenuation = 1,
             TopLayer = LayerWater, SideLayer = LayerWater, BottomLayer = LayerWater,
         });
 
@@ -97,10 +104,12 @@ public static class StarterBlocks
             Name = "oak_log", TopLayer = LayerLogTop, SideLayer = LayerLogSide, BottomLayer = LayerLogTop,
         });
 
-        // Leaves are solid but see-through, which is exactly why the two flags are separate.
+        // Leaves are solid but see-through, which is exactly why the two flags are separate. They
+        // dim what passes through rather than stopping it, so a canopy casts shade instead of a
+        // hole and the forest floor is darker than the field beside it.
         var leaves = registry.Register(new BlockType
         {
-            Name = "oak_leaves", Opaque = false,
+            Name = "oak_leaves", Opaque = false, LightAttenuation = 1,
             TopLayer = LayerLeaves, SideLayer = LayerLeaves, BottomLayer = LayerLeaves,
         });
 
@@ -121,6 +130,18 @@ public static class StarterBlocks
             Name = "bedrock", TopLayer = LayerBedrock, SideLayer = LayerBedrock, BottomLayer = LayerBedrock,
         });
 
-        return new Ids(stone, dirt, grass, sand, water, gravel, log, leaves, planks, coal, iron, bedrock);
+        // The one thing in the world that gives off light. Added so lighting has something to
+        // prove itself against underground before a placeable torch exists — a light system whose
+        // only source is the sun can only ever be tested outdoors, where it is hardest to be wrong
+        // in a way anyone notices. Warm and slightly red, so coloured light is visibly coloured.
+        var emberstone = registry.Register(new BlockType
+        {
+            Name = "emberstone",
+            LightEmission = LightValue.PackBlock(15, 10, 4),
+            TopLayer = LayerEmberstone, SideLayer = LayerEmberstone, BottomLayer = LayerEmberstone,
+        });
+
+        return new Ids(
+            stone, dirt, grass, sand, water, gravel, log, leaves, planks, coal, iron, bedrock, emberstone);
     }
 }

@@ -1,3 +1,5 @@
+using Driftwood.Core.Lighting;
+
 namespace Driftwood.Core.Blocks;
 
 /// <summary>
@@ -57,6 +59,32 @@ public sealed class BlockRegistry
     {
         var table = new bool[_byId.Count];
         for (var i = 0; i < _byId.Count; i++) table[i] = _byId[i].Opaque;
+        return table;
+    }
+
+    /// <summary>
+    /// Light lost per step into each block id. Opaque blocks get <see cref="LightValue.Max"/>,
+    /// which drives light to zero in one step without the propagator needing a separate branch
+    /// for "blocked" and "dimmed".
+    /// </summary>
+    public byte[] BuildLightAttenuationTable()
+    {
+        var table = new byte[_byId.Count];
+        for (var i = 0; i < _byId.Count; i++)
+        {
+            var type = _byId[i];
+            table[i] = type.Opaque
+                ? (byte)LightValue.Max
+                : (byte)Math.Clamp(type.LightAttenuation, 0, LightValue.Max);
+        }
+        return table;
+    }
+
+    /// <summary>Packed emission keyed by raw id.</summary>
+    public ushort[] BuildLightEmissionTable()
+    {
+        var table = new ushort[_byId.Count];
+        for (var i = 0; i < _byId.Count; i++) table[i] = _byId[i].LightEmission;
         return table;
     }
 

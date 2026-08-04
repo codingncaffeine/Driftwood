@@ -21,8 +21,21 @@ public sealed class BlockType
     /// <summary>Stops movement. Drives collision, never face culling.</summary>
     public bool Solid { get; init; } = true;
 
-    /// <summary>Hides whatever is behind it. Drives face culling now and light blocking at P2.</summary>
+    /// <summary>Hides whatever is behind it. Drives face culling and blocks light outright.</summary>
     public bool Opaque { get; init; } = true;
+
+    /// <summary>
+    /// Extra light levels lost crossing this block, on top of the one every step costs. Zero for
+    /// air and glass; one for leaves and water, which is what makes a canopy cast dappled shade and
+    /// deep water go dark. Ignored when <see cref="Opaque"/> — that stops light entirely.
+    /// </summary>
+    public int LightAttenuation { get; init; }
+
+    /// <summary>
+    /// Light this block gives off, packed by <see cref="Lighting.LightValue"/>. Zero for almost
+    /// everything.
+    /// </summary>
+    public ushort LightEmission { get; init; }
 
     /// <summary>Texture array layer for the +Y face.</summary>
     public ushort TopLayer { get; init; }

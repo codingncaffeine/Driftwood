@@ -22,6 +22,16 @@ public sealed class Chunk
 
     private readonly ushort[] _blocks = new ushort[Volume];
 
+    /// <summary>
+    /// Per-cell light, packed by <see cref="Lighting.LightValue"/>. Allocated up front alongside
+    /// the blocks: a chunk with no light is still a chunk that has to answer light queries, and a
+    /// lazily-allocated array would have to be null-checked on the hottest read in the mesher.
+    /// </summary>
+    private readonly ushort[] _light = new ushort[Volume];
+
+    /// <summary>Set once light has been seeded and flooded for this chunk.</summary>
+    public bool Lit { get; set; }
+
     /// <summary>Count of non-air blocks. Lets the mesher skip empty chunks without scanning them.</summary>
     public int SolidCount { get; private set; }
 
@@ -57,6 +67,21 @@ public sealed class Chunk
     /// <see cref="RecountSolid"/> afterwards.
     /// </summary>
     public ushort[] Raw => _blocks;
+
+    /// <summary>Direct view of the light store, for the lighting pass and the mesher's snapshot.</summary>
+    public ushort[] RawLight => _light;
+
+    /// <summary>Reads packed light by chunk-local coordinate. Callers must pass 0..31.</summary>
+    public ushort GetLight(int x, int y, int z) => _light[Index(x, y, z)];
+
+    /// <summary>Writes packed light. Returns true when the value actually changed.</summary>
+    public bool SetLight(int x, int y, int z, ushort value)
+    {
+        var i = Index(x, y, z);
+        if (_light[i] == value) return false;
+        _light[i] = value;
+        return true;
+    }
 
     public void RecountSolid()
     {

@@ -42,6 +42,7 @@ public sealed class TerrainGenerator
     private readonly int _seedCoal;
     private readonly int _seedIron;
     private readonly int _seedGravel;
+    private readonly int _seedEmber;
     private readonly int _seedTree;
 
     /// <summary>Default share of the surface that sits at or below sea level.</summary>
@@ -68,6 +69,7 @@ public sealed class TerrainGenerator
         _seedCoal = seed.Derive("ore.coal");
         _seedIron = seed.Derive("ore.iron");
         _seedGravel = seed.Derive("deposit.gravel");
+        _seedEmber = seed.Derive("ore.emberstone");
         _seedTree = seed.Derive("decor.tree");
 
         _heightBias = CalibrateHeightBias(OceanCoverage);
@@ -221,6 +223,13 @@ public sealed class TerrainGenerator
     /// </remarks>
     private ushort OreAt(int x, int y, int z)
     {
+        // Emberstone is deeper and rarer than anything else, and it is placed before the metals so
+        // a cell that qualifies for both becomes the interesting one. Caves are carved before ore
+        // is assigned, so a vein only ever forms in the rock that survived — which is why one shows
+        // up as a glow in a cave wall rather than as a lamp sealed inside a mountain.
+        if (y is >= 4 and <= 40 && Noise.Fbm3(x / 7f, y / 7f, z / 7f, _seedEmber, 2) > 0.53f)
+            return _ids.Emberstone;
+
         // Iron sits deeper and rarer than coal, which is the first progression gate the
         // survival loop leans on.
         // Target mix, checked by the audit: coal near 0.8% of stone, iron near 0.35%, coal

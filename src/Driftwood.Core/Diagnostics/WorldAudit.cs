@@ -3,6 +3,7 @@ using System.Numerics;
 using System.Text;
 using Driftwood.Core.Blocks;
 using Driftwood.Core.Gen;
+using Driftwood.Core.Lighting;
 using Driftwood.Core.Meshing;
 using Driftwood.Core.Spatial;
 using Driftwood.Core.World;
@@ -56,6 +57,13 @@ public static class WorldAudit
         var decorWatch = Stopwatch.StartNew();
         Parallel.For(0, chunks.Length, i => generator.DecorateChunk(chunks[i]));
         decorWatch.Stop();
+
+        // Lighting runs before meshing because the mesh bakes light into its vertices; meshing
+        // first would measure and check geometry lit by nothing.
+        var lightWatch = Stopwatch.StartNew();
+        var lightEngine = new LightEngine(registry);
+        lightEngine.LightAll(world);
+        lightWatch.Stop();
 
         var meshWatch = Stopwatch.StartNew();
         var meshes = new ChunkMeshData?[positions.Count];
@@ -159,6 +167,7 @@ public static class WorldAudit
         sb.AppendLine();
         sb.AppendLine($"generate      {genWatch.ElapsedMilliseconds,6} ms   ({positions.Count / Math.Max(genWatch.Elapsed.TotalSeconds, 0.001):N0} chunks/s)");
         sb.AppendLine($"decorate      {decorWatch.ElapsedMilliseconds,6} ms");
+        sb.AppendLine($"light         {lightWatch.ElapsedMilliseconds,6} ms   ({lightEngine.LastCellsVisited:N0} cells flooded)");
         sb.AppendLine($"mesh          {meshWatch.ElapsedMilliseconds,6} ms   ({positions.Count / Math.Max(meshWatch.Elapsed.TotalSeconds, 0.001):N0} chunks/s)");
         sb.AppendLine();
         sb.AppendLine($"geometry      {verts:N0} verts, {tris:N0} tris, {verts * ChunkVertex.SizeInBytes / (1024.0 * 1024.0):F1} MiB vertex data");
@@ -172,6 +181,12 @@ public static class WorldAudit
         var trees = SurveyTrees(world, chunks, ids);
         sb.AppendLine($"trees         {trees.Count:N0} trunks, {trees.MinTrunk}..{trees.MaxTrunk} logs "
                     + $"(mean {trees.MeanTrunk:F1}), crown reaches {trees.MinCrown}..{trees.MaxCrown} above ground");
+
+        var light = SurveyLight(world, chunks, registry);
+        sb.AppendLine($"sunlight      {light.SkyFullPct:F1}% of open air at full strength, "
+                    + $"{light.SkyDarkPct:F1}% of open air in shadow");
+        sb.AppendLine($"block light   {light.BlockLitCells:N0} cells reached, "
+                    + $"peak {light.BlockPeak}, {light.ColouredCells:N0} of them off-white");
         sb.AppendLine();
         sb.AppendLine("block census");
 
@@ -270,7 +285,213 @@ public static class WorldAudit
         Check("tree heights vary", trees.MaxTrunk - trees.MinTrunk >= 3,
             $"{trees.MinTrunk}..{trees.MaxTrunk} logs");
 
+        // Lighting gates. Every one of these is a band or a two-sided comparison, because the two
+        // ways lighting fails are opposite and each looks fine to the other's check: light that
+        // never propagates leaves a black world, light that ignores blocks leaves a world with no
+        // shadows at all. A floor on brightness passes the second; a ceiling passes the first.
+        Check("sun reaches open air", light.SkyFullPct is > 30.0 and < 94.0,
+            $"{light.SkyFullPct:F1}% of open air at full sun (want 30-94)");
+        Check("shadow exists", light.SkyDarkPct is > 3.0 and < 65.0,
+            $"{light.SkyDarkPct:F1}% of open air in full shadow (want 3-65)");
+        Check("rock stays dark", light.LitSolids == 0,
+            light.LitSolids == 0 ? "no light inside opaque non-emitters" : $"{light.LitSolids:N0} lit solid cells");
+        Check("canopy casts shade", light.MaxSkyUnderLeaves < LightValue.Max,
+            $"brightest cell under a leaf is {light.MaxSkyUnderLeaves} (must be under {LightValue.Max})");
+
+        // The brightest open cell next to a full-strength emitter is one level down from it, since
+        // the emitter itself is solid and the first step out costs a level. Banded rather than
+        // pinned to 14 so a dimmer source, or one that is not a full cube, does not read as a fault.
+        Check("emitters light the dark", light.BlockLitCells > 0 && light.BlockPeak is >= 12 and <= LightValue.Max,
+            $"{light.BlockLitCells:N0} cells reached, peak {light.BlockPeak} (want 12-{LightValue.Max})");
+        Check("block light is coloured", light.ColouredCells > 0,
+            $"{light.ColouredCells:N0} cells where the channels differ");
+
+        var emberPct = counts[ids.Emberstone.Value] * 100.0 / stone;
+        Check("emberstone rate in band", emberPct is > 0.05 and < 0.40,
+            $"{emberPct:F3}% of stone (want 0.05-0.40)");
+
+        var lightingConverges = LightingIsOrderIndependent(seed, registry, ids, oceanCoverage, out var lightDetail);
+        Check("light ignores load order", lightingConverges, lightDetail);
+
         return new Result(sb.ToString(), passed);
+    }
+
+    /// <summary>
+    /// Lights the same blocks twice — once as a whole region, once column by column in a scattered
+    /// order — and compares every cell.
+    /// </summary>
+    /// <remarks>
+    /// This is the question streaming asks of lighting, and it is not the same question meshing
+    /// asks. A mesh is built from blocks that are already final; light is built from light, so a
+    /// column lit before its neighbour existed has to end up identical to one lit after. The failure
+    /// it guards against is a seam of darkness frozen along a chunk boundary the player walked
+    /// across in the wrong direction — which never reproduces from a fresh load, because a fresh
+    /// load lights everything at once.
+    /// <para>The column order is deliberately scattered rather than reversed. A reversed sweep is
+    /// still a sweep, and a bug that only needs "some neighbour already lit" survives it.</para>
+    /// </remarks>
+    private static bool LightingIsOrderIndependent(
+        WorldSeed seed, BlockRegistry registry, StarterBlocks.Ids ids, float oceanCoverage, out string detail)
+    {
+        const int radius = 2;   // 5x5 columns is enough for interior cells to have full neighbours
+
+        var order = new List<(int X, int Z)>();
+        for (var cz = -radius; cz <= radius; cz++)
+        for (var cx = -radius; cx <= radius; cx++)
+            order.Add((cx, cz));
+
+        var batch = BuildRegion(seed, registry, ids, oceanCoverage, radius);
+        new LightEngine(registry).LightAll(batch);
+
+        var incremental = BuildRegion(seed, registry, ids, oceanCoverage, radius);
+        var engine = new LightEngine(registry);
+
+        // Every third column, wrapping — hits the whole set without ever lighting two neighbours
+        // back to back.
+        for (var i = 0; i < order.Count; i++)
+        {
+            var (cx, cz) = order[i * 3 % order.Count];
+            engine.LightColumn(incremental, cx, cz);
+        }
+
+        var chunksTall = TerrainGenerator.WorldHeight / Chunk.Size;
+        var compared = 0;
+
+        for (var cz = -radius; cz <= radius; cz++)
+        for (var cx = -radius; cx <= radius; cx++)
+        for (var cy = 0; cy < chunksTall; cy++)
+        {
+            var pos = new ChunkPos(cx, cy, cz);
+            if (!batch.TryGetChunk(pos, out var a) || !incremental.TryGetChunk(pos, out var b)) continue;
+
+            var la = a.RawLight;
+            var lb = b.RawLight;
+            for (var i = 0; i < la.Length; i++)
+            {
+                compared++;
+                if (la[i] == lb[i]) continue;
+
+                var x = i & Chunk.SizeMask;
+                var z = (i >> Chunk.SizeLog2) & Chunk.SizeMask;
+                var y = i >> (Chunk.SizeLog2 * 2);
+                detail = $"chunk {pos} local ({x},{y},{z}): batch sky {LightValue.Sky(la[i])} "
+                       + $"rgb {LightValue.Red(la[i])},{LightValue.Green(la[i])},{LightValue.Blue(la[i])} vs "
+                       + $"streamed sky {LightValue.Sky(lb[i])} "
+                       + $"rgb {LightValue.Red(lb[i])},{LightValue.Green(lb[i])},{LightValue.Blue(lb[i])}";
+                return false;
+            }
+        }
+
+        detail = $"{compared:N0} cells identical whole-region and column by column";
+        return true;
+    }
+
+    private static VoxelWorld BuildRegion(
+        WorldSeed seed, BlockRegistry registry, StarterBlocks.Ids ids, float oceanCoverage, int radius)
+    {
+        var world = new VoxelWorld(registry);
+        var generator = new TerrainGenerator(seed, ids, oceanCoverage);
+        var chunksTall = TerrainGenerator.WorldHeight / Chunk.Size;
+
+        for (var cz = -radius; cz <= radius; cz++)
+        for (var cx = -radius; cx <= radius; cx++)
+        for (var cy = 0; cy < chunksTall; cy++)
+        {
+            var chunk = world.GetOrCreateChunk(new ChunkPos(cx, cy, cz));
+            generator.GenerateChunk(chunk);
+            generator.DecorateChunk(chunk);
+        }
+
+        return world;
+    }
+
+    private readonly record struct LightSurvey(
+        long OpenCells,
+        double SkyFullPct,
+        double SkyDarkPct,
+        long BlockLitCells,
+        long ColouredCells,
+        int BlockPeak,
+        long LitSolids,
+        int MaxSkyUnderLeaves);
+
+    /// <summary>
+    /// Counts what the lighting pass actually produced, over every cell light is allowed to exist in.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately reported as shares of open air rather than of the whole volume. Most of a world
+    /// is stone, and stone is always dark, so any fraction taken over everything is dominated by the
+    /// part of the answer nobody was asking about — and it barely moves when the lighting is
+    /// completely broken.
+    /// </remarks>
+    private static LightSurvey SurveyLight(VoxelWorld world, Chunk[] chunks, BlockRegistry registry)
+    {
+        var opaque = registry.BuildOpacityTable();
+        var emission = registry.BuildLightEmissionTable();
+
+        long open = 0, skyFull = 0, skyDark = 0, blockLit = 0, coloured = 0, litSolids = 0;
+        var peak = 0;
+        var underLeaves = 0;
+
+        var leaves = registry.ByName("oak_leaves").Id.Value;
+
+        foreach (var chunk in chunks)
+        {
+            var raw = chunk.Raw;
+            var light = chunk.RawLight;
+            var (ox, oy, oz) = chunk.Position.Origin;
+
+            for (var y = 0; y < Chunk.Size; y++)
+            for (var z = 0; z < Chunk.Size; z++)
+            for (var x = 0; x < Chunk.Size; x++)
+            {
+                var i = Chunk.Index(x, y, z);
+                var packed = light[i];
+
+                if (opaque[raw[i]])
+                {
+                    // Light inside solid rock means the attenuation table is not being consulted.
+                    // An emitter is the exception: it holds its own emission, which is where the
+                    // flood starts from. Counting those was the first thing this check caught, and
+                    // the count matched the emberstone census exactly — the check was wrong, not
+                    // the engine.
+                    if (packed != 0 && emission[raw[i]] == 0) litSolids++;
+                    continue;
+                }
+
+                open++;
+
+                var sky = LightValue.Sky(packed);
+                if (sky >= LightValue.Max) skyFull++;
+                else if (sky == 0) skyDark++;
+
+                var r = LightValue.Red(packed);
+                var g = LightValue.Green(packed);
+                var b = LightValue.Blue(packed);
+                var block = Math.Max(r, Math.Max(g, b));
+                if (block > 0)
+                {
+                    blockLit++;
+                    if (r != g || g != b) coloured++;
+                    if (block > peak) peak = block;
+                }
+
+                if (sky > underLeaves && world.GetBlock(ox + x, oy + y + 1, oz + z).Value == leaves)
+                    underLeaves = sky;
+            }
+        }
+
+        if (open == 0) return new LightSurvey(0, 0, 0, 0, 0, 0, litSolids, 0);
+
+        return new LightSurvey(
+            open,
+            skyFull * 100.0 / open,
+            skyDark * 100.0 / open,
+            blockLit,
+            coloured,
+            peak,
+            litSolids,
+            underLeaves);
     }
 
     private readonly record struct TreeSurvey(
