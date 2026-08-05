@@ -1,4 +1,7 @@
+using Driftwood.Client.Audio;
 using Driftwood.Client.Render;
+using Driftwood.Core.Audio;
+using Driftwood.Core.Blocks;
 using Driftwood.Core.Diagnostics;
 using Driftwood.Core.Entities;
 using Driftwood.Core.Gen;
@@ -32,6 +35,8 @@ public static class Program
                 return result.Passed ? 0 : 1;
             }
 
+            if (args.Contains("--audio-check")) return AudioCheck();
+
             using var host = new ClientHost(options);
             return host.Run();
         }
@@ -40,6 +45,96 @@ public static class Program
             Console.Error.WriteLine($"driftwood: {ex.Message}");
             return 1;
         }
+    }
+
+    /// <summary>
+    /// Opens the audio device, resolves every sound the block table names, and plays nothing.
+    /// </summary>
+    /// <remarks>
+    /// Sound is the one thing in this project that cannot be checked here, and it is checked here
+    /// anyway — everything except whether it is the right noise. Whether a device opens, whether
+    /// every material resolves, whether every file named exists and decodes to something audible
+    /// rather than to silence: all of that is answerable, and all of it is what actually goes
+    /// wrong. Deliberately silent, because making noise on somebody else's machine to prove a
+    /// speaker works is not a test anybody asked for.
+    /// </remarks>
+    private static int AudioCheck()
+    {
+        var registry = new BlockRegistry();
+        StarterBlocks.Register(registry);
+        registry.Seal();
+
+        var root = SoundLibrary.FindRoot();
+        var library = new SoundLibrary(root);
+
+        Console.WriteLine($"root        {root}");
+        Console.WriteLine($"indexed     {library.Count} clips");
+
+        using var engine = new AudioEngine(library);
+        Console.WriteLine($"device      {engine.Summary}");
+        Console.WriteLine();
+
+        var faults = new List<string>();
+        double shortest = double.MaxValue, longest = 0;
+
+        Console.WriteLine("clips the block table names");
+        foreach (var name in MaterialSounds.AllNames().Order(StringComparer.Ordinal))
+        {
+            var clip = library.Load(name);
+            if (clip is null)
+            {
+                Console.WriteLine($"  {name,-32} MISSING");
+                faults.Add($"{name} is missing or would not decode");
+                continue;
+            }
+
+            var peak = clip.Peak;
+            shortest = Math.Min(shortest, clip.Seconds);
+            longest = Math.Max(longest, clip.Seconds);
+
+            Console.WriteLine(
+                $"  {name,-32} {clip.Seconds,6:F2}s  {clip.Channels}ch {clip.SampleRate}Hz  peak {peak:F2}");
+
+            // A file that decodes to silence is indistinguishable from one that never plays, and
+            // is the failure this whole check exists to be able to see.
+            if (peak < 0.02f) faults.Add($"{name} decodes to near silence (peak {peak:F3})");
+            if (clip.Seconds > 8f) faults.Add($"{name} is {clip.Seconds:F1}s, which is a loop not a one-shot");
+        }
+
+        Console.WriteLine();
+        Console.WriteLine("materials");
+        foreach (var material in MaterialSounds.Materials.Order())
+        {
+            var counts = new List<string>();
+            foreach (var which in Enum.GetValues<SoundEvent>())
+            {
+                var names = MaterialSounds.For(material, which);
+                counts.Add($"{which.ToString().ToLowerInvariant()} {names.Count}");
+                if (names.Count == 0) faults.Add($"{material} has no {which} sound");
+            }
+
+            Console.WriteLine($"  {material,-8} {string.Join(", ", counts)}");
+        }
+
+        var uncovered = new List<string>();
+        for (ushort id = 1; id < registry.Count; id++)
+            if (MaterialSounds.For(registry[id].Sounds, SoundEvent.Break).Count == 0)
+                uncovered.Add(registry[id].Name);
+
+        Console.WriteLine();
+        Console.WriteLine($"blocks      {registry.Count - 1} registered, {uncovered.Count} without a break sound");
+        Console.WriteLine($"lengths     {shortest:F2}s to {longest:F2}s");
+        foreach (var fault in library.Faults) faults.Add(fault);
+
+        Console.WriteLine();
+        if (faults.Count == 0)
+        {
+            Console.WriteLine("OK  every material resolves, every clip decodes, nothing is silent");
+            return 0;
+        }
+
+        foreach (var fault in faults) Console.WriteLine($"FAULT  {fault}");
+        return 1;
     }
 
     private static ClientOptions ParseArgs(string[] args)
@@ -103,8 +198,12 @@ public static class Program
                 case "--stall":
                     options = options with { StallMs = ParseInt(Next(args, ref i, "--stall"), 0, 1000) };
                     break;
+                case "--mute":
+                    options = options with { Mute = true };
+                    break;
                 case "--audit":
-                    break;   // handled in Main; listed here so it is not an unknown argument
+                case "--audio-check":
+                    break;   // handled in Main; listed here so they are not unknown arguments
                 default:
                     throw new ArgumentException($"unknown argument '{args[i]}' (try --help)");
             }
@@ -175,7 +274,9 @@ public static class Program
               --time <hour>     hour of the day to open at, 0 to 23 (default 8)
               --daylength <s>   seconds in a full day (default 1200); short values walk a sunset
               --vsync           cap to the display refresh rate (off by default so fps is readable)
+              --mute            open no audio device at all
               --audit           generate and mesh headlessly, print a census and checks, then exit
+              --audio-check     resolve every sound the block table names and report, silently
               --bench [secs]    fly a fixed path once the world has settled, report frame-time
                                 percentiles, then exit (default 15 s, seed defaults to 'driftwood')
               --uploads <n>     chunk uploads allowed per frame (default 4)

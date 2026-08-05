@@ -3,6 +3,8 @@ using System.Numerics;
 using System.Runtime.InteropServices;
 using Silk.NET.Core;
 using Driftwood.Client.Diagnostics;
+using Driftwood.Client.Audio;
+using Driftwood.Core.Audio;
 using Driftwood.Core.Blocks;
 using Driftwood.Core.Entities;
 using Driftwood.Core.Gen;
@@ -68,6 +70,9 @@ public sealed record ClientOptions
 
     /// <summary>Seconds in a full day. Short values are how a sunset gets looked at twice.</summary>
     public float DayLength { get; init; } = SkyClock.DefaultDayLength;
+
+    /// <summary>Opens no audio device at all. The benchmark sets this for itself.</summary>
+    public bool Mute { get; init; }
 }
 
 /// <summary>Where the camera sits relative to the player. Cycled with F5.</summary>
@@ -167,6 +172,19 @@ public sealed class ClientHost : IDisposable
     /// <summary>Chips, bursts and dust.</summary>
     private ParticleSystem _particles = null!;
     private ParticleRenderer _particleRenderer = null!;
+
+    /// <summary>Voices, and the clips they play. Null when the run asked for silence.</summary>
+    private AudioEngine? _audio;
+
+    /// <summary>
+    /// Which of a material's several sounds to use, and how much to shift its pitch.
+    /// </summary>
+    /// <remarks>
+    /// The pitch shift is what keeps four footsteps from reading as a loop. Four files played in
+    /// rotation at exactly their recorded speed is audibly a rotation of four files; a few percent
+    /// either way and the ear stops counting.
+    /// </remarks>
+    private readonly Random _soundPick = new(0x50554E43);
 
     /// <summary>Ground contact last frame, and the fall it had accumulated, for landing dust.</summary>
     private bool _wasOnGround = true;
@@ -379,6 +397,14 @@ public sealed class ClientHost : IDisposable
         _outline = new BlockOutline(_gl);
 
         _particleRenderer = new ParticleRenderer(_gl);
+
+        // The benchmark opens no device at all. It flies a scripted path and hears nothing worth
+        // hearing, and a measurement run that makes noise on somebody's machine is rude twice over.
+        if (_options.BenchSeconds <= 0 && !_options.Mute)
+        {
+            _audio = new AudioEngine(new SoundLibrary(SoundLibrary.FindRoot()));
+            Console.WriteLine($"sound       {_audio.Summary}");
+        }
 
         _clock = new SkyClock(_options.StartTime, _options.DayLength);
         _skyState = _clock.Now;
@@ -745,6 +771,7 @@ public sealed class ClientHost : IDisposable
         _elapsed += dt;
         _clock.Advance((float)dt);
         _skyState = _clock.Now;
+        _audio?.SetListener(_viewPosition, _viewForward);
 
         UpdateTarget();
         StepAnimation((float)dt);
@@ -825,13 +852,20 @@ public sealed class ClientHost : IDisposable
         // Chips fly off the face the blow lands on, not off the block as a whole. Once per swing
         // rather than every frame, so the spray keeps the arm's rhythm instead of being a hose.
         if (strikes > 0 && !placing && target is not null && _target is { } struck)
+        {
             _particles.Chip(target, struck.X, struck.Y, struck.Z, struck.Face);
+            PlaySound(target, SoundEvent.Hit, new Vector3(struck.X + 0.5f, struck.Y + 0.5f, struck.Z + 0.5f), 0.55f);
+        }
 
         if (!_mining.Update(dt, target, cell, _holdingBreak)) return;
 
         // The burst goes before the block does. Reading the type after BreakTarget gets air.
         if (target is not null && cell is { } broken)
+        {
+            var centre = new Vector3(broken.Item1 + 0.5f, broken.Item2 + 0.5f, broken.Item3 + 0.5f);
             _particles.Burst(target, broken.Item1, broken.Item2, broken.Item3);
+            PlaySound(target, SoundEvent.Break, centre);
+        }
 
         BreakTarget();
         UpdateTarget();
@@ -870,6 +904,7 @@ public sealed class ClientHost : IDisposable
         if (landed > 1.2f)
         {
             _particles.Puff(type, _player.Position, Math.Min(4 + (int)landed * 2, 20), MathF.Min(landed / 3f, 2.4f));
+            PlaySound(type, SoundEvent.Step, _player.Position, MathF.Min(0.6f + landed * 0.15f, 1.4f));
             _stepDistance = 0f;
             return;
         }
@@ -883,7 +918,10 @@ public sealed class ClientHost : IDisposable
         if (_stepDistance < 2.1f) return;
 
         _stepDistance = 0f;
-        if (speed > 0.5f) _particles.Puff(type, _player.Position, 2, 0.4f);
+        if (speed <= 0.5f) return;
+
+        _particles.Puff(type, _player.Position, 2, 0.4f);
+        PlaySound(type, SoundEvent.Step, _player.Position, _player.Sneaking ? 0.18f : 0.45f);
     }
 
     /// <summary>
@@ -932,6 +970,21 @@ public sealed class ClientHost : IDisposable
             LightValue.Sky(packed) / (float)LightValue.Max,
             new Vector3(LightValue.Red(packed), LightValue.Green(packed), LightValue.Blue(packed))
                 / LightValue.Max);
+    }
+
+    /// <summary>Plays one of a material's sounds for one situation, at a point in the world.</summary>
+    private void PlaySound(BlockType type, SoundEvent which, Vector3 at, float volume = 1f)
+    {
+        if (_audio is null) return;
+
+        var names = MaterialSounds.For(type.Sounds, which);
+        if (names.Count == 0) return;
+
+        _audio.Play(
+            names[_soundPick.Next(names.Count)],
+            at,
+            volume,
+            0.92f + (float)_soundPick.NextDouble() * 0.16f);
     }
 
     /// <summary>
@@ -1009,6 +1062,7 @@ public sealed class ClientHost : IDisposable
         }
 
         _streamer.EditBlock(x, y, z, block);
+        PlaySound(_registry[block], SoundEvent.Place, new Vector3(x + 0.5f, y + 0.5f, z + 0.5f), 0.85f);
     }
 
     /// <summary>
@@ -1296,6 +1350,7 @@ public sealed class ClientHost : IDisposable
         _sky?.Dispose();
         _clouds?.Dispose();
         _particleRenderer?.Dispose();
+        _audio?.Dispose();
         _blockTextures?.Dispose();
         _playerRenderer?.Dispose();
         _cracks?.Dispose();

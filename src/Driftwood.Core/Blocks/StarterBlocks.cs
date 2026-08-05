@@ -1,3 +1,4 @@
+using Driftwood.Core.Audio;
 using Driftwood.Core.Lighting;
 
 namespace Driftwood.Core.Blocks;
@@ -112,7 +113,7 @@ public static class StarterBlocks
         });
         var dirt = registry.Register(new BlockType
         {
-            Name = "dirt", Hardness = 0.5f,
+            Name = "dirt", Hardness = 0.5f, Sounds = SoundMaterial.Dirt,
             TopLayer = LayerDirt, SideLayer = LayerDirt, BottomLayer = LayerDirt,
         });
         // The one block that was never really a cube. Its top is the climate colour over a grey
@@ -121,13 +122,13 @@ public static class StarterBlocks
         // put that second pass, so grass sides came out as bare dirt in every pack ever imported.
         var grass = registry.Register(new BlockType
         {
-            Name = "grass", Hardness = 0.6f, Tint = TintSource.Grass,
+            Name = "grass", Hardness = 0.6f, Tint = TintSource.Grass, Sounds = SoundMaterial.Grass,
             Model = BlockModel.CubeWithSideOverlay(
                 LayerGrassTop, LayerGrassSide, LayerDirt, LayerGrassSideOverlay),
         });
         var sand = registry.Register(new BlockType
         {
-            Name = "sand", Hardness = 0.5f,
+            Name = "sand", Hardness = 0.5f, Sounds = SoundMaterial.Sand,
             TopLayer = LayerSand, SideLayer = LayerSand, BottomLayer = LayerSand,
         });
 
@@ -141,18 +142,18 @@ public static class StarterBlocks
         var water = registry.Register(new BlockType
         {
             Name = "water", Solid = false, Opaque = false, LightAttenuation = 1, Hardness = -1f,
-            Tint = TintSource.Water,
+            Tint = TintSource.Water, Sounds = SoundMaterial.Water,
             TopLayer = LayerWater, SideLayer = LayerWater, BottomLayer = LayerWater,
         });
 
         var gravel = registry.Register(new BlockType
         {
-            Name = "gravel", Hardness = 0.6f,
+            Name = "gravel", Hardness = 0.6f, Sounds = SoundMaterial.Gravel,
             TopLayer = LayerGravel, SideLayer = LayerGravel, BottomLayer = LayerGravel,
         });
         var log = registry.Register(new BlockType
         {
-            Name = "driftoak_log", Hardness = 2f,
+            Name = "driftoak_log", Hardness = 2f, Sounds = SoundMaterial.Wood,
             TopLayer = LayerLogTop, SideLayer = LayerLogSide, BottomLayer = LayerLogTop,
         });
 
@@ -162,13 +163,14 @@ public static class StarterBlocks
         var leaves = registry.Register(new BlockType
         {
             Name = "driftoak_leaves", Hardness = 0.2f, Opaque = false, LightAttenuation = 1,
+            Sounds = SoundMaterial.Leaves,
             Tint = TintSource.Foliage,
             TopLayer = LayerLeaves, SideLayer = LayerLeaves, BottomLayer = LayerLeaves,
         });
 
         var planks = registry.Register(new BlockType
         {
-            Name = "driftoak_planks", Hardness = 2f, Crafted = true,
+            Name = "driftoak_planks", Hardness = 2f, Crafted = true, Sounds = SoundMaterial.Wood,
             TopLayer = LayerPlanks, SideLayer = LayerPlanks, BottomLayer = LayerPlanks,
         });
         var coal = registry.Register(new BlockType
@@ -210,6 +212,7 @@ public static class StarterBlocks
         var vine = registry.Register(new BlockType
         {
             Name = "vine", Hardness = 0.2f, Solid = false, Opaque = false, LightAttenuation = 1,
+            Sounds = SoundMaterial.Plant,
             Tint = TintSource.Foliage,
             Model = BlockModel.Cross(LayerVine),
         });
@@ -270,7 +273,7 @@ public static class StarterBlocks
 
         var clay = registry.Register(new BlockType
         {
-            Name = "clay", Hardness = 0.6f,
+            Name = "clay", Hardness = 0.6f, Sounds = SoundMaterial.Dirt,
             TopLayer = LayerClay, SideLayer = LayerClay, BottomLayer = LayerClay,
         });
 
@@ -286,7 +289,7 @@ public static class StarterBlocks
         // comes away in a single blow.
         var snow = registry.Register(new BlockType
         {
-            Name = "snow", Hardness = 0.2f,
+            Name = "snow", Hardness = 0.2f, Sounds = SoundMaterial.Snow,
             TopLayer = LayerSnow, SideLayer = LayerSnow, BottomLayer = LayerSnow,
         });
 
@@ -295,7 +298,7 @@ public static class StarterBlocks
         // under a dusting, between the meadow and the snowfield proper.
         var snowLayer = registry.Register(new BlockType
         {
-            Name = "snow_layer", Hardness = 0.1f, Solid = false, Opaque = false,
+            Name = "snow_layer", Hardness = 0.1f, Solid = false, Opaque = false, Sounds = SoundMaterial.Snow,
             Model = BlockModel.Layer(LayerSnow, LayerSnow, LayerSnow, 3f),
         });
 
@@ -305,7 +308,7 @@ public static class StarterBlocks
         // per-block path works against something a player can walk through.
         var meadowgrass = registry.Register(new BlockType
         {
-            Name = "meadowgrass", Hardness = 0.05f, Solid = false, Opaque = false,
+            Name = "meadowgrass", Hardness = 0.05f, Solid = false, Opaque = false, Sounds = SoundMaterial.Plant,
             Tint = TintSource.Grass,
             Model = BlockModel.Cross(LayerMeadowgrass),
         });
@@ -315,12 +318,12 @@ public static class StarterBlocks
         // colormap turns every bloom in the world the same green as the field it stands in.
         var seaflax = registry.Register(new BlockType
         {
-            Name = "seaflax", Hardness = 0.05f, Solid = false, Opaque = false,
+            Name = "seaflax", Hardness = 0.05f, Solid = false, Opaque = false, Sounds = SoundMaterial.Plant,
             Model = BlockModel.Cross(LayerSeaflax, tinted: false),
         });
         var marshlily = registry.Register(new BlockType
         {
-            Name = "marshlily", Hardness = 0.05f, Solid = false, Opaque = false,
+            Name = "marshlily", Hardness = 0.05f, Solid = false, Opaque = false, Sounds = SoundMaterial.Plant,
             Model = BlockModel.Cross(LayerMarshlily, tinted: false),
         });
 
@@ -334,6 +337,7 @@ public static class StarterBlocks
         registry.Register(new BlockType
         {
             Name = "torch", Hardness = 0.05f, Solid = false, Opaque = false, Crafted = true,
+            Sounds = SoundMaterial.Wood,
             LightEmission = LightValue.PackBlock(14, 10, 5),
             Model = BlockModel.Torch(LayerTorch),
         });
@@ -344,11 +348,11 @@ public static class StarterBlocks
             azurite, clay, sandstone, snow, snowLayer, meadowgrass, seaflax, marshlily);
     }
 
-    /// <summary>The materials that come in slab and stair form, and the tiles each wears.</summary>
-    private static readonly (string Name, ushort Top, ushort Side, ushort Bottom)[] ShapedMaterials =
+    /// <summary>The materials that come in slab and stair form, the tiles each wears, and its sound.</summary>
+    private static readonly (string Name, ushort Top, ushort Side, ushort Bottom, SoundMaterial Sound)[] ShapedMaterials =
     [
-        ("driftoak", LayerPlanks, LayerPlanks, LayerPlanks),
-        ("stone", LayerStone, LayerStone, LayerStone),
+        ("driftoak", LayerPlanks, LayerPlanks, LayerPlanks, SoundMaterial.Wood),
+        ("stone", LayerStone, LayerStone, LayerStone, SoundMaterial.Stone),
     ];
 
     /// <summary>Facing names in <see cref="Placeable.Facings"/> order: +x, -x, +z, -z.</summary>
@@ -356,14 +360,14 @@ public static class StarterBlocks
 
     private static void RegisterShapes(BlockRegistry registry)
     {
-        foreach (var (name, top, side, bottom) in ShapedMaterials)
+        foreach (var (name, top, side, bottom, sound) in ShapedMaterials)
         {
             foreach (var upper in (bool[])[false, true])
             {
                 registry.Register(new BlockType
                 {
                     Name = $"{name}_slab_{(upper ? "upper" : "lower")}",
-                    Hardness = 2f, Opaque = false, Crafted = true,
+                    Hardness = 2f, Opaque = false, Crafted = true, Sounds = sound,
                     Model = BlockModel.Slab(top, side, bottom, upper),
                 });
             }
@@ -374,7 +378,7 @@ public static class StarterBlocks
                 registry.Register(new BlockType
                 {
                     Name = $"{name}_stairs_{FacingNames[i]}_{(upper ? "upper" : "lower")}",
-                    Hardness = 2f, Opaque = false, Crafted = true,
+                    Hardness = 2f, Opaque = false, Crafted = true, Sounds = sound,
                     Model = BlockModel.Stairs(top, side, bottom, Placeable.Facings[i], upper),
                 });
             }
@@ -397,7 +401,7 @@ public static class StarterBlocks
             new() { Label = "driftoak planks", Kind = PlacementKind.Plain, Variants = [registry.ByName("driftoak_planks").Id] },
         };
 
-        foreach (var (name, _, _, _) in ShapedMaterials)
+        foreach (var (name, _, _, _, _) in ShapedMaterials)
         {
             hand.Add(new Placeable
             {

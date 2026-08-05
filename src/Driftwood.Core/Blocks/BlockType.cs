@@ -98,6 +98,14 @@ public sealed class BlockType
     /// </remarks>
     public bool Crafted { get; init; }
 
+    /// <summary>What this sounds like underfoot, under a blow, and coming apart.</summary>
+    /// <remarks>
+    /// Coarser than the block, because fifty-odd blocks share about a dozen surfaces. Stone is the
+    /// default because most of the world is rock and because a wrong guess there is the least
+    /// noticeable one — see <see cref="Audio.MaterialSounds"/>.
+    /// </remarks>
+    public Audio.SoundMaterial Sounds { get; init; } = Audio.SoundMaterial.Stone;
+
     /// <summary>Texture array layer for the +Y face of the default cube shape.</summary>
     public ushort TopLayer { get; init; }
 

@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Numerics;
 using System.Text;
+using Driftwood.Core.Audio;
 using Driftwood.Core.Blocks;
 using Driftwood.Core.Entities;
 using Driftwood.Core.Gen;
@@ -356,6 +357,11 @@ public static class WorldAudit
                 ? "slab half a cell, stairs three quarters, a dusting three sixteenths, a slender torch, "
                   + "and six outlines wrapping the shape rather than the cell"
                 : $"{volumeFaults.Count} faults: {volumeFaults[0]}");
+
+        var soundFaults = SoundSelfTest(registry, out var soundDetail);
+        Check("every material has a sound", soundFaults.Count == 0, soundFaults.Count == 0
+            ? soundDetail
+            : $"{soundFaults.Count} faults: {soundFaults[0]}");
 
         var particleFaults = ParticleSelfTest(registry, ids);
         Check("debris falls and settles", particleFaults.Count == 0,
@@ -1016,6 +1022,70 @@ public static class WorldAudit
         if (ChunkVertex.Quantise(Chunk.Size + 1) > 0xFFF)
             faults.Add("the position field cannot address a model reaching past the chunk");
 
+        return faults;
+    }
+
+    /// <summary>
+    /// Resolves every sound the block table names, without opening a speaker.
+    /// </summary>
+    /// <remarks>
+    /// <para>A sound table pointing at a file nobody shipped is silent in exactly the way a working
+    /// game is silent. Nothing on screen changes, nothing throws, and the only way anybody finds
+    /// out is by noticing that grass has stopped making a noise — which is not something a person
+    /// reliably notices at all. So the gate is here, where a release cannot get past it.</para>
+    /// <para>Decoding is the point, not merely finding the file. A truncated WAV, a format this
+    /// reader does not handle, or a file that decodes to digital silence all pass a
+    /// does-it-exist test and all of them are the fault this is looking for.</para>
+    /// </remarks>
+    private static List<string> SoundSelfTest(BlockRegistry registry, out string detail)
+    {
+        var faults = new List<string>();
+        var root = SoundLibrary.FindRoot();
+        var library = new SoundLibrary(root);
+
+        detail = $"{library.Count} clips in {Path.GetFileName(root)}";
+
+        if (library.Count == 0)
+        {
+            faults.Add($"no sounds found under {root}");
+            return faults;
+        }
+
+        var named = 0;
+        var quietest = 1f;
+        foreach (var name in MaterialSounds.AllNames())
+        {
+            named++;
+            var clip = library.Load(name);
+            if (clip is null)
+            {
+                faults.Add($"'{name}' is named by the block table and is not in {Path.GetFileName(root)}");
+                continue;
+            }
+
+            var peak = clip.Peak;
+            quietest = MathF.Min(quietest, peak);
+            if (peak < 0.02f) faults.Add($"'{name}' decodes to near silence (peak {peak:F3})");
+            if (clip.Seconds > 8f) faults.Add($"'{name}' runs {clip.Seconds:F1}s, which is a loop not a one-shot");
+        }
+
+        foreach (var material in MaterialSounds.Materials)
+        foreach (var which in Enum.GetValues<SoundEvent>())
+        {
+            if (MaterialSounds.For(material, which).Count > 0) continue;
+            faults.Add($"{material} has nothing for {which}");
+        }
+
+        // And every registered block has to land on a material that is actually in the table.
+        for (ushort id = 1; id < registry.Count; id++)
+        {
+            if (MaterialSounds.For(registry[id].Sounds, SoundEvent.Break).Count > 0) continue;
+            faults.Add($"block '{registry[id].Name}' resolves to no break sound");
+        }
+
+        foreach (var fault in library.Faults) faults.Add(fault);
+
+        detail = $"{named} clips over {registry.Count - 1} blocks, quietest peak {quietest:F2}";
         return faults;
     }
 
