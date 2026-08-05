@@ -186,7 +186,9 @@ public static class Program
                     options = options with { PackPath = Next(args, ref i, "--pack") };
                     break;
                 case "--texture-size":
-                    options = options with { TextureSize = ParseInt(Next(args, ref i, "--texture-size"), 16, 512) };
+                    // Clamped again at load against what the card and the memory budget allow.
+                    // Omit it and the pack's own resolution is used, which is almost always right.
+                    options = options with { TextureSize = ParseInt(Next(args, ref i, "--texture-size"), 16, 4096) };
                     break;
                 case "--skin":
                     options = options with { SkinPath = Next(args, ref i, "--skin") };

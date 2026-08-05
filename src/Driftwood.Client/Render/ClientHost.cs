@@ -51,7 +51,16 @@ public sealed record ClientOptions
     public string? PackPath { get; init; }
 
     /// <summary>Tile resolution the texture array is built at.</summary>
-    public int TextureSize { get; init; } = 16;
+    /// <summary>
+    /// Tile size to build the texture array at, or 0 to take whatever the pack is painted at.
+    /// </summary>
+    /// <remarks>
+    /// Zero by default. This used to be sixteen, so importing a 512-pixel pack without also saying
+    /// <c>--texture-size 512</c> squashed every texture in it down to a sixteenth of its width —
+    /// the import worked, and what came out looked like a bad copy of the pack somebody had just
+    /// chosen. A player who picked a pack has already said what resolution they want.
+    /// </remarks>
+    public int TextureSize { get; init; }
 
     /// <summary>A skin PNG to wear, or null for Driftwood's own.</summary>
     public string? SkinPath { get; init; }
@@ -408,6 +417,44 @@ public sealed class ClientHost : IDisposable
     /// <para>Two sizes are offered and the platform picks; handing over one and letting Windows
     /// scale it is how a taskbar icon ends up soft or, at 16 pixels, unreadable.</para>
     /// </remarks>
+    /// <summary>
+    /// The largest tile this machine will actually take, asked of the card rather than assumed.
+    /// </summary>
+    /// <remarks>
+    /// <para>Two limits, and the one that binds is not the obvious one. The card reports a maximum
+    /// texture side and a maximum number of array layers, and both are enormous on anything modern
+    /// — sixteen thousand and two thousand are typical. What actually runs out is memory: at the
+    /// layer count in use, a 512-pixel array is about eighty megabytes with its mip chain, a
+    /// thousand-pixel one about three hundred, and two thousand about one and a third gigabytes.
+    /// </para>
+    /// <para>So the ceiling is a calculation against a budget rather than a constant, and it comes
+    /// down on its own as the block set grows. It used to be the number 512, typed once, which was
+    /// neither what the card said nor what the memory allowed.</para>
+    /// </remarks>
+    private int TextureCeiling()
+    {
+        const long Budget = 512L * 1024 * 1024;
+
+        // A full mip chain is a third again on top of the base level.
+        const double WithMips = 4.0 * 4.0 / 3.0;
+
+        var maxSide = _gl.GetInteger(GLEnum.MaxTextureSize);
+        var maxLayers = _gl.GetInteger(GLEnum.MaxArrayTextureLayers);
+        var layers = StarterBlocks.LayerCount;
+
+        if (maxLayers > 0 && layers > maxLayers)
+            Console.Error.WriteLine($"driftwood: {layers} texture layers but the card takes {maxLayers}");
+
+        var affordable = (int)Math.Sqrt(Budget / (layers * WithMips));
+
+        // Down to a power of two. Every pack is painted at one, and a mip chain built from an
+        // awkward size loses a level to rounding at the bottom.
+        var ceiling = 16;
+        while (ceiling * 2 <= affordable && ceiling * 2 <= maxSide) ceiling *= 2;
+
+        return ceiling;
+    }
+
     private void ApplyWindowIcon()
     {
         var icons = new List<RawImage>(2);
@@ -503,7 +550,8 @@ public sealed class ClientHost : IDisposable
             $"clouds      {cloudField.Summary}, {cloudField.Coverage * 100:F0}% cover, "
             + $"{_clouds.QuadCount:N0} quads over {CloudField.Period:F0} blocks");
 
-        _textures = BlockTextureSet.Build(_options.PackPath, _options.TextureSize);
+        var ceiling = TextureCeiling();
+        _textures = BlockTextureSet.Build(_options.PackPath, _options.TextureSize, ceiling);
         _blockTextures = new BlockTextureArray(_gl, _textures.Tiles, _textures.Size);
         Console.WriteLine($"textures    {_textures.Summary}");
 
@@ -511,7 +559,9 @@ public sealed class ClientHost : IDisposable
         _playerRenderer = new PlayerRenderer(_gl, skin);
         Console.WriteLine($"skin        {skin.Summary}");
 
-        var cracks = CrackTextures.Build(_options.PackPath, _options.TextureSize);
+        // The same size the block tiles came out at, whatever decided it — cracks are laid over a
+        // block face and a crack chain at a different resolution is visible as a crack chain.
+        var cracks = CrackTextures.Build(_options.PackPath, _textures.Size);
         _cracks = new BlockCracks(_gl, cracks);
         Console.WriteLine($"cracks      {cracks.Summary}");
 

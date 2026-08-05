@@ -26,9 +26,34 @@ public sealed class TexturePack : IDisposable
     private readonly string? _root;
     private readonly Dictionary<string, ZipArchiveEntry> _entries = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// What sits in front of every path inside the pack. Usually nothing.
+    /// </summary>
+    /// <remarks>
+    /// A pack is supposed to have <c>assets/</c> at the root of its archive, and an enormous number
+    /// of them do not — because zipping a folder is one click and zipping its contents is three,
+    /// so the archive comes out as <c>MyPack/assets/…</c>. Looking for a literal path finds nothing
+    /// in one of those, loads not a single texture, and reports success, which a player reads as
+    /// the import having quietly done nothing. So the root is <em>found</em> rather than assumed.
+    /// </remarks>
+    private readonly string _prefix = "";
+
+    /// <summary>
+    /// Which namespaces the pack actually ships, <c>minecraft</c> first.
+    /// </summary>
+    /// <remarks>
+    /// Almost everything lives under <c>minecraft</c>, and almost is not all: the pack this was
+    /// tested against ships three. A texture in one of the others used to stay ours with nothing
+    /// anywhere saying why.
+    /// </remarks>
+    private readonly string[] _namespaces = ["minecraft"];
+
     public string Name { get; }
     public string Description { get; private set; } = string.Empty;
     public int Format { get; private set; }
+
+    /// <summary>The namespaces this pack was found to contain, for the report.</summary>
+    public IReadOnlyList<string> Namespaces => _namespaces;
 
     /// <summary>Textures asked for and found.</summary>
     public int Loaded { get; private set; }
@@ -45,8 +70,80 @@ public sealed class TexturePack : IDisposable
         _zip = zip;
         _root = root;
 
-        if (_zip is null) return;
-        foreach (var entry in _zip.Entries) _entries[entry.FullName] = entry;
+        if (_zip is not null)
+            foreach (var entry in _zip.Entries) _entries[entry.FullName] = entry;
+
+        _prefix = FindRoot();
+        _namespaces = FindNamespaces();
+    }
+
+    /// <summary>
+    /// Whatever directory holds <c>pack.mcmeta</c>, as a prefix ending in a slash.
+    /// </summary>
+    /// <remarks>
+    /// The manifest is the one file every pack has exactly one of, so finding it finds the root
+    /// without having to guess at folder names. The shallowest wins, because a pack that also
+    /// carries somebody else's pack inside it should be read as itself.
+    /// </remarks>
+    private string FindRoot()
+    {
+        var best = (string?)null;
+
+        foreach (var path in RawEntries())
+        {
+            if (!path.EndsWith("pack.mcmeta", StringComparison.OrdinalIgnoreCase)) continue;
+
+            var directory = path[..^"pack.mcmeta".Length];
+            if (best is null || directory.Length < best.Length) best = directory;
+        }
+
+        // No manifest anywhere. Some packs genuinely ship without one, so fall back to wherever
+        // "assets/" begins rather than refusing.
+        if (best is not null) return best;
+
+        foreach (var path in RawEntries())
+        {
+            var at = path.IndexOf("assets/", StringComparison.OrdinalIgnoreCase);
+            if (at < 0) continue;
+            if (best is null || at < best.Length) best = path[..at];
+        }
+
+        return best ?? "";
+    }
+
+    private string[] FindNamespaces()
+    {
+        var found = new List<string> { "minecraft" };
+        var root = $"{_prefix}assets/";
+
+        foreach (var path in RawEntries())
+        {
+            if (!path.StartsWith(root, StringComparison.OrdinalIgnoreCase)) continue;
+
+            var rest = path[root.Length..];
+            var slash = rest.IndexOf('/');
+            if (slash <= 0) continue;
+
+            var space = rest[..slash];
+            if (!found.Contains(space, StringComparer.OrdinalIgnoreCase)) found.Add(space);
+        }
+
+        return [.. found];
+    }
+
+    /// <summary>Every path in the archive or folder, before the root prefix is taken off.</summary>
+    private IEnumerable<string> RawEntries()
+    {
+        if (_zip is not null)
+        {
+            foreach (var entry in _zip.Entries) yield return entry.FullName;
+            yield break;
+        }
+
+        if (_root is null || !Directory.Exists(_root)) yield break;
+
+        foreach (var path in Directory.EnumerateFiles(_root, "*", SearchOption.AllDirectories))
+            yield return Path.GetRelativePath(_root, path).Replace(Path.DirectorySeparatorChar, '/');
     }
 
     /// <summary>Opens a pack from a directory or a .zip. Returns null if the path is neither.</summary>
@@ -78,7 +175,7 @@ public sealed class TexturePack : IDisposable
     /// </summary>
     private void ReadManifest()
     {
-        var raw = ReadAllBytes("pack.mcmeta");
+        var raw = ReadAllBytes($"{_prefix}pack.mcmeta");
         if (raw is null) return;
 
         var text = Encoding.UTF8.GetString(raw);
@@ -141,23 +238,18 @@ public sealed class TexturePack : IDisposable
     /// </remarks>
     public IEnumerable<string> Entries()
     {
-        if (_zip is not null)
+        foreach (var path in RawEntries())
         {
-            foreach (var entry in _zip.Entries)
-                if (entry.Length > 0) yield return entry.FullName;
-            yield break;
+            if (path.Length <= _prefix.Length) continue;
+            if (path.EndsWith('/')) continue;
+            yield return path[_prefix.Length..];
         }
-
-        if (_root is null || !Directory.Exists(_root)) yield break;
-
-        foreach (var path in Directory.EnumerateFiles(_root, "*", SearchOption.AllDirectories))
-            yield return Path.GetRelativePath(_root, path).Replace(Path.DirectorySeparatorChar, '/');
     }
 
     /// <summary>Loads one texture by its path inside the pack, scaled to the given tile size.</summary>
     public byte[]? TryLoadTile(string assetPath, int size)
     {
-        var raw = ReadAllBytes($"assets/minecraft/{assetPath}");
+        var raw = ReadAsset(assetPath);
         if (raw is null)
         {
             Missing++;
@@ -172,6 +264,58 @@ public sealed class TexturePack : IDisposable
 
         Loaded++;
         return Resample(image, size);
+    }
+
+    /// <summary>
+    /// What resolution this pack is actually painted at.
+    /// </summary>
+    /// <remarks>
+    /// <para>Asked rather than told. The tile size used to default to sixteen and had to be repeated
+    /// on the command line, so importing a 512-pixel pack without also saying so squashed every
+    /// texture in it down to a sixteenth of its width — the import worked, and what came out looked
+    /// like a bad copy of the pack a player had just chosen.</para>
+    /// <para>Several textures are tried and the widest wins, because any single one of them might
+    /// be missing from a partial pack, and because a pack that repaints only its blocks at high
+    /// resolution should still be read as high resolution. Animation strips are measured across
+    /// rather than down, for the same reason <see cref="Resample"/> only takes their first frame.
+    /// </para>
+    /// </remarks>
+    public int DetectResolution()
+    {
+        string[] probes =
+        [
+            "textures/block/stone.png",
+            "textures/block/dirt.png",
+            "textures/block/oak_planks.png",
+            "textures/block/cobblestone.png",
+            "textures/item/stick.png",
+        ];
+
+        var widest = 0;
+        foreach (var probe in probes)
+        {
+            var raw = ReadAsset(probe);
+            if (raw is null) continue;
+            if (!Png.TryDecode(raw, out var image, out _)) continue;
+
+            widest = Math.Max(widest, image.Width);
+        }
+
+        // A pack that carries none of the five is a pack we cannot measure, so keep our own size
+        // rather than guessing large and spending a gigabyte on it.
+        return widest > 0 ? widest : TileGen.Size;
+    }
+
+    /// <summary>Reads one asset, trying each namespace the pack turned out to have.</summary>
+    private byte[]? ReadAsset(string assetPath)
+    {
+        foreach (var space in _namespaces)
+        {
+            var raw = ReadAllBytes($"{_prefix}assets/{space}/{assetPath}");
+            if (raw is not null) return raw;
+        }
+
+        return null;
     }
 
     /// <summary>

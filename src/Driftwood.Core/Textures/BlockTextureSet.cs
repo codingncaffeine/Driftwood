@@ -164,20 +164,49 @@ public static class BlockTextureSet
     /// Draws Driftwood's own tiles, then lets a pack replace the ones it has.
     /// </summary>
     /// <param name="packPath">A folder or .zip to import from, or null for Driftwood's own art.</param>
-    public static Result Build(string? packPath, int size = TileGen.Size)
+    /// <summary>
+    /// Draws Driftwood's own tiles, then lets a pack replace the ones it has.
+    /// </summary>
+    /// <param name="packPath">A folder or .zip to import from, or null for Driftwood's own art.</param>
+    /// <param name="size">
+    /// The tile size to build at, or 0 to take the pack's own. Zero is the default because a
+    /// player who chose a pack has already said what resolution they want.
+    /// </param>
+    /// <param name="ceiling">The largest tile the machine will take. See <c>--texture-size</c>.</param>
+    public static Result Build(string? packPath, int size = 0, int ceiling = 512)
     {
-        var tiles = new byte[Layers.Length][];
-        for (var i = 0; i < Layers.Length; i++) tiles[i] = Own(i, size);
-
         var grass = Colormap.Grass();
         var foliage = Colormap.Foliage();
 
         if (string.IsNullOrWhiteSpace(packPath))
-            return new Result(tiles, size, $"{Layers.Length} built-in tiles at {size}x{size}", grass, foliage);
+        {
+            var own = size > 0 ? size : TileGen.Size;
+            var plain = new byte[Layers.Length][];
+            for (var i = 0; i < Layers.Length; i++) plain[i] = Own(i, own);
+
+            return new Result(plain, own, $"{Layers.Length} built-in tiles at {own}x{own}", grass, foliage);
+        }
 
         using var pack = TexturePack.Open(packPath);
         if (pack is null)
-            return new Result(tiles, size, $"no pack at '{packPath}' — using built-in tiles", grass, foliage);
+        {
+            var own = size > 0 ? size : TileGen.Size;
+            var plain = new byte[Layers.Length][];
+            for (var i = 0; i < Layers.Length; i++) plain[i] = Own(i, own);
+
+            return new Result(plain, own, $"no pack at '{packPath}' — using built-in tiles", grass, foliage);
+        }
+
+        // The pack's own resolution unless somebody said otherwise, clamped to what the machine
+        // will take. Asking the pack is the difference between a 512-pixel import looking like the
+        // pack and looking like a bad photograph of it.
+        var detected = pack.DetectResolution();
+        var chosen = Math.Clamp(size > 0 ? size : detected, TileGen.Size, Math.Max(TileGen.Size, ceiling));
+
+        var tiles = new byte[Layers.Length][];
+        for (var i = 0; i < Layers.Length; i++) tiles[i] = Own(i, chosen);
+
+        size = chosen;
 
         for (var i = 0; i < Layers.Length; i++)
         {
@@ -198,10 +227,16 @@ public static class BlockTextureSet
         if (packGrass is not null) grass = packGrass;
         if (packFoliage is not null) foliage = packFoliage;
 
+        var resolution = chosen == detected
+            ? $"{chosen}px, its own"
+            : $"{chosen}px, painted at {detected}";
+
         var summary = $"pack '{pack.Name}'"
                     + (pack.Description.Length > 0 ? $" — {pack.Description}" : "")
-                    + $" (format {pack.Format}): {pack.Loaded - colormaps} of {Layers.Length} layers replaced"
+                    + $" (format {pack.Format}, {resolution}): "
+                    + $"{pack.Loaded - colormaps} of {Layers.Length} layers replaced"
                     + (colormaps > 0 ? $", {colormaps} colormaps" : ", built-in colormaps")
+                    + (pack.Namespaces.Count > 1 ? $", {pack.Namespaces.Count} namespaces" : "")
                     + (pack.Faults.Count > 0 ? $", {pack.Faults.Count} unreadable: {pack.Faults[0]}" : "");
 
         return new Result(tiles, size, summary, grass, foliage);
