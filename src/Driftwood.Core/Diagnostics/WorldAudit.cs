@@ -414,6 +414,10 @@ public static class WorldAudit
         Check("a furnace burns only when it has work", furnaceFaults.Count == 0,
             furnaceFaults.Count == 0 ? furnaceDetail : $"{furnaceFaults.Count} faults: {furnaceFaults[0]}");
 
+        var dialectFaults = PackDialectSelfTest(out var dialectDetail);
+        Check("a pack of either kind is read as itself", dialectFaults.Count == 0,
+            dialectFaults.Count == 0 ? dialectDetail : $"{dialectFaults.Count} faults: {dialectFaults[0]}");
+
         var layoutFaults = ScreenLayoutSelfTest(out var layoutDetail);
         Check("a click lands on the square it is over", layoutFaults.Count == 0,
             layoutFaults.Count == 0 ? layoutDetail : $"{layoutFaults.Count} faults: {layoutFaults[0]}");
@@ -1647,6 +1651,147 @@ public static class WorldAudit
     /// both are here: a build that never lights at all would pass "it does not burn when idle" on
     /// its own.</para>
     /// </remarks>
+    /// <summary>
+    /// That a pack of either layout is recognised, and that every layer knows where the other one
+    /// keeps it.
+    /// </summary>
+    /// <remarks>
+    /// <para>Two packs of the same game are two different formats, and a <c>.mcpack</c> opening as a
+    /// zip is the easy quarter of it: no <c>assets/</c>, no namespace, folders in the plural, and a
+    /// third of the files under names that never went through the 2018 rename. All of that is one
+    /// translation table, and a translation table with a hole in it fails by <em>silently keeping
+    /// our own art</em> — the exact shape of failure a texture importer cannot afford, because it is
+    /// indistinguishable from a pack that simply did not ship that texture.</para>
+    /// <para>So both halves are checked: the table is walked for every layer, and a pack of each
+    /// kind is built on disk and opened. The on-disk half turns on <see cref="TexturePack.Faults"/>
+    /// against <see cref="TexturePack.Missing"/> — a file written as junk bytes is <em>found and
+    /// unreadable</em> if the path resolved and <em>missing</em> if it did not, which is what tells
+    /// "we looked in the right place" from "we looked in the wrong one" without needing an encoder.
+    /// </para>
+    /// </remarks>
+    private static List<string> PackDialectSelfTest(out string detail)
+    {
+        var faults = new List<string>();
+        var seen = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var translated = 0;
+        var renamed = 0;
+
+        foreach (var layer in BlockTextureSet.Layers)
+        {
+            if (layer.PackPath.Length == 0) continue;
+
+            if (BedrockNames.Translate(layer.PackPath) is not { } other)
+            {
+                faults.Add($"'{layer.Name}' ({layer.PackPath}) translates to nothing at all");
+                continue;
+            }
+
+            translated++;
+
+            // Counted on the FILE, not the path. Every path differs — the folder is plural over
+            // there — so "how many changed" was 75 of 75 and said nothing about whether the rename
+            // table does anything at all.
+            if (!Path.GetFileName(other).Equals(Path.GetFileName(layer.PackPath), StringComparison.OrdinalIgnoreCase))
+                renamed++;
+
+            if (other.Contains("//") || other.StartsWith('/') || !other.EndsWith(".png"))
+                faults.Add($"'{layer.Name}' translates to a malformed path '{other}'");
+
+            if (!other.StartsWith("textures/", StringComparison.Ordinal))
+                faults.Add($"'{layer.Name}' translates outside textures/, to '{other}'");
+
+            // Two of our layers landing on one of their files would draw both with one picture, and
+            // nothing downstream would ever mention it.
+            if (seen.TryGetValue(other, out var already))
+                faults.Add($"'{layer.Name}' and '{already}' both translate to '{other}'");
+            else
+                seen[other] = layer.Name;
+        }
+
+        // The renames that were actually read out of a real Bedrock pack, written out so gutting the
+        // table fails here. Everything above this is satisfied by a table with nothing in it: the
+        // folder alone changes on every path, nothing collides, and stone is called stone on both
+        // sides. A rename table is only worth having if these six are in it.
+        (string Java, string Bedrock)[] measured =
+        [
+            ("textures/block/oak_log.png", "textures/blocks/log_oak.png"),
+            ("textures/block/oak_planks.png", "textures/blocks/planks_oak.png"),
+            ("textures/block/oak_leaves.png", "textures/blocks/leaves_oak.png"),
+            ("textures/block/grass_block_top.png", "textures/blocks/grass_top.png"),
+            ("textures/block/granite.png", "textures/blocks/stone_granite.png"),
+            ("textures/block/torch.png", "textures/blocks/torch_on.png"),
+            ("textures/item/stick.png", "textures/items/stick.png"),
+        ];
+
+        foreach (var (java, bedrock) in measured)
+        {
+            var got = BedrockNames.Translate(java);
+            if (!string.Equals(got, bedrock, StringComparison.OrdinalIgnoreCase))
+                faults.Add($"'{java}' should reach '{bedrock}' and reaches '{got ?? "nothing"}'");
+        }
+
+        // And a pack of each kind, on disk, opened for real.
+        var root = Path.Combine(Path.GetTempPath(), $"driftwood-dialect-{Environment.ProcessId}");
+
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(root, "bedrock", "textures", "blocks"));
+            File.WriteAllText(Path.Combine(root, "bedrock", "manifest.json"), "{\"format_version\":2}");
+            File.WriteAllBytes(Path.Combine(root, "bedrock", "textures", "blocks", "stone.png"), [1, 2, 3, 4]);
+
+            Directory.CreateDirectory(Path.Combine(root, "java", "assets", "minecraft", "textures", "block"));
+            File.WriteAllText(Path.Combine(root, "java", "pack.mcmeta"), "{\"pack\":{\"pack_format\":34}}");
+            File.WriteAllBytes(
+                Path.Combine(root, "java", "assets", "minecraft", "textures", "block", "stone.png"), [1, 2, 3, 4]);
+
+            Check(Path.Combine(root, "bedrock"), PackDialect.Bedrock, "textures/blocks/stone.png");
+            Check(Path.Combine(root, "java"), PackDialect.Java, "assets/minecraft/textures/block/stone.png");
+        }
+        catch (IOException ex)
+        {
+            faults.Add($"could not build a pack to open: {ex.Message}");
+        }
+        finally
+        {
+            try { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); }
+            catch (IOException) { }
+        }
+
+        void Check(string path, PackDialect want, string where)
+        {
+            using var pack = TexturePack.Open(path);
+
+            if (pack is null)
+            {
+                faults.Add($"a {want} pack on disk would not open at all");
+                return;
+            }
+
+            if (pack.Dialect != want) faults.Add($"a {want} pack was read as {pack.Dialect}");
+
+            // Asked for by its Java name either way, which is the whole point: one table of paths
+            // and one place that knows the other layout exists.
+            pack.TryLoadTile("textures/block/stone.png", 16);
+
+            if (pack.Faults.Count == 0)
+                faults.Add($"a {want} pack was asked for stone and never reached {where}");
+
+            // The control. A name nothing could resolve must come back MISSING rather than as a
+            // fault — otherwise "found and unreadable" is not actually telling us anything.
+            var before = pack.Missing;
+            pack.TryLoadTile("textures/block/nothing_is_called_this.png", 16);
+
+            if (pack.Missing == before)
+                faults.Add($"a {want} pack reported a texture that cannot exist as something it had");
+        }
+
+        detail = $"{translated} layers translate and {renamed} are called something else over there, "
+            + $"none colliding, {measured.Length} of them pinned to what a real pack ships; "
+            + "a pack of each layout built on disk, recognised, and read from the right folder";
+
+        return faults;
+    }
+
     /// <summary>
     /// That the panel's squares are where the pack's grid puts them, and that a click on one lands
     /// back on the same one.

@@ -277,7 +277,11 @@ public static class BlockTextureSet
             if (flattened) neutralised++;
 
             tiles[i] = replacement;
-            outcomes.Add(new LayerOutcome(Layers[i].Name, true, from, flattened));
+
+            // Reported as the path it actually came off, which for a Bedrock pack is not the path
+            // that was asked for. "ours or theirs, and from where" is the only question this report
+            // answers, and half an answer is worse than none.
+            outcomes.Add(new LayerOutcome(Layers[i].Name, true, pack.PathOf(from), flattened));
         }
 
         // Colormaps are loaded at their own fixed size rather than the tile size, because the
@@ -295,7 +299,7 @@ public static class BlockTextureSet
 
         var summary = $"pack '{pack.Name}'"
                     + (pack.Description.Length > 0 ? $" — {pack.Description}" : "")
-                    + $" (format {pack.Format}, {resolution}): "
+                    + $" ({pack.Dialect.ToString().ToLowerInvariant()} format {pack.Format}, {resolution}): "
                     + $"{pack.Loaded - colormaps} of {Layers.Length} layers replaced"
                     + (colormaps > 0 ? $", {colormaps} colormaps" : ", built-in colormaps")
                     + (pack.Namespaces.Count > 1 ? $", {pack.Namespaces.Count} namespaces" : "")

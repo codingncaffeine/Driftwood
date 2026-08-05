@@ -52,6 +52,9 @@ public sealed class TexturePack : IDisposable
     public string Description { get; private set; } = string.Empty;
     public int Format { get; private set; }
 
+    /// <summary>Which of the two layouts this pack was written for.</summary>
+    public PackDialect Dialect { get; private set; }
+
     /// <summary>The namespaces this pack was found to contain, for the report.</summary>
     public IReadOnlyList<string> Namespaces => _namespaces;
 
@@ -87,19 +90,24 @@ public sealed class TexturePack : IDisposable
     /// </remarks>
     private string FindRoot()
     {
-        var best = (string?)null;
-
-        foreach (var path in RawEntries())
+        // Whichever manifest is there says both where the root is and which layout this is. A Java
+        // pack never carries manifest.json and a Bedrock one never carries pack.mcmeta, so the file
+        // that turns up is the answer to both questions at once.
+        if (FindShallowest("pack.mcmeta") is { } java)
         {
-            if (!path.EndsWith("pack.mcmeta", StringComparison.OrdinalIgnoreCase)) continue;
-
-            var directory = path[..^"pack.mcmeta".Length];
-            if (best is null || directory.Length < best.Length) best = directory;
+            Dialect = PackDialect.Java;
+            return java;
         }
 
-        // No manifest anywhere. Some packs genuinely ship without one, so fall back to wherever
-        // "assets/" begins rather than refusing.
-        if (best is not null) return best;
+        if (FindShallowest("manifest.json") is { } bedrock)
+        {
+            Dialect = PackDialect.Bedrock;
+            return bedrock;
+        }
+
+        // No manifest anywhere. Some packs genuinely ship without one, so fall back to wherever the
+        // textures begin rather than refusing — "assets/" for one layout, "textures/" for the other.
+        var best = (string?)null;
 
         foreach (var path in RawEntries())
         {
@@ -108,7 +116,39 @@ public sealed class TexturePack : IDisposable
             if (best is null || at < best.Length) best = path[..at];
         }
 
+        if (best is not null) return best;
+
+        foreach (var path in RawEntries())
+        {
+            var at = path.IndexOf("textures/", StringComparison.OrdinalIgnoreCase);
+            if (at < 0) continue;
+            if (best is null || at < best.Length) best = path[..at];
+        }
+
+        if (best is not null) Dialect = PackDialect.Bedrock;
         return best ?? "";
+    }
+
+    /// <summary>
+    /// The directory holding the shallowest copy of a file, as a prefix ending in a slash.
+    /// </summary>
+    /// <remarks>
+    /// Shallowest, because a pack that happens to carry somebody else's pack inside it should be
+    /// read as itself.
+    /// </remarks>
+    private string? FindShallowest(string fileName)
+    {
+        var best = (string?)null;
+
+        foreach (var path in RawEntries())
+        {
+            if (!path.EndsWith(fileName, StringComparison.OrdinalIgnoreCase)) continue;
+
+            var directory = path[..^fileName.Length];
+            if (best is null || directory.Length < best.Length) best = directory;
+        }
+
+        return best;
     }
 
     private string[] FindNamespaces()
@@ -146,7 +186,18 @@ public sealed class TexturePack : IDisposable
             yield return Path.GetRelativePath(_root, path).Replace(Path.DirectorySeparatorChar, '/');
     }
 
-    /// <summary>Opens a pack from a directory or a .zip. Returns null if the path is neither.</summary>
+    /// <summary>
+    /// The archive extensions a pack is actually distributed under.
+    /// </summary>
+    /// <remarks>
+    /// All of them are zips. <c>.mcpack</c> is how Bedrock packs are handed round — it opens on a
+    /// double-click and installs itself, which is why nobody renames them — and <c>.mcaddon</c> is
+    /// the same container holding one or more of those. Refusing an extension is refusing a file
+    /// that would have loaded perfectly.
+    /// </remarks>
+    public static readonly string[] Extensions = [".zip", ".mcpack", ".mcaddon"];
+
+    /// <summary>Opens a pack from a directory or an archive. Returns null if the path is neither.</summary>
     public static TexturePack? Open(string path)
     {
         var name = Path.GetFileNameWithoutExtension(path);
@@ -156,7 +207,7 @@ public sealed class TexturePack : IDisposable
         {
             pack = new TexturePack(name, null, path);
         }
-        else if (File.Exists(path) && Path.GetExtension(path).Equals(".zip", StringComparison.OrdinalIgnoreCase))
+        else if (File.Exists(path) && Extensions.Contains(Path.GetExtension(path), StringComparer.OrdinalIgnoreCase))
         {
             pack = new TexturePack(name, ZipFile.OpenRead(path), null);
         }
@@ -175,7 +226,9 @@ public sealed class TexturePack : IDisposable
     /// </summary>
     private void ReadManifest()
     {
-        var raw = ReadAllBytes($"{_prefix}pack.mcmeta");
+        var raw = ReadAllBytes(
+            $"{_prefix}{(Dialect == PackDialect.Bedrock ? "manifest.json" : "pack.mcmeta")}");
+
         if (raw is null) return;
 
         var text = Encoding.UTF8.GetString(raw);
@@ -183,7 +236,10 @@ public sealed class TexturePack : IDisposable
         // Deliberately not a JSON parser. Two numbers and a string out of a file whose schema has
         // changed three times does not justify one, and a manifest we cannot read must not stop us
         // reading the textures beside it.
-        Format = ReadInt(text, "pack_format") ?? ReadInt(text, "min_format") ?? 0;
+        //
+        // The two manifests say different things: one carries a pack format number, the other a
+        // format_version and a name in a header block. Both are read for what they have.
+        Format = ReadInt(text, "pack_format") ?? ReadInt(text, "min_format") ?? ReadInt(text, "format_version") ?? 0;
         Description = ReadString(text, "description") ?? string.Empty;
 
         // Strip the legacy colour codes packs put in their descriptions.
@@ -282,6 +338,7 @@ public sealed class TexturePack : IDisposable
     /// </remarks>
     public int DetectResolution()
     {
+        // Named the Java way; ReadAsset translates them for a Bedrock pack, so one list covers both.
         string[] probes =
         [
             "textures/block/stone.png",
@@ -306,9 +363,23 @@ public sealed class TexturePack : IDisposable
         return widest > 0 ? widest : TileGen.Size;
     }
 
-    /// <summary>Reads one asset, trying each namespace the pack turned out to have.</summary>
+    /// <summary>
+    /// Reads one asset, given the path a Java pack would keep it at.
+    /// </summary>
+    /// <remarks>
+    /// Every caller names a Java path, and this is the one place that knows the other layout exists.
+    /// A Bedrock pack has no namespaces to try, keeps <c>textures/</c> at its root, and calls a
+    /// third of the files something else — see <see cref="BedrockNames"/>. Keeping the translation
+    /// here rather than in the layer table means the table stays one column of our names against
+    /// one column of theirs, which is what it is for.
+    /// </remarks>
     private byte[]? ReadAsset(string assetPath)
     {
+        if (Dialect == PackDialect.Bedrock)
+            return BedrockNames.Translate(assetPath) is { } translated
+                ? ReadAllBytes($"{_prefix}{translated}")
+                : null;
+
         foreach (var space in _namespaces)
         {
             var raw = ReadAllBytes($"{_prefix}assets/{space}/{assetPath}");
@@ -317,6 +388,10 @@ public sealed class TexturePack : IDisposable
 
         return null;
     }
+
+    /// <summary>Where a layer was actually read from, for the report that says ours or theirs.</summary>
+    public string PathOf(string assetPath) =>
+        Dialect == PackDialect.Bedrock ? BedrockNames.Translate(assetPath) ?? assetPath : assetPath;
 
     /// <summary>
     /// Scales an image to a square tile with nearest-neighbour sampling.

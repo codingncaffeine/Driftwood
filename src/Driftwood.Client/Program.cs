@@ -52,7 +52,8 @@ public static class Program
             {
                 if (string.IsNullOrWhiteSpace(options.PackPath))
                 {
-                    Console.Error.WriteLine("driftwood: --pack-coverage needs --pack <folder or zip>");
+                    Console.Error.WriteLine(
+                        "driftwood: --pack-coverage needs --pack <folder, .zip, .mcpack or .mcaddon>");
                     return 1;
                 }
 
@@ -301,8 +302,11 @@ public static class Program
               --ocean <pct>     percent of the surface under water (default 25)
               --width <n>       window width (default 1600)
               --height <n>      window height (default 900)
-              --pack <path>     import block, item and skin textures from a texture pack folder
-                                or .zip; anything the pack does not carry keeps Driftwood's own art
+              --pack <path>     import block and item textures from a texture pack: a folder, or a
+                                .zip, .mcpack or .mcaddon. Both layouts are read — assets/ with a
+                                namespace, or textures/ at the root with the older names — and
+                                whichever is which is worked out from the pack. Anything it does
+                                not carry keeps Driftwood's own art.
               --texture-size n  tile size to build the texture array at; omit it and the pack's own
                                 resolution is used, which is almost always what is wanted. Clamped
                                 to what the card reports and a memory budget allows.
