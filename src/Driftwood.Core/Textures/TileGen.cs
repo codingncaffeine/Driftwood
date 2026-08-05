@@ -972,6 +972,144 @@ public static class TileGen
         return t;
     }
 
+    /// <summary>
+    /// A metal cage round a flame, with a ring of chain above it — a lantern.
+    /// </summary>
+    /// <remarks>
+    /// Drawn to fill the tile, because the model puts the whole tile on each of the box's six faces
+    /// rather than reading a strip of it. That is the one thing this generator has to know about the
+    /// shape it lands on: art in the margins would be art squeezed onto a face nobody sees, and a
+    /// gap in the middle would be a hole in a solid lamp.
+    /// </remarks>
+    public static byte[] LanternTile(int seed, byte r, byte g, byte b)
+    {
+        var t = new byte[BytesPerTile];
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            // The two bars top and bottom and the two posts either side are the cage; everything
+            // inside it is the flame it is holding.
+            var frame = y <= 2 || y >= Size - 3 || x <= 1 || x >= Size - 2;
+            var grain = (int)((Noise(x, y, seed) * 2f - 1f) * 12f);
+
+            if (frame)
+            {
+                // A rivet at each corner of the cage, which is what stops it reading as a box.
+                var rivet = (x is 1 or 14) && (y is 1 or 14);
+                var d = grain + (rivet ? 34 : 0);
+                Put(t, x, y, Clamp(r + d), Clamp(g + d), Clamp(b + d), 255);
+                continue;
+            }
+
+            // Hottest low and in the middle, cooling outward, so it reads as a flame rather than
+            // as a coloured pane behind a grille.
+            var dx = (x - (Size - 1) / 2f) / 5f;
+            var dy = (y - (Size - 2f)) / 9f;
+            var heat = Math.Clamp(1f - MathF.Sqrt(dx * dx + dy * dy), 0f, 1f);
+            heat = Math.Clamp(heat + (Noise(x, y, seed + 17) * 2f - 1f) * 0.12f, 0f, 1f);
+
+            Put(t, x, y,
+                Clamp((int)(150 + heat * 105f)),
+                Clamp((int)(110 + heat * 130f)),
+                Clamp((int)(52 + heat * 150f)),
+                255);
+        }
+
+        // The chain, in the two columns at the top the hanging form reads for it.
+        for (var y = 0; y < 2; y++)
+        for (var x = 7; x < 9; x++)
+        {
+            var d = (int)((Noise(x, y, seed + 3) * 2f - 1f) * 10f);
+            Put(t, x, y, Clamp(r + d - 20), Clamp(g + d - 20), Clamp(b + d - 20), 255);
+        }
+
+        return t;
+    }
+
+    /// <summary>A sheet of flame, transparent around it — what stands in a campfire.</summary>
+    /// <remarks>
+    /// Tapering as it rises and eaten into at the edges, so the two crossed planes it is drawn on
+    /// read as one fire from any angle rather than as two rectangles meeting at a corner.
+    /// </remarks>
+    public static byte[] Fire(int seed)
+    {
+        var t = new byte[BytesPerTile];
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            // Wide at the bottom and drawn to a point, measured from the tile's own bottom edge.
+            var rise = (Size - 1 - y) / (float)(Size - 1);
+            var halfWidth = (1f - rise) * 6.5f + 1.2f;
+            var offset = MathF.Abs(x - (Size - 1) / 2f);
+            if (offset > halfWidth) continue;
+
+            // Torn edges, so the silhouette is a flame and not a triangle.
+            var edge = offset > halfWidth - 1.4f;
+            if (edge && Noise(x, y, seed + 29) < 0.42f) continue;
+
+            var heat = Math.Clamp(1f - rise * 0.85f - offset / 9f, 0f, 1f);
+            heat = Math.Clamp(heat + (Noise(x, y, seed) * 2f - 1f) * 0.16f, 0f, 1f);
+
+            Put(t, x, y,
+                Clamp((int)(214 + heat * 41f)),
+                Clamp((int)(96 + heat * 130f)),
+                Clamp((int)(34 + heat * 96f)),
+                255);
+        }
+
+        return t;
+    }
+
+    /// <summary>Glass with the light taken out of it: the same pane, smoked and opaque-looking.</summary>
+    /// <remarks>
+    /// Drawn as a full tile rather than as a frame, unlike <see cref="Glass"/>, because the block is
+    /// the one thing in the set that is seen through and not passed through — a nearly empty tile
+    /// would say the opposite of what it does.
+    /// </remarks>
+    public static byte[] Smokeglass(int seed)
+    {
+        var t = new byte[BytesPerTile];
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var edge = x == 0 || y == 0 || x == Size - 1 || y == Size - 1;
+            var streak = y >= 2 && y <= 6 && x - y >= 1 && x - y <= 3;
+
+            var d = (int)((Noise(x, y, seed) * 2f - 1f) * 9f);
+            var lift = edge ? 26 : streak ? 18 : 0;
+
+            Put(t, x, y,
+                Clamp(48 + d + lift), Clamp(52 + d + lift), Clamp(60 + d + lift),
+                edge ? (byte)235 : (byte)206);
+        }
+
+        return t;
+    }
+
+    /// <summary>A block of set gem, glowing from inside — the brightest thing that can be built.</summary>
+    public static byte[] Lamp(int seed, byte r, byte g, byte b)
+    {
+        var t = new byte[BytesPerTile];
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            // Cells of set crystal, brightest at their middles, so the face reads as packed rather
+            // than as a flat colour with noise on it.
+            var cellX = MathF.Abs((x % 4) - 1.5f) / 1.5f;
+            var cellY = MathF.Abs((y % 4) - 1.5f) / 1.5f;
+            var core = 1f - Math.Clamp(MathF.Max(cellX, cellY), 0f, 1f);
+
+            var d = (int)(core * 46f) + (int)((Noise(x, y, seed) * 2f - 1f) * 8f);
+            Put(t, x, y, Clamp(r + d), Clamp(g + d), Clamp(b + d), 255);
+        }
+
+        return t;
+    }
+
     /// <summary>A tile with a darker inset panel on it — the side and front of built furniture.</summary>
     public static byte[] Panel(byte[] baseTile, int inset, int darken)
     {

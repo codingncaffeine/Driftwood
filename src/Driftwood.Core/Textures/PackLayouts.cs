@@ -77,6 +77,11 @@ public static class PackLayouts
         ["torch"] = ["torch_on"],
         ["furnace_front"] = ["furnace_front_off"],
 
+        // Light. A lantern and a sea lantern are called the same thing everywhere; the flame that
+        // stands in a campfire is not, and both names were read out of a real pack of each layout —
+        // the modern one ships campfire_fire and the Bedrock one ships plain campfire.
+        ["campfire_fire"] = ["campfire"],
+
         // Cut stone. The polished forms were "smooth" before they were "polished", and the bonded
         // one was one word. All checked against a real pack of the old layout.
         ["stone_bricks"] = ["stonebrick"],

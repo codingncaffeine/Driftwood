@@ -455,11 +455,64 @@ public sealed class BlockModel
     /// the shaping. The cap reads a 2x2 patch out of the middle of the tile, which is the one place
     /// an explicit <c>uv</c> is doing real work rather than restating the default.
     /// </remarks>
-    public static BlockModel Torch(ushort layer)
+    public static BlockModel Torch(ushort layer) =>
+        Stick(layer, new Vector3(7f, 0f, 7f), new Vector3(9f, 10f, 9f), Vector3.Zero, 1, 0f);
+
+    /// <summary>
+    /// A torch fixed to a wall, leaning out of it.
+    /// </summary>
+    /// <param name="facing">The way it leans, which is the face of the wall it came off.</param>
+    /// <remarks>
+    /// <para>Written per facing, the way <see cref="Stairs"/> is, and for a better reason than
+    /// symmetry: the format expresses this as one model turned four times about y <em>on top of</em>
+    /// a 22.5 degree lean about z, and <see cref="ModelElement"/> takes one axis. Turned into four
+    /// facings by hand, each is a single rotation — about z for the two that lean along x, about x
+    /// for the two that lean along z — so nothing needs composing at all. Six numbers a facing, and
+    /// the part that is easy to get wrong is derived below rather than written out four times.</para>
+    /// <para>The lean is 22.5 degrees, the same as the format's own wall torch, and the stick starts
+    /// three units up the wall so the flame clears the block it is fixed to.</para>
+    /// </remarks>
+    public static BlockModel WallTorch(ushort layer, int facing)
     {
-        var post = new ModelFace?[Faces.Count];
-        post[Faces.PosY] = new ModelFace { Layer = layer, Uv = new Vector4(7f, 6f, 9f, 8f) };
-        post[Faces.NegY] = new ModelFace { Layer = layer, Uv = new Vector4(7f, 13f, 9f, 15f) };
+        var (from, to, pivot, axis, angle) = facing switch
+        {
+            Faces.PosX => (new Vector3(0f, 3f, 7f), new Vector3(2f, 13f, 9f), new Vector3(0f, 3f, 8f), 2, -22.5f),
+            Faces.NegX => (new Vector3(14f, 3f, 7f), new Vector3(16f, 13f, 9f), new Vector3(16f, 3f, 8f), 2, 22.5f),
+            Faces.PosZ => (new Vector3(7f, 3f, 0f), new Vector3(9f, 13f, 2f), new Vector3(8f, 3f, 0f), 0, 22.5f),
+            _ => (new Vector3(7f, 3f, 14f), new Vector3(9f, 13f, 16f), new Vector3(8f, 3f, 16f), 0, -22.5f),
+        };
+
+        return Stick(layer, from, to, pivot, axis, angle);
+    }
+
+    /// <summary>
+    /// A two-unit post drawn as two crossed full-width planes, with a cap on top of it.
+    /// </summary>
+    /// <remarks>
+    /// <para>The planes are wider than the post they draw. That is not a mistake in the format and it
+    /// is what makes a torch read at a distance: two 2-unit-wide boxes would be nearly invisible edge
+    /// on, so the model stretches the tile across a whole cell's worth of plane and lets the
+    /// transparent margin do the shaping. The cap reads a 2x2 patch out of the middle of the tile,
+    /// which is the one place an explicit <c>uv</c> is doing real work rather than restating the
+    /// default.</para>
+    /// <para><b>The planes are placed from the post rather than written down beside it.</b> Every
+    /// side face here reads its texture with u running along the plane's own axis from its minimum
+    /// and v running down from its top — which means the tile's stick pixels land on the post only
+    /// if the plane starts seven units before it and sixteen units of it are spanned. Writing that
+    /// out per facing is how a wall torch ends up with its flame a few pixels off the stick in one
+    /// direction out of four, so it is arithmetic here instead.</para>
+    /// </remarks>
+    private static BlockModel Stick(
+        ushort layer, Vector3 from, Vector3 to, Vector3 pivot, int axis, float angle)
+    {
+        const float Tile = 16f;
+
+        // Where the tile draws the stick: two columns in from the left, and the bottom ten rows.
+        const float StickU = 7f;
+
+        var cap = new ModelFace?[Faces.Count];
+        cap[Faces.PosY] = new ModelFace { Layer = layer, Uv = new Vector4(7f, 6f, 9f, 8f) };
+        cap[Faces.NegY] = new ModelFace { Layer = layer, Uv = new Vector4(7f, 13f, 9f, 15f) };
 
         var alongX = new ModelFace?[Faces.Count];
         alongX[Faces.NegX] = new ModelFace { Layer = layer, Uv = new Vector4(0f, 0f, 16f, 16f) };
@@ -469,27 +522,178 @@ public sealed class BlockModel
         alongZ[Faces.NegZ] = new ModelFace { Layer = layer, Uv = new Vector4(16f, 0f, 0f, 16f) };
         alongZ[Faces.PosZ] = new ModelFace { Layer = layer, Uv = new Vector4(0f, 0f, 16f, 16f) };
 
+        ModelElement Turned(Vector3 lo, Vector3 hi, ModelFace?[] faces) => new()
+        {
+            From = lo,
+            To = hi,
+            Faces = faces,
+            Shade = false,
+            AmbientOcclusion = false,
+            RotationAngle = angle,
+            RotationAxis = axis,
+            RotationOrigin = pivot,
+        };
+
         var model = new BlockModel(
         [
-            new ModelElement
-            {
-                From = new Vector3(7f, 0f, 7f), To = new Vector3(9f, 10f, 9f),
-                Faces = post, Shade = false, AmbientOcclusion = false,
-            },
-            new ModelElement
-            {
-                From = new Vector3(7f, 0f, 0f), To = new Vector3(9f, 16f, 16f),
-                Faces = alongX, Shade = false, AmbientOcclusion = false,
-            },
-            new ModelElement
-            {
-                From = new Vector3(0f, 0f, 7f), To = new Vector3(16f, 16f, 9f),
-                Faces = alongZ, Shade = false, AmbientOcclusion = false,
-            },
+            Turned(from, to, cap),
+
+            // Faces along x: u runs with z, so the plane starts seven units before the post in z.
+            Turned(
+                new Vector3(from.X, from.Y, from.Z - StickU),
+                new Vector3(to.X, from.Y + Tile, from.Z - StickU + Tile),
+                alongX),
+
+            // Faces along z: u runs with x, so the same offset applies in x instead.
+            Turned(
+                new Vector3(from.X - StickU, from.Y, from.Z),
+                new Vector3(from.X - StickU + Tile, from.Y + Tile, to.Z),
+                alongZ),
         ]);
 
-        // The stick, not the planes that draw it.
-        model.Outline = (new Vector3(7f, 0f, 7f) / 16f, new Vector3(9f, 10f, 9f) / 16f);
+        // The stick, not the planes that draw it — and the stick where it ends up, not where it
+        // was written, or a leaning torch is outlined as if it were standing upright.
+        model.Outline = Bounds(Turned(from, to, cap));
+        return model;
+    }
+
+    /// <summary>Where one element's box actually ends up, in block units.</summary>
+    private static (Vector3 Min, Vector3 Max) Bounds(ModelElement element)
+    {
+        var transform = BuildTransform(element);
+        var min = new Vector3(float.MaxValue);
+        var max = new Vector3(float.MinValue);
+
+        for (var corner = 0; corner < 8; corner++)
+        {
+            var p = Vector3.Transform(
+                new Vector3(
+                    (corner & 1) == 0 ? element.From.X : element.To.X,
+                    (corner & 2) == 0 ? element.From.Y : element.To.Y,
+                    (corner & 4) == 0 ? element.From.Z : element.To.Z),
+                transform) / 16f;
+
+            min = Vector3.Min(min, p);
+            max = Vector3.Max(max, p);
+        }
+
+        return (min, max);
+    }
+
+    /// <summary>
+    /// A small box hung in the middle of the cell, standing on the floor or under the ceiling.
+    /// </summary>
+    /// <param name="hanging">True for the form that hangs, which draws a chain up to the ceiling.</param>
+    /// <remarks>
+    /// Every face reads the whole tile rather than the strip its own extent would project onto, and
+    /// that is the deliberate choice here. A pack's lantern is one texture holding a body and a
+    /// chain in a layout only its own model knows, so a face that reads part of it reads whichever
+    /// part that model happened to put there; a face that reads all of it is a small picture of a
+    /// lantern, which is wrong by a little in every pack rather than wrong entirely in most.
+    /// </remarks>
+    public static BlockModel Lantern(ushort layer, bool hanging)
+    {
+        var body = new ModelFace?[Faces.Count];
+        for (var face = 0; face < Faces.Count; face++)
+            body[face] = new ModelFace { Layer = layer, Uv = new Vector4(0f, 0f, 16f, 16f) };
+
+        var low = hanging ? 6f : 0f;
+        var elements = new List<ModelElement>(2)
+        {
+            new()
+            {
+                From = new Vector3(5f, low, 5f),
+                To = new Vector3(11f, low + 7f, 11f),
+                Faces = body,
+            },
+        };
+
+        if (hanging)
+        {
+            // Two units of chain, reading the patch at the top of the tile where a lantern's
+            // hanging gear is drawn in every layout there is.
+            var chain = new ModelFace?[Faces.Count];
+            for (var face = 0; face < Faces.Count; face++)
+            {
+                if (face is Faces.PosY or Faces.NegY) continue;
+                chain[face] = new ModelFace { Layer = layer, Uv = new Vector4(7f, 0f, 9f, 2f) };
+            }
+
+            elements.Add(new ModelElement
+            {
+                From = new Vector3(7f, 13f, 7f),
+                To = new Vector3(9f, 16f, 9f),
+                Faces = chain,
+                Shade = false,
+                AmbientOcclusion = false,
+            });
+        }
+
+        var model = new BlockModel(elements);
+        model.Outline = (new Vector3(5f, low, 5f) / 16f, new Vector3(11f, low + 7f, 11f) / 16f);
+        return model;
+    }
+
+    /// <summary>
+    /// Four logs laid in a square, with a fire standing in them when it is alight.
+    /// </summary>
+    /// <param name="facing">Which way the lower pair of logs runs.</param>
+    /// <remarks>
+    /// <para>The logs are our own timber rather than a texture drawn for a campfire, and that is the
+    /// better answer twice over: a fire built out of the logs a player chopped reads as one, and a
+    /// box sixteen long by four tall reading a strip of bark is what the natural projection already
+    /// does correctly. A campfire-specific tile would be a layout only somebody else's model knows,
+    /// with a bite taken out of it that would show through as a hole in ours.</para>
+    /// <para>The fire is two crossed planes rather than one, so it reads from every side, and it is
+    /// lit flat because a flame does not take the shading of the direction it happens to face.</para>
+    /// </remarks>
+    public static BlockModel Campfire(ushort logSide, ushort logTop, ushort fire, int facing, bool lit)
+    {
+        var alongX = facing is Faces.PosX or Faces.NegX;
+
+        // The lower pair, then the upper pair crossing them.
+        var elements = new List<ModelElement>(6)
+        {
+            alongX
+                ? Box(new Vector3(0f, 0f, 1f), new Vector3(16f, 4f, 5f), logTop, logSide, logTop)
+                : Box(new Vector3(1f, 0f, 0f), new Vector3(5f, 4f, 16f), logTop, logSide, logTop),
+            alongX
+                ? Box(new Vector3(0f, 0f, 11f), new Vector3(16f, 4f, 15f), logTop, logSide, logTop)
+                : Box(new Vector3(11f, 0f, 0f), new Vector3(15f, 4f, 16f), logTop, logSide, logTop),
+            alongX
+                ? Box(new Vector3(1f, 4f, 0f), new Vector3(5f, 8f, 16f), logTop, logSide, logTop)
+                : Box(new Vector3(0f, 4f, 1f), new Vector3(16f, 8f, 5f), logTop, logSide, logTop),
+            alongX
+                ? Box(new Vector3(11f, 4f, 0f), new Vector3(15f, 8f, 16f), logTop, logSide, logTop)
+                : Box(new Vector3(0f, 4f, 11f), new Vector3(16f, 8f, 15f), logTop, logSide, logTop),
+        };
+
+        if (lit)
+        {
+            var acrossZ = new ModelFace?[Faces.Count];
+            acrossZ[Faces.NegZ] = new ModelFace { Layer = fire, Uv = new Vector4(16f, 0f, 0f, 16f) };
+            acrossZ[Faces.PosZ] = new ModelFace { Layer = fire, Uv = new Vector4(0f, 0f, 16f, 16f) };
+
+            var acrossX = new ModelFace?[Faces.Count];
+            acrossX[Faces.NegX] = new ModelFace { Layer = fire, Uv = new Vector4(0f, 0f, 16f, 16f) };
+            acrossX[Faces.PosX] = new ModelFace { Layer = fire, Uv = new Vector4(16f, 0f, 0f, 16f) };
+
+            elements.Add(new ModelElement
+            {
+                From = new Vector3(1f, 4f, 8f), To = new Vector3(15f, 14f, 8f),
+                Faces = acrossZ, Shade = false, AmbientOcclusion = false,
+            });
+            elements.Add(new ModelElement
+            {
+                From = new Vector3(8f, 4f, 1f), To = new Vector3(8f, 14f, 15f),
+                Faces = acrossX, Shade = false, AmbientOcclusion = false,
+            });
+        }
+
+        var model = new BlockModel(elements);
+
+        // The logs, not the flame standing in them, so the outline is something to aim at.
+        model.Outline = (Vector3.Zero, new Vector3(1f, 0.5f, 1f));
         return model;
     }
 

@@ -255,6 +255,15 @@ public sealed class ClientHost : IDisposable
     /// <summary>Each half-slab and the whole block a second one laid on it makes.</summary>
     private readonly Dictionary<ushort, BlockId> _slabMerge = [];
 
+    /// <summary>Each block with two states, and the one a right click swaps it to.</summary>
+    private readonly Dictionary<ushort, BlockId> _toggle = [];
+
+    /// <summary>What holds each block up, and what comes down when that is taken away.</summary>
+    private SupportTable _supports = null!;
+
+    /// <summary>Scratch for the shed pass, so taking a wall down allocates nothing.</summary>
+    private readonly List<(int X, int Y, int Z, BlockId Was)> _fallen = [];
+
     /// <summary>Nine pockets, one of them in hand.</summary>
     private Inventory _inventory = null!;
 
@@ -621,6 +630,8 @@ public sealed class ClientHost : IDisposable
         _furnaceCold = StarterBlocks.Furnaces(registry, lit: false);
         _furnaceHot = StarterBlocks.Furnaces(registry, lit: true);
         foreach (var (slab, whole) in StarterBlocks.SlabMerges(registry)) _slabMerge[slab.Value] = whole;
+        foreach (var (from, to) in StarterBlocks.Toggles(registry)) _toggle[from.Value] = to;
+        _supports = new SupportTable(registry);
 
         var generator = new TerrainGenerator(_options.Seed, ids, _options.OceanCoverage);
 
@@ -2655,9 +2666,41 @@ public sealed class ClientHost : IDisposable
         foreach (var spilled in _furnaces.Remove(hit.X, hit.Y, hit.Z)) _drops.Drop(spilled, centre);
 
         _streamer.EditBlock(hit.X, hit.Y, hit.Z, BlockId.Air);
+        ShedUnsupported(hit.X, hit.Y, hit.Z);
 
         // Standing in front of a furnace that is no longer there.
         if (_hudScreen.IsOpen && _station == (hit.X, hit.Y, hit.Z)) CloseScreen();
+    }
+
+    /// <summary>
+    /// Takes down anything an edit left with nothing to hold on to, and leaves it on the floor.
+    /// </summary>
+    /// <remarks>
+    /// The pass itself is in Core and knows nothing about items; what it hands back is a list of
+    /// cells and what was in them, which is exactly the point where the two layers meet. A torch
+    /// whose wall is mined has to become a torch on the ground, not vanish — and not stay hanging
+    /// in the air either, which is what it did before this existed.
+    /// </remarks>
+    private void ShedUnsupported(int x, int y, int z)
+    {
+        _fallen.Clear();
+        if (_supports.Shed(_streamer.World, x, y, z, _fallen) == 0) return;
+
+        foreach (var (fx, fy, fz, was) in _fallen)
+        {
+            // Core wrote the air directly, so the light and mesh work still has to be booked. Going
+            // back through EditBlock would re-run the whole pass once per block that came down.
+            _streamer.TouchBlock(fx, fy, fz);
+
+            var at = new Vector3(fx + 0.5f, fy + 0.5f, fz + 0.5f);
+            var type = _registry[was];
+
+            var left = _dropTable.Of(was);
+            if (!left.IsEmpty) _drops.Drop(left, at);
+
+            _particles.Burst(type, fx, fy, fz);
+            PlaySound(type, SoundEvent.Break, at, 0.7f);
+        }
     }
 
     /// <summary>
@@ -2673,15 +2716,25 @@ public sealed class ClientHost : IDisposable
         if (_target is not { } hit) return;
 
         // Using comes before building. A block that does something answers the right button itself,
-        // so a bench cannot be buried under the plank a player meant to open it with. The general
-        // machinery for this — a block deciding what a right click means — is still ahead of us;
-        // this is the narrow version the two blocks that exist need.
+        // so a bench cannot be buried under the plank a player meant to open it with — and what it
+        // does is something the block says rather than something this works out from its name.
         var struck = _registry[_streamer.World.GetBlock(hit.X, hit.Y, hit.Z)];
-        if (struck.Interactive)
+        switch (struck.Use)
         {
-            if (struck.Name == "bench") OpenBench(hit.X, hit.Y, hit.Z);
-            else OpenFurnace(hit.X, hit.Y, hit.Z);
-            return;
+            case BlockUse.Bench:
+                OpenBench(hit.X, hit.Y, hit.Z);
+                return;
+
+            case BlockUse.Furnace:
+                OpenFurnace(hit.X, hit.Y, hit.Z);
+                return;
+
+            case BlockUse.Toggle when _toggle.TryGetValue(struck.Id.Value, out var other):
+                _streamer.EditBlock(hit.X, hit.Y, hit.Z, other);
+                PlaySound(
+                    _registry[other], SoundEvent.Place,
+                    new Vector3(hit.X + 0.5f, hit.Y + 0.5f, hit.Z + 0.5f), 0.7f);
+                return;
         }
 
         // A slab laid on a matching slab fills the cell rather than starting a second one above it.
@@ -2713,7 +2766,25 @@ public sealed class ClientHost : IDisposable
         var height = Math.Clamp(landing.Y - y, 0f, 1f);
 
         if (!held.TryResolve(hit.Face, height, _camera.Forward, out var block)) return;
-        if (held.NeedsFloor && !_solid[_streamer.World.GetBlock(x, y - 1, z).Value]) return;
+
+        // What holds it up is the block's own answer, not the item's. A torch put against a wall
+        // resolved to a different block from one put on the floor, and that block already says
+        // which way it is fixed — asking the item again would be a second copy of the same rule
+        // with nothing keeping the two in step.
+        var support = _registry[block].SupportFace;
+        if (support >= 0)
+        {
+            var (sx, sy, sz) = Faces.Normals[support];
+            var against = _registry[_streamer.World.GetBlock(x + sx, y + sy, z + sz)];
+
+            // Down means anything a foot would rest on, which is what lets a torch stand on a slab.
+            // Any other direction means a whole face to fix to, or a torch hangs off a fence post.
+            var enough = Placeable.NeedsFirmSupport(support)
+                ? against.Solid && against.Model.IsFullCube
+                : against.Solid;
+
+            if (!enough) return;
+        }
 
         if (_walking)
         {

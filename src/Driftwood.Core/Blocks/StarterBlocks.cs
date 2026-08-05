@@ -81,6 +81,16 @@ public static class StarterBlocks
     public const ushort LayerSandstoneCut = 49;
     public const ushort LayerSandstoneChiseled = 50;
 
+    // Light a player can make and carry. The one family in the coverage report where the genre has
+    // eighty files of art and we had two — a torch and a pane of glass — and not one of these
+    // needed a system that did not already exist: emission is a per-block value, the torch proved
+    // the model path, and the three-way split between solid, opaque and attenuating is what lets a
+    // dark pane of glass be a real thing rather than a contradiction.
+    public const ushort LayerLantern = 51;
+    public const ushort LayerCampfireFire = 52;
+    public const ushort LayerSmokeglass = 53;
+    public const ushort LayerStormglassLamp = 54;
+
     /// <summary>The first layer that is an item icon rather than a block face.</summary>
     /// <remarks>
     /// Items share the block texture array rather than taking one of their own. They are the same
@@ -88,24 +98,24 @@ public static class StarterBlocks
     /// spinning on the floor — and a second array would be a second bind, a second upload and a
     /// second pack-import path for no difference anybody could see.
     /// </remarks>
-    public const ushort LayerFirstIcon = 51;
+    public const ushort LayerFirstIcon = 55;
 
-    public const ushort LayerStick = 51;
-    public const ushort LayerCoal = 52;
-    public const ushort LayerCharcoal = 53;
-    public const ushort LayerRawCopper = 54;
-    public const ushort LayerRawIron = 55;
-    public const ushort LayerRawGold = 56;
-    public const ushort LayerCopperIngot = 57;
-    public const ushort LayerIronIngot = 58;
-    public const ushort LayerGoldIngot = 59;
-    public const ushort LayerStormglass = 60;
-    public const ushort LayerAzurite = 61;
-    public const ushort LayerClayLump = 62;
-    public const ushort LayerBrick = 63;
+    public const ushort LayerStick = 55;
+    public const ushort LayerCoal = 56;
+    public const ushort LayerCharcoal = 57;
+    public const ushort LayerRawCopper = 58;
+    public const ushort LayerRawIron = 59;
+    public const ushort LayerRawGold = 60;
+    public const ushort LayerCopperIngot = 61;
+    public const ushort LayerIronIngot = 62;
+    public const ushort LayerGoldIngot = 63;
+    public const ushort LayerStormglass = 64;
+    public const ushort LayerAzurite = 65;
+    public const ushort LayerClayLump = 66;
+    public const ushort LayerBrick = 67;
 
     /// <summary>The tool icons: one palette per tier, four heads each, tier-major.</summary>
-    public const ushort LayerFirstTool = 64;
+    public const ushort LayerFirstTool = 68;
 
     /// <summary>Head shapes a tier comes in — pickaxe, axe, shovel, sword.</summary>
     public const int ToolShapeCount = 4;
@@ -461,17 +471,19 @@ public static class StarterBlocks
         registry.Register(new BlockType
         {
             Name = "torch", Hardness = 0.05f, Solid = false, Opaque = false, Crafted = true,
-            Sounds = SoundMaterial.Wood,
+            Sounds = SoundMaterial.Wood, SupportFace = Faces.NegY,
             LightEmission = LightValue.PackBlock(14, 10, 5),
             Model = BlockModel.Torch(LayerTorch),
         });
 
-        // The two blocks a player uses rather than builds with. Both are Interactive, which is what
-        // makes a right-click open them instead of stacking another one on top — the first time the
-        // world has had a block that answers back.
+        RegisterLights(registry);
+
+        // The two blocks a player uses rather than builds with. Both answer a right click, which is
+        // what makes one open instead of having another stacked on top of it — the first time the
+        // world had a block that answers back.
         var bench = registry.Register(new BlockType
         {
-            Name = "bench", Hardness = 2.5f, Crafted = true, Interactive = true,
+            Name = "bench", Hardness = 2.5f, Crafted = true, Use = BlockUse.Bench,
             HarvestClass = ToolClass.Axe, Sounds = SoundMaterial.Wood,
             TopLayer = LayerBenchTop, SideLayer = LayerBenchSide, BottomLayer = LayerPlanks,
         });
@@ -487,7 +499,7 @@ public static class StarterBlocks
             var id = registry.Register(new BlockType
             {
                 Name = $"furnace_{FacingNames[i]}{(lit ? "_lit" : "")}",
-                Hardness = 3.5f, Crafted = true, Interactive = true,
+                Hardness = 3.5f, Crafted = true, Use = BlockUse.Furnace,
                 HarvestClass = ToolClass.Pickaxe, HarvestTier = 1,
                 LightEmission = lit ? LightValue.PackBlock(13, 9, 4) : (ushort)0,
                 Model = BlockModel.CubeFacing(
@@ -505,6 +517,129 @@ public static class StarterBlocks
             emberstone, vine, deepstone, coralstone, driftstone, saltstone, copper, gold, stormglass,
             azurite, clay, sandstone, snow, snowLayer, meadowgrass, seaflax, marshlily,
             rubble, glass, bricks, bench, furnace, furnaceLit);
+    }
+
+    /// <summary>
+    /// The light a player can make, and the glass that stops it.
+    /// </summary>
+    /// <remarks>
+    /// <para>Four things, and between them a torch stops being the only answer to a dark room.
+    /// A wall torch is the torch a wall was aimed at; a lantern is brighter, whiter and hangs; a
+    /// campfire is a floor light with a state; and smokeglass is the one block in the set that
+    /// exists <em>because</em> solidity, opacity and attenuation are three separate fields — it is
+    /// seen through and it is not passed through, which is a combination nothing else has needed.
+    /// </para>
+    /// <para>The stormglass lamp is the first thing azurite has ever been for. Six ores came up out
+    /// of the ground and five of them went somewhere; a mineral with no recipe at all is a hole in
+    /// the tree rather than a decision, and a cold bright lamp is what the deep blue rock should
+    /// obviously make.</para>
+    /// </remarks>
+    private static void RegisterLights(BlockRegistry registry)
+    {
+        // The same torch, fixed to a wall instead of standing on the floor. Four ids, because a
+        // cell holds an id and nothing beside it, and the same light out of every one of them.
+        for (var i = 0; i < Placeable.Facings.Length; i++)
+            registry.Register(new BlockType
+            {
+                Name = $"torch_wall_{FacingNames[i]}",
+                Hardness = 0.05f, Solid = false, Opaque = false, Crafted = true,
+                Sounds = SoundMaterial.Wood,
+                SupportFace = Placeable.Opposite(Placeable.Facings[i]),
+                LightEmission = LightValue.PackBlock(14, 10, 5),
+                Model = BlockModel.WallTorch(LayerTorch, Placeable.Facings[i]),
+            });
+
+        // Brighter than a torch and much whiter, which is the whole reason the genre carries both:
+        // a torch says "somebody was here", a lantern says "somebody lives here".
+        foreach (var hanging in (bool[])[false, true])
+            registry.Register(new BlockType
+            {
+                Name = hanging ? "lantern_hanging" : "lantern",
+                Hardness = 0.6f, Solid = false, Opaque = false, Crafted = true,
+                Sounds = SoundMaterial.Metal,
+                HarvestClass = ToolClass.Pickaxe,
+                SupportFace = hanging ? Faces.PosY : Faces.NegY,
+                LightEmission = LightValue.PackBlock(15, 13, 10),
+                Model = BlockModel.Lantern(LayerLantern, hanging),
+            });
+
+        // Two ways the logs can lie and two states, not four ways and two. A stack of timber looks
+        // the same from both ends, so a facing form would be four ids for two shapes — and a check
+        // that cannot tell east from west is a check that passes anything.
+        foreach (var axis in (int[])[Faces.PosX, Faces.PosZ])
+        foreach (var lit in (bool[])[false, true])
+            registry.Register(new BlockType
+            {
+                Name = $"campfire_{AxisNames[axis == Faces.PosX ? 0 : 1]}{(lit ? "_lit" : "")}",
+                Hardness = 2f, Opaque = false, Crafted = true,
+                Sounds = SoundMaterial.Wood, Use = BlockUse.Toggle,
+                HarvestClass = ToolClass.Axe,
+                SupportFace = Faces.NegY,
+                LightEmission = lit ? LightValue.PackBlock(15, 11, 6) : (ushort)0,
+                Model = BlockModel.Campfire(LayerLogSide, LayerLogTop, LayerCampfireFire, axis, lit),
+            });
+
+        // ⚠ Solid, see-through, and dark. Opaque is a question about faces and visibility;
+        // LightAttenuation is a question about how much light survives the crossing, and this is
+        // the block that needs them answered differently — a window that lets nothing through.
+        // Fusing the two fields, which every voxel engine is tempted to do, makes this impossible.
+        registry.Register(new BlockType
+        {
+            Name = "smokeglass", Hardness = 0.4f, Opaque = false, Crafted = true,
+            LightAttenuation = LightValue.Max,
+            Sounds = SoundMaterial.Glass,
+            Model = BlockModel.Cube(LayerSmokeglass, LayerSmokeglass, LayerSmokeglass),
+        });
+
+        // The brightest thing that can be built, and cold where everything else is warm.
+        registry.Register(new BlockType
+        {
+            Name = "stormglass_lamp", Hardness = 0.6f, Crafted = true,
+            Sounds = SoundMaterial.Glass,
+            LightEmission = LightValue.PackBlock(12, 15, 15),
+            TopLayer = LayerStormglassLamp, SideLayer = LayerStormglassLamp,
+            BottomLayer = LayerStormglassLamp,
+        });
+    }
+
+    /// <summary>Each block with another state, and the state a right click swaps it to.</summary>
+    /// <remarks>
+    /// Named in one place because the pairing is content, not geometry. A lit campfire is not
+    /// derivable from an unlit one by any rule the registry knows — they are two registered blocks
+    /// whose names happen to differ by a suffix, and the day the pair is a door and its open form
+    /// the suffix will not be the same one.
+    /// </remarks>
+    public static IEnumerable<(BlockId From, BlockId To)> Toggles(BlockRegistry registry)
+    {
+        foreach (var axis in AxisNames)
+        {
+            var outFire = registry.ByName($"campfire_{axis}").Id;
+            var lit = registry.ByName($"campfire_{axis}_lit").Id;
+            yield return (outFire, lit);
+            yield return (lit, outFire);
+        }
+    }
+
+    /// <summary>The two ways something can lie along the ground, in the order a placeable wants them.</summary>
+    private static readonly string[] AxisNames = ["x", "z"];
+
+    /// <summary>Both forms of the campfire, along x then along z, lit or out.</summary>
+    public static BlockId[] Campfires(BlockRegistry registry, bool lit)
+    {
+        var ids = new BlockId[AxisNames.Length];
+        for (var i = 0; i < ids.Length; i++)
+            ids[i] = registry.ByName($"campfire_{AxisNames[i]}{(lit ? "_lit" : "")}").Id;
+        return ids;
+    }
+
+    /// <summary>A torch's five forms: standing, then leaning off each of the four walls.</summary>
+    public static BlockId[] Torches(BlockRegistry registry)
+    {
+        var ids = new BlockId[1 + Placeable.Facings.Length];
+        ids[0] = registry.ByName("torch").Id;
+        for (var i = 0; i < Placeable.Facings.Length; i++)
+            ids[1 + i] = registry.ByName($"torch_wall_{FacingNames[i]}").Id;
+        return ids;
     }
 
     /// <summary>Every form of the furnace, by facing then lit — the order they were registered.</summary>
@@ -618,6 +753,8 @@ public static class StarterBlocks
         new("brick_wall", LayerBricks, SoundMaterial.Stone, ToolClass.Pickaxe, 1,
             4f, 3f, [(0f, 14f)]),
         new("glass_pane", LayerGlass, SoundMaterial.Glass, ToolClass.None, 0,
+            1f, 1f, [(0f, 16f)]),
+        new("smokeglass_pane", LayerSmokeglass, SoundMaterial.Glass, ToolClass.None, 0,
             1f, 1f, [(0f, 16f)]),
     ];
 

@@ -145,16 +145,45 @@ public static class StarterItems
 
         // A torch is flat art on crossed planes, so a cube of it is a cube of black. Declared
         // rather than derived from "does it place a block", because it places one and is not one.
+        // Five forms out of one item: on the floor, or leaning off whichever wall was aimed at.
         items.Register(new ItemType
         {
             Name = "torch", Label = "torch", IconLayer = StarterBlocks.LayerTorch,
             Places = new Placeable
             {
                 Label = "torch",
-                Kind = PlacementKind.Standing,
-                Variants = [blocks.ByName("torch").Id],
+                Kind = PlacementKind.Attached,
+                Variants = StarterBlocks.Torches(blocks),
             },
         });
+
+        // Standing on what is under it, or hanging from what is over it, off one item.
+        items.Register(new ItemType
+        {
+            Name = "lantern", Label = "lantern", IconLayer = StarterBlocks.LayerLantern,
+            Places = new Placeable
+            {
+                Label = "lantern",
+                Kind = PlacementKind.Hung,
+                Variants = [blocks.ByName("lantern").Id, blocks.ByName("lantern_hanging").Id],
+            },
+        });
+
+        // Put down alight, the way a fire somebody just built would be. The four unlit forms leave
+        // this same item, below.
+        items.Register(new ItemType
+        {
+            Name = "campfire", Label = "campfire", IconLayer = StarterBlocks.LayerCampfireFire,
+            Places = new Placeable
+            {
+                Label = "campfire",
+                Kind = PlacementKind.Axis,
+                Variants = StarterBlocks.Campfires(blocks, lit: true),
+            },
+        });
+
+        Block(items, blocks, "smokeglass", "smokeglass", StarterBlocks.LayerSmokeglass);
+        Block(items, blocks, "stormglass_lamp", "stormglass lamp", StarterBlocks.LayerStormglassLamp);
 
         items.Register(new ItemType
         {
@@ -249,7 +278,12 @@ public static class StarterItems
         new BlockDrops.Rule("furnace_east_lit", "furnace"),
         new BlockDrops.Rule("furnace_west_lit", "furnace"),
         new BlockDrops.Rule("furnace_south_lit", "furnace"),
-        new BlockDrops.Rule("furnace_north_lit", "furnace"));
+        new BlockDrops.Rule("furnace_north_lit", "furnace"),
+
+        // And a fire that has gone out is still a campfire. The item places the lit pair, so it is
+        // the other two that need saying — the same shape of rule, from the other side.
+        new BlockDrops.Rule("campfire_x", "campfire"),
+        new BlockDrops.Rule("campfire_z", "campfire"));
 
     private static void Block(
         ItemRegistry items, BlockRegistry blocks, string name, string label, ushort icon,

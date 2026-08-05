@@ -181,6 +181,21 @@ public static class StarterRecipes
         // out of a furnace are the same thing on the end of a stick.
         Shaped("torch", "torch", 4, ["C", "S"]);
 
+        // The rest of it, and the reason a torch stops being the only answer. A lantern is iron
+        // shut round a flame, so it is brighter, whiter and can be hung; a campfire is timber and
+        // kindling with something to light it, laid out as a picture of the thing it makes; and
+        // smokeglass is glass with the light taken out of it.
+        Shaped("lantern", "lantern", 1, [" I ", "ITI", " I "]);
+        Shaped("campfire", "campfire", 1, [" S ", "SCS", "WWW"]);
+        Shaped("smokeglass", "smokeglass", 2, [" C ", "CGC", " C "]);
+        Shaped("smokeglass pane", "smokeglass_pane", 16, ["MMM", "MMM"], "smokeglass");
+
+        // ⚠ The first thing azurite has ever been for. Six ores come up out of the ground and this
+        // was the one with no recipe anywhere in the tree — a mineral a player mines four of and
+        // can do nothing whatever with, which is a hole rather than a decision. Set round a
+        // stormglass it is the brightest and the coldest light there is.
+        Shaped("stormglass lamp", "stormglass_lamp", 1, [" A ", "AZA", " A "]);
+
         // Building shapes, three across for six of the flat kind and a staircase for four steps.
         foreach (var (material, from) in ShapedFrom)
         {
@@ -284,6 +299,12 @@ public static class StarterRecipes
         'C' => "#coals",
         'B' => "brick",
         'L' => "clay_lump",
+        'W' => "#logs",
+        'T' => "torch",
+        'I' => "iron_ingot",
+        'G' => "glass",
+        'A' => "azurite",
+        'Z' => "stormglass",
         _ => throw new InvalidOperationException($"recipe '{recipe}' uses unknown key '{key}'"),
     };
 }

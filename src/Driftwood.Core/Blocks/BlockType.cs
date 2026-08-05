@@ -1,5 +1,27 @@
 namespace Driftwood.Core.Blocks;
 
+/// <summary>What a right click on a block does, when it does anything.</summary>
+/// <remarks>
+/// A named answer rather than a chain of tests on the block's own name. Two blocks answered a
+/// right click when this was a bare flag and the input handler could afford to spell them out; the
+/// third is where that stops being true, and where "what does using this do" has to be something a
+/// block says about itself rather than something the caller works out.
+/// </remarks>
+public enum BlockUse
+{
+    /// <summary>Nothing. A right click builds on it, which is what almost every block wants.</summary>
+    None = 0,
+
+    /// <summary>Opens the three-by-three.</summary>
+    Bench,
+
+    /// <summary>Opens the furnace at this cell.</summary>
+    Furnace,
+
+    /// <summary>Swaps to this block's other state — lit or out, open or shut.</summary>
+    Toggle,
+}
+
 /// <summary>Which colour lookup, if any, a block's texture is multiplied by.</summary>
 public enum TintSource
 {
@@ -94,10 +116,25 @@ public sealed class BlockType
     /// <summary>True when bare hands are the wrong way to take this.</summary>
     public bool NeedsTool => HarvestTier > 0;
 
+    /// <summary>What using this block does, if anything.</summary>
+    public BlockUse Use { get; init; }
+
     /// <summary>
     /// True when using this block does something, so a right-click opens it rather than building on it.
     /// </summary>
-    public bool Interactive { get; init; }
+    public bool Interactive => Use != BlockUse.None;
+
+    /// <summary>
+    /// The side of this block's own cell that has to have something to hold on to, or -1.
+    /// </summary>
+    /// <remarks>
+    /// <para>Named on the block rather than on the item that puts it down, because it is the
+    /// question asked long after placement: the wall a torch is fixed to can be taken away, and
+    /// something has to notice. <see cref="SupportTable"/> is what does.</para>
+    /// <para><see cref="Placeable.NeedsFirmSupport"/> says what counts in each direction — down
+    /// means anything a foot would rest on, any other way means a whole block face.</para>
+    /// </remarks>
+    public int SupportFace { get; init; } = -1;
 
     /// <summary>Nothing takes this block. Bedrock, and the floor of the world.</summary>
     public bool Unbreakable => Hardness < 0f;

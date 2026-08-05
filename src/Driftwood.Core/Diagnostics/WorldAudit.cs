@@ -410,6 +410,14 @@ public static class WorldAudit
         Check("things that join up find their neighbours", joinFaults.Count == 0,
             joinFaults.Count == 0 ? joinDetail : $"{joinFaults.Count} faults: {joinFaults[0]}");
 
+        var supportFaults = SupportSelfTest(registry, items, drops, out var supportDetail);
+        Check("what is held up comes down with its wall", supportFaults.Count == 0,
+            supportFaults.Count == 0 ? supportDetail : $"{supportFaults.Count} faults: {supportFaults[0]}");
+
+        var lampFaults = CraftedLightSelfTest(registry, out var lampDetail);
+        Check("light can be built, and blocked", lampFaults.Count == 0,
+            lampFaults.Count == 0 ? lampDetail : $"{lampFaults.Count} faults: {lampFaults[0]}");
+
         var furnaceFaults = FurnaceSelfTest(items, book, out var furnaceDetail);
         Check("a furnace burns only when it has work", furnaceFaults.Count == 0,
             furnaceFaults.Count == 0 ? furnaceDetail : $"{furnaceFaults.Count} faults: {furnaceFaults[0]}");
@@ -2363,6 +2371,235 @@ public static class WorldAudit
         }
     }
 
+    /// <summary>
+    /// Checks that the light a player can build gets brighter, and that smokeglass stops it.
+    /// </summary>
+    /// <remarks>
+    /// <para>⚠ <b>The ladder is not a ladder of range, and saying it was is what this check first
+    /// got wrong.</b> A torch reaches fourteen and everything above it reaches fifteen, which is the
+    /// ceiling — so "each brighter than the last" is a claim only the first rung can satisfy and the
+    /// rest would pass it by being equal. What actually distinguishes them is <em>colour</em>: a
+    /// torch and a fire are warm, a lantern is warm and much whiter, and the lamp is the one cold
+    /// light there is. So both are asserted, and separately — everything outruns a torch, and the
+    /// lamp is not a lantern with a different name on it.</para>
+    /// <para>The second is the one worth having. Smokeglass is the only block in the set that is
+    /// seen through and not passed through, which is possible only because opacity and attenuation
+    /// are separate fields — and the way that breaks is somebody deciding they are the same thing,
+    /// after which smokeglass is either an ordinary window or a solid grey cube. Both halves are
+    /// asserted, so either collapse fails by name.</para>
+    /// <para>Toggling is checked as a round trip and as a difference. A pair that swaps back to
+    /// itself would pass "there and back again" while doing nothing at all, so the lit form also has
+    /// to actually give off light the unlit one does not.</para>
+    /// </remarks>
+    private static List<string> CraftedLightSelfTest(BlockRegistry registry, out string detail)
+    {
+        var faults = new List<string>();
+
+        // How far a source reaches: one level lost per step, so the peak channel is the range.
+        static int Reach(BlockType type) => LightValue.BlockPeak(type.LightEmission);
+
+        var torch = registry.ByName("torch");
+        var lantern = registry.ByName("lantern");
+        var lamp = registry.ByName("stormglass_lamp");
+        var fire = registry.ByName("campfire_x_lit");
+        var glass = registry.ByName("glass");
+        var smoke = registry.ByName("smokeglass");
+
+        if (Reach(torch) == 0) faults.Add("a torch gives off no light at all");
+        if (Reach(lantern) <= Reach(torch))
+            faults.Add($"a lantern reaches {Reach(lantern)} against a torch's {Reach(torch)}, "
+                     + "so there is no reason to make one");
+        if (Reach(lamp) <= Reach(torch))
+            faults.Add($"a stormglass lamp reaches {Reach(lamp)}, no further than a torch");
+        if (Reach(fire) == 0) faults.Add("a lit campfire gives off no light");
+
+        // Warm against cold, which is the difference the range cannot express because everything
+        // above a torch is already at the ceiling. A lamp that came out warm is a lantern with
+        // another name, and every cave in the game would be lit one colour.
+        static int Warmth(BlockType type) =>
+            LightValue.Red(type.LightEmission) - LightValue.Blue(type.LightEmission);
+
+        foreach (var warm in (BlockType[])[torch, fire, lantern])
+            if (Warmth(warm) <= 0)
+                faults.Add($"{warm.Name} burns as cold as it does warm, so nothing in the game is firelight");
+
+        if (Warmth(lamp) >= 0)
+            faults.Add($"a stormglass lamp is {Warmth(lamp)} warmer than it is cold, "
+                     + "so it lights a room the same colour a torch does");
+
+        // A wall torch is the same light as the one it was made from, whichever wall it is on.
+        for (var i = 0; i < Placeable.Facings.Length; i++)
+        {
+            var wall = registry.ByName($"torch_wall_{FacingName(Placeable.Facings[i])}");
+            if (wall.LightEmission != torch.LightEmission)
+                faults.Add($"{wall.Name} burns differently from the torch it is");
+        }
+
+        // Glass and smokeglass differ in exactly one thing, and it is not opacity.
+        if (glass.Opaque || smoke.Opaque)
+            faults.Add("glass or smokeglass hides what is behind it, so neither is a window");
+        if (!smoke.Solid) faults.Add("smokeglass is not solid, so it is not a block anybody can build with");
+        if (glass.LightAttenuation != 0)
+            faults.Add($"plain glass dims light by {glass.LightAttenuation}, so a glasshouse is dark");
+        if (smoke.LightAttenuation < LightValue.Max)
+            faults.Add($"smokeglass dims light by only {smoke.LightAttenuation} of {LightValue.Max}, "
+                     + "so it is an ordinary window with a dark texture");
+
+        // And the table the propagator actually reads has to agree, which is a different claim from
+        // what the block says about itself: the two are joined by one Math.Clamp and a ternary.
+        var dimming = registry.BuildLightAttenuationTable();
+        if (dimming[smoke.Id.Value] < LightValue.Max)
+            faults.Add($"the propagator dims smokeglass by {dimming[smoke.Id.Value]}, not {LightValue.Max}");
+        if (dimming[glass.Id.Value] != 0)
+            faults.Add($"the propagator dims plain glass by {dimming[glass.Id.Value]}");
+
+        // Every toggle pairs both ways, and the two states are actually different.
+        var toggles = 0;
+        var pairs = new Dictionary<ushort, BlockId>();
+        foreach (var (from, to) in StarterBlocks.Toggles(registry)) pairs[from.Value] = to;
+
+        foreach (var (from, to) in pairs)
+        {
+            toggles++;
+
+            if (!pairs.TryGetValue(to.Value, out var back) || back.Value != from)
+                faults.Add($"{registry[from].Name} toggles to {registry[to].Name} and not back again");
+
+            if (registry[from].LightEmission == registry[to].LightEmission)
+                faults.Add($"{registry[from].Name} and {registry[to].Name} give off the same light, "
+                         + "so using it changes nothing anybody can see");
+        }
+
+        if (toggles == 0) faults.Add("no block has a second state, so nothing here was checked");
+
+        detail = $"torch {Reach(torch)} warm {Warmth(torch):+#;-#;0}, fire {Reach(fire)} "
+               + $"{Warmth(fire):+#;-#;0}, lantern {Reach(lantern)} {Warmth(lantern):+#;-#;0}, "
+               + $"lamp {Reach(lamp)} {Warmth(lamp):+#;-#;0}; glass dims 0 and smokeglass "
+               + $"{LightValue.Max} while neither is opaque; {toggles} states swap both ways";
+
+        return faults;
+    }
+
+    /// <summary>The name a facing is registered under, in <see cref="Placeable.Facings"/> terms.</summary>
+    private static string FacingName(int face) => face switch
+    {
+        Faces.PosX => "east",
+        Faces.NegX => "west",
+        Faces.PosZ => "south",
+        _ => "north",
+    };
+
+    /// <summary>
+    /// Fixes things to walls, floors and ceilings, then takes each away and checks what falls.
+    /// </summary>
+    /// <remarks>
+    /// <para>The pass has to answer three separate claims and each is asked on its own. That what
+    /// needs holding up says so — a table where nothing declares a support face would make every
+    /// other assertion here vacuously true, so the count is checked first. That taking the support
+    /// away brings the thing down and leaves the right item. And that a support still there leaves
+    /// it alone, which is the control: a pass that simply cleared its neighbours would satisfy every
+    /// "did it fall" test ever written.</para>
+    /// <para>The cascade is the reason the pass has a queue instead of a ring, so it is measured
+    /// rather than argued: a stack four deep is built out of things that hold each other, the block
+    /// under all of it is removed, and every one of the four has to come down from that single edit.
+    /// A ring would take the bottom one and leave three hanging.</para>
+    /// </remarks>
+    private static List<string> SupportSelfTest(
+        BlockRegistry registry, ItemRegistry items, BlockDrops drops, out string detail)
+    {
+        var faults = new List<string>();
+        var table = new SupportTable(registry);
+        var fell = new List<(int X, int Y, int Z, BlockId Was)>();
+
+        // Nothing needs holding up: every claim below would pass on an empty table.
+        if (table.Supported == 0)
+            faults.Add("no block in the whole registry says what holds it up, so this checks nothing");
+
+        var stone = registry.ByName("stone").Id;
+        var pane = StarterBlocks.Connected(registry, "glass_pane")[0];
+        var torch = registry.ByName("torch").Id;
+        var wallTorch = registry.ByName("torch_wall_east").Id;
+        var lantern = registry.ByName("lantern_hanging").Id;
+
+        // A wall with a torch on its east face, and a torch standing on top of it.
+        var world = new VoxelWorld(registry);
+        world.SetBlock(0, 64, 0, stone);
+        world.SetBlock(1, 64, 0, wallTorch);
+        world.SetBlock(0, 65, 0, torch);
+
+        if (!table.Holds(world, 1, 64, 0)) faults.Add("a torch on a wall was not being held by it");
+        if (!table.Holds(world, 0, 65, 0)) faults.Add("a torch on a floor was not being held by it");
+
+        // The control: an edit two cells away must move nothing at all.
+        fell.Clear();
+        world.SetBlock(4, 64, 0, stone);
+        if (table.Shed(world, 4, 64, 0, fell) != 0)
+            faults.Add($"putting a block down two cells away brought {fell.Count} things off a wall it never touched");
+
+        // Now take the wall out from under both of them.
+        fell.Clear();
+        world.SetBlock(0, 64, 0, BlockId.Air);
+        table.Shed(world, 0, 64, 0, fell);
+
+        if (!world.GetBlock(1, 64, 0).IsAir) faults.Add("a wall torch stayed in the air after its wall was mined");
+        if (!world.GetBlock(0, 65, 0).IsAir) faults.Add("a standing torch stayed in the air after its floor was mined");
+        if (fell.Count != 2) faults.Add($"{fell.Count} things came down where two were held up");
+
+        // And what came down has to become something. A torch that falls and leaves nothing is a
+        // torch a player has lost to a rule nobody told them about.
+        foreach (var (_, _, _, was) in fell)
+        {
+            if (drops.Of(was).IsEmpty)
+                faults.Add($"{registry[was].Name} came down and left nothing on the floor");
+            else if (items[drops.Of(was).Item].Name != "torch")
+                faults.Add($"{registry[was].Name} came down and left {drops.Describe(was)} rather than a torch");
+        }
+
+        // A pane is solid and is not a whole face, so nothing fixes itself to one — the difference
+        // between "solid" and "something to hang off" is the whole reason the two tests are separate.
+        var thin = new VoxelWorld(registry);
+        thin.SetBlock(0, 64, 0, pane);
+        thin.SetBlock(1, 64, 0, wallTorch);
+        if (table.Holds(thin, 1, 64, 0))
+            faults.Add("a torch hung off a pane of glass, which has no face to hold it");
+
+        // But a pane will hold something standing on it, which is what a foot rests on.
+        thin.SetBlock(0, 65, 0, torch);
+        if (!table.Holds(thin, 0, 65, 0))
+            faults.Add("a torch would not stand on a pane of glass, which is something to stand on");
+
+        // A ceiling holds what hangs from it, and stops doing so when it goes.
+        var roof = new VoxelWorld(registry);
+        roof.SetBlock(0, 66, 0, stone);
+        roof.SetBlock(0, 65, 0, lantern);
+        if (!table.Holds(roof, 0, 65, 0)) faults.Add("a hanging lantern was not being held by the ceiling");
+
+        fell.Clear();
+        roof.SetBlock(0, 66, 0, BlockId.Air);
+        table.Shed(roof, 0, 66, 0, fell);
+        if (!roof.GetBlock(0, 65, 0).IsAir) faults.Add("a lantern kept hanging from a ceiling that was gone");
+
+        // The cascade, and the reason there is a queue. Four torches each standing on the one below
+        // — which is what a door is, and what a ring pass would get wrong by three.
+        var stack = new VoxelWorld(registry);
+        stack.SetBlock(0, 63, 0, stone);
+        for (var y = 64; y < 68; y++) stack.SetBlock(0, y, 0, torch);
+
+        fell.Clear();
+        stack.SetBlock(0, 63, 0, BlockId.Air);
+        var cascaded = table.Shed(stack, 0, 63, 0, fell);
+
+        if (cascaded != 4)
+            faults.Add($"a stack four deep lost {cascaded} of its four when the block under it went — "
+                     + "the pass is not following what was leaning on what");
+
+        detail = $"{table.Supported} of {registry.Count} blocks say what holds them, on walls, floors "
+               + $"and ceilings; a pane holds a foot and not a fixing, {cascaded} of a stack of 4 "
+               + "cascade off one edit, and an edit two cells away moves nothing";
+
+        return faults;
+    }
+
     /// <summary>Whether any part of a model reaches the cell wall on one side.</summary>
     private static bool ReachesEdge(BlockModel model, int face)
     {
@@ -3392,6 +3629,14 @@ public static class WorldAudit
                     continue;
                 }
 
+                // Attached refuses a ceiling and takes everything else, which is the one kind whose
+                // answer to "can it go here" is neither always yes nor one face.
+                if (entry.Kind == PlacementKind.Attached && face == Faces.NegY)
+                {
+                    if (placed) faults.Add($"{where}: fixed itself to a ceiling");
+                    continue;
+                }
+
                 if (!placed)
                 {
                     faults.Add($"{where}: refused to place at all");
@@ -3401,6 +3646,48 @@ public static class WorldAudit
                 if (entry.Kind == PlacementKind.Plain) continue;
 
                 var model = registry[id].Model;
+
+                // The two kinds that hang off something. Both claims are checked, and separately:
+                // that the form which came back says it is held on the side that was struck, and
+                // that its shape is actually over there. The first alone would pass a variant table
+                // shuffled into the wrong order as long as the labels moved with it; the second
+                // alone would pass a wall torch built for the right wall and handed out for the
+                // wrong one. It takes both to say a torch leans out of the wall it was put on.
+                if (entry.Kind is PlacementKind.Attached or PlacementKind.Hung)
+                {
+                    var wall = Array.IndexOf(Placeable.Facings, face);
+                    var want = entry.Kind == PlacementKind.Attached
+                        ? wall >= 0 ? Placeable.Opposite(face) : Faces.NegY
+                        : face == Faces.NegY ? Faces.PosY : Faces.NegY;
+
+                    var says = registry[id].SupportFace;
+                    if (says != want)
+                    {
+                        faults.Add($"{where}: says it is held on face {says}, wanted {want}");
+                        continue;
+                    }
+
+                    var lean = LeanOf(model, want);
+                    if (lean < 0.05f)
+                        faults.Add($"{where}: held on face {want} but its shape sits {lean:F3} that way "
+                                 + "— it is not against what is meant to be holding it");
+
+                    continue;
+                }
+
+                // Something lying along an axis has no halves and no front either. What has to be
+                // true is that its long boxes run the way the player was looking — read off the
+                // model, because "it picked variant 0" only says the table was indexed.
+                if (entry.Kind == PlacementKind.Axis)
+                {
+                    var wantAxis = wantFacing is Faces.PosX or Faces.NegX ? 0 : 2;
+                    var gotAxis = LongAxis(model);
+
+                    if (gotAxis != wantAxis)
+                        faults.Add($"{where}: lies along axis {gotAxis}, wanted {wantAxis}");
+
+                    continue;
+                }
 
                 // A facing block has no halves. Its face has to end up looking back at whoever put
                 // it down, which is the opposite cardinal to the one a stair's step points along —
@@ -3481,6 +3768,61 @@ public static class WorldAudit
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// How far toward one side of the cell a shape actually sits, from 0 (centred) to 0.5 (flush).
+    /// </summary>
+    /// <remarks>
+    /// <para>Measured off the box a player aims at rather than off every quad, because a torch draws
+    /// itself on two planes a whole cell wide and those reach every side of the cell whichever way
+    /// it is leaning. The outline is the stick, so this reads where the stick is.</para>
+    /// <para>A displacement rather than "does it touch that face": touching is satisfied by a shape
+    /// that spans the whole cell and says nothing about which way it leans, which is the vacuous
+    /// version of this test. A wall torch built for the opposite wall touches the same faces and
+    /// leans the wrong way, so the sign is the part that discriminates.</para>
+    /// </remarks>
+    private static float LeanOf(BlockModel model, int face)
+    {
+        var (min, max) = model.Outline;
+        var centre = (min + max) * 0.5f;
+
+        var n = Faces.Normals[face];
+        var along = n.X != 0 ? centre.X : n.Y != 0 ? centre.Y : centre.Z;
+        var toward = n.X + n.Y + n.Z > 0 ? along - 0.5f : 0.5f - along;
+
+        return toward;
+    }
+
+    /// <summary>
+    /// The axis a shape's long boxes run along — 0 for x, 2 for z, -1 when none of them are long.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ Takes the <em>lowest</em> long boxes, not the first and not the majority. A campfire is two
+    /// logs one way crossed by two the other, so counting them comes out even and answers nothing —
+    /// which is a check that would have passed both forms of it. What lies on the ground is what a
+    /// stack of timber points along, and that is a statement about the shape rather than about the
+    /// order somebody happened to write its boxes in.
+    /// </remarks>
+    private static int LongAxis(BlockModel model)
+    {
+        var lowest = float.MaxValue;
+        var axis = -1;
+
+        foreach (var element in model.Elements)
+        {
+            var wide = element.To.X - element.From.X >= 15.9f;
+            var deep = element.To.Z - element.From.Z >= 15.9f;
+
+            // Long both ways or neither is a box with no direction in it.
+            if (wide == deep) continue;
+            if (element.From.Y >= lowest) continue;
+
+            lowest = element.From.Y;
+            axis = wide ? 0 : 2;
+        }
+
+        return axis;
     }
 
     /// <summary>Which side of the cell a stair's raised step sits on, or -1 when nothing does.</summary>

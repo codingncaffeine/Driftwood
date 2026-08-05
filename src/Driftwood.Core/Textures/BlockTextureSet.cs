@@ -123,6 +123,24 @@ public static class BlockTextureSet
         new("sandstone_cut", "textures/block/cut_sandstone.png",  false),
         new("sandstone_chiseled", "textures/block/chiseled_sandstone.png", false),
 
+        // Light a player can make. Our smokeglass is their tinted glass and our stormglass lamp is
+        // the bright block a pack has painted for the bottom of the sea, which is the same trade
+        // every coined name in this table makes. The fire that stands in a campfire is the one file
+        // whose name differs between the layouts, and the rename table carries it.
+        //
+        // ⚠ A lantern keeps ours, and the empty path is the table saying why out loud. A pack's
+        // lantern.png is not a picture of a lantern — it is a sheet with a body, a cap and a chain
+        // packed into corners of it, and which corner is which is stated in the model file beside
+        // it and nowhere else. Measured on a real pack of each layout: neither puts a six-by-seven
+        // body anywhere a rect derived from ours would land. Reading a pack's own models is the
+        // real fix and is the only way any of the packed-sheet blocks will ever import; guessing at
+        // rects would put a lantern's chain across its own door in most packs and in none of them
+        // obviously. Everything else new here maps a whole tile onto a whole face and is safe.
+        new("lantern",     "",                                    false),
+        new("campfire_fire", "textures/block/campfire_fire.png",  true),
+        new("smokeglass",  "textures/block/tinted_glass.png",     false),
+        new("stormglass_lamp", "textures/block/sea_lantern.png",  false),
+
         // Items, from here to the end. They live in the same array as the block faces because they
         // are the same sixteen-pixel tiles drawn by the same two places — a slot on the bar and a
         // thing spinning on the floor — and a pack that reskins the world should reskin the pockets
@@ -459,6 +477,14 @@ public static class BlockTextureSet
             StarterBlocks.LayerSaltstonePolished => TileGen.Polished(1021, 202, 202, 205),
             StarterBlocks.LayerSandstoneCut => TileGen.CutBlock(1027, 214, 199, 152),
             StarterBlocks.LayerSandstoneChiseled => TileGen.Chiselled(1027, 214, 199, 152),
+
+            // Light. The lantern is iron round a flame, so it takes the iron ingot's own colour;
+            // the lamp is stormglass set solid, so it takes the gem's. Both relationships are the
+            // same one the worked rocks have with the rock they were cut from.
+            StarterBlocks.LayerLantern => TileGen.LanternTile(1056, 176, 176, 184),
+            StarterBlocks.LayerCampfireFire => TileGen.Fire(1057),
+            StarterBlocks.LayerSmokeglass => TileGen.Smokeglass(1058),
+            StarterBlocks.LayerStormglassLamp => TileGen.Lamp(1059, 132, 210, 214),
 
             // The bench is planks that have been worked on: grooves where a straight edge was laid
             // and nicks where it was not.

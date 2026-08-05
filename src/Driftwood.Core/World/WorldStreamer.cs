@@ -156,6 +156,23 @@ public sealed class WorldStreamer : IDisposable
     }
 
     /// <summary>
+    /// Books the light and mesh work for a cell somebody else has already written.
+    /// </summary>
+    /// <remarks>
+    /// The one way into this queue that does not also write the block, for the passes that run over
+    /// several cells at once and have their own reason to touch each. Going back through
+    /// <see cref="EditBlock"/> for each would re-run the whole neighbour sweep once per cell.
+    /// </remarks>
+    public void TouchBlock(int wx, int wy, int wz)
+    {
+        if (wy < 0 || wy >= TerrainGenerator.WorldHeight) return;
+        if (!_world.TryGetChunk(ChunkPos.FromWorld(wx, wy, wz), out _)) return;
+
+        _editQueue.Enqueue((wx, wy, wz));
+        _lightWork.Release();
+    }
+
+    /// <summary>
     /// Lets anything that joins up with its neighbours re-pick its shape after an edit.
     /// </summary>
     /// <remarks>

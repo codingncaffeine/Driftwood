@@ -19,6 +19,33 @@ public enum PlacementKind
 
     /// <summary>One form, and only on top of something.</summary>
     Standing,
+
+    /// <summary>
+    /// Five forms: standing on the floor, or leaning off any of the four walls.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="Variants"/> is the standing form followed by the four wall forms in
+    /// <see cref="Facings"/> order, each named for the way it <em>leans</em> — which is the face
+    /// that was struck, since a thing put against a wall points away from it.
+    /// </remarks>
+    Attached,
+
+    /// <summary>Two forms: standing on what is below, or hanging from what is above.</summary>
+    /// <remarks>
+    /// Lower then upper, which is the same order <see cref="Halved"/> stores its two in. A side
+    /// face gives the standing form rather than refusing: a player aiming at the wall beside a
+    /// floor meant the floor, and the support test says so if they did not.
+    /// </remarks>
+    Hung,
+
+    /// <summary>Two forms: lying along x, or along z.</summary>
+    /// <remarks>
+    /// Not <see cref="Facing"/> with half the answers thrown away. A thing that lies along an axis
+    /// looks the same from both ends, so four facings would be four ids for two shapes and a check
+    /// that could never tell two of them apart — which is exactly how a campfire arrived before this
+    /// kind existed. A log laid sideways and a rail want the same two.
+    /// </remarks>
+    Axis,
 }
 
 /// <summary>
@@ -52,14 +79,6 @@ public sealed class Placeable
     /// <summary>The four cardinal facings, in the order stair variants are stored.</summary>
     public static readonly int[] Facings = [Faces.PosX, Faces.NegX, Faces.PosZ, Faces.NegZ];
 
-    /// <summary>True when this must have something solid under it to stand on.</summary>
-    /// <remarks>
-    /// The world query stays with the caller. Everything else here is decided from the hit alone,
-    /// which is what lets every orientation be checked headlessly; asking what is under the target
-    /// cell needs a world, and dragging one in here to answer one question would cost that.
-    /// </remarks>
-    public bool NeedsFloor => Kind == PlacementKind.Standing;
-
     /// <summary>
     /// Works out which form to place, or reports that it cannot go there.
     /// </summary>
@@ -77,6 +96,11 @@ public sealed class Placeable
     /// <para>Stairs take the direction from a vector rather than an angle, deliberately. An angle
     /// needs a convention for where zero points and which way it turns, and getting that wrong puts
     /// every stair in the world a quarter turn out in a way that looks like a modelling bug.</para>
+    /// <para><b>What holds the result up is not answered here.</b> The form that comes back already
+    /// says — a torch fixed to the west wall is a different registered block from one standing on
+    /// the floor, and <see cref="BlockType.SupportFace"/> on it is the one statement of that. A
+    /// second copy of the answer alongside the id is a second copy to keep in step, and the question
+    /// is asked again long after placement, when the wall is taken away.</para>
     /// </remarks>
     public bool TryResolve(int hitFace, float hitHeight, Vector3 forward, out BlockId id)
     {
@@ -101,17 +125,56 @@ public sealed class Placeable
                 return true;
 
             case PlacementKind.Standing:
-                // Nothing holds it up on a wall or a ceiling yet, so it does not go there at all.
-                // Placing it anyway leaves a torch hanging in mid-air, which reads as a bug in the
+                // Nothing holds it up on a wall or a ceiling, so it does not go there at all.
+                // Placing it anyway leaves it hanging in mid-air, which reads as a bug in the
                 // renderer rather than as a rule nobody wrote.
                 id = Variants[0];
                 return hitFace == Faces.PosY;
+
+            case PlacementKind.Attached:
+            {
+                // A wall was struck: the thing leans out of it, away from the player. A ceiling has
+                // nothing to offer either form, so nothing goes there.
+                var wall = Array.IndexOf(Facings, hitFace);
+                id = wall >= 0 ? Variants[1 + wall] : Variants[0];
+                return hitFace != Faces.NegY;
+            }
+
+            case PlacementKind.Hung:
+                id = Variants[hitFace == Faces.NegY ? 1 : 0];
+                return true;
+
+            case PlacementKind.Axis:
+                // Lying along the way the player is looking, so a fire built in front of somebody
+                // runs away from them rather than across their path.
+                id = Variants[Cardinal(forward) is Faces.PosX or Faces.NegX ? 0 : 1];
+                return true;
 
             default:
                 id = Variants[0];
                 return true;
         }
     }
+
+    /// <summary>The face opposite another, which is what a pair of them differ by.</summary>
+    /// <remarks>
+    /// <see cref="Faces"/> lists each direction beside its own opposite, so the pairing is the low
+    /// bit and there is nothing to keep in step. Anything that reorders that table breaks this, and
+    /// the table says so at the top of itself.
+    /// </remarks>
+    public static int Opposite(int face) => face ^ 1;
+
+    /// <summary>
+    /// True when what holds this up has to be a whole block face rather than merely solid.
+    /// </summary>
+    /// <remarks>
+    /// A torch stands happily on a slab or a stair — anything a foot would rest on. Hanging one off
+    /// a fence post or a pane of glass is a different question, because there is no face there to
+    /// fix it to, and the answer differs by direction rather than by block: down means "something to
+    /// stand on", any other way means "something to fix to". The world query itself stays with the
+    /// caller, as it does for everything else here.
+    /// </remarks>
+    public static bool NeedsFirmSupport(int support) => support >= 0 && support != Faces.NegY;
 
     /// <summary>The cardinal a horizontal direction points most nearly along.</summary>
     /// <remarks>
