@@ -11,29 +11,70 @@ namespace Driftwood.Client.Render;
 public enum HudScreenKind
 {
     None,
-    Crafting,
+
+    /// <summary>The tabbed one: what can be made, and everything that can be changed.</summary>
+    Menu,
+
+    /// <summary>A station rather than a menu, so it has no tabs.</summary>
     Furnace,
 }
+
+/// <summary>The tabs across the top of the menu, in the order they are shown.</summary>
+public enum MenuTab
+{
+    Craft,
+    Controls,
+    Video,
+    Audio,
+    World,
+}
+
+/// <summary>
+/// One line of a settings tab: what it is, and what it is currently set to.
+/// </summary>
+/// <param name="Heading">True for a group title, which has no value and cannot be selected.</param>
+/// <param name="Note">A second, dimmer line under it — what a setting costs, or when it applies.</param>
+public readonly record struct MenuRow(string Label, string Value = "", bool Heading = false, string Note = "");
 
 /// <summary>
 /// Everything the overlay needs to know about the screen the player has open.
 /// </summary>
-/// <param name="Recipes">What this station can make, craftable or not.</param>
-/// <param name="Payable">Whether each of those can be paid for right now, in the same order.</param>
 /// <remarks>
-/// Uncraftable recipes are listed rather than hidden, greyed out. A book that shows only what you
-/// can already afford answers "what now" and never answers "what for" — and what a player wants
-/// from a recipe screen in this genre is mostly the second question.
+/// <para>A class the host owns and fills in rather than a value passed by copy, because it holds
+/// three lists that are rebuilt every frame and copying them around would be the only allocation
+/// on the overlay path.</para>
+/// <para>The rows are built by whoever knows what the settings mean, and this side only draws a
+/// label and a value. That split is what keeps the renderer from growing a switch over every
+/// setting in the game — and it is why the world tab, which is mostly read-outs, costs nothing
+/// here at all.</para>
 /// </remarks>
-public readonly record struct HudScreen(
-    HudScreenKind Kind,
-    IReadOnlyList<Recipe> Recipes,
-    IReadOnlyList<bool> Payable,
-    int Selected,
-    Furnace? Burning,
-    int Slot)
+public sealed class HudScreen
 {
-    public static readonly HudScreen None = new(HudScreenKind.None, [], [], 0, null, 0);
+    public HudScreenKind Kind;
+    public MenuTab Tab;
+
+    /// <summary>What this station can make, craftable or not.</summary>
+    /// <remarks>
+    /// Uncraftable recipes are listed rather than hidden, greyed out. A book that shows only what
+    /// you can already afford answers "what now" and never answers "what for", and what a player
+    /// wants from a recipe screen in this genre is mostly the second question.
+    /// </remarks>
+    public readonly List<Recipe> Recipes = [];
+
+    /// <summary>Whether each of those can be paid for right now, in the same order.</summary>
+    public readonly List<bool> Payable = [];
+
+    /// <summary>The lines of whichever settings tab is open.</summary>
+    public readonly List<MenuRow> Rows = [];
+
+    /// <summary>Which recipe or row is picked out.</summary>
+    public int Selected;
+
+    /// <summary>The hint along the bottom — what the keys do here, right now.</summary>
+    public string Footer = "";
+
+    public Furnace? Burning;
+    public int Slot;
 
     public bool IsOpen => Kind != HudScreenKind.None;
 }
@@ -176,7 +217,7 @@ public sealed class HudRenderer : IDisposable
         ItemRegistry catalogue,
         Inventory inventory,
         PlayerVitals vitals,
-        in HudScreen screen,
+        HudScreen screen,
         int screenWidth,
         int screenHeight)
     {
@@ -185,9 +226,15 @@ public sealed class HudRenderer : IDisposable
         _iconQuads.Clear();
         _text.Clear();
 
-        var scale = MathF.Max(1f, MathF.Floor(screenHeight / DesignHeight * 2f) / 2f);
-        var w = screenWidth / scale;
-        var h = screenHeight / scale;
+        // A whole number of screen pixels per layout unit, never a half. Everything here is pixel
+        // art — a font drawn at twice its authored size, two-pixel bevels, hard edges — and all of
+        // that depends on one layout unit landing on exactly one grid of pixels. At a half step the
+        // bevels come out one and a half pixels wide, which the sampler resolves by blurring them,
+        // and the whole interface goes soft in a way that reads as a low resolution rather than as
+        // a deliberate one.
+        var scale = MathF.Max(1f, MathF.Floor(screenHeight / DesignHeight));
+        var w = MathF.Floor(screenWidth / scale);
+        var h = MathF.Floor(screenHeight / scale);
 
         // A screen covers the world and the crosshair with it: a reticle over an inventory is
         // aiming at nothing, and it sits exactly where the eye is trying to read.
@@ -269,25 +316,20 @@ public sealed class HudRenderer : IDisposable
 
         var width = Inventory.Slots * Slot;
         var left = MathF.Round((w - width) / 2f);
-        var top = h - Slot - 6f;
+        var top = MathF.Round(h - Slot - 8f);
 
-        Rect(_plain, left - 2f, top - 2f, width + 4f, Slot + 4f, new Vector4(0.05f, 0.05f, 0.07f, 0.55f));
+        Bevel(left - 3f, top - 3f, width + 6f, Slot + 6f, raised: true, PanelFill);
 
         for (var i = 0; i < Inventory.Slots; i++)
         {
             var x = left + i * Slot;
 
-            Rect(_plain, x, top, Slot, Slot, new Vector4(0.12f, 0.12f, 0.15f, 0.55f));
+            // Each pocket pressed into the bar, so the bar reads as a rack of them rather than as
+            // nine rectangles drawn on one.
+            Bevel(x + 1f, top + 1f, Slot - 2f, Slot - 2f, raised: false, SlotFill);
 
-            // The selected slot gets a frame rather than a fill, so the icon in it is not tinted.
-            if (i == inventory.Selected)
-            {
-                var frame = new Vector4(1f, 1f, 1f, 0.9f);
-                Rect(_plain, x - 1f, top - 1f, Slot + 2f, 1.5f, frame);
-                Rect(_plain, x - 1f, top + Slot - 0.5f, Slot + 2f, 1.5f, frame);
-                Rect(_plain, x - 1f, top - 1f, 1.5f, Slot + 2f, frame);
-                Rect(_plain, x + Slot - 0.5f, top - 1f, 1.5f, Slot + 2f, frame);
-            }
+            // The one in hand gets a lit edge rather than a fill, so the icon in it is not tinted.
+            if (i == inventory.Selected) Select(x + 1f, top + 1f, Slot - 2f, Slot - 2f);
 
             var stack = inventory[i];
             if (stack.IsEmpty) continue;
@@ -323,25 +365,102 @@ public sealed class HudRenderer : IDisposable
     /// <para>Uncraftable recipes are drawn dark rather than left out. Half the value of the screen
     /// is seeing that a stormglass pickaxe exists long before there is any stormglass.</para>
     /// </remarks>
-    private void Screen(ItemRegistry catalogue, in HudScreen screen, float w, float h)
+    private void Screen(ItemRegistry catalogue, HudScreen screen, float w, float h)
     {
-        Rect(_plain, 0f, 0f, w, h, new Vector4(0.02f, 0.02f, 0.04f, 0.62f));
+        Rect(_plain, 0f, 0f, w, h, new Vector4(0.02f, 0.02f, 0.04f, 0.72f));
 
         const float Panel = 232f;
         var left = MathF.Round((w - Panel) / 2f);
-        var top = MathF.Round(h * 0.16f);
+        var top = MathF.Round(h * 0.12f);
 
         if (screen.Kind == HudScreenKind.Furnace)
         {
             Hearth(catalogue, screen, left, top, Panel);
+            Footer(screen, w, h);
             return;
         }
 
-        Book(catalogue, screen, left, top, Panel);
+        Tabs(screen, left, top, Panel);
+        var body = top + 22f;
+
+        if (screen.Tab == MenuTab.Craft) Book(catalogue, screen, left, body, Panel);
+        else Rows(screen, left, body, Panel);
+
+        Footer(screen, w, h);
+    }
+
+    /// <summary>The tabs, with the open one lit and underlined.</summary>
+    private void Tabs(HudScreen screen, float left, float top, float panel)
+    {
+        var names = Enum.GetNames<MenuTab>();
+        var pen = left;
+
+        for (var i = 0; i < names.Length; i++)
+        {
+            var name = names[i].ToLowerInvariant();
+            var width = MathF.Round(TextWidth(name, 8f)) + 10f;
+            var open = (int)screen.Tab == i;
+
+            // The open one stands out of the screen and the shut ones are pressed into it, which is
+            // the oldest way of drawing a tab and still the one that needs no explaining.
+            Bevel(pen, top, width, 16f, open, open ? PanelFill : new Vector4(0.05f, 0.06f, 0.08f, 0.95f));
+
+            Text(name, pen + 5f, top + 4f, 8f,
+                open ? Highlight : new Vector4(0.52f, 0.55f, 0.62f, 1f));
+
+            pen += width + 2f;
+        }
+
+        // The rule the open tab is standing on. Drawn after, so its two pixels meet the panel below
+        // rather than the tab above.
+        Rect(_plain, left, top + 16f, panel, 2f, PanelLight);
+    }
+
+    /// <summary>A settings tab: a label on the left and what it is set to on the right.</summary>
+    private void Rows(HudScreen screen, float left, float top, float panel)
+    {
+        const float Line = 13f;
+
+        Frame(left - 4f, top - 4f, panel + 8f, screen.Rows.Count * Line + 12f);
+
+        for (var i = 0; i < screen.Rows.Count; i++)
+        {
+            var row = screen.Rows[i];
+            var y = top + i * Line + 2f;
+
+            if (row.Heading)
+            {
+                Text(row.Label, left, y, 8f, new Vector4(0.95f, 0.80f, 0.35f, 1f));
+                continue;
+            }
+
+            if (i == screen.Selected)
+                Bevel(left - 2f, y - 2f, panel + 4f, Line, raised: false, new Vector4(0.22f, 0.24f, 0.30f, 0.97f));
+
+            var lit = i == screen.Selected;
+            Text(row.Label, left + 6f, y, 8f, lit ? Vector4.One : new Vector4(0.74f, 0.76f, 0.80f, 1f));
+
+            if (row.Value.Length > 0)
+            {
+                var width = TextWidth(row.Value, 8f);
+                Text(row.Value, left + panel - width - 4f, y, 8f,
+                    lit ? new Vector4(1f, 0.92f, 0.62f, 1f) : new Vector4(0.62f, 0.66f, 0.72f, 1f));
+            }
+
+            if (row.Note.Length > 0 && lit)
+                Text(row.Note, left + 6f, y + 9f, 7f, new Vector4(0.55f, 0.58f, 0.64f, 1f));
+        }
+    }
+
+    /// <summary>The hint along the bottom, above the bar.</summary>
+    private void Footer(HudScreen screen, float w, float h)
+    {
+        if (screen.Footer.Length == 0) return;
+        TextCentred(screen.Footer, w / 2f, h - 46f, 8f, new Vector4(0.72f, 0.75f, 0.80f, 1f));
     }
 
     /// <summary>The recipe list, and the selected recipe laid out as it would be in the grid.</summary>
-    private void Book(ItemRegistry catalogue, in HudScreen screen, float left, float top, float panel)
+    private void Book(ItemRegistry catalogue, HudScreen screen, float left, float top, float panel)
     {
         const float Cell = 22f;
         const int Columns = 10;
@@ -357,14 +476,14 @@ public sealed class HudRenderer : IDisposable
             var y = top + i / Columns * Cell;
             var payable = i < screen.Payable.Count && screen.Payable[i];
 
-            Rect(_plain, x, y, Cell - 1f, Cell - 1f,
-                payable ? new Vector4(0.16f, 0.18f, 0.20f, 0.85f) : new Vector4(0.09f, 0.09f, 0.10f, 0.85f));
+            Bevel(x, y, Cell - 2f, Cell - 2f, raised: false,
+                payable ? SlotFill : new Vector4(0.07f, 0.07f, 0.09f, 0.95f));
 
             var result = screen.Recipes[i].Result;
-            var shade = payable ? Vector4.One : new Vector4(0.42f, 0.42f, 0.46f, 0.75f);
-            Rect(_blocks, x + 3f, y + 3f, Cell - 7f, Cell - 7f, shade, catalogue[result.Item].IconLayer);
+            var shade = payable ? Vector4.One : new Vector4(0.40f, 0.40f, 0.45f, 0.8f);
+            Rect(_blocks, x + 3f, y + 3f, Cell - 8f, Cell - 8f, shade, catalogue[result.Item].IconLayer);
 
-            if (i == screen.Selected) Select(x - 1f, y - 1f, Cell + 1f, Cell + 1f);
+            if (i == screen.Selected) Select(x, y, Cell - 2f, Cell - 2f);
         }
 
         // The selected recipe, drawn as its own picture: the grid on the left, the result on the
@@ -389,11 +508,11 @@ public sealed class HudRenderer : IDisposable
                 ? Nth(chosen, y * 3 + x)
                 : x < chosen.Width && y < chosen.Height ? chosen.At(x, y) : null;
 
-            Rect(_plain, px, py, Cell - 1f, Cell - 1f,
-                slot is null ? new Vector4(0.07f, 0.07f, 0.08f, 0.8f) : new Vector4(0.16f, 0.18f, 0.20f, 0.9f));
+            Bevel(px, py, Cell - 2f, Cell - 2f, raised: false,
+                slot is null ? new Vector4(0.06f, 0.06f, 0.08f, 0.95f) : SlotFill);
 
             if (slot is null) continue;
-            Rect(_blocks, px + 3f, py + 3f, Cell - 7f, Cell - 7f, Vector4.One,
+            Rect(_blocks, px + 3f, py + 3f, Cell - 8f, Cell - 8f, Vector4.One,
                 catalogue[slot.Members[0]].IconLayer);
 
             // A slot that will take more than one thing wears a corner mark, so a tag does not read
@@ -408,7 +527,7 @@ public sealed class HudRenderer : IDisposable
 
         var resultX = left + 3f * Cell + 34f;
         var resultY = detailTop + Cell - 4f;
-        Rect(_plain, resultX - 3f, resultY - 3f, 34f, 34f, new Vector4(0.16f, 0.18f, 0.20f, 0.9f));
+        Bevel(resultX - 4f, resultY - 4f, 36f, 36f, raised: false, SlotFill);
         Rect(_blocks, resultX, resultY, 28f, 28f, Vector4.One, catalogue[chosen.Result.Item].IconLayer);
         if (chosen.Result.Count > 1) Number(chosen.Result.Count, resultX + 29f, resultY + 20f);
 
@@ -433,7 +552,7 @@ public sealed class HudRenderer : IDisposable
     }
 
     /// <summary>A furnace: what is in it, what is burning, and how far through it is.</summary>
-    private void Hearth(ItemRegistry catalogue, in HudScreen screen, float left, float top, float panel)
+    private void Hearth(ItemRegistry catalogue, HudScreen screen, float left, float top, float panel)
     {
         const float Slot = 30f;
 
@@ -451,20 +570,21 @@ public sealed class HudRenderer : IDisposable
 
         // The flame between the two, burning down. Drawn as a bar rather than a picture because
         // what it has to say is how much is left, and a flickering icon says nothing about that.
-        var flameH = 26f * furnace.FuelLeft;
-        Rect(_plain, left + 52f, inputY + 34f, 8f, 26f, new Vector4(0.10f, 0.09f, 0.09f, 0.9f));
-        Rect(_plain, left + 52f, inputY + 34f + (26f - flameH), 8f, flameH,
+        // Quantised to whole pixels so it steps rather than slides, which is the whole aesthetic.
+        var flameH = MathF.Round(26f * furnace.FuelLeft);
+        Bevel(left + 52f, inputY + 34f, 10f, 30f, raised: false, new Vector4(0.08f, 0.07f, 0.07f, 0.95f));
+        Rect(_plain, left + 54f, inputY + 36f + (26f - flameH), 6f, flameH,
             new Vector4(1f, 0.55f + furnace.FuelLeft * 0.3f, 0.18f, 1f));
 
         // And the work, filling toward the output.
-        Rect(_plain, left + 70f, top + 40f, 56f, 6f, new Vector4(0.10f, 0.10f, 0.12f, 0.9f));
-        Rect(_plain, left + 70f, top + 40f, 56f * furnace.Fraction, 6f,
-            new Vector4(0.75f, 0.80f, 0.86f, 1f));
+        Bevel(left + 70f, top + 38f, 58f, 10f, raised: false, new Vector4(0.08f, 0.08f, 0.10f, 0.95f));
+        Rect(_plain, left + 72f, top + 40f, MathF.Round(54f * furnace.Fraction), 6f,
+            new Vector4(0.78f, 0.82f, 0.88f, 1f));
 
         void Cell(float x, float y, ItemStack stack, int index)
         {
-            Rect(_plain, x, y, Slot, Slot, new Vector4(0.16f, 0.18f, 0.20f, 0.9f));
-            if (index == chosen) Select(x - 1f, y - 1f, Slot + 2f, Slot + 2f);
+            Bevel(x, y, Slot, Slot, raised: false, SlotFill);
+            if (index == chosen) Select(x, y, Slot, Slot);
 
             if (stack.IsEmpty) return;
             Rect(_blocks, x + 4f, y + 4f, Slot - 8f, Slot - 8f, Vector4.One,
@@ -473,24 +593,63 @@ public sealed class HudRenderer : IDisposable
         }
     }
 
-    private void Frame(float x, float y, float w, float h)
+    // The interface's own palette. Named rather than written out at each use, so the whole thing
+    // can be re-toned in one place and so two panels cannot drift apart by a hex digit.
+    private static readonly Vector4 PanelFill = new(0.09f, 0.10f, 0.13f, 0.97f);
+    private static readonly Vector4 PanelLight = new(0.42f, 0.45f, 0.52f, 1f);
+    private static readonly Vector4 PanelDark = new(0.03f, 0.03f, 0.05f, 1f);
+    private static readonly Vector4 SlotFill = new(0.16f, 0.17f, 0.21f, 0.97f);
+    private static readonly Vector4 Highlight = new(0.98f, 0.84f, 0.38f, 1f);
+
+    /// <summary>
+    /// A panel with a two-pixel bevel: lit from the top left, in shadow at the bottom right.
+    /// </summary>
+    /// <param name="raised">
+    /// True for something standing out of the screen, false for something pressed into it.
+    /// </param>
+    /// <remarks>
+    /// Two pixels rather than one, and light on two sides rather than a border on four. A single
+    /// hairline round a rectangle is what a vector interface does; a bevel is what a pixel one does,
+    /// and the difference is entirely that the light has a direction. Swapping which pair of sides
+    /// is lit is the whole of "pressed in" versus "standing out", which is why one function draws
+    /// both and a selected row can simply ask for the other one.
+    /// </remarks>
+    private void Bevel(float x, float y, float w, float h, bool raised, Vector4 fill)
     {
-        Rect(_plain, x, y, w, h, new Vector4(0.06f, 0.07f, 0.09f, 0.94f));
-        var edge = new Vector4(0.32f, 0.34f, 0.38f, 0.95f);
-        Rect(_plain, x, y, w, 1f, edge);
-        Rect(_plain, x, y + h - 1f, w, 1f, edge);
-        Rect(_plain, x, y, 1f, h, edge);
-        Rect(_plain, x + w - 1f, y, 1f, h, edge);
+        x = MathF.Round(x);
+        y = MathF.Round(y);
+        w = MathF.Round(w);
+        h = MathF.Round(h);
+
+        var top = raised ? PanelLight : PanelDark;
+        var bottom = raised ? PanelDark : PanelLight;
+
+        Rect(_plain, x, y, w, h, fill);
+        Rect(_plain, x, y, w, 2f, top);
+        Rect(_plain, x, y, 2f, h, top);
+        Rect(_plain, x, y + h - 2f, w, 2f, bottom);
+        Rect(_plain, x + w - 2f, y, 2f, h, bottom);
+
+        // The two corners where the light meets the shadow are neither, and leaving them to
+        // whichever bar was drawn last is what makes a bevel look mitred wrong.
+        Rect(_plain, x, y + h - 2f, 2f, 2f, PanelFill);
+        Rect(_plain, x + w - 2f, y, 2f, 2f, PanelFill);
     }
 
-    /// <summary>Four thin bars round a slot. The same frame the held hotbar slot wears.</summary>
+    private void Frame(float x, float y, float w, float h) => Bevel(x, y, w, h, raised: true, PanelFill);
+
+    /// <summary>What is picked out: pressed into the panel, with a lit edge round it.</summary>
     private void Select(float x, float y, float w, float h)
     {
-        var frame = new Vector4(1f, 1f, 1f, 0.92f);
-        Rect(_plain, x, y, w, 1.5f, frame);
-        Rect(_plain, x, y + h - 1.5f, w, 1.5f, frame);
-        Rect(_plain, x, y, 1.5f, h, frame);
-        Rect(_plain, x + w - 1.5f, y, 1.5f, h, frame);
+        x = MathF.Round(x);
+        y = MathF.Round(y);
+        w = MathF.Round(w);
+        h = MathF.Round(h);
+
+        Rect(_plain, x - 1f, y - 1f, w + 2f, 1f, Highlight);
+        Rect(_plain, x - 1f, y + h, w + 2f, 1f, Highlight);
+        Rect(_plain, x - 1f, y - 1f, 1f, h + 2f, Highlight);
+        Rect(_plain, x + w, y - 1f, 1f, h + 2f, Highlight);
     }
 
     /// <summary>
@@ -505,43 +664,51 @@ public sealed class HudRenderer : IDisposable
     /// </remarks>
     private float Text(string line, float x, float y, float height, Vector4 colour, bool shadow = true)
     {
-        var scale = height / TileGen.Size;
-        var pen = x;
+        var pen = MathF.Round(x);
+        var top = MathF.Round(y);
 
         foreach (var c in line)
         {
             var glyph = TileGen.GlyphOf(c);
             if (glyph < 0) glyph = TileGen.GlyphOf('?');
 
-            // A dark copy one pixel down and right, so text stays readable over snow and over a
-            // cave mouth alike. The same reason the crosshair is two colours.
-            if (shadow)
-            {
-                Rect(_text, pen + scale * 2f, y + scale * 2f, height, height,
-                    new Vector4(0f, 0f, 0f, colour.W * 0.7f), glyph);
-            }
+            // A dark copy one unit down and right, so text stays readable over snow and over a cave
+            // mouth alike. The same reason the crosshair is two colours.
+            if (shadow) Rect(_text, pen + 1f, top + 1f, height, height, new Vector4(0f, 0f, 0f, colour.W * 0.75f), glyph);
 
-            Rect(_text, pen, y, height, height, colour, glyph);
-            pen += _advance[glyph] * scale;
+            Rect(_text, pen, top, height, height, colour, glyph);
+            pen += Advance(glyph, height);
         }
 
-        return pen - x;
+        return pen - MathF.Round(x);
     }
 
     /// <summary>How wide a line of text would come out, without drawing it.</summary>
     private float TextWidth(string line, float height)
     {
-        var scale = height / TileGen.Size;
         var width = 0f;
 
         foreach (var c in line)
         {
             var glyph = TileGen.GlyphOf(c);
-            width += _advance[glyph < 0 ? TileGen.GlyphOf('?') : glyph] * scale;
+            width += Advance(glyph < 0 ? TileGen.GlyphOf('?') : glyph, height);
         }
 
         return width;
     }
+
+    /// <summary>
+    /// How far the pen moves after one glyph, in whole layout units.
+    /// </summary>
+    /// <remarks>
+    /// Rounded, and rounded in one place so the measurer and the drawer cannot disagree. A pen that
+    /// advances by half a unit lands every second letter between two pixels, and the sampler
+    /// resolves that by blurring it — which at this size is the difference between a pixel font and
+    /// a smudge. It also means the ceiling on how narrow a glyph can get is a whole unit, so a
+    /// comma never collides with what follows it.
+    /// </remarks>
+    private float Advance(int glyph, float height) =>
+        MathF.Max(1f, MathF.Round(_advance[glyph] * (height / TileGen.Size)));
 
     /// <summary>Draws a line centred on a point.</summary>
     private void TextCentred(string line, float centreX, float y, float height, Vector4 colour) =>

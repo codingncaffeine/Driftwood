@@ -111,11 +111,25 @@ public sealed unsafe class AudioEngine : IDisposable
         fixed (float* p = orientation) _al.SetListenerProperty(ListenerFloatArray.Orientation, p);
     }
 
+    /// <summary>
+    /// Everything's loudness, 0 to 1. Applied to each source as it starts, not to the listener.
+    /// </summary>
+    /// <remarks>
+    /// The listener has a gain of its own and using it would be one call rather than a multiply,
+    /// but it does not touch what is already playing — turning the volume down would leave the
+    /// current footstep at full and only take effect from the next one. A factor per source is what
+    /// makes a slider feel connected to the thing it moves.
+    /// </remarks>
+    public float MasterVolume { get; set; } = 1f;
+
     /// <summary>Starts one clip at a point in the world.</summary>
     /// <param name="pitch">1 is as recorded. Small variation is what stops a repeat sounding looped.</param>
     public void Play(string name, Vector3 at, float volume = 1f, float pitch = 1f)
     {
         if (!Available || _al is null) return;
+        if (MasterVolume <= 0f) return;
+
+        volume *= MasterVolume;
 
         var buffer = BufferFor(name);
         if (buffer == 0) return;

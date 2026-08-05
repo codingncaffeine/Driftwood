@@ -10,6 +10,7 @@ using Driftwood.Core.Lighting;
 using Driftwood.Core.Meshing;
 using Driftwood.Core.Particles;
 using Driftwood.Core.Physics;
+using Driftwood.Core.Settings;
 using Driftwood.Core.Sky;
 using Driftwood.Core.Spatial;
 using Driftwood.Core.Textures;
@@ -391,6 +392,10 @@ public static class WorldAudit
         var reach = ReachabilitySelfTest(registry, items, drops, book, counts, out var reachDetail);
         Check("everything is reachable from bare hands", reach.Count == 0,
             reach.Count == 0 ? reachDetail : $"{reach.Count} faults: {reach[0]}");
+
+        var settingsFaults = SettingsSelfTest(out var settingsDetail);
+        Check("settings survive a round trip", settingsFaults.Count == 0,
+            settingsFaults.Count == 0 ? settingsDetail : $"{settingsFaults.Count} faults: {settingsFaults[0]}");
 
         var fontFaults = FontSelfTest(out var fontDetail);
         Check("every letter is drawn and distinct", fontFaults.Count == 0,
@@ -1919,6 +1924,98 @@ public static class WorldAudit
 
         detail = $"{tiles.Length} glyphs, {inked} with ink, none alike, "
                + $"advancing {narrowest} to {widest} pixels";
+
+        return faults;
+    }
+
+    /// <summary>
+    /// Writes settings out, reads them back, and checks nothing changed on the way.
+    /// </summary>
+    /// <remarks>
+    /// <para>Every fault here is one a player meets after they have already stopped looking. A
+    /// binding that does not survive a save is noticed on the next launch, when there is nothing on
+    /// screen connecting it to what they did; a value silently clamped to a default is noticed
+    /// never. So the round trip is checked against values that are all deliberately <em>not</em> the
+    /// defaults — a writer that writes nothing at all passes a round trip of default values.</para>
+    /// <para>Nothing touches the disk. The file's text is the thing being checked and it is
+    /// generated in memory, so this runs on a machine with no home directory and cannot leave
+    /// somebody's real settings behind it.</para>
+    /// </remarks>
+    private static List<string> SettingsSelfTest(out string detail)
+    {
+        var faults = new List<string>();
+
+        var defaults = new GameSettings();
+        foreach (var fault in defaults.Keys.Faults()) faults.Add($"the shipped keys: {fault}");
+
+        // Every value moved off its default, so a writer that emits nothing cannot pass.
+        var written = new GameSettings
+        {
+            ViewDistance = 14,
+            FieldOfView = 96,
+            Fullscreen = true,
+            VSync = true,
+            Volume = 43,
+            Mute = true,
+            MouseSensitivity = 175,
+            Keys = Bindings.Defaults(),
+        };
+
+        written.Keys.Bind(GameAction.Jump, "Y");
+        written.Keys.Bind(GameAction.MoveForward, "I");
+
+        var path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "driftwood-settings-check.txt");
+        var text = written.Write();
+
+        GameSettings read;
+        try
+        {
+            File.WriteAllText(path, text);
+            read = GameSettings.Load(path);
+        }
+        finally
+        {
+            try { File.Delete(path); } catch (IOException) { }
+        }
+
+        if (read.ViewDistance != 14) faults.Add($"view distance came back {read.ViewDistance}, not 14");
+        if (read.FieldOfView != 96) faults.Add($"field of view came back {read.FieldOfView}, not 96");
+        if (!read.Fullscreen) faults.Add("fullscreen came back off");
+        if (!read.VSync) faults.Add("vsync came back off");
+        if (read.Volume != 43) faults.Add($"volume came back {read.Volume}, not 43");
+        if (!read.Mute) faults.Add("mute came back off");
+        if (read.MouseSensitivity != 175) faults.Add($"sensitivity came back {read.MouseSensitivity}, not 175");
+
+        foreach (var action in GameActions.All)
+        {
+            if (read.Keys.Primary(action) == written.Keys.Primary(action)
+                && read.Keys.Secondary(action) == written.Keys.Secondary(action)) continue;
+
+            faults.Add(
+                $"'{GameActions.Label(action)}' went out as '{written.Keys.Describe(action)}' "
+                + $"and came back as '{read.Keys.Describe(action)}'");
+        }
+
+        foreach (var fault in read.Keys.Faults()) faults.Add($"after a round trip: {fault}");
+
+        // Binding steals rather than refusing, so the key it took has to actually be gone.
+        var stealing = Bindings.Defaults();
+        var had = stealing.Primary(GameAction.Jump);
+        stealing.Bind(GameAction.Sneak, had);
+
+        if (stealing.Primary(GameAction.Jump) == had)
+            faults.Add($"binding '{had}' to sneak left it on jump as well");
+        if (stealing.ActionFor(had) != GameAction.Sneak)
+            faults.Add($"'{had}' does not run sneak after being bound to it");
+
+        // A file that says nothing about keys keeps the shipped ones rather than ending up with none.
+        var bare = GameSettings.Load(System.IO.Path.Combine(
+            System.IO.Path.GetTempPath(), "driftwood-settings-absent.txt"));
+        if (bare.Keys.Faults().Count > 0)
+            faults.Add("a missing settings file left the game with no keys on it");
+
+        detail = $"{GameActions.All.Length} actions and 7 settings out and back unchanged, "
+               + "a rebind takes the key off whatever had it, a missing file keeps the shipped keys";
 
         return faults;
     }

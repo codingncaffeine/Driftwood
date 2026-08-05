@@ -164,7 +164,11 @@ public static class Program
                     seedGiven = true;
                     break;
                 case "--chunks":
-                    options = options with { ChunksAcross = ParseInt(Next(args, ref i, "--chunks"), 2, 64) };
+                    options = options with
+                    {
+                        ChunksAcross = ParseInt(Next(args, ref i, "--chunks"), 2, 64),
+                        ChunksGiven = true,
+                    };
                     break;
                 case "--ocean":
                     options = options with { OceanCoverage = ParseInt(Next(args, ref i, "--ocean"), 0, 90) / 100f };

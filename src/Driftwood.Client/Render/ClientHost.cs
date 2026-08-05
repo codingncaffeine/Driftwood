@@ -12,6 +12,7 @@ using Driftwood.Core.Items;
 using Driftwood.Core.Lighting;
 using Driftwood.Core.Meshing;
 using Driftwood.Core.Particles;
+using Driftwood.Core.Settings;
 using Driftwood.Core.Physics;
 using Driftwood.Core.Sky;
 using Driftwood.Core.Spatial;
@@ -28,6 +29,16 @@ public sealed record ClientOptions
 {
     public WorldSeed Seed { get; init; } = WorldSeed.Random();
     public int ChunksAcross { get; init; } = 16;
+
+    /// <summary>
+    /// True when <c>--chunks</c> was actually given, so it beats the saved view distance.
+    /// </summary>
+    /// <remarks>
+    /// A command line is somebody saying what they want right now and a settings file is what they
+    /// wanted last time; the first wins. Without knowing which of the two the number came from, a
+    /// default indistinguishable from a choice would silently overrule the screen.
+    /// </remarks>
+    public bool ChunksGiven { get; init; }
 
     /// <summary>Share of the surface at or below sea level, 0..0.9.</summary>
     public float OceanCoverage { get; init; } = TerrainGenerator.DefaultOceanCoverage;
@@ -165,16 +176,24 @@ public sealed class ClientHost : IDisposable
     private RecipeBook _book = null!;
     private FurnaceBank _furnaces = null!;
 
-    /// <summary>Which screen is over the world, and what it is showing.</summary>
-    private HudScreenKind _screen = HudScreenKind.None;
+    /// <summary>Which screen is over the world, and everything it is showing.</summary>
+    private readonly HudScreen _hudScreen = new();
     private bool _atBench;
     private (int X, int Y, int Z) _station;
-    private int _recipeIndex;
-    private int _furnaceSlot;
 
-    /// <summary>What the open screen can make, and which of those can be paid for now.</summary>
+    /// <summary>What the crafting tab can make, kept across frames so the selection holds still.</summary>
     private readonly List<Recipe> _shown = [];
-    private readonly List<bool> _payable = [];
+
+    /// <summary>Where the selection sits on each tab, so switching away and back comes home.</summary>
+    private readonly int[] _tabRow = new int[Enum.GetValues<MenuTab>().Length];
+
+    /// <summary>The action waiting for a key, while the controls tab is listening.</summary>
+    private GameAction? _rebinding;
+
+    /// <summary>What the player has changed, and the keys they did it with.</summary>
+    private GameSettings _settings = null!;
+    private InputMap _keys = null!;
+    private bool _settingsDirty;
 
     /// <summary>Furnaces whose flame changed this frame, so the block drawn can follow.</summary>
     private readonly List<(int X, int Y, int Z, bool Lit)> _relit = [];
@@ -404,6 +423,19 @@ public sealed class ClientHost : IDisposable
     {
         _gl = GL.GetApi(_window);
         ApplyWindowIcon();
+
+        // Whatever the player changed last time, before anything reads a key or a field of view.
+        // A bad file costs the setting it names and nothing else — see GameSettings.Load.
+        _settings = GameSettings.Load();
+        _keys = new InputMap(_settings.Keys);
+
+        // A command line still wins over a saved setting for the run it is on, without writing
+        // itself into the file — starting once with --vsync should not turn it on for good.
+        if (_options.VSync) _settings.VSync = true;
+        if (_options.Mute) _settings.Mute = true;
+
+        Console.WriteLine($"settings    {GameSettings.Path}");
+
         _input = _window.CreateInput();
         _keyboard = _input.Keyboards[0];
         _mouse = _input.Mice[0];
@@ -470,6 +502,11 @@ public sealed class ClientHost : IDisposable
         Console.WriteLine($"cracks      {cracks.Summary}");
 
         BuildWorld();
+
+        // Last, because it wants the camera, the window and the audio device to all exist. Doing
+        // it here rather than in half a dozen constructors also means there is exactly one place
+        // that turns a setting into an effect, which is the place to look when one does nothing.
+        ApplySettings();
     }
 
     private void BuildWorld()
@@ -493,8 +530,12 @@ public sealed class ClientHost : IDisposable
         var generator = new TerrainGenerator(_options.Seed, ids, _options.OceanCoverage);
 
         // --chunks used to size a fixed box; it now sets how far the world is kept loaded around
-        // the viewer, which is the same dial pointed at a world that no longer has edges.
-        var viewRadius = Math.Max(2, _options.ChunksAcross / 2);
+        // the viewer, which is the same dial pointed at a world that no longer has edges. The
+        // saved view distance is the same dial again, and the command line beats it when given.
+        var viewRadius = _options.ChunksGiven
+            ? Math.Max(2, _options.ChunksAcross / 2)
+            : _settings.ViewDistance;
+
         _viewRadius = viewRadius;
 
         // The pack's colormaps if it ships them, ours otherwise — so an imported pack's grass is
@@ -646,79 +687,96 @@ public sealed class ClientHost : IDisposable
 
     private void OnKeyDown(IKeyboard keyboard, Key key, int _)
     {
+        // The controls tab is listening. It takes the key raw — before it is looked up — because
+        // the whole point is to bind whatever was pressed, including the key that already does
+        // something else.
+        if (_rebinding is { } waiting)
+        {
+            FinishRebind(waiting, key);
+            return;
+        }
+
         // A screen takes the keyboard while it is open, and gives it back on the way out. Letting
         // the world keep reading keys underneath is how a player closes an inventory by walking
         // into a wall.
-        if (_screen != HudScreenKind.None && ScreenKey(key)) return;
+        if (_hudScreen.IsOpen && ScreenKey(key)) return;
 
-        switch (key)
+        if (_keys.ActionFor(key) is not { } action) return;
+
+        switch (action)
         {
-            case Key.Escape:
+            case GameAction.ReleaseMouse:
                 SetMouseCaptured(!_mouseCaptured);
                 break;
 
             // The bench a player always has: two by two, in their own hands. Anything wider needs
             // a real one, and the screen says so by simply not listing it.
-            case Key.E:
+            case GameAction.OpenScreen:
                 if (_bench is not null) break;
-                OpenCrafting(atBench: false, default);
+                OpenMenu(MenuTab.Craft, atBench: false, default);
                 break;
-            case Key.F1:
+
+            case GameAction.ToggleWireframe:
                 _wireframe = !_wireframe;
                 _gl.PolygonMode(TriangleFace.FrontAndBack, _wireframe ? PolygonMode.Line : PolygonMode.Fill);
                 break;
 
             // Toggling culling must change the chunk count in the title and nothing on screen.
             // If anything pops in or out, the planes are wrong.
-            case Key.F2:
+            case GameAction.ToggleCulling:
                 _frustumCulling = !_frustumCulling;
                 break;
 
             // Leaving the fly camera in reach. It is how terrain gets looked at, and a bug you can
             // only reach by walking to it is a bug you look at twice.
-            case Key.F3:
+            case GameAction.ToggleFly:
                 if (_bench is not null) break;
-                _walking = !_walking;
-                if (_walking)
-                {
-                    _player.Teleport(_camera.Position - new Vector3(0f, _player.CurrentEyeHeight, 0f));
-                    _spawned = false;
-                }
+                ToggleFly();
                 break;
 
             // First, over the shoulder, then facing. The middle one is the reason the model exists;
             // the third is how you look at your own skin, and every game in the genre has it.
-            case Key.F5:
+            case GameAction.ToggleView:
                 if (_bench is not null) break;
-                _view = _view switch
-                {
-                    ViewMode.First => ViewMode.ThirdBehind,
-                    ViewMode.ThirdBehind => ViewMode.ThirdFacing,
-                    _ => ViewMode.First,
-                };
+                CycleView();
                 break;
 
             // Holding the clock still. A sky is judged by eye at a particular hour, and waiting
             // twenty minutes for the one you wanted to look at again is how a colour ramp ends up
             // checked at noon and nowhere else.
-            case Key.F6:
+            case GameAction.HoldClock:
                 _clock.Running = !_clock.Running;
                 break;
 
             // Winding it. A tenth of a day a press, which walks dawn to dusk in five.
-            case Key.F7:
+            case GameAction.WindClock:
                 _clock.SetTime(_clock.TimeOfDay + 0.1f);
                 _skyState = _clock.Now;
                 break;
 
-            // The hand, until an inventory owns it. The number row picks directly and the wheel
-            // walks it, which is where every hand in the genre lives and where a player will look
-            // for it without being told.
-            case >= Key.Number1 and <= Key.Number9:
-                SelectHandSlot(key - Key.Number1);
+            // The hand. The number row picks directly and the wheel walks it, which is where every
+            // hand in the genre lives and where a player will look for it without being told.
+            case >= GameAction.Slot1 and <= GameAction.Slot9:
+                SelectHandSlot(action - GameAction.Slot1);
                 break;
         }
     }
+
+    private void ToggleFly()
+    {
+        _walking = !_walking;
+        if (!_walking) return;
+
+        _player.Teleport(_camera.Position - new Vector3(0f, _player.CurrentEyeHeight, 0f));
+        _spawned = false;
+    }
+
+    private void CycleView() => _view = _view switch
+    {
+        ViewMode.First => ViewMode.ThirdBehind,
+        ViewMode.ThirdBehind => ViewMode.ThirdFacing,
+        _ => ViewMode.First,
+    };
 
     /// <summary>
     /// Handles a key while a screen is open. Returns true when the screen took it.
@@ -731,6 +789,8 @@ public sealed class ClientHost : IDisposable
     private bool ScreenKey(Key key)
     {
         var many = _keyboard.IsKeyPressed(Key.ShiftLeft) || _keyboard.IsKeyPressed(Key.ShiftRight);
+        var menu = _hudScreen.Kind == HudScreenKind.Menu;
+        var craft = menu && _hudScreen.Tab == MenuTab.Craft;
 
         switch (key)
         {
@@ -738,25 +798,36 @@ public sealed class ClientHost : IDisposable
                 CloseScreen();
                 return true;
 
+            // Tab walks the tabs, which is where a hand already is and what every other program
+            // does with it. Shift walks back.
+            case Key.Tab when menu:
+                var count = Enum.GetValues<MenuTab>().Length;
+                _tabRow[(int)_hudScreen.Tab] = _hudScreen.Selected;
+                _hudScreen.Tab = (MenuTab)(((int)_hudScreen.Tab + (many ? count - 1 : 1)) % count);
+                _hudScreen.Selected = _tabRow[(int)_hudScreen.Tab];
+                RefreshScreen();
+                return true;
+
             case Key.Enter or Key.KeypadEnter or Key.Space:
-                if (_screen == HudScreenKind.Crafting) CraftSelected(many);
+                if (craft) CraftSelected(many);
+                else if (menu) ActivateRow();
                 else MoveFurnaceSlot();
                 return true;
 
             case Key.Left or Key.A:
-                Step(-1);
+                Step(-1, horizontal: true);
                 return true;
 
             case Key.Right or Key.D:
-                Step(1);
+                Step(1, horizontal: true);
                 return true;
 
             case Key.Up or Key.W:
-                Step(_screen == HudScreenKind.Crafting ? -10 : -1);
+                Step(craft ? -RecipeColumns : -1, horizontal: false);
                 return true;
 
             case Key.Down or Key.S:
-                Step(_screen == HudScreenKind.Crafting ? 10 : 1);
+                Step(craft ? RecipeColumns : 1, horizontal: false);
                 return true;
 
             // The bar still picks, so a player can choose what to feed a furnace without closing it.
@@ -768,25 +839,64 @@ public sealed class ClientHost : IDisposable
 
         return false;
 
-        void Step(int by)
+        void Step(int by, bool horizontal)
         {
-            if (_screen == HudScreenKind.Furnace)
+            if (_hudScreen.Kind == HudScreenKind.Furnace)
             {
-                _furnaceSlot = Math.Clamp(_furnaceSlot + Math.Sign(by), 0, 2);
+                _hudScreen.Slot = Math.Clamp(_hudScreen.Slot + Math.Sign(by), 0, 2);
                 return;
             }
 
-            if (_shown.Count == 0) return;
-            _recipeIndex = Math.Clamp(_recipeIndex + by, 0, _shown.Count - 1);
+            if (craft)
+            {
+                if (_shown.Count == 0) return;
+                _hudScreen.Selected = Math.Clamp(_hudScreen.Selected + by, 0, _shown.Count - 1);
+                return;
+            }
+
+            // On a settings tab, up and down pick a line and left and right change it. Headings are
+            // skipped rather than selectable, so holding down never lands on one.
+            if (!horizontal)
+            {
+                MoveRow(Math.Sign(by));
+                return;
+            }
+
+            AdjustRow(Math.Sign(by));
         }
     }
 
-    private void OpenCrafting(bool atBench, (int X, int Y, int Z) at)
+    /// <summary>How many recipes a row of the book holds. The same number the overlay lays out.</summary>
+    private const int RecipeColumns = 10;
+
+    /// <summary>How fast looking around was before anybody could change it. 100% means this.</summary>
+    private const float ShippedSensitivity = 0.12f;
+
+    private void MoveRow(int by)
     {
-        _screen = HudScreenKind.Crafting;
+        if (_hudScreen.Rows.Count == 0) return;
+
+        var at = _hudScreen.Selected;
+        for (var step = 0; step < _hudScreen.Rows.Count; step++)
+        {
+            at = Math.Clamp(at + by, 0, _hudScreen.Rows.Count - 1);
+            if (!_hudScreen.Rows[at].Heading) break;
+
+            // A heading at the very end would trap the walk, so give up where it started.
+            if (at == 0 || at == _hudScreen.Rows.Count - 1) return;
+        }
+
+        _hudScreen.Selected = at;
+    }
+
+    private void OpenMenu(MenuTab tab, bool atBench, (int X, int Y, int Z) at)
+    {
+        _hudScreen.Kind = HudScreenKind.Menu;
+        _hudScreen.Tab = tab;
+        _hudScreen.Selected = tab == MenuTab.Craft ? 0 : _tabRow[(int)tab];
         _atBench = atBench;
         _station = at;
-        _recipeIndex = 0;
+        _shown.Clear();
         _holdingBreak = false;
         _holdingPlace = false;
         _mining.Cancel();
@@ -795,50 +905,327 @@ public sealed class ClientHost : IDisposable
 
     private void OpenFurnace(int x, int y, int z)
     {
-        _screen = HudScreenKind.Furnace;
+        _hudScreen.Kind = HudScreenKind.Furnace;
+        _hudScreen.Slot = 0;
         _station = (x, y, z);
-        _furnaceSlot = 0;
         _holdingBreak = false;
         _holdingPlace = false;
         _mining.Cancel();
         _furnaces.Open(x, y, z);
-    }
-
-    private void CloseScreen()
-    {
-        _screen = HudScreenKind.None;
-        _shown.Clear();
-        _payable.Clear();
+        RefreshScreen();
     }
 
     /// <summary>
-    /// Rebuilds what the open crafting screen shows and what of it can be afforded.
+    /// Closes the screen, and writes the settings out if anything in it changed.
     /// </summary>
     /// <remarks>
-    /// Everything the station could ever make is listed; only the affordability is recomputed. A
-    /// list that changes length as a player picks things up would move the selection out from under
-    /// them on the frame they pressed enter.
+    /// On close rather than on every keystroke. A slider walked from 0 to 100 is a hundred writes
+    /// of the same file, and the moment a player is actually finished with a setting is the moment
+    /// they leave the screen.
+    /// </remarks>
+    private void CloseScreen()
+    {
+        if (_hudScreen.Kind == HudScreenKind.Menu) _tabRow[(int)_hudScreen.Tab] = _hudScreen.Selected;
+
+        _rebinding = null;
+        _hudScreen.Kind = HudScreenKind.None;
+        _shown.Clear();
+        _hudScreen.Recipes.Clear();
+        _hudScreen.Payable.Clear();
+        _hudScreen.Rows.Clear();
+
+        if (!_settingsDirty) return;
+        _settingsDirty = false;
+
+        if (!_settings.Save()) Console.Error.WriteLine("driftwood: could not write the settings file");
+    }
+
+    /// <summary>
+    /// Rebuilds whatever the open screen shows.
+    /// </summary>
+    /// <remarks>
+    /// The recipe list is built once per opening and only its affordability is recomputed, because
+    /// a list that changes length as a player picks things up would move the selection out from
+    /// under them on the frame they pressed enter. The settings rows are rebuilt outright, because
+    /// they are cheap and because a value has to be able to change under its own label.
     /// </remarks>
     private void RefreshScreen()
     {
-        if (_screen != HudScreenKind.Crafting) return;
+        if (_hudScreen.Kind == HudScreenKind.None) return;
 
-        if (_shown.Count == 0)
+        _hudScreen.Footer = FooterHint();
+
+        if (_hudScreen.Kind == HudScreenKind.Furnace) return;
+
+        if (_hudScreen.Tab == MenuTab.Craft)
         {
-            foreach (var recipe in _book.Recipes)
-                if (!recipe.NeedsBench || _atBench) _shown.Add(recipe);
+            if (_shown.Count == 0)
+            {
+                foreach (var recipe in _book.Recipes)
+                    if (!recipe.NeedsBench || _atBench) _shown.Add(recipe);
+            }
+
+            _hudScreen.Recipes.Clear();
+            _hudScreen.Recipes.AddRange(_shown);
+
+            _hudScreen.Payable.Clear();
+            foreach (var recipe in _shown) _hudScreen.Payable.Add(_book.CanPay(_inventory, recipe));
+
+            _hudScreen.Selected = Math.Clamp(_hudScreen.Selected, 0, Math.Max(0, _shown.Count - 1));
+            return;
         }
 
-        _payable.Clear();
-        foreach (var recipe in _shown) _payable.Add(_book.CanPay(_inventory, recipe));
+        BuildRows();
+        _hudScreen.Selected = Math.Clamp(_hudScreen.Selected, 0, Math.Max(0, _hudScreen.Rows.Count - 1));
+        if (_hudScreen.Rows.Count > 0 && _hudScreen.Rows[_hudScreen.Selected].Heading) MoveRow(1);
+    }
+
+    private string FooterHint()
+    {
+        if (_rebinding is { } waiting)
+            return $"press a key for {GameActions.Label(waiting)}, or escape to leave it alone";
+
+        return _hudScreen.Kind switch
+        {
+            HudScreenKind.Furnace => "left and right pick a slot, enter moves it, 1-9 picks from the bar",
+            _ when _hudScreen.Tab == MenuTab.Craft =>
+                "arrows pick, enter makes one, shift and enter makes as many as it can, tab changes tab",
+            _ when _hudScreen.Tab == MenuTab.Controls =>
+                "up and down pick, enter listens for a key, left clears it, tab changes tab",
+            _ => "up and down pick, left and right change it, tab changes tab",
+        };
+    }
+
+    /// <summary>What the open settings tab is showing, rebuilt from what is actually set.</summary>
+    private void BuildRows()
+    {
+        _hudScreen.Rows.Clear();
+
+        switch (_hudScreen.Tab)
+        {
+            case MenuTab.Controls:
+                var group = "";
+                foreach (var action in GameActions.All)
+                {
+                    var heading = GameActions.GroupOf(action);
+                    if (heading != group)
+                    {
+                        group = heading;
+                        _hudScreen.Rows.Add(new MenuRow(heading, Heading: true));
+                    }
+
+                    var listening = _rebinding == action;
+                    _hudScreen.Rows.Add(new MenuRow(
+                        GameActions.Label(action),
+                        listening ? "press a key" : _settings.Keys.Describe(action)));
+                }
+                break;
+
+            case MenuTab.Video:
+                _hudScreen.Rows.Add(new MenuRow("picture", Heading: true));
+                _hudScreen.Rows.Add(new MenuRow(
+                    "view distance", $"{_settings.ViewDistance} chunks",
+                    Note: $"takes effect next time the game opens; {_viewRadius} loaded now"));
+                _hudScreen.Rows.Add(new MenuRow("field of view", $"{_settings.FieldOfView}"));
+                _hudScreen.Rows.Add(new MenuRow("fullscreen", OnOff(_settings.Fullscreen)));
+                _hudScreen.Rows.Add(new MenuRow(
+                    "wait for the display", OnOff(_settings.VSync),
+                    Note: "smoother, and the frame counter stops meaning anything"));
+
+                _hudScreen.Rows.Add(new MenuRow("looking at things", Heading: true));
+                _hudScreen.Rows.Add(new MenuRow("wireframe", OnOff(_wireframe)));
+                _hudScreen.Rows.Add(new MenuRow(
+                    "frustum culling", OnOff(_frustumCulling),
+                    Note: "turning it off must change the chunk count and nothing on screen"));
+                break;
+
+            case MenuTab.Audio:
+                _hudScreen.Rows.Add(new MenuRow("sound", Heading: true));
+                _hudScreen.Rows.Add(new MenuRow("volume", $"{_settings.Volume}"));
+                _hudScreen.Rows.Add(new MenuRow("mute", OnOff(_settings.Mute)));
+                break;
+
+            default:
+                var p = _walking ? _player.Position : _camera.Position;
+
+                _hudScreen.Rows.Add(new MenuRow("this world", Heading: true));
+                _hudScreen.Rows.Add(new MenuRow("seed", _options.Seed.ToString()));
+                _hudScreen.Rows.Add(new MenuRow("where you are", $"{p.X:F0} {p.Y:F0} {p.Z:F0}"));
+                _hudScreen.Rows.Add(new MenuRow(
+                    "loaded", $"{_meshes.Count} chunks, {_drawnChunks} drawn"));
+
+                _hudScreen.Rows.Add(new MenuRow("time", Heading: true));
+                _hudScreen.Rows.Add(new MenuRow(
+                    "hour", ClockFace(_clock.TimeOfDay), Note: "left and right wind it"));
+                _hudScreen.Rows.Add(new MenuRow("clock", _clock.Running ? "running" : "held"));
+
+                _hudScreen.Rows.Add(new MenuRow("body", Heading: true));
+                _hudScreen.Rows.Add(new MenuRow("moving", _walking ? "walking" : "flying"));
+                _hudScreen.Rows.Add(new MenuRow("camera", _view switch
+                {
+                    ViewMode.First => "first person",
+                    ViewMode.ThirdBehind => "over the shoulder",
+                    _ => "facing you",
+                }));
+                _hudScreen.Rows.Add(new MenuRow(
+                    "mouse speed", $"{_settings.MouseSensitivity}"));
+                break;
+        }
+    }
+
+    private static string OnOff(bool value) => value ? "on" : "off";
+
+    /// <summary>Nudges whatever is selected. Left is -1 and right is +1.</summary>
+    private void AdjustRow(int by)
+    {
+        if (_hudScreen.Selected < 0 || _hudScreen.Selected >= _hudScreen.Rows.Count) return;
+
+        var label = _hudScreen.Rows[_hudScreen.Selected].Label;
+
+        switch (_hudScreen.Tab)
+        {
+            case MenuTab.Controls:
+                // Left is the only thing a direction can mean on a key: take it off.
+                if (by >= 0 || ActionAtRow() is not { } action) break;
+                _settings.Keys.Bind(action, "");
+                AfterRebind();
+                break;
+
+            case MenuTab.Video:
+                switch (label)
+                {
+                    case "view distance": _settings.ViewDistance = Nudge(_settings.ViewDistance, by, 2, 32); break;
+                    case "field of view": _settings.FieldOfView = Nudge(_settings.FieldOfView, by * 5, 50, 110); break;
+                    case "fullscreen": _settings.Fullscreen = !_settings.Fullscreen; break;
+                    case "wait for the display": _settings.VSync = !_settings.VSync; break;
+                    case "wireframe":
+                        _wireframe = !_wireframe;
+                        _gl.PolygonMode(TriangleFace.FrontAndBack, _wireframe ? PolygonMode.Line : PolygonMode.Fill);
+                        return;
+                    case "frustum culling": _frustumCulling = !_frustumCulling; return;
+                }
+                break;
+
+            case MenuTab.Audio:
+                switch (label)
+                {
+                    case "volume": _settings.Volume = Nudge(_settings.Volume, by * 5, 0, 100); break;
+                    case "mute": _settings.Mute = !_settings.Mute; break;
+                }
+                break;
+
+            default:
+                switch (label)
+                {
+                    // The world tab is mostly read-outs; these three are the dials that make it
+                    // possible to look at something at a particular hour without waiting for it.
+                    case "hour":
+                        _clock.SetTime(_clock.TimeOfDay + by / 24f);
+                        _skyState = _clock.Now;
+                        return;
+                    case "clock": _clock.Running = !_clock.Running; return;
+                    case "moving": ToggleFly(); return;
+                    case "camera": CycleView(); return;
+                    case "mouse speed":
+                        _settings.MouseSensitivity = Nudge(_settings.MouseSensitivity, by * 10, 10, 400);
+                        break;
+                    default: return;
+                }
+                break;
+        }
+
+        _settingsDirty = true;
+        ApplySettings();
+    }
+
+    /// <summary>Enter, on a settings row. Toggles what toggles and listens for a key on a binding.</summary>
+    private void ActivateRow()
+    {
+        if (_hudScreen.Tab == MenuTab.Controls)
+        {
+            if (ActionAtRow() is { } action) _rebinding = action;
+            RefreshScreen();
+            return;
+        }
+
+        AdjustRow(1);
+    }
+
+    /// <summary>Which action the selected controls row is for, counting past the headings.</summary>
+    private GameAction? ActionAtRow()
+    {
+        if (_hudScreen.Tab != MenuTab.Controls) return null;
+
+        var seen = 0;
+        for (var i = 0; i < _hudScreen.Rows.Count; i++)
+        {
+            if (_hudScreen.Rows[i].Heading) continue;
+            if (i == _hudScreen.Selected) return GameActions.All[seen];
+            seen++;
+        }
+
+        return null;
+    }
+
+    /// <summary>Takes the key the player pressed while the controls tab was listening.</summary>
+    /// <remarks>
+    /// Escape backs out rather than binding, because escape is how everything else in the game
+    /// backs out and a player who changed their mind will press it. That costs the ability to bind
+    /// escape itself, which is a fair trade — and it is still bindable by hand in the file.
+    /// </remarks>
+    private void FinishRebind(GameAction action, Key key)
+    {
+        _rebinding = null;
+
+        if (key != Key.Escape && InputMap.NameOf(key) is { Length: > 0 } name)
+        {
+            _settings.Keys.Bind(action, name);
+            AfterRebind();
+        }
+
+        RefreshScreen();
+    }
+
+    private void AfterRebind()
+    {
+        _keys.Rebuild(_settings.Keys);
+        _settingsDirty = true;
+        RefreshScreen();
+    }
+
+    private static int Nudge(int value, int by, int min, int max) => Math.Clamp(value + by, min, max);
+
+    /// <summary>
+    /// Puts the settings into effect, for the ones that can take effect while the game is running.
+    /// </summary>
+    /// <remarks>
+    /// View distance is the exception and says so on its own row. The streamer's radius is fixed
+    /// when it is built and changing it means throwing every loaded chunk away, which is a worse
+    /// answer than a line of text.
+    /// </remarks>
+    private void ApplySettings()
+    {
+        _camera.FovDegrees = _settings.FieldOfView;
+
+        // A percentage of the rate the game shipped with, not an absolute. The number on screen
+        // means "how much faster than out of the box", which is the only reading of it a player can
+        // check against their own hand.
+        _camera.MouseSensitivity = ShippedSensitivity * (_settings.MouseSensitivity / 100f);
+        _window.VSync = _settings.VSync;
+
+        var wanted = _settings.Fullscreen ? WindowState.Fullscreen : WindowState.Normal;
+        if (_window.WindowState != wanted) _window.WindowState = wanted;
+
+        if (_audio is not null)
+            _audio.MasterVolume = _settings.Mute ? 0f : _settings.Volume / 100f;
     }
 
     /// <summary>Makes one of the selected recipe, or as many as the pockets will pay for.</summary>
     private void CraftSelected(bool many)
     {
-        if (_recipeIndex < 0 || _recipeIndex >= _shown.Count) return;
+        if (_hudScreen.Selected < 0 || _hudScreen.Selected >= _shown.Count) return;
 
-        var recipe = _shown[_recipeIndex];
+        var recipe = _shown[_hudScreen.Selected];
         var made = 0;
 
         // Bounded even when asked for as many as possible: a bar of logs against a one-log recipe
@@ -867,12 +1254,12 @@ public sealed class ClientHost : IDisposable
     {
         if (!_furnaces.TryGet(_station.X, _station.Y, _station.Z, out var furnace)) return;
 
-        var taking = _furnaceSlot == 2 || _inventory.Held.IsEmpty;
+        var taking = _hudScreen.Slot == 2 || _inventory.Held.IsEmpty;
 
         if (taking)
         {
-            ref var slot = ref _furnaceSlot == 0 ? ref furnace.Input
-                : ref _furnaceSlot == 1 ? ref furnace.Fuel
+            ref var slot = ref _hudScreen.Slot == 0 ? ref furnace.Input
+                : ref _hudScreen.Slot == 1 ? ref furnace.Fuel
                 : ref furnace.Output;
 
             if (slot.IsEmpty) return;
@@ -882,17 +1269,17 @@ public sealed class ClientHost : IDisposable
         }
 
         var held = _inventory.Held;
-        var target = _furnaceSlot == 0 ? furnace.Input : furnace.Fuel;
+        var target = _hudScreen.Slot == 0 ? furnace.Input : furnace.Fuel;
 
         // Fuel that will not burn and ore that will not smelt are refused rather than accepted and
         // sat on, so a slot that takes something is a slot that is going to use it.
-        if (_furnaceSlot == 0 && _book.SmeltFor(held.Item) is null) return;
-        if (_furnaceSlot == 1 && _items[held.Item].BurnSeconds <= 0f) return;
+        if (_hudScreen.Slot == 0 && _book.SmeltFor(held.Item) is null) return;
+        if (_hudScreen.Slot == 1 && _items[held.Item].BurnSeconds <= 0f) return;
 
         var merged = target.Merge(held, _items[held.Item].MaxStack, out var over);
         if (merged.Count == target.Count) return;
 
-        if (_furnaceSlot == 0) furnace.Input = merged; else furnace.Fuel = merged;
+        if (_hudScreen.Slot == 0) furnace.Input = merged; else furnace.Fuel = merged;
         _inventory.SpendHeld(held.Count - over.Count);
         PlaySound(SoundMaterial.Wood, SoundEvent.Place, _viewPosition, 0.5f);
     }
@@ -949,7 +1336,7 @@ public sealed class ClientHost : IDisposable
         if (_bench is not null) return;
 
         // A screen swallows the buttons rather than digging through itself.
-        if (_screen != HudScreenKind.None) return;
+        if (_hudScreen.IsOpen) return;
 
         // A click into a released cursor takes the mouse back rather than editing the world —
         // otherwise clicking the window to focus it digs a hole in whatever was under the crosshair.
@@ -1012,7 +1399,7 @@ public sealed class ClientHost : IDisposable
 
         // The view holds still under a screen. It is still tracked above, so closing the screen
         // does not snap the camera to wherever the cursor drifted while it was up.
-        if (_mouseCaptured && _screen == HudScreenKind.None) _camera.ApplyMouseDelta(delta.X, delta.Y);
+        if (_mouseCaptured && !_hudScreen.IsOpen) _camera.ApplyMouseDelta(delta.X, delta.Y);
     }
 
     private void OnUpdate(double dt)
@@ -1060,7 +1447,7 @@ public sealed class ClientHost : IDisposable
         // What a screen can afford changes as the world hands things over, so it is recomputed
         // rather than only rebuilt on a keypress: a stack flying into the bar while the book is
         // open should light up what it just made possible.
-        if (_screen == HudScreenKind.Crafting) RefreshScreen();
+        if (_hudScreen.Kind == HudScreenKind.Menu) RefreshScreen();
 
         // Collected from the middle of the body rather than the feet, so a stack lying against a
         // wall is still reachable from the other side of it.
@@ -1432,7 +1819,7 @@ public sealed class ClientHost : IDisposable
         _streamer.EditBlock(hit.X, hit.Y, hit.Z, BlockId.Air);
 
         // Standing in front of a furnace that is no longer there.
-        if (_screen != HudScreenKind.None && _station == (hit.X, hit.Y, hit.Z)) CloseScreen();
+        if (_hudScreen.IsOpen && _station == (hit.X, hit.Y, hit.Z)) CloseScreen();
     }
 
     /// <summary>
@@ -1454,7 +1841,7 @@ public sealed class ClientHost : IDisposable
         var struck = _registry[_streamer.World.GetBlock(hit.X, hit.Y, hit.Z)];
         if (struck.Interactive)
         {
-            if (struck.Name == "bench") OpenCrafting(atBench: true, (hit.X, hit.Y, hit.Z));
+            if (struck.Name == "bench") OpenMenu(MenuTab.Craft, atBench: true, (hit.X, hit.Y, hit.Z));
             else OpenFurnace(hit.X, hit.Y, hit.Z);
             return;
         }
@@ -1539,7 +1926,7 @@ public sealed class ClientHost : IDisposable
 
         // A screen has the keyboard, so the body stands still — but it is still stepped, because
         // stopping the simulation would leave a player who opened a bench in mid-air hanging there.
-        if (_screen != HudScreenKind.None)
+        if (_hudScreen.IsOpen)
         {
             _player.Step(_streamer.World, dt, Vector3.Zero, false, false, false);
             _camera.Position = _player.EyePosition;
@@ -1547,14 +1934,14 @@ public sealed class ClientHost : IDisposable
         }
 
         var wish = Vector3.Zero;
-        if (_keyboard.IsKeyPressed(Key.Up) || _keyboard.IsKeyPressed(Key.W)) wish += forward;
-        if (_keyboard.IsKeyPressed(Key.Down) || _keyboard.IsKeyPressed(Key.S)) wish -= forward;
-        if (_keyboard.IsKeyPressed(Key.Right) || _keyboard.IsKeyPressed(Key.D)) wish += right;
-        if (_keyboard.IsKeyPressed(Key.Left) || _keyboard.IsKeyPressed(Key.A)) wish -= right;
+        if (_keys.Held(_keyboard, GameAction.MoveForward)) wish += forward;
+        if (_keys.Held(_keyboard, GameAction.MoveBack)) wish -= forward;
+        if (_keys.Held(_keyboard, GameAction.MoveRight)) wish += right;
+        if (_keys.Held(_keyboard, GameAction.MoveLeft)) wish -= right;
 
-        var jump = _keyboard.IsKeyPressed(Key.Space);
-        var sneak = _keyboard.IsKeyPressed(Key.ControlLeft);
-        var sprint = _keyboard.IsKeyPressed(Key.ShiftLeft) && !sneak;
+        var jump = _keys.Held(_keyboard, GameAction.Jump);
+        var sneak = _keys.Held(_keyboard, GameAction.Sneak);
+        var sprint = _keys.Held(_keyboard, GameAction.Sprint) && !sneak;
 
         _player.Step(_streamer.World, dt, wish, jump, sneak, sprint);
 
@@ -1745,12 +2132,8 @@ public sealed class ClientHost : IDisposable
         if (_bench is null)
         {
             _furnaces.TryGet(_station.X, _station.Y, _station.Z, out var open);
-            _hud.Draw(
-                _blockTextures, _items, _inventory, _vitals,
-                new HudScreen(
-                    _screen, _shown, _payable, _recipeIndex,
-                    _screen == HudScreenKind.Furnace ? open : null, _furnaceSlot),
-                size.X, size.Y);
+            _hudScreen.Burning = _hudScreen.Kind == HudScreenKind.Furnace ? open : null;
+            _hud.Draw(_blockTextures, _items, _inventory, _vitals, _hudScreen, size.X, size.Y);
         }
 
         _renderMs = (Stopwatch.GetTimestamp() - renderStart) * TicksToMs;
