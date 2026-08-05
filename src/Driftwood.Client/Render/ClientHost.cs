@@ -2476,6 +2476,11 @@ public sealed class ClientHost : IDisposable
 
     private void OnUpdate(double dt)
     {
+        // ⚠ Held still for the check, which reads a moving title off the framebuffer and would
+        // otherwise sample a different frame of it every run.
+        if (_options.UiCheck) _hudScreen.Drift = 0.8f;
+        else _hudScreen.Drift += (float)dt;
+
         // A frame is measured from the top of one update to the top of the next, so the swap and
         // the driver's share of the wait are inside it. Timing only the callbacks would report a
         // renderer that never stalls while the player watches it stutter.
@@ -3308,6 +3313,7 @@ public sealed class ClientHost : IDisposable
         {
             _furnaces.TryGet(_station.X, _station.Y, _station.Z, out var open);
             _hudScreen.Burning = _hudScreen.Kind == HudScreenKind.Furnace ? open : null;
+
             _hud.Draw(
                 _blockTextures, _items, _inventory, _equipment, _vitals,
                 _hudScreen, _layout, _toasts, size.X, size.Y);
@@ -3385,7 +3391,7 @@ public sealed class ClientHost : IDisposable
             case 210: SampleUi(size, "cutter"); ProbeSquares(); ProbeCuts(); break;
 
             case 211: CloseScreen(); OpenGame(GameTab.Controls); break;
-            case 240: SampleUi(size, "game"); ProbeRows("top"); break;
+            case 240: SampleUi(size, "game"); ProbeRows("top"); SampleTitle(size); break;
 
             case 241: ScrollRows(int.MaxValue); break;
             case 250: ProbeRows("bottom"); break;
@@ -3670,6 +3676,66 @@ public sealed class ClientHost : IDisposable
         Console.Out.Flush();
     }
 
+    /// <summary>
+    /// Reads the title's own timber, and the gap inside a letter beside it.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ The pair is the check, for the same reason the chest's is. A title drawn in the wrong place
+    /// or not at all leaves the backdrop showing, and a backdrop is a colour — so what has to be
+    /// true is that a cell the word FILLS reads differently from a cell the word LEAVES EMPTY, both
+    /// worked out from the same letter grid the renderer draws from.
+    /// </remarks>
+    private unsafe void SampleTitle(Vector2D<int> size)
+    {
+        var scale = HudRenderer.ScaleFor(size.Y);
+        var h = size.Y / scale;
+        var w = size.X / scale;
+
+        // The same arithmetic the renderer uses, so the sample follows the title if it ever moves.
+        var tall = 22f + Math.Min(_hudScreen.Rows.Count, ScreenLayout.MenuLines(h)) * ScreenLayout.MenuLine + 12f;
+        var top = MathF.Round((h - tall) * 0.42f);
+        var cell = HudRenderer.TitleCell(w);
+        var titleTop = MathF.Max(6f, top - TitleArt.LetterHeight * cell - 26f);
+        var left = w * 0.5f - TitleArt.Cells * cell * 0.5f;
+
+        (byte R, byte G, byte B) At(int cx, int cy)
+        {
+            var px = (int)((left + (cx + 0.5f) * cell) * scale);
+            var py = (int)((titleTop + (cy + 0.5f) * cell) * scale);
+
+            Span<byte> pixel = stackalloc byte[4];
+            fixed (byte* p = pixel)
+                _gl.ReadPixels(px, size.Y - 1 - py, 1, 1, PixelFormat.Rgba, PixelType.UnsignedByte, p);
+
+            return (pixel[0], pixel[1], pixel[2]);
+        }
+
+        // The first filled cell of the word, and the first empty one — found from the letter grid
+        // rather than written down, so neither can drift away from what is drawn.
+        (int X, int Y) ink = (-1, -1);
+        (int X, int Y) air = (-1, -1);
+
+        for (var i = 0; i < TitleArt.Word.Length; i++)
+        for (var y = 0; y < TitleArt.LetterHeight; y++)
+        for (var x = 0; x < TitleArt.LetterWidth; x++)
+        {
+            var at = (i * (TitleArt.LetterWidth + TitleArt.Gap) + x, y);
+            if (TitleArt.Filled(TitleArt.Word[i], x, y)) { if (ink.X < 0) ink = at; }
+            else if (air.X < 0) air = at;
+        }
+
+        _uiSamples["title wood"] = ink.X >= 0 ? At(ink.X, ink.Y) : default;
+        _uiSamples["title gap"] = air.X >= 0 ? At(air.X, air.Y) : default;
+
+        var wood = _uiSamples["title wood"];
+        var gap = _uiSamples["title gap"];
+
+        Console.WriteLine(
+            $"ui-check    title      {TitleArt.Cells} cells at {cell:F0}, timber rgb {wood.R,3} {wood.G,3} "
+            + $"{wood.B,3} against a gap of {gap.R,3} {gap.G,3} {gap.B,3}");
+        Console.Out.Flush();
+    }
+
     /// <summary>What each sample read, so the run can judge itself rather than only report.</summary>
     private readonly Dictionary<string, (byte R, byte G, byte B)> _uiSamples = [];
 
@@ -3718,6 +3784,20 @@ public sealed class ClientHost : IDisposable
                      + $"{storedFull.R} {storedFull.G} {storedFull.B}");
 
         if (cutter == bare) faults.Add("opening a stonecutter changed nothing on screen");
+
+        // The title has to be there, and has to be made of something. A cell the word fills reading
+        // the same as a cell it leaves empty is a title that is not drawn, drawn somewhere else, or
+        // drawn in one flat colour — and all three look identical from every other angle.
+        var timber = Read("title wood");
+        var behindIt = Read("title gap");
+
+        if (timber == behindIt)
+            faults.Add($"the title's timber reads the same as the gap inside its own letters, "
+                     + $"{timber.R} {timber.G} {timber.B}");
+        else if (timber.R <= timber.B)
+            faults.Add($"the title reads {timber.R} {timber.G} {timber.B}, which is not wood");
+
+        foreach (var fault in TitleArt.Validate()) faults.Add(fault);
 
         // The station IS the list. Two wells and no offers is a stonecutter nothing comes out of,
         // and it draws exactly the same as one that works.

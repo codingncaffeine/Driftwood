@@ -183,6 +183,14 @@ public sealed class HudScreen
     /// keeps nothing. What is on its bed goes back into the pockets when the screen shuts, exactly
     /// as a bench's grid does, because it belongs to the player rather than to the station.
     /// </remarks>
+    /// <summary>Seconds, for anything on a screen that moves. Wound on by the client.</summary>
+    /// <remarks>
+    /// On the screen rather than passed into the draw, because it is a property of what is being
+    /// shown rather than of one call — and because the same number twice draws the same picture,
+    /// which is what lets a check read a moving thing back off the framebuffer.
+    /// </remarks>
+    public float Drift;
+
     public ItemStack Cutting;
 
     public readonly List<Recipe> Cuts = [];
@@ -675,6 +683,13 @@ public sealed class HudRenderer : IDisposable
         // Sat where it is tall rather than always a fixed way down the screen.
         var tall = 22f + Math.Min(screen.Rows.Count, ScreenLayout.MenuLines(h)) * ScreenLayout.MenuLine + 12f;
         var top = MathF.Round((h - tall) * 0.42f);
+
+        // The name, over the panel. ⛳ It belongs on the start screen and the start screen does not
+        // exist yet, so it lives here meanwhile — which is also somewhere it is worth having: a
+        // paused game is the other place a title reads as a title rather than as decoration.
+        var cell = TitleCell(w);
+        var titleTop = MathF.Max(6f, top - TitleArt.LetterHeight * cell - 26f);
+        Title(w * 0.5f, titleTop, cell, screen.Drift);
 
         Tabs(screen, layout, left, top, Panel);
         Rows(screen, layout, left, top + 22f, Panel, h);
@@ -1749,6 +1764,94 @@ public sealed class HudRenderer : IDisposable
             x + size, y + quarter, 1f, 0f,
             x + size, y + quarter * 3f, 1f, 1f,
             x + half, y + size, 0f, 1f);
+    }
+
+    /// <summary>
+    /// The game's name, cut out of timber, floating on a swell.
+    /// </summary>
+    /// <param name="drift">Seconds, for the float. The same number every frame draws it still.</param>
+    /// <remarks>
+    /// <para><b>The letters are carved from one plank, not painted with one.</b> Every cell reads
+    /// its own patch of the plank layer at its own position in the word, so the grain runs
+    /// unbroken across all nine letters as though they were cut from a single board — which is what
+    /// makes it read as timber rather than as letters with a wood pattern on them. It also means
+    /// that with a texture pack loaded the title is made of <em>that pack's</em> wood, for nothing.
+    /// </para>
+    /// <para><b>The depth converges.</b> Each cell is extruded toward the middle of the word rather
+    /// than in one direction, so the sides of the left letters are seen on their right and the right
+    /// letters on their left — one viewpoint, in front of the centre. A title extruded uniformly
+    /// reads as a drop shadow; this reads as a solid thing being looked at.</para>
+    /// <para><b>And it drifts.</b> Each letter rides a sine wave phased by how far along the word it
+    /// is, so a slow swell travels through the name — which is the one animation the word itself
+    /// asks for.</para>
+    /// </remarks>
+    /// <summary>
+    /// How big one block of the title is, in layout units.
+    /// </summary>
+    /// <remarks>
+    /// Measured against the width of the screen rather than the width of the panel under it. A
+    /// title is the widest thing on a screen and a panel is not — sized to the panel it came out
+    /// three units a block, which is a caption. Whole units, like everything else here.
+    /// </remarks>
+    public static float TitleCell(float width) =>
+        MathF.Max(2f, MathF.Round(width * 0.58f / TitleArt.Cells));
+
+    private void Title(float centreX, float top, float cell, float drift)
+    {
+        var depth = MathF.Max(1f, MathF.Round(cell * 0.9f));
+        var width = TitleArt.Cells * cell;
+        var left = centreX - width * 0.5f;
+        var middle = TitleArt.Cells * 0.5f;
+
+        // How far across one plank tile a single cell reaches. Eight cells to a board, so the grain
+        // is coarse enough to read at this size and repeats slowly enough not to look tiled.
+        const float Board = 8f;
+
+        for (var index = 0; index < TitleArt.Word.Length; index++)
+        {
+            var letter = TitleArt.Word[index];
+            var column = index * (TitleArt.LetterWidth + TitleArt.Gap);
+
+            // Phased by position, so the swell travels rather than the word bobbing as one piece.
+            var bob = MathF.Sin(drift * 1.5f - index * 0.55f) * cell * 0.55f;
+            var lean = MathF.Cos(drift * 1.1f - index * 0.4f) * cell * 0.12f;
+
+            for (var y = 0; y < TitleArt.LetterHeight; y++)
+            for (var x = 0; x < TitleArt.LetterWidth; x++)
+            {
+                if (!TitleArt.Filled(letter, x, y)) continue;
+
+                var cx = column + x;
+                var px = left + cx * cell + lean;
+                var py = top + y * cell + bob;
+
+                // Toward the middle of the word, and a little down: one viewpoint in front of it.
+                var toward = cx < middle ? 1f : -1f;
+
+                var u0 = cx % Board / Board;
+                var v0 = y % Board / Board;
+                var u1 = u0 + 1f / Board;
+                var v1 = v0 + 1f / Board;
+
+                // The side, laid down first so the face sits on top of it. Drawn as the same timber
+                // darkened rather than as a flat colour, so the grain carries round the edge.
+                for (var step = (int)depth; step >= 1; step--)
+                {
+                    var shade = 0.30f + 0.16f * (1f - step / depth);
+                    Quad(_blocks, StarterBlocks.LayerPlanks, new Vector4(shade, shade, shade, 1f),
+                        px + step * toward, py + step * 0.55f, u0, v0,
+                        px + step * toward + cell, py + step * 0.55f, u1, v0,
+                        px + step * toward + cell, py + step * 0.55f + cell, u1, v1,
+                        px + step * toward, py + step * 0.55f + cell, u0, v1);
+                }
+
+                Quad(_blocks, StarterBlocks.LayerPlanks, Vector4.One,
+                    px, py, u0, v0,
+                    px + cell, py, u1, v0,
+                    px + cell, py + cell, u1, v1,
+                    px, py + cell, u0, v1);
+            }
+        }
     }
 
     /// <summary>Four corners in any arrangement, for the shapes a rectangle cannot describe.</summary>
