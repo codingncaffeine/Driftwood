@@ -251,6 +251,31 @@ public sealed class BlockModel
         return new BlockModel([WholeBlock(faces)]);
     }
 
+    /// <summary>A cube with one side different from the other three — a machine with a face.</summary>
+    /// <remarks>
+    /// Still a full cube, so it still merges: the greedy pass keys on the block id and every facing
+    /// is its own id, so four furnaces in a row facing the same way merge and four facing different
+    /// ways do not. That is the correct answer to both.
+    /// </remarks>
+    public static BlockModel CubeFacing(ushort top, ushort side, ushort bottom, ushort front, int facing)
+    {
+        var faces = new ModelFace?[Blocks.Faces.Count];
+        for (var face = 0; face < Blocks.Faces.Count; face++)
+        {
+            var layer = face == facing
+                ? front
+                : face switch
+                {
+                    Blocks.Faces.PosY => top,
+                    Blocks.Faces.NegY => bottom,
+                    _ => side,
+                };
+            faces[face] = new ModelFace { Layer = layer, CullFace = face };
+        }
+
+        return new BlockModel([WholeBlock(faces)]);
+    }
+
     /// <summary>A cube whose four sides carry a second, tinted cut-out over the first.</summary>
     /// <remarks>
     /// The grass block, and the reason model-driven blocks came before anything else. Packs paint

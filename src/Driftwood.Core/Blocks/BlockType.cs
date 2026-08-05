@@ -73,15 +73,31 @@ public sealed class BlockType
     /// </remarks>
     public float Hardness { get; init; } = 1f;
 
+    /// <summary>Which class of tool is the right way to take this block.</summary>
+    /// <remarks>
+    /// Speed only, on its own. A shovel is quicker through sand and sand comes up either way; it is
+    /// <see cref="HarvestTier"/> beside it that turns a class into a gate.
+    /// </remarks>
+    public Items.ToolClass HarvestClass { get; init; }
+
     /// <summary>
-    /// True when a tool is the right way to take this block, and bare hands are the wrong way.
+    /// The tier of <see cref="HarvestClass"/> needed to keep what this block leaves. Zero for
+    /// anything a bare hand can bring up.
     /// </summary>
     /// <remarks>
-    /// The distinction is what makes stone feel like it wants a pickaxe while wood does not, and it
-    /// is the hook the whole tool progression hangs off. Nothing can be crafted yet, so today it is
-    /// only a penalty; at P6 it becomes "which tier will actually harvest this".
+    /// This is the hook the whole tool progression hangs off, and it replaced a plain "wants a tool"
+    /// flag the day tiers existed. Below the line a block still breaks — slowly — and leaves nothing,
+    /// which is what makes the first pickaxe worth making rather than a formality.
     /// </remarks>
-    public bool NeedsTool { get; init; }
+    public int HarvestTier { get; init; }
+
+    /// <summary>True when bare hands are the wrong way to take this.</summary>
+    public bool NeedsTool => HarvestTier > 0;
+
+    /// <summary>
+    /// True when using this block does something, so a right-click opens it rather than building on it.
+    /// </summary>
+    public bool Interactive { get; init; }
 
     /// <summary>Nothing takes this block. Bedrock, and the floor of the world.</summary>
     public bool Unbreakable => Hardness < 0f;
@@ -97,20 +113,6 @@ public sealed class BlockType
     /// check has to be told about each time one is added.
     /// </remarks>
     public bool Crafted { get; init; }
-
-    /// <summary>
-    /// What breaking this leaves behind. Null means itself; air means nothing.
-    /// </summary>
-    /// <remarks>
-    /// Nullable rather than defaulted to the block's own id, because the id is not known until it
-    /// is registered and "leaves nothing" has to be sayable. Grass leaves dirt, foliage leaves
-    /// nothing, and everything else leaves what it was — which is the rule until tool tiers arrive
-    /// and turn this into a table with conditions in it.
-    /// </remarks>
-    public BlockId? Drop { get; internal set; }
-
-    /// <summary>How many of <see cref="Drop"/> one block leaves.</summary>
-    public int DropCount { get; init; } = 1;
 
     /// <summary>What this sounds like underfoot, under a blow, and coming apart.</summary>
     /// <remarks>

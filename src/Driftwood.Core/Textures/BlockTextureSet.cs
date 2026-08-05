@@ -93,6 +93,66 @@ public static class BlockTextureSet
         new("seaflax",     "textures/block/cornflower.png",       true),
         new("marshlily",   "textures/block/oxeye_daisy.png",      true),
         new("torch",       "textures/block/torch.png",            true),
+
+        // What crafting brought with it.
+        new("rubble",      "textures/block/cobblestone.png",      false),
+        new("glass",       "textures/block/glass.png",            true),
+        new("bricks",      "textures/block/bricks.png",           false),
+        new("bench_top",   "textures/block/crafting_table_top.png",  false),
+        new("bench_side",  "textures/block/crafting_table_side.png", false),
+        new("furnace_top", "textures/block/furnace_top.png",      false),
+        new("furnace_side", "textures/block/furnace_side.png",    false),
+        new("furnace_front", "textures/block/furnace_front.png",  false),
+        new("furnace_front_lit", "textures/block/furnace_front_on.png", false),
+
+        // Items, from here to the end. They live in the same array as the block faces because they
+        // are the same sixteen-pixel tiles drawn by the same two places — a slot on the bar and a
+        // thing spinning on the floor — and a pack that reskins the world should reskin the pockets
+        // too. Every one of them is a cut-out: an icon on an opaque square is a sticker.
+        new("stick",       "textures/item/stick.png",             true),
+        new("coal",        "textures/item/coal.png",              true),
+        new("charcoal",    "textures/item/charcoal.png",          true),
+        new("raw_copper",  "textures/item/raw_copper.png",        true),
+        new("raw_iron",    "textures/item/raw_iron.png",          true),
+        new("raw_gold",    "textures/item/raw_gold.png",          true),
+        new("copper_ingot", "textures/item/copper_ingot.png",     true),
+        new("iron_ingot",  "textures/item/iron_ingot.png",        true),
+        new("gold_ingot",  "textures/item/gold_ingot.png",        true),
+
+        // Ours are stormglass and azurite; the deep gem and the blue mineral are what a pack has
+        // painted, whatever its own game calls them.
+        new("stormglass",  "textures/item/diamond.png",           true),
+        new("azurite",     "textures/item/lapis_lazuli.png",      true),
+        new("clay_lump",   "textures/item/clay_ball.png",         true),
+        new("brick",       "textures/item/brick.png",             true),
+
+        // Six tiers of four heads, tier-major. Copper tooling has no counterpart to look up, so
+        // those four keep our own art rather than being pointed at somebody else's nearest thing —
+        // an empty path is the table saying so out loud.
+        new("wood_pickaxe", "textures/item/wooden_pickaxe.png",   true),
+        new("wood_axe",    "textures/item/wooden_axe.png",        true),
+        new("wood_shovel", "textures/item/wooden_shovel.png",     true),
+        new("wood_sword",  "textures/item/wooden_sword.png",      true),
+        new("stone_pickaxe", "textures/item/stone_pickaxe.png",   true),
+        new("stone_axe",   "textures/item/stone_axe.png",         true),
+        new("stone_shovel", "textures/item/stone_shovel.png",     true),
+        new("stone_sword", "textures/item/stone_sword.png",       true),
+        new("copper_pickaxe", "",                                 true),
+        new("copper_axe",  "",                                    true),
+        new("copper_shovel", "",                                  true),
+        new("copper_sword", "",                                   true),
+        new("gold_pickaxe", "textures/item/golden_pickaxe.png",   true),
+        new("gold_axe",    "textures/item/golden_axe.png",        true),
+        new("gold_shovel", "textures/item/golden_shovel.png",     true),
+        new("gold_sword",  "textures/item/golden_sword.png",      true),
+        new("iron_pickaxe", "textures/item/iron_pickaxe.png",     true),
+        new("iron_axe",    "textures/item/iron_axe.png",          true),
+        new("iron_shovel", "textures/item/iron_shovel.png",       true),
+        new("iron_sword",  "textures/item/iron_sword.png",        true),
+        new("stormglass_pickaxe", "textures/item/diamond_pickaxe.png", true),
+        new("stormglass_axe", "textures/item/diamond_axe.png",    true),
+        new("stormglass_shovel", "textures/item/diamond_shovel.png", true),
+        new("stormglass_sword", "textures/item/diamond_sword.png", true),
     ];
 
     /// <param name="GrassMap">Grass colormap, the pack's if it ships one.</param>
@@ -202,8 +262,60 @@ public static class BlockTextureSet
             StarterBlocks.LayerSeaflax => TileGen.Flower(1031, 74, 118, 58, 78, 116, 208, 226, 232, 118),
             StarterBlocks.LayerMarshlily => TileGen.Flower(1032, 82, 126, 62, 236, 238, 232, 236, 196, 84),
             StarterBlocks.LayerTorch => TileGen.Torch(1033),
-            _ => TileGen.Solid(255, 0, 255, 255),
+
+            StarterBlocks.LayerRubble => TileGen.Cobble(1034, 126, 126, 130),
+            StarterBlocks.LayerGlass => TileGen.Glass(1035),
+            StarterBlocks.LayerBricks => TileGen.Bricks(1036, 154, 90, 74, 168),
+
+            // The bench is planks that have been worked on: grooves where a straight edge was laid
+            // and nicks where it was not.
+            StarterBlocks.LayerBenchTop => TileGen.Scored(1037, TileGen.Planks(1011, 179, 143, 87)),
+            StarterBlocks.LayerBenchSide => TileGen.Panel(TileGen.Planks(1038, 168, 132, 80), 3, 26),
+
+            StarterBlocks.LayerFurnaceTop => TileGen.Speckle(1039, 112, 110, 112, 14, 0.5f),
+            StarterBlocks.LayerFurnaceSide => TileGen.Cobble(1040, 116, 114, 116),
+            StarterBlocks.LayerFurnaceFront =>
+                TileGen.Hearth(1041, TileGen.Cobble(1040, 116, 114, 116), lit: false),
+            StarterBlocks.LayerFurnaceFrontLit =>
+                TileGen.Hearth(1042, TileGen.Cobble(1040, 116, 114, 116), lit: true),
+
+            StarterBlocks.LayerStick => TileGen.IconStick(1043, 150, 112, 66),
+            StarterBlocks.LayerCoal => TileGen.IconLump(1044, 46, 44, 46),
+            StarterBlocks.LayerCharcoal => TileGen.IconLump(1045, 62, 54, 48),
+            StarterBlocks.LayerRawCopper => TileGen.IconLump(1046, 190, 118, 74),
+            StarterBlocks.LayerRawIron => TileGen.IconLump(1047, 190, 162, 140),
+            StarterBlocks.LayerRawGold => TileGen.IconLump(1048, 226, 190, 84),
+            StarterBlocks.LayerCopperIngot => TileGen.IconIngot(1049, 200, 116, 66),
+            StarterBlocks.LayerIronIngot => TileGen.IconIngot(1050, 214, 214, 220),
+            StarterBlocks.LayerGoldIngot => TileGen.IconIngot(1051, 236, 200, 86),
+            StarterBlocks.LayerStormglass => TileGen.IconGem(1052, 118, 214, 214),
+            StarterBlocks.LayerAzurite => TileGen.IconGem(1053, 58, 88, 194),
+            StarterBlocks.LayerClayLump => TileGen.IconLump(1054, 164, 170, 180),
+            StarterBlocks.LayerBrick => TileGen.IconBrick(1055, 158, 94, 78),
+
+            _ => Tool(layer),
         };
     }
 
+    /// <summary>The head colour of each tool tier, in the order the layers run.</summary>
+    private static readonly (byte R, byte G, byte B)[] ToolPalettes =
+    [
+        (158, 122, 72),     // wood
+        (132, 132, 137),    // stone
+        (196, 112, 62),     // copper
+        (232, 196, 82),     // gold
+        (214, 214, 220),    // iron
+        (118, 224, 220),    // stormglass
+    ];
+
+    /// <summary>One tool icon, or the loud magenta that says a layer has no art behind it.</summary>
+    private static byte[] Tool(int layer)
+    {
+        var index = layer - StarterBlocks.LayerFirstTool;
+        if (index < 0 || index >= ToolPalettes.Length * StarterBlocks.ToolShapeCount)
+            return TileGen.Solid(255, 0, 255, 255);
+
+        var (r, g, b) = ToolPalettes[index / StarterBlocks.ToolShapeCount];
+        return TileGen.IconTool(1100 + index, index % StarterBlocks.ToolShapeCount, r, g, b);
+    }
 }

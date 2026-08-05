@@ -6,12 +6,15 @@ using Silk.NET.OpenGL;
 namespace Driftwood.Client.Render;
 
 /// <summary>
-/// Draws what is lying on the ground: a small cube of the block, bobbing and turning.
+/// Draws what is lying on the ground: a small cube of the block, or a card of the icon, bobbing
+/// and turning.
 /// </summary>
 /// <remarks>
-/// <para>A cube rather than a flat sprite, because everything that drops is currently a block and a
-/// block reads as a block from every angle. It also means the thing on the floor is visibly the
-/// thing that was broken, without any second set of art.</para>
+/// <para>A block draws as a cube, because a block reads as a block from every angle and it means
+/// the thing on the floor is visibly the thing that was broken. Everything else — a stick, an
+/// ingot, a pickaxe — draws as the same cube squashed almost flat with its icon on every face,
+/// which is a card with thickness. It has to have <em>some</em> thickness: a plane turning on its
+/// axis vanishes once a revolution, and an item that blinks looks like a rendering fault.</para>
 /// <para>One draw call each. A stack of dropped items is tens of entities, not thousands, and an
 /// instanced path would cost more code than the draw calls cost frames — the moment that stops
 /// being true, the vertex buffer here is already shaped to take a per-instance stream.</para>
@@ -69,6 +72,9 @@ public sealed class ItemRenderer : IDisposable
 
     /// <summary>How big a dropped block is, as a share of a full one.</summary>
     private const float Size = 0.26f;
+
+    /// <summary>How thick a flat item is, as a share of its width.</summary>
+    private const float CardThickness = 0.14f;
 
     private readonly GL _gl;
     private readonly Shader _shader;
@@ -133,13 +139,14 @@ public sealed class ItemRenderer : IDisposable
     }
 
     public unsafe void Draw(
-        DroppedItems items,
+        DroppedItems ground,
         BlockRegistry registry,
+        ItemRegistry catalogue,
         Matrix4x4 viewProj,
         Func<Vector3, Vector3> lightAt)
     {
         DrawnItems = 0;
-        if (items.Count == 0) return;
+        if (ground.Count == 0) return;
 
         _shader.Use();
         _shader.SetMatrix4("uViewProj", viewProj);
@@ -147,23 +154,36 @@ public sealed class ItemRenderer : IDisposable
 
         _gl.BindVertexArray(_vao);
 
-        foreach (var item in items.Live)
+        foreach (var item in ground.Live)
         {
-            var type = registry[item.Stack.Block];
+            var type = catalogue[item.Stack.Item];
 
             // Shrinking as it is drawn in is the whole tell that a pickup is happening.
             var scale = Size * (1f - item.Collecting * 0.8f);
             var bob = MathF.Sin(item.Age * 2.6f) * 0.045f;
 
-            var model = Matrix4x4.CreateScale(scale)
+            var thickness = type.DrawsAsCube ? 1f : CardThickness;
+
+            var model = Matrix4x4.CreateScale(scale, scale, scale * thickness)
                       * Matrix4x4.CreateRotationY(item.Age * 1.5f)
                       * Matrix4x4.CreateTranslation(item.Position + new Vector3(0f, scale + bob, 0f));
 
             _shader.SetMatrix4("uModel", model);
-            _shader.SetVec3("uLayers", new Vector3(
-                type.Model.PassLayer(0, Faces.PosY) is var top and not BlockModel.NoLayer ? top : type.Model.ParticleLayer,
-                type.Model.ParticleLayer,
-                type.Model.PassLayer(0, Faces.NegY) is var bottom and not BlockModel.NoLayer ? bottom : type.Model.ParticleLayer));
+
+            // A block wears its own three faces; anything else wears its icon on all six, which is
+            // what makes the card read the same whichever way round the spin has it.
+            if (type.DrawsAsCube)
+            {
+                var shape = registry[type.PlainBlock].Model;
+                _shader.SetVec3("uLayers", new Vector3(
+                    shape.PassLayer(0, Faces.PosY) is var top and not BlockModel.NoLayer ? top : shape.ParticleLayer,
+                    shape.ParticleLayer,
+                    shape.PassLayer(0, Faces.NegY) is var bottom and not BlockModel.NoLayer ? bottom : shape.ParticleLayer));
+            }
+            else
+            {
+                _shader.SetVec3("uLayers", new Vector3(type.IconLayer));
+            }
 
             _shader.SetVec3("uLight", lightAt(item.Position));
             _gl.DrawElements(PrimitiveType.Triangles, 36, DrawElementsType.UnsignedInt, (void*)0);

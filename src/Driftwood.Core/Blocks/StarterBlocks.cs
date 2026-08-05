@@ -1,4 +1,5 @@
 using Driftwood.Core.Audio;
+using Driftwood.Core.Items;
 using Driftwood.Core.Lighting;
 
 namespace Driftwood.Core.Blocks;
@@ -52,7 +53,53 @@ public static class StarterBlocks
     public const ushort LayerMarshlily = 31;
     public const ushort LayerTorch = 32;
 
-    public const int LayerCount = 33;
+    // What crafting brought with it. Rubble is what a pickaxe leaves and stone is what a furnace
+    // gives back, so the two are seen side by side constantly and have to look like cause and
+    // effect. The bench and the furnace each need a face that is not their sides, which is why the
+    // cube model grew a facing form.
+    public const ushort LayerRubble = 33;
+    public const ushort LayerGlass = 34;
+    public const ushort LayerBricks = 35;
+    public const ushort LayerBenchTop = 36;
+    public const ushort LayerBenchSide = 37;
+    public const ushort LayerFurnaceTop = 38;
+    public const ushort LayerFurnaceSide = 39;
+    public const ushort LayerFurnaceFront = 40;
+    public const ushort LayerFurnaceFrontLit = 41;
+
+    /// <summary>The first layer that is an item icon rather than a block face.</summary>
+    /// <remarks>
+    /// Items share the block texture array rather than taking one of their own. They are the same
+    /// sixteen-pixel tiles, they are drawn by the same two places — a slot on the bar and a thing
+    /// spinning on the floor — and a second array would be a second bind, a second upload and a
+    /// second pack-import path for no difference anybody could see.
+    /// </remarks>
+    public const ushort LayerFirstIcon = 42;
+
+    public const ushort LayerStick = 42;
+    public const ushort LayerCoal = 43;
+    public const ushort LayerCharcoal = 44;
+    public const ushort LayerRawCopper = 45;
+    public const ushort LayerRawIron = 46;
+    public const ushort LayerRawGold = 47;
+    public const ushort LayerCopperIngot = 48;
+    public const ushort LayerIronIngot = 49;
+    public const ushort LayerGoldIngot = 50;
+    public const ushort LayerStormglass = 51;
+    public const ushort LayerAzurite = 52;
+    public const ushort LayerClayLump = 53;
+    public const ushort LayerBrick = 54;
+
+    /// <summary>The tool icons: one palette per tier, four heads each, tier-major.</summary>
+    public const ushort LayerFirstTool = 55;
+
+    /// <summary>Head shapes a tier comes in — pickaxe, axe, shovel, sword.</summary>
+    public const int ToolShapeCount = 4;
+
+    /// <summary>Palettes a head comes in — wood, stone, copper, gold, iron, stormglass.</summary>
+    public const int ToolTierCount = 6;
+
+    public const int LayerCount = LayerFirstTool + ToolShapeCount * ToolTierCount;
 
     public sealed record Ids(
         BlockId Stone,
@@ -83,7 +130,13 @@ public static class StarterBlocks
         BlockId SnowLayer,
         BlockId Meadowgrass,
         BlockId Seaflax,
-        BlockId Marshlily)
+        BlockId Marshlily,
+        BlockId Rubble,
+        BlockId Glass,
+        BlockId Bricks,
+        BlockId Bench,
+        BlockId Furnace,
+        BlockId FurnaceLit)
     {
         /// <summary>Every rock an ore can form in. Ore replaces rock, whichever rock it is.</summary>
         public BlockId[] Rock => [Stone, Deepstone, Coralstone, Driftstone, Saltstone];
@@ -108,12 +161,13 @@ public static class StarterBlocks
         // what makes the first pickaxe worth crafting at P6 rather than a formality.
         var stone = registry.Register(new BlockType
         {
-            Name = "stone", Hardness = 1.5f, NeedsTool = true,
+            Name = "stone", Hardness = 1.5f, HarvestClass = ToolClass.Pickaxe, HarvestTier = 1,
             TopLayer = LayerStone, SideLayer = LayerStone, BottomLayer = LayerStone,
         });
         var dirt = registry.Register(new BlockType
         {
             Name = "dirt", Hardness = 0.5f, Sounds = SoundMaterial.Dirt,
+            HarvestClass = ToolClass.Shovel,
             TopLayer = LayerDirt, SideLayer = LayerDirt, BottomLayer = LayerDirt,
         });
         // The one block that was never really a cube. Its top is the climate colour over a grey
@@ -123,13 +177,14 @@ public static class StarterBlocks
         var grass = registry.Register(new BlockType
         {
             Name = "grass", Hardness = 0.6f, Tint = TintSource.Grass, Sounds = SoundMaterial.Grass,
-            Drop = dirt,
+            HarvestClass = ToolClass.Shovel,
             Model = BlockModel.CubeWithSideOverlay(
                 LayerGrassTop, LayerGrassSide, LayerDirt, LayerGrassSideOverlay),
         });
         var sand = registry.Register(new BlockType
         {
             Name = "sand", Hardness = 0.5f, Sounds = SoundMaterial.Sand,
+            HarvestClass = ToolClass.Shovel,
             TopLayer = LayerSand, SideLayer = LayerSand, BottomLayer = LayerSand,
         });
 
@@ -150,11 +205,13 @@ public static class StarterBlocks
         var gravel = registry.Register(new BlockType
         {
             Name = "gravel", Hardness = 0.6f, Sounds = SoundMaterial.Gravel,
+            HarvestClass = ToolClass.Shovel,
             TopLayer = LayerGravel, SideLayer = LayerGravel, BottomLayer = LayerGravel,
         });
         var log = registry.Register(new BlockType
         {
             Name = "driftoak_log", Hardness = 2f, Sounds = SoundMaterial.Wood,
+            HarvestClass = ToolClass.Axe,
             TopLayer = LayerLogTop, SideLayer = LayerLogSide, BottomLayer = LayerLogTop,
         });
 
@@ -164,7 +221,7 @@ public static class StarterBlocks
         var leaves = registry.Register(new BlockType
         {
             Name = "driftoak_leaves", Hardness = 0.2f, Opaque = false, LightAttenuation = 1,
-            Sounds = SoundMaterial.Leaves, Drop = BlockId.Air,
+            Sounds = SoundMaterial.Leaves,
             Tint = TintSource.Foliage,
             TopLayer = LayerLeaves, SideLayer = LayerLeaves, BottomLayer = LayerLeaves,
         });
@@ -172,16 +229,21 @@ public static class StarterBlocks
         var planks = registry.Register(new BlockType
         {
             Name = "driftoak_planks", Hardness = 2f, Crafted = true, Sounds = SoundMaterial.Wood,
+            HarvestClass = ToolClass.Axe,
             TopLayer = LayerPlanks, SideLayer = LayerPlanks, BottomLayer = LayerPlanks,
         });
+
+        // The ore ladder is a tier ladder. Coal comes up with the first wooden pickaxe, the two
+        // working metals want stone, the two showy ones want copper, and the gem at the floor of
+        // the world wants iron — so each rung is the reason to make the next.
         var coal = registry.Register(new BlockType
         {
-            Name = "coal_ore", Hardness = 3f, NeedsTool = true,
+            Name = "coal_ore", Hardness = 3f, HarvestClass = ToolClass.Pickaxe, HarvestTier = 1,
             TopLayer = LayerCoalOre, SideLayer = LayerCoalOre, BottomLayer = LayerCoalOre,
         });
         var iron = registry.Register(new BlockType
         {
-            Name = "iron_ore", Hardness = 3f, NeedsTool = true,
+            Name = "iron_ore", Hardness = 3f, HarvestClass = ToolClass.Pickaxe, HarvestTier = 2,
             TopLayer = LayerIronOre, SideLayer = LayerIronOre, BottomLayer = LayerIronOre,
         });
 
@@ -198,7 +260,7 @@ public static class StarterBlocks
         // in a way anyone notices. Warm and slightly red, so coloured light is visibly coloured.
         var emberstone = registry.Register(new BlockType
         {
-            Name = "emberstone", Hardness = 0.3f,
+            Name = "emberstone", Hardness = 0.3f, HarvestClass = ToolClass.Pickaxe, HarvestTier = 1,
             LightEmission = LightValue.PackBlock(15, 10, 4),
             TopLayer = LayerEmberstone, SideLayer = LayerEmberstone, BottomLayer = LayerEmberstone,
         });
@@ -213,7 +275,7 @@ public static class StarterBlocks
         var vine = registry.Register(new BlockType
         {
             Name = "vine", Hardness = 0.2f, Solid = false, Opaque = false, LightAttenuation = 1,
-            Sounds = SoundMaterial.Plant, Drop = BlockId.Air,
+            Sounds = SoundMaterial.Plant,
             Tint = TintSource.Foliage,
             Model = BlockModel.Cross(LayerVine),
         });
@@ -222,7 +284,7 @@ public static class StarterBlocks
         // going somewhere rather than as more of the same grey.
         var deepstone = registry.Register(new BlockType
         {
-            Name = "deepstone", Hardness = 3f, NeedsTool = true,
+            Name = "deepstone", Hardness = 3f, HarvestClass = ToolClass.Pickaxe, HarvestTier = 2,
             TopLayer = LayerDeepstone, SideLayer = LayerDeepstone, BottomLayer = LayerDeepstone,
         });
 
@@ -232,17 +294,17 @@ public static class StarterBlocks
         // geology, and a pack has art for three kinds of rock whatever anyone calls them.
         var coralstone = registry.Register(new BlockType
         {
-            Name = "coralstone", Hardness = 1.5f, NeedsTool = true,
+            Name = "coralstone", Hardness = 1.5f, HarvestClass = ToolClass.Pickaxe, HarvestTier = 1,
             TopLayer = LayerCoralstone, SideLayer = LayerCoralstone, BottomLayer = LayerCoralstone,
         });
         var driftstone = registry.Register(new BlockType
         {
-            Name = "driftstone", Hardness = 1.5f, NeedsTool = true,
+            Name = "driftstone", Hardness = 1.5f, HarvestClass = ToolClass.Pickaxe, HarvestTier = 1,
             TopLayer = LayerDriftstone, SideLayer = LayerDriftstone, BottomLayer = LayerDriftstone,
         });
         var saltstone = registry.Register(new BlockType
         {
-            Name = "saltstone", Hardness = 1.5f, NeedsTool = true,
+            Name = "saltstone", Hardness = 1.5f, HarvestClass = ToolClass.Pickaxe, HarvestTier = 1,
             TopLayer = LayerSaltstone, SideLayer = LayerSaltstone, BottomLayer = LayerSaltstone,
         });
 
@@ -251,30 +313,31 @@ public static class StarterBlocks
         // a cold gem found only at the floor of the world.
         var copper = registry.Register(new BlockType
         {
-            Name = "copper_ore", Hardness = 3f, NeedsTool = true,
+            Name = "copper_ore", Hardness = 3f, HarvestClass = ToolClass.Pickaxe, HarvestTier = 2,
             TopLayer = LayerCopperOre, SideLayer = LayerCopperOre, BottomLayer = LayerCopperOre,
         });
         var gold = registry.Register(new BlockType
         {
-            Name = "gold_ore", Hardness = 3f, NeedsTool = true,
+            Name = "gold_ore", Hardness = 3f, HarvestClass = ToolClass.Pickaxe, HarvestTier = 3,
             TopLayer = LayerGoldOre, SideLayer = LayerGoldOre, BottomLayer = LayerGoldOre,
         });
         var stormglass = registry.Register(new BlockType
         {
-            Name = "stormglass_ore", Hardness = 3f, NeedsTool = true,
+            Name = "stormglass_ore", Hardness = 3f, HarvestClass = ToolClass.Pickaxe, HarvestTier = 4,
             TopLayer = LayerStormglassOre, SideLayer = LayerStormglassOre, BottomLayer = LayerStormglassOre,
         });
 
         // Azurite is a real blue copper mineral, and ours rather than anybody's coined name.
         var azurite = registry.Register(new BlockType
         {
-            Name = "azurite_ore", Hardness = 3f, NeedsTool = true,
+            Name = "azurite_ore", Hardness = 3f, HarvestClass = ToolClass.Pickaxe, HarvestTier = 3,
             TopLayer = LayerAzuriteOre, SideLayer = LayerAzuriteOre, BottomLayer = LayerAzuriteOre,
         });
 
         var clay = registry.Register(new BlockType
         {
             Name = "clay", Hardness = 0.6f, Sounds = SoundMaterial.Dirt,
+            HarvestClass = ToolClass.Shovel,
             TopLayer = LayerClay, SideLayer = LayerClay, BottomLayer = LayerClay,
         });
 
@@ -282,7 +345,7 @@ public static class StarterBlocks
         // stratified top would put the bands on edge when seen from above.
         var sandstone = registry.Register(new BlockType
         {
-            Name = "sandstone", Hardness = 0.8f, NeedsTool = true,
+            Name = "sandstone", Hardness = 0.8f, HarvestClass = ToolClass.Pickaxe, HarvestTier = 1,
             TopLayer = LayerSandstoneTop, SideLayer = LayerSandstone, BottomLayer = LayerSandstoneTop,
         });
 
@@ -291,6 +354,7 @@ public static class StarterBlocks
         var snow = registry.Register(new BlockType
         {
             Name = "snow", Hardness = 0.2f, Sounds = SoundMaterial.Snow,
+            HarvestClass = ToolClass.Shovel,
             TopLayer = LayerSnow, SideLayer = LayerSnow, BottomLayer = LayerSnow,
         });
 
@@ -300,7 +364,7 @@ public static class StarterBlocks
         var snowLayer = registry.Register(new BlockType
         {
             Name = "snow_layer", Hardness = 0.1f, Solid = false, Opaque = false, Sounds = SoundMaterial.Snow,
-            Drop = BlockId.Air,
+            HarvestClass = ToolClass.Shovel,
             Model = BlockModel.Layer(LayerSnow, LayerSnow, LayerSnow, 3f),
         });
 
@@ -311,7 +375,6 @@ public static class StarterBlocks
         var meadowgrass = registry.Register(new BlockType
         {
             Name = "meadowgrass", Hardness = 0.05f, Solid = false, Opaque = false, Sounds = SoundMaterial.Plant,
-            Drop = BlockId.Air,
             Tint = TintSource.Grass,
             Model = BlockModel.Cross(LayerMeadowgrass),
         });
@@ -330,6 +393,35 @@ public static class StarterBlocks
             Model = BlockModel.Cross(LayerMarshlily, tinted: false),
         });
 
+        // What a pickaxe leaves when it takes stone, and what a furnace turns back into stone. The
+        // loop between the two is the reason a furnace is worth building before there is any metal
+        // to smelt, and it is why rubble is the block most early walls are made of.
+        var rubble = registry.Register(new BlockType
+        {
+            // Crafted, in the sense the flag means: nothing in the ground is made of it. Rubble is
+            // what stone becomes on the way out, so a world census that expected to find some would
+            // be looking for something that only exists once somebody has swung at a wall.
+            Name = "rubble", Hardness = 2f, Crafted = true,
+            HarvestClass = ToolClass.Pickaxe, HarvestTier = 1,
+            TopLayer = LayerRubble, SideLayer = LayerRubble, BottomLayer = LayerRubble,
+        });
+
+        // Solid, and see-through. The pair of flags earns its keep again: a pane stops a player and
+        // does not stop the sun, so a glasshouse is bright inside.
+        var glass = registry.Register(new BlockType
+        {
+            Name = "glass", Hardness = 0.3f, Opaque = false, Crafted = true,
+            Sounds = SoundMaterial.Glass,
+            Model = BlockModel.Cube(LayerGlass, LayerGlass, LayerGlass),
+        });
+
+        var bricks = registry.Register(new BlockType
+        {
+            Name = "bricks", Hardness = 2f, Crafted = true,
+            HarvestClass = ToolClass.Pickaxe, HarvestTier = 1,
+            TopLayer = LayerBricks, SideLayer = LayerBricks, BottomLayer = LayerBricks,
+        });
+
         // The built shapes. Every orientation is its own block, because there is nowhere else to
         // keep one — a cell holds an id and nothing beside it. That is also how the genre stores it
         // underneath, and it means the mesher never asks which way a stair faces: the id says.
@@ -345,17 +437,74 @@ public static class StarterBlocks
             Model = BlockModel.Torch(LayerTorch),
         });
 
+        // The two blocks a player uses rather than builds with. Both are Interactive, which is what
+        // makes a right-click open them instead of stacking another one on top — the first time the
+        // world has had a block that answers back.
+        var bench = registry.Register(new BlockType
+        {
+            Name = "bench", Hardness = 2.5f, Crafted = true, Interactive = true,
+            HarvestClass = ToolClass.Axe, Sounds = SoundMaterial.Wood,
+            TopLayer = LayerBenchTop, SideLayer = LayerBenchSide, BottomLayer = LayerPlanks,
+        });
+
+        // Four facings each, lit and unlit. Eight ids for one machine, which is the price of a cell
+        // that holds an id and nothing beside it — and the reason the mesher never has to ask which
+        // way a furnace is pointing or whether it is burning.
+        var furnace = BlockId.Air;
+        var furnaceLit = BlockId.Air;
+        for (var i = 0; i < Placeable.Facings.Length; i++)
+        foreach (var lit in (bool[])[false, true])
+        {
+            var id = registry.Register(new BlockType
+            {
+                Name = $"furnace_{FacingNames[i]}{(lit ? "_lit" : "")}",
+                Hardness = 3.5f, Crafted = true, Interactive = true,
+                HarvestClass = ToolClass.Pickaxe, HarvestTier = 1,
+                LightEmission = lit ? LightValue.PackBlock(13, 9, 4) : (ushort)0,
+                Model = BlockModel.CubeFacing(
+                    LayerFurnaceTop, LayerFurnaceSide, LayerFurnaceTop,
+                    lit ? LayerFurnaceFrontLit : LayerFurnaceFront,
+                    Placeable.Facings[i]),
+            });
+
+            if (i != 0) continue;
+            if (lit) furnaceLit = id; else furnace = id;
+        }
+
         return new Ids(
             stone, dirt, grass, sand, water, gravel, log, leaves, planks, coal, iron, bedrock,
             emberstone, vine, deepstone, coralstone, driftstone, saltstone, copper, gold, stormglass,
-            azurite, clay, sandstone, snow, snowLayer, meadowgrass, seaflax, marshlily);
+            azurite, clay, sandstone, snow, snowLayer, meadowgrass, seaflax, marshlily,
+            rubble, glass, bricks, bench, furnace, furnaceLit);
     }
 
-    /// <summary>The materials that come in slab and stair form, the tiles each wears, and its sound.</summary>
-    private static readonly (string Name, ushort Top, ushort Side, ushort Bottom, SoundMaterial Sound)[] ShapedMaterials =
+    /// <summary>Every form of the furnace, by facing then lit — the order they were registered.</summary>
+    public static BlockId[] Furnaces(BlockRegistry registry, bool lit)
+    {
+        var ids = new BlockId[Placeable.Facings.Length];
+        for (var i = 0; i < ids.Length; i++)
+            ids[i] = registry.ByName($"furnace_{FacingNames[i]}{(lit ? "_lit" : "")}").Id;
+        return ids;
+    }
+
+    /// <summary>One material that comes in slab and stair form: its tiles, its sound, its tool.</summary>
+    public readonly record struct ShapedMaterial(
+        string Name, ushort Top, ushort Side, ushort Bottom, SoundMaterial Sound,
+        ToolClass Harvest, int Tier);
+
+    /// <summary>
+    /// The materials shapes are cut from. One row here is ten blocks and two recipes.
+    /// </summary>
+    /// <remarks>
+    /// The table is the point. Eight hundred blocks in this genre is fifty-odd template families
+    /// times a few axes, not eight hundred drawings — so every axis we have should read like this
+    /// one, where adding a wood species is a line rather than a chapter.
+    /// </remarks>
+    private static readonly ShapedMaterial[] ShapedMaterials =
     [
-        ("driftoak", LayerPlanks, LayerPlanks, LayerPlanks, SoundMaterial.Wood),
-        ("stone", LayerStone, LayerStone, LayerStone, SoundMaterial.Stone),
+        new("driftoak", LayerPlanks, LayerPlanks, LayerPlanks, SoundMaterial.Wood, ToolClass.Axe, 0),
+        new("stone", LayerStone, LayerStone, LayerStone, SoundMaterial.Stone, ToolClass.Pickaxe, 1),
+        new("rubble", LayerRubble, LayerRubble, LayerRubble, SoundMaterial.Stone, ToolClass.Pickaxe, 1),
     ];
 
     /// <summary>Facing names in <see cref="Placeable.Facings"/> order: +x, -x, +z, -z.</summary>
@@ -363,15 +512,16 @@ public static class StarterBlocks
 
     private static void RegisterShapes(BlockRegistry registry)
     {
-        foreach (var (name, top, side, bottom, sound) in ShapedMaterials)
+        foreach (var m in ShapedMaterials)
         {
             foreach (var upper in (bool[])[false, true])
             {
                 registry.Register(new BlockType
                 {
-                    Name = $"{name}_slab_{(upper ? "upper" : "lower")}",
-                    Hardness = 2f, Opaque = false, Crafted = true, Sounds = sound,
-                    Model = BlockModel.Slab(top, side, bottom, upper),
+                    Name = $"{m.Name}_slab_{(upper ? "upper" : "lower")}",
+                    Hardness = 2f, Opaque = false, Crafted = true, Sounds = m.Sound,
+                    HarvestClass = m.Harvest, HarvestTier = m.Tier,
+                    Model = BlockModel.Slab(m.Top, m.Side, m.Bottom, upper),
                 });
             }
 
@@ -380,58 +530,38 @@ public static class StarterBlocks
             {
                 registry.Register(new BlockType
                 {
-                    Name = $"{name}_stairs_{FacingNames[i]}_{(upper ? "upper" : "lower")}",
-                    Hardness = 2f, Opaque = false, Crafted = true, Sounds = sound,
-                    Model = BlockModel.Stairs(top, side, bottom, Placeable.Facings[i], upper),
+                    Name = $"{m.Name}_stairs_{FacingNames[i]}_{(upper ? "upper" : "lower")}",
+                    Hardness = 2f, Opaque = false, Crafted = true, Sounds = m.Sound,
+                    HarvestClass = m.Harvest, HarvestTier = m.Tier,
+                    Model = BlockModel.Stairs(m.Top, m.Side, m.Bottom, Placeable.Facings[i], upper),
                 });
             }
         }
     }
 
-    /// <summary>
-    /// What a player can hold and put down, in the order a picker walks through it.
-    /// </summary>
-    /// <remarks>
-    /// Built by name out of the registry rather than threaded through <see cref="Ids"/>. Twenty-odd
-    /// stair orientations have no business in a record every caller has to carry, and the names are
-    /// generated a few lines above from the same two tables — so a material added there appears in
-    /// the hand without anything here changing.
-    /// </remarks>
-    public static Placeable[] Hand(BlockRegistry registry)
+    /// <summary>The names of the materials that come in slab and stair form.</summary>
+    public static IEnumerable<string> ShapedNames
     {
-        var hand = new List<Placeable>
+        get { foreach (var m in ShapedMaterials) yield return m.Name; }
+    }
+
+    /// <summary>Every form of one shaped material, in the order a <see cref="Placeable"/> wants them.</summary>
+    public static BlockId[] Slabs(BlockRegistry registry, string material) =>
+    [
+        registry.ByName($"{material}_slab_lower").Id,
+        registry.ByName($"{material}_slab_upper").Id,
+    ];
+
+    /// <summary>Eight stair orientations: <see cref="Placeable.Facings"/> order, each lower then upper.</summary>
+    public static BlockId[] Stairs(BlockRegistry registry, string material)
+    {
+        var stairs = new BlockId[Placeable.Facings.Length * 2];
+        for (var i = 0; i < Placeable.Facings.Length; i++)
         {
-            new() { Label = "driftoak planks", Kind = PlacementKind.Plain, Variants = [registry.ByName("driftoak_planks").Id] },
-        };
-
-        foreach (var (name, _, _, _, _) in ShapedMaterials)
-        {
-            hand.Add(new Placeable
-            {
-                Label = $"{name} slab",
-                Kind = PlacementKind.Halved,
-                Variants =
-                [
-                    registry.ByName($"{name}_slab_lower").Id,
-                    registry.ByName($"{name}_slab_upper").Id,
-                ],
-            });
-
-            var stairs = new BlockId[Placeable.Facings.Length * 2];
-            for (var i = 0; i < Placeable.Facings.Length; i++)
-            {
-                stairs[i * 2] = registry.ByName($"{name}_stairs_{FacingNames[i]}_lower").Id;
-                stairs[i * 2 + 1] = registry.ByName($"{name}_stairs_{FacingNames[i]}_upper").Id;
-            }
-
-            hand.Add(new Placeable { Label = $"{name} stairs", Kind = PlacementKind.Stairs, Variants = stairs });
+            stairs[i * 2] = registry.ByName($"{material}_stairs_{FacingNames[i]}_lower").Id;
+            stairs[i * 2 + 1] = registry.ByName($"{material}_stairs_{FacingNames[i]}_upper").Id;
         }
 
-        hand.Add(new Placeable { Label = "torch", Kind = PlacementKind.Standing, Variants = [registry.ByName("torch").Id] });
-
-        foreach (var plain in (string[])["stone", "dirt", "sand", "meadowgrass"])
-            hand.Add(new Placeable { Label = plain, Kind = PlacementKind.Plain, Variants = [registry.ByName(plain).Id] });
-
-        return [.. hand];
+        return stairs;
     }
 }

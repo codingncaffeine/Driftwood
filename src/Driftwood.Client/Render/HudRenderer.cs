@@ -136,7 +136,7 @@ public sealed class HudRenderer : IDisposable
     /// <summary>Lays the whole overlay out and draws it.</summary>
     public void Draw(
         BlockTextureArray blocks,
-        BlockRegistry registry,
+        ItemRegistry catalogue,
         Inventory inventory,
         PlayerVitals vitals,
         int screenWidth,
@@ -151,7 +151,7 @@ public sealed class HudRenderer : IDisposable
         var h = screenHeight / scale;
 
         Crosshair(w, h);
-        Hotbar(registry, inventory, w, h);
+        Hotbar(catalogue, inventory, w, h);
         Hearts(vitals, w, h);
         Bubbles(vitals, w, h);
 
@@ -214,7 +214,7 @@ public sealed class HudRenderer : IDisposable
     }
 
     /// <summary>The bar, one slot per pocket, with each block's own tile and its count.</summary>
-    private void Hotbar(BlockRegistry registry, Inventory inventory, float w, float h)
+    private void Hotbar(ItemRegistry catalogue, Inventory inventory, float w, float h)
     {
         const float Slot = 22f;
         const float Pad = 2f;
@@ -244,8 +244,18 @@ public sealed class HudRenderer : IDisposable
             var stack = inventory[i];
             if (stack.IsEmpty) continue;
 
-            var layer = registry[stack.Block].Model.ParticleLayer;
-            Rect(_blocks, x + Pad, top + Pad, Slot - Pad * 2f, Slot - Pad * 2f, Vector4.One, layer);
+            var type = catalogue[stack.Item];
+            Rect(_blocks, x + Pad, top + Pad, Slot - Pad * 2f, Slot - Pad * 2f, Vector4.One, type.IconLayer);
+
+            // How much life a tool has left, as a bar across the bottom of its slot. A count would
+            // say nothing — a tool is always one — and wear is the only thing about it that changes.
+            if (type.Durability > 0 && stack.Damage > 0)
+            {
+                var life = 1f - stack.Damage / (float)type.Durability;
+                Rect(_plain, x + Pad, top + Slot - 4f, Slot - Pad * 2f, 2f, new Vector4(0f, 0f, 0f, 0.8f));
+                Rect(_plain, x + Pad, top + Slot - 4f, (Slot - Pad * 2f) * life, 2f,
+                    new Vector4(1f - life, 0.25f + life * 0.65f, 0.2f, 1f));
+            }
 
             // Counts sit in the bottom right of the slot, right-aligned, one digit at a time. A
             // single item shows no number: nine slots each labelled "1" is noise, not information.

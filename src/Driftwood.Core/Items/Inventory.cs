@@ -1,5 +1,3 @@
-using Driftwood.Core.Blocks;
-
 namespace Driftwood.Core.Items;
 
 /// <summary>
@@ -14,6 +12,8 @@ namespace Driftwood.Core.Items;
 /// also what stops a pocketful of single logs. Anything that will not fit comes back rather than
 /// vanishing: an inventory that silently eats what it cannot hold is the one bug in this area that
 /// nobody forgives.</para>
+/// <para>It holds the item registry because the per-slot ceiling is a property of the item — sixty
+/// four planks and exactly one pickaxe — and the slot is the only place that knows both.</para>
 /// </remarks>
 public sealed class Inventory
 {
@@ -21,6 +21,9 @@ public sealed class Inventory
     public const int Slots = 9;
 
     private readonly ItemStack[] _slots = new ItemStack[Slots];
+    private readonly ItemRegistry _items;
+
+    public Inventory(ItemRegistry items) => _items = items;
 
     /// <summary>Which slot is in hand.</summary>
     public int Selected { get; private set; }
@@ -29,6 +32,9 @@ public sealed class Inventory
 
     /// <summary>What is in hand right now.</summary>
     public ItemStack Held => _slots[Selected];
+
+    /// <summary>What is in hand, described. Null when the hand is empty.</summary>
+    public ItemType? HeldType => Held.IsEmpty ? null : _items[Held.Item];
 
     public void Select(int slot) => Selected = ((slot % Slots) + Slots) % Slots;
 
@@ -42,6 +48,8 @@ public sealed class Inventory
     {
         if (stack.IsEmpty) return ItemStack.Empty;
 
+        var cap = _items[stack.Item].MaxStack;
+
         // Partial stacks of the same thing first, then empty slots. The other order leaves a row
         // of half-full slots and an empty one at the end of every gathering trip.
         for (var pass = 0; pass < 2; pass++)
@@ -50,7 +58,7 @@ public sealed class Inventory
             var wantEmpty = pass == 1;
             if (_slots[i].IsEmpty != wantEmpty) continue;
 
-            _slots[i] = _slots[i].Merge(stack, out stack);
+            _slots[i] = _slots[i].Merge(stack, cap, out stack);
         }
 
         return stack;
@@ -59,18 +67,74 @@ public sealed class Inventory
     /// <summary>Takes one off the held stack, for a block that has just been put down.</summary>
     public void SpendHeld() => _slots[Selected] = _slots[Selected].MinusOne();
 
+    /// <summary>
+    /// Puts one use on whatever is in hand, and empties the slot when that use was its last.
+    /// </summary>
+    /// <returns>True when the tool broke on this use, for the sound that says so.</returns>
+    public bool WearHeld()
+    {
+        var before = _slots[Selected];
+        if (before.IsEmpty) return false;
+
+        _slots[Selected] = before.Worn(_items[before.Item].Durability);
+        return _slots[Selected].IsEmpty;
+    }
+
     /// <summary>Empties everything. What a fresh world or a respawn does.</summary>
     public void Clear() => Array.Clear(_slots);
 
     /// <summary>How many of one thing are being carried, across every slot.</summary>
-    public int CountOf(BlockId block)
+    public int CountOf(ItemId item)
     {
         var total = 0;
         foreach (var slot in _slots)
-            if (!slot.IsEmpty && slot.Block.Value == block.Value) total += slot.Count;
+            if (!slot.IsEmpty && slot.Item.Value == item.Value) total += slot.Count;
         return total;
+    }
+
+    /// <summary>
+    /// Removes up to <paramref name="howMany"/> of one thing, and reports how many it actually got.
+    /// </summary>
+    /// <remarks>
+    /// Partial by design. A craft asks whether it can be paid for before it spends anything, so this
+    /// returning less than it was asked for is a bug upstream rather than a case to handle here —
+    /// but returning the number means the check can be written, and it is.
+    /// </remarks>
+    public int Take(ItemId item, int howMany)
+    {
+        var taken = 0;
+
+        // Smallest stacks first, so paying for a craft tidies the bar instead of fragmenting it.
+        while (taken < howMany)
+        {
+            var best = -1;
+            for (var i = 0; i < Slots; i++)
+            {
+                if (_slots[i].IsEmpty || _slots[i].Item.Value != item.Value) continue;
+                if (best < 0 || _slots[i].Count < _slots[best].Count) best = i;
+            }
+
+            if (best < 0) break;
+
+            var take = Math.Min(howMany - taken, _slots[best].Count);
+            _slots[best] = _slots[best].Minus(take);
+            taken += take;
+        }
+
+        return taken;
     }
 
     /// <summary>Everything being carried, for the display and the checks.</summary>
     public ReadOnlySpan<ItemStack> All => _slots;
+
+    /// <summary>Slots holding something. What a crafting screen counts.</summary>
+    public int Used
+    {
+        get
+        {
+            var used = 0;
+            foreach (var slot in _slots) if (!slot.IsEmpty) used++;
+            return used;
+        }
+    }
 }

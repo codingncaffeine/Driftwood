@@ -157,17 +157,9 @@ public sealed class ClientHost : IDisposable
     /// <summary>How far a player can reach to break or place. Genre-standard.</summary>
     private const float Reach = 5f;
 
-    /// <summary>What can be placed on right-click until an inventory decides otherwise.</summary>
-    /// <remarks>
-    /// A hand rather than a single block, because a slab and a stair are not one block each — they
-    /// are two and eight, and which one lands depends on where you clicked and which way you were
-    /// looking. Without something to pick from, every shape the mesher can now draw would be
-    /// unreachable and unlookable-at, which is the same as not having built it.
-    /// </remarks>
-    private Placeable[] _hand = null!;
-
-    /// <summary>Which <see cref="Placeable"/> a held block places as, for the shapes that have one.</summary>
-    private Dictionary<ushort, Placeable> _placeables = null!;
+    /// <summary>Everything that can be carried, and what each block leaves behind.</summary>
+    private ItemRegistry _items = null!;
+    private BlockDrops _dropTable = null!;
 
     /// <summary>Nine pockets, one of them in hand.</summary>
     private Inventory _inventory = null!;
@@ -462,6 +454,12 @@ public sealed class ClientHost : IDisposable
         registry.Seal();
         _registry = registry;
 
+        // The item layer sits on top of the block layer and never the other way round, which is why
+        // it is built here rather than beside it: everything it needs is an id the blocks have
+        // already handed out.
+        _items = StarterItems.Register(registry);
+        _dropTable = StarterItems.Drops(registry, _items);
+
         var generator = new TerrainGenerator(_options.Seed, ids, _options.OceanCoverage);
 
         // --chunks used to size a fixed box; it now sets how far the world is kept loaded around
@@ -484,25 +482,21 @@ public sealed class ClientHost : IDisposable
         _player = new PlayerBody(registry);
         _vitals = new PlayerVitals(registry);
         _particles = new ParticleSystem(registry);
-        _hand = StarterBlocks.Hand(registry);
         _leafBlock = ids.Leaves;
-        _inventory = new Inventory();
-        _drops = new DroppedItems(registry);
+        _inventory = new Inventory(_items);
+        _drops = new DroppedItems(registry, _items);
         _solid = registry.BuildSolidTable();
 
-        // Every orientation of every shape maps back to the family that placed it, so a slab picked
-        // up off the floor still lands the right way up when it goes back down.
-        _placeables = [];
-        foreach (var entry in _hand)
-        foreach (var variant in entry.Variants)
-            _placeables[variant.Value] = entry;
-
         // A starting kit, and it is scaffolding. The design is to spawn with nothing, but the only
-        // way to obtain a slab, a stair or a torch is to craft one and there is no crafting yet —
-        // so without this the shapes the last commit added would be unreachable. It goes the day
-        // recipes land.
-        foreach (var entry in _hand)
-            _inventory.Add(new ItemStack(entry.Variants[0], ItemStack.MaxCount));
+        // way to obtain a slab, a stair, a torch or a furnace is to craft one and there is no
+        // crafting yet — so without this everything built rather than dug would be unreachable.
+        // It goes the day recipes land, which is why it is a filter over Crafted rather than a list.
+        foreach (var item in _items.All)
+        {
+            if (item.PlainBlock.IsAir || !registry[item.PlainBlock].Crafted) continue;
+            if (_inventory.Add(new ItemStack(item.Id, ItemStack.MaxCount)).IsEmpty) continue;
+            break;      // the bar is full; the rest waits for recipes
+        }
 
         _outlines = new (Vector3, Vector3)[registry.Count];
         for (var id = 0; id < registry.Count; id++) _outlines[id] = registry[(ushort)id].Model.Outline;
@@ -826,7 +820,7 @@ public sealed class ClientHost : IDisposable
 
         var picked = _drops.Update(_streamer.World, (float)dt, collector, collector is null ? null : _inventory);
         if (picked > 0 && collector is { } where)
-            PlaySound(_registry[_inventory.Held.Block], SoundEvent.Place, where, 0.5f);
+            PlaySound(MaterialOf(_inventory.Held), SoundEvent.Place, where, 0.5f);
         PlaceCamera();
         PumpStreaming();
 
@@ -859,9 +853,11 @@ public sealed class ClientHost : IDisposable
                   + $"xyz {p.X:F0} {p.Y:F0} {p.Z:F0} | "
                   + $"{ClockFace(_clock.TimeOfDay)}{(_clock.Running ? "" : " held")} | "
                   + $"holding {_inventory.Selected + 1}. "
-                  + (_inventory.Held.IsEmpty
+                  + (_inventory.HeldType is not { } held
                       ? "nothing"
-                      : $"{_registry[_inventory.Held.Block].Name} x{_inventory.Held.Count}")
+                      : held.Durability > 0
+                          ? $"{held.Label} ({held.Durability - _inventory.Held.Damage} left)"
+                          : $"{held.Label} x{_inventory.Held.Count}")
                   + " | "
                   + $"{_drawnChunks}/{_meshes.Count} drawn, {_drawnTriangles:N0} tris"
                   + (queued > 0 ? $" | {queued} queued" : "")
@@ -911,7 +907,7 @@ public sealed class ClientHost : IDisposable
             PlaySound(target, SoundEvent.Hit, new Vector3(struck.X + 0.5f, struck.Y + 0.5f, struck.Z + 0.5f), 0.55f);
         }
 
-        if (!_mining.Update(dt, target, cell, _holdingBreak)) return;
+        if (!_mining.Update(dt, target, cell, _holdingBreak, _inventory.HeldType)) return;
 
         // The burst goes before the block does. Reading the type after BreakTarget gets air.
         if (target is not null && cell is { } broken)
@@ -920,8 +916,14 @@ public sealed class ClientHost : IDisposable
             _particles.Burst(target, broken.Item1, broken.Item2, broken.Item3);
             PlaySound(target, SoundEvent.Break, centre);
 
-            var drop = target.Drop ?? target.Id;
-            if (!drop.IsAir) _drops.Drop(new ItemStack(drop, target.DropCount), centre);
+            // What the block leaves depends on what took it. Below the tier line it still comes
+            // apart and leaves nothing, which is the whole reason to go and make a pickaxe.
+            _drops.Drop(_dropTable.Harvest(target, _inventory.HeldType), centre);
+
+            // A tool that did the work wears from it. Only the tool: a bare hand is free, and so is
+            // a plank held like a club, which is why this asks the item rather than the swing.
+            if (_inventory.HeldType is { IsTool: true } && _inventory.WearHeld())
+                PlaySound(SoundMaterial.Wood, SoundEvent.Break, _viewPosition, 0.7f);
         }
 
         BreakTarget();
@@ -1103,11 +1105,30 @@ public sealed class ClientHost : IDisposable
     }
 
     /// <summary>Plays one of a material's sounds for one situation, at a point in the world.</summary>
-    private void PlaySound(BlockType type, SoundEvent which, Vector3 at, float volume = 1f)
+    private void PlaySound(BlockType type, SoundEvent which, Vector3 at, float volume = 1f) =>
+        PlaySound(type.Sounds, which, at, volume);
+
+    /// <summary>
+    /// What one thing sounds like, for the things that are not blocks.
+    /// </summary>
+    /// <remarks>
+    /// An item that puts a block down sounds like that block; everything else sounds like timber,
+    /// which is what the pickup clips in the library actually are. Keyed on the material rather
+    /// than on a block so a stick and an ingot have an answer at all.
+    /// </remarks>
+    private SoundMaterial MaterialOf(ItemStack stack)
+    {
+        if (stack.IsEmpty) return SoundMaterial.Wood;
+
+        var block = _items[stack.Item].PlainBlock;
+        return block.IsAir ? SoundMaterial.Wood : _registry[block].Sounds;
+    }
+
+    private void PlaySound(SoundMaterial material, SoundEvent which, Vector3 at, float volume = 1f)
     {
         if (_audio is null) return;
 
-        var names = MaterialSounds.For(type.Sounds, which);
+        var names = MaterialSounds.For(material, which);
         if (names.Count == 0) return;
 
         _audio.Play(
@@ -1169,13 +1190,7 @@ public sealed class ClientHost : IDisposable
         var (x, y, z) = hit.Adjacent;
         if (!_streamer.World.GetBlock(x, y, z).IsAir) return;
 
-        var stack = _inventory.Held;
-        if (stack.IsEmpty) return;
-
-        // A shape places as its family so the orientation rules run; anything else places as itself.
-        var held = _placeables.TryGetValue(stack.Block.Value, out var family)
-            ? family
-            : new Placeable { Label = "", Kind = PlacementKind.Plain, Variants = [stack.Block] };
+        if (_inventory.HeldType is not { Places: { } held }) return;
 
         // Where in the target cell the ray landed, which is what decides a slab's half. Taken from
         // the ray rather than from which face was struck: clicking a block's top lands at the floor
@@ -1413,7 +1428,7 @@ public sealed class ClientHost : IDisposable
         // the hill it flew behind. The texture array is re-bound because the cracking pass owns
         // unit zero by now.
         _blockTextures.Bind();
-        _itemRenderer.Draw(_drops, _registry, viewProj, at => ParticleLight(at));
+        _itemRenderer.Draw(_drops, _registry, _items, viewProj, at => ParticleLight(at));
         _particleRenderer.Draw(
             _particles, viewProj, _viewPosition, _viewForward,
             at => ParticleLight(at), _skyState.Horizon, _fogStart, _fogEnd);
@@ -1431,7 +1446,7 @@ public sealed class ClientHost : IDisposable
 
         // Over everything, in screen space. The benchmark flies itself and wants a clean picture.
         if (_bench is null)
-            _hud.Draw(_blockTextures, _registry, _inventory, _vitals, size.X, size.Y);
+            _hud.Draw(_blockTextures, _items, _inventory, _vitals, size.X, size.Y);
 
         _renderMs = (Stopwatch.GetTimestamp() - renderStart) * TicksToMs;
     }

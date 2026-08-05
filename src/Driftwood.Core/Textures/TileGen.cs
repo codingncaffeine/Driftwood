@@ -618,6 +618,433 @@ public static class TileGen
         return tiles;
     }
 
+    /// <summary>Irregular stones in dark mortar — broken rock rather than cut rock.</summary>
+    /// <remarks>
+    /// The mortar is what tells rubble from stone at a glance. Speckle alone reads as the same grey
+    /// at a different roughness, and the two blocks sit next to each other constantly: one is what a
+    /// pickaxe leaves and the other is what a furnace gives back.
+    /// </remarks>
+    public static byte[] Cobble(int seed, byte r, byte g, byte b)
+    {
+        var t = new byte[BytesPerTile];
+
+        // Each pixel belongs to whichever scattered stone centre is nearest, which gives blocky
+        // irregular cells; the seams between them become the mortar.
+        Span<int> cx = stackalloc int[7];
+        Span<int> cy = stackalloc int[7];
+        Span<int> shade = stackalloc int[7];
+        for (var i = 0; i < 7; i++)
+        {
+            cx[i] = (int)(Noise(i, 0, seed) * Size);
+            cy[i] = (int)(Noise(0, i, seed + 41) * Size);
+            shade[i] = (int)((Noise(i, i, seed + 83) * 2f - 1f) * 26f);
+        }
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var best = 0;
+            var bestD = int.MaxValue;
+            var secondD = int.MaxValue;
+
+            for (var i = 0; i < 7; i++)
+            {
+                // Wrapped distance, so the stones carry across the tile edge and the block does not
+                // show a grid where two of its faces meet.
+                var dx = Math.Abs(x - cx[i]);
+                var dy = Math.Abs(y - cy[i]);
+                dx = Math.Min(dx, Size - dx);
+                dy = Math.Min(dy, Size - dy);
+
+                var d = dx * dx + dy * dy;
+                if (d < bestD) { secondD = bestD; bestD = d; best = i; }
+                else if (d < secondD) secondD = d;
+            }
+
+            var grain = (int)((Noise(x, y, seed + 17) * 2f - 1f) * 9f);
+            var mortar = secondD - bestD <= 2;
+
+            Put(t, x, y,
+                Clamp(r + shade[best] + grain - (mortar ? 46 : 0)),
+                Clamp(g + shade[best] + grain - (mortar ? 46 : 0)),
+                Clamp(b + shade[best] + grain - (mortar ? 46 : 0)),
+                255);
+        }
+
+        return t;
+    }
+
+    /// <summary>Courses of brick in running bond, offset every other row.</summary>
+    public static byte[] Bricks(int seed, byte r, byte g, byte b, byte mortar)
+    {
+        var t = new byte[BytesPerTile];
+        const int CourseHeight = 4;
+        const int BrickWidth = 8;
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var course = y / CourseHeight;
+            var offset = (course & 1) * (BrickWidth / 2);
+            var joint = y % CourseHeight == 0 || (x + offset) % BrickWidth == 0;
+
+            if (joint)
+            {
+                var m = (int)((Noise(x, y, seed + 7) * 2f - 1f) * 6f);
+                Put(t, x, y, Clamp(mortar + m), Clamp(mortar + m), Clamp(mortar + m), 255);
+                continue;
+            }
+
+            // One shade per brick, so a course reads as bricks rather than as a striped wall.
+            var brick = (int)((Noise((x + offset) / BrickWidth, course, seed) * 2f - 1f) * 18f);
+            var d = brick + (int)((Noise(x, y, seed + 31) * 2f - 1f) * 7f);
+            Put(t, x, y, Clamp(r + d), Clamp(g + d), Clamp(b + d), 255);
+        }
+
+        return t;
+    }
+
+    /// <summary>A pane: a pale frame, a corner highlight, and nothing in the middle.</summary>
+    /// <remarks>
+    /// Almost entirely transparent, which is the point — a glass tile that is a translucent wash
+    /// reads as dirty ice, and cannot be drawn in the cut-out pass the rest of our alpha uses.
+    /// </remarks>
+    public static byte[] Glass(int seed)
+    {
+        var t = new byte[BytesPerTile];
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var edge = x == 0 || y == 0 || x == Size - 1 || y == Size - 1;
+
+            // A short diagonal streak in the upper left, the way a pane catches the sky.
+            var streak = y >= 2 && y <= 6 && x - y >= 1 && x - y <= 3;
+
+            if (!edge && !streak) continue;
+
+            var d = (int)((Noise(x, y, seed) * 2f - 1f) * 10f);
+            Put(t, x, y,
+                Clamp(214 + d), Clamp(230 + d), Clamp(238 + d),
+                edge ? (byte)200 : (byte)120);
+        }
+
+        return t;
+    }
+
+    /// <summary>A tile with a darker inset panel on it — the side and front of built furniture.</summary>
+    public static byte[] Panel(byte[] baseTile, int inset, int darken)
+    {
+        var t = (byte[])baseTile.Clone();
+
+        for (var y = inset; y < Size - inset; y++)
+        for (var x = inset; x < Size - inset; x++)
+        {
+            var border = x == inset || y == inset || x == Size - 1 - inset || y == Size - 1 - inset;
+            var i = y * Stride + x * 4;
+            var d = border ? darken : darken / 3;
+
+            t[i] = Clamp(t[i] - d);
+            t[i + 1] = Clamp(t[i + 1] - d);
+            t[i + 2] = Clamp(t[i + 2] - d);
+        }
+
+        return t;
+    }
+
+    /// <summary>A tile crossed by grooves — the worn top of a bench.</summary>
+    public static byte[] Scored(int seed, byte[] baseTile)
+    {
+        var t = (byte[])baseTile.Clone();
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var groove = x == Size / 2 || y == Size / 2 || x == 0 || y == 0;
+            var nick = Noise(x, y, seed) > 0.94f;
+            if (!groove && !nick) continue;
+
+            var i = y * Stride + x * 4;
+            var d = groove ? 40 : 22;
+            t[i] = Clamp(t[i] - d);
+            t[i + 1] = Clamp(t[i + 1] - d);
+            t[i + 2] = Clamp(t[i + 2] - d);
+        }
+
+        return t;
+    }
+
+    /// <summary>A stone face with a mouth in it, dark or burning — the front of a furnace.</summary>
+    public static byte[] Hearth(int seed, byte[] baseTile, bool lit)
+    {
+        var t = (byte[])baseTile.Clone();
+
+        for (var y = 5; y < 14; y++)
+        for (var x = 3; x < 13; x++)
+        {
+            // A rounded top on the opening, so it reads as an arch rather than as a letterbox.
+            if (y == 5 && (x < 5 || x > 10)) continue;
+            if (y == 6 && (x < 4 || x > 11)) continue;
+
+            var lip = y == 13 || x == 3 || x == 12;
+            if (lip)
+            {
+                Put(t, x, y, 88, 84, 80, 255);
+                continue;
+            }
+
+            if (!lit)
+            {
+                var soot = (int)(Noise(x, y, seed) * 14f);
+                Put(t, x, y, Clamp(28 + soot), Clamp(26 + soot), Clamp(25 + soot), 255);
+                continue;
+            }
+
+            // Hottest at the floor of the opening and cooling upward, with the flicker frozen —
+            // an animated tile is one frame here until the sidecar that drives them lands.
+            var heat = (y - 6) / 7f;
+            var jitter = (Noise(x, y, seed + 61) * 2f - 1f) * 0.18f;
+            heat = Math.Clamp(heat + jitter, 0f, 1f);
+
+            Put(t, x, y,
+                Clamp((int)(210 + heat * 45f)),
+                Clamp((int)(74 + heat * 130f)),
+                Clamp((int)(24 + heat * 60f)),
+                255);
+        }
+
+        return t;
+    }
+
+    /// <summary>A length of timber lying corner to corner — the stick everything else is built on.</summary>
+    public static byte[] IconStick(int seed, byte r, byte g, byte b)
+    {
+        var t = new byte[BytesPerTile];
+
+        for (var i = 0; i < 11; i++)
+        {
+            var x = 3 + i;
+            var y = 12 - i;
+            for (var w = 0; w < 2; w++)
+            {
+                var d = (int)((Noise(x, y + w, seed) * 2f - 1f) * 16f) - w * 18;
+                Put(t, x, y + w, Clamp(r + d), Clamp(g + d), Clamp(b + d), 255);
+            }
+        }
+
+        return t;
+    }
+
+    /// <summary>A rounded nugget — coal, a raw metal, a ball of clay.</summary>
+    public static byte[] IconLump(int seed, byte r, byte g, byte b)
+    {
+        var t = new byte[BytesPerTile];
+        const float Centre = (Size - 1) / 2f;
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var dx = (x - Centre) / 5.4f;
+            var dy = (y - Centre) / 4.8f;
+
+            // A wobble on the radius, so a lump is a lump rather than a ball bearing.
+            var wobble = 1f + (Noise(x >> 1, y >> 1, seed) * 2f - 1f) * 0.18f;
+            if (dx * dx + dy * dy > wobble) continue;
+
+            // Lit from the upper left: the standard for every icon here, so a row of them agrees.
+            var lift = (int)((Centre - x) * 1.6f + (Centre - y) * 2.2f);
+            var d = lift + (int)((Noise(x, y, seed + 23) * 2f - 1f) * 10f);
+            Put(t, x, y, Clamp(r + d), Clamp(g + d), Clamp(b + d), 255);
+        }
+
+        return t;
+    }
+
+    /// <summary>A cast bar with a bevel — what comes out of a furnace.</summary>
+    public static byte[] IconIngot(int seed, byte r, byte g, byte b)
+    {
+        var t = new byte[BytesPerTile];
+
+        for (var y = 5; y <= 11; y++)
+        {
+            // Narrower at the top than the bottom, which is the whole silhouette of a cast bar.
+            var inset = 3 - (y - 5) / 2;
+            for (var x = 2 + inset; x < Size - 2 - inset; x++)
+            {
+                var top = y <= 6;
+                var d = (top ? 34 : 0) - (y >= 10 ? 26 : 0)
+                      + (int)((Noise(x, y, seed) * 2f - 1f) * 7f);
+                Put(t, x, y, Clamp(r + d), Clamp(g + d), Clamp(b + d), 255);
+            }
+        }
+
+        return t;
+    }
+
+    /// <summary>A cut stone with facets — the deep gem, and anything else worth keeping.</summary>
+    public static byte[] IconGem(int seed, byte r, byte g, byte b)
+    {
+        var t = new byte[BytesPerTile];
+        const float Centre = (Size - 1) / 2f;
+
+        for (var y = 2; y < Size - 2; y++)
+        for (var x = 2; x < Size - 2; x++)
+        {
+            // A rhombus: the taxicab distance from the middle, which is a diamond rather than a disc.
+            var reach = MathF.Abs(x - Centre) + MathF.Abs(y - Centre) * 1.15f;
+            if (reach > 6.2f) continue;
+
+            // Three facets divided by where the pixel sits, so it has flats rather than a gradient.
+            var facet = y < Centre - 1 ? 40 : x < Centre ? 4 : -30;
+            var d = facet + (int)((Noise(x, y, seed) * 2f - 1f) * 6f);
+            Put(t, x, y, Clamp(r + d), Clamp(g + d), Clamp(b + d), 255);
+        }
+
+        return t;
+    }
+
+    /// <summary>One fired brick, held rather than laid.</summary>
+    public static byte[] IconBrick(int seed, byte r, byte g, byte b)
+    {
+        var t = new byte[BytesPerTile];
+
+        for (var y = 5; y < 11; y++)
+        for (var x = 2; x < 14; x++)
+        {
+            var edge = y == 5 || y == 10 || x == 2 || x == 13;
+            var d = (y == 5 ? 26 : 0) - (y == 10 ? 24 : 0)
+                  + (edge ? -10 : 0) + (int)((Noise(x, y, seed) * 2f - 1f) * 9f);
+            Put(t, x, y, Clamp(r + d), Clamp(g + d), Clamp(b + d), 255);
+        }
+
+        return t;
+    }
+
+    /// <summary>The silhouettes tools are drawn from, one row of the tile per string.</summary>
+    /// <remarks>
+    /// <para>Drawn rather than generated, and deliberately. Speckle and noise make a convincing
+    /// material and cannot make a recognisable pickaxe: a tool icon is a shape a player identifies
+    /// in a slot the size of a fingernail, and the only honest way to write one is to draw it.</para>
+    /// <para>Four shapes and a palette a tier hands in is what keeps this a template rather than
+    /// twenty pictures — every tier that is ever added is a row of colours, not a new drawing.</para>
+    /// <para><c>h</c> handle, <c>H</c> handle in shadow, <c>m</c> head, <c>M</c> head in shadow,
+    /// <c>l</c> the highlight along its lit edge, <c>.</c> nothing.</para>
+    /// </remarks>
+    public static readonly string[][] ToolShapes =
+    [
+        // Pickaxe: a swept head across the top, the haft falling away to the left.
+        [
+            "...m........m...",
+            "..mMmm....mmMm..",
+            "...mMMmmmmMMm...",
+            "....mmllhhmm....",
+            ".......hh.......",
+            "......hh........",
+            "......hh........",
+            ".....hh.........",
+            ".....hh.........",
+            "....hh..........",
+            "....hh..........",
+            "...hh...........",
+            "...hh...........",
+            "..hH............",
+            "..hH............",
+            "................",
+        ],
+
+        // Axe: a bit with weight in it, biting to the left of the haft.
+        [
+            "....mmmm........",
+            "...mMlmMm.......",
+            "...mMlMMm.......",
+            "...mMMMMm.......",
+            "....mmMhh.......",
+            "......hh........",
+            "......hh........",
+            ".....hh.........",
+            ".....hh.........",
+            "....hh..........",
+            "....hh..........",
+            "...hh...........",
+            "...hh...........",
+            "..hH............",
+            "..hH............",
+            "................",
+        ],
+
+        // Shovel: a broad blade on a long haft.
+        [
+            ".....mmmm.......",
+            "....mMlMMm......",
+            "....mMlMMm......",
+            "....mMMMMm......",
+            ".....mmMhh......",
+            "......hh........",
+            "......hh........",
+            ".....hh.........",
+            ".....hh.........",
+            "....hh..........",
+            "....hh..........",
+            "...hh...........",
+            "...hh...........",
+            "..hH............",
+            "..hH............",
+            "................",
+        ],
+
+        // Sword: a blade up to the corner, a guard, a grip.
+        [
+            "..........mmm...",
+            ".........mMlm...",
+            "........mMlMm...",
+            ".......mMlMm....",
+            "......mMlMm.....",
+            ".....mMlMm......",
+            "....mMlMm.......",
+            "...mMlMm........",
+            "..mMMMm.........",
+            ".mHhhhHm........",
+            "..HhhH..........",
+            "...hh...........",
+            "...hh...........",
+            "..hHH...........",
+            "..HHH...........",
+            "................",
+        ],
+    ];
+
+    /// <summary>One tool: a silhouette from <see cref="ToolShapes"/> in a tier's colours.</summary>
+    public static byte[] IconTool(int seed, int shape, byte r, byte g, byte b)
+    {
+        var t = new byte[BytesPerTile];
+        var rows = ToolShapes[shape];
+
+        // The haft is the same timber on every tier. Only the head changes, which is what makes a
+        // row of tools read as one family at five materials rather than as five unrelated pictures.
+        const byte HandleR = 128, HandleG = 94, HandleB = 56;
+
+        for (var y = 0; y < Size && y < rows.Length; y++)
+        for (var x = 0; x < Size && x < rows[y].Length; x++)
+        {
+            var c = rows[y][x];
+            if (c == '.') continue;
+
+            var handle = c is 'h' or 'H';
+            var (br, bg, bb) = handle ? (HandleR, HandleG, HandleB) : (r, g, b);
+
+            var d = c switch
+            {
+                'l' => 46,
+                'm' or 'h' => 0,
+                _ => -34,      // 'M' and 'H', the shadowed side
+            } + (int)((Noise(x, y, seed) * 2f - 1f) * 8f);
+
+            Put(t, x, y, Clamp(br + d), Clamp(bg + d), Clamp(bb + d), 255);
+        }
+
+        return t;
+    }
+
     /// <summary>Nearest-neighbour upscale, so generated art stays as crisp as imported art.</summary>
     public static byte[] Upscale(byte[] tile, int size)
     {

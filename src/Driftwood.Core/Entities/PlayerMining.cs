@@ -1,4 +1,5 @@
 using Driftwood.Core.Blocks;
+using Driftwood.Core.Items;
 
 namespace Driftwood.Core.Entities;
 
@@ -48,7 +49,16 @@ public sealed class PlayerMining
     /// <param name="type">The targeted block's type, or null when nothing is in reach.</param>
     /// <param name="at">Which cell that is.</param>
     /// <param name="mining">Whether the player is still swinging at it.</param>
-    public bool Update(float dt, BlockType? type, (int X, int Y, int Z)? at, bool mining)
+    /// <param name="held">
+    /// What is in hand, which decides both the speed and whether anything is left behind.
+    /// </param>
+    /// <remarks>
+    /// The tool is read every frame rather than latched when the block was first struck, so
+    /// switching to a pickaxe part way through a block speeds up the rest of it. Latching would
+    /// mean a player who reached for the right tool got no benefit until they let go and started
+    /// again, which reads as the swap not having worked.
+    /// </remarks>
+    public bool Update(float dt, BlockType? type, (int X, int Y, int Z)? at, bool mining, ItemType? held = null)
     {
         if (!mining || type is null || at is null)
         {
@@ -64,7 +74,7 @@ public sealed class PlayerMining
             _progress = 0f;
         }
 
-        TargetSeconds = MiningRules.SecondsToBreak(type);
+        TargetSeconds = MiningRules.SecondsToBreak(type, held);
 
         // Unbreakable blocks are not "very slow". They never move, so the bar never appears and no
         // amount of holding changes that.

@@ -14,6 +14,9 @@ public enum PlacementKind
     /// <summary>Eight forms: four facings, each in either half.</summary>
     Stairs,
 
+    /// <summary>Four forms: one per cardinal, turned so its face meets the player.</summary>
+    Facing,
+
     /// <summary>One form, and only on top of something.</summary>
     Standing,
 }
@@ -88,11 +91,13 @@ public sealed class Placeable
             case PlacementKind.Stairs:
                 // The raised half goes on the far side from the player, so you meet the low step
                 // first and climb away from yourself.
-                var facing = MathF.Abs(forward.X) >= MathF.Abs(forward.Z)
-                    ? forward.X >= 0f ? Faces.PosX : Faces.NegX
-                    : forward.Z >= 0f ? Faces.PosZ : Faces.NegZ;
+                id = Variants[Array.IndexOf(Facings, Cardinal(forward)) * 2 + (upper ? 1 : 0)];
+                return true;
 
-                id = Variants[Array.IndexOf(Facings, facing) * 2 + (upper ? 1 : 0)];
+            case PlacementKind.Facing:
+                // The face turns back toward whoever put it down. A furnace you have to walk round
+                // to use is a furnace placed by a rule written from the block's point of view.
+                id = Variants[Array.IndexOf(Facings, Cardinal(-forward))];
                 return true;
 
             case PlacementKind.Standing:
@@ -107,4 +112,15 @@ public sealed class Placeable
                 return true;
         }
     }
+
+    /// <summary>The cardinal a horizontal direction points most nearly along.</summary>
+    /// <remarks>
+    /// Taken from the vector rather than from an angle, deliberately. An angle needs a convention
+    /// for where zero points and which way it turns, and getting that wrong puts every shape in the
+    /// world a quarter turn out in a way that looks like a modelling bug.
+    /// </remarks>
+    private static int Cardinal(Vector3 direction) =>
+        MathF.Abs(direction.X) >= MathF.Abs(direction.Z)
+            ? direction.X >= 0f ? Faces.PosX : Faces.NegX
+            : direction.Z >= 0f ? Faces.PosZ : Faces.NegZ;
 }

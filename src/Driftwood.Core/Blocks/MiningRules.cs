@@ -1,45 +1,66 @@
+using Driftwood.Core.Items;
+
 namespace Driftwood.Core.Blocks;
 
 /// <summary>
-/// Turns a block's hardness into how long it takes to break.
+/// Turns a block's hardness and whatever is swinging at it into how long it takes, and into
+/// whether anything is left behind.
 /// </summary>
 /// <remarks>
-/// <para>One formula in one place, so tool tiers at P6 arrive as an argument rather than as a
-/// rewrite. Hardness stays a property of the block and speed stays a property of whatever is
-/// swinging; the two only meet here.</para>
-/// <para>The genre's own numbers are a base rate and a much steeper penalty for using the wrong
-/// thing — steep enough that stone by hand is most of ten seconds, which works because a pickaxe is
-/// four blocks of wood away. Nothing can be crafted here yet, so the penalty is softened until
-/// there is a tool to reward: see <see cref="WithoutToolPenalty"/>.</para>
+/// <para>One formula in one place. Hardness stays a property of the block and speed stays a
+/// property of the tool; the two only meet here, which is why adding a tier is a row in a table
+/// rather than an edit to fifty block entries.</para>
+/// <para>Both halves of the rule live together on purpose. "How long" and "do you get anything"
+/// are the same question asked twice — a pickaxe that halves the time but yields nothing is a
+/// different game from one that yields but takes as long — and splitting them across two files is
+/// how they drift apart.</para>
 /// </remarks>
 public static class MiningRules
 {
     /// <summary>How many steps of cracking show before a block goes. The genre's number.</summary>
     public const int Stages = 10;
 
-    /// <summary>Seconds per hardness unit when the right thing is being used.</summary>
+    /// <summary>Seconds per hardness unit with the right tool at speed one.</summary>
     public const float SecondsPerHardness = 1.5f;
 
     /// <summary>
     /// Extra cost for going at a block bare-handed that wanted a tool.
     /// </summary>
     /// <remarks>
-    /// The genre uses about 3.3x here. This is deliberately gentler, and only until P6: a penalty
-    /// that severe is a signal telling the player to go and craft something, and while there is
-    /// nothing to craft it is just a long wait with no lesson in it. Restore it with tool tiers.
+    /// The genre's own figure, restored now that there is something to craft. It was held at 1.5
+    /// through P3 because a penalty this steep is a signal telling the player to go and make a
+    /// pickaxe, and while there was no crafting it was only a long wait with no lesson in it.
+    /// Stone by hand is seven and a half seconds; with the wooden pickaxe that is four planks and
+    /// two sticks away, it is one and a bit.
     /// </remarks>
-    public const float WithoutToolPenalty = 1.5f;
+    public const float WithoutToolPenalty = 3.33f;
 
     /// <summary>Fastest anything can be taken, so a very soft block still reads as a swing.</summary>
     public const float FloorSeconds = 0.2f;
 
-    /// <summary>How long this block takes to break bare-handed. Infinite if it never does.</summary>
-    public static float SecondsToBreak(BlockType type)
-    {
-        if (type.Unbreakable) return float.PositiveInfinity;
+    /// <summary>True when this tool is good enough to bring the block up rather than only break it.</summary>
+    /// <remarks>
+    /// A block below the tier line comes apart and leaves nothing, which is the genre's rule and the
+    /// reason a tier ladder is a ladder rather than a speed setting. Anything with no tier at all
+    /// yields to a bare hand, so ordinary digging is never gated.
+    /// </remarks>
+    public static bool CanHarvest(BlockType block, ItemType? held) =>
+        block.HarvestTier <= 0
+        || (held is not null && held.Tool == block.HarvestClass && held.Tier >= block.HarvestTier);
 
-        var seconds = type.Hardness * SecondsPerHardness;
-        if (type.NeedsTool) seconds *= WithoutToolPenalty;
+    /// <summary>How long this block takes to break with that in hand. Infinite if it never does.</summary>
+    public static float SecondsToBreak(BlockType block, ItemType? held)
+    {
+        if (block.Unbreakable) return float.PositiveInfinity;
+
+        var seconds = block.Hardness * SecondsPerHardness;
+
+        // The right class of tool speeds the work whether or not it is good enough to keep what
+        // comes out. A wooden pickaxe on stormglass is quicker and still leaves rubble on the floor.
+        if (held is not null && held.Tool != ToolClass.None && held.Tool == block.HarvestClass)
+            seconds /= MathF.Max(held.MiningSpeed, 0.01f);
+
+        if (!CanHarvest(block, held)) seconds *= WithoutToolPenalty;
 
         return MathF.Max(seconds, FloorSeconds);
     }

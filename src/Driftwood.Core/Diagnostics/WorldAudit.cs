@@ -38,6 +38,13 @@ public static class WorldAudit
         var ids = StarterBlocks.Register(registry);
         registry.Seal();
 
+        // The item layer, exactly as the game builds it. Everything below that asks what a block
+        // leaves, how long it takes with a tool, or whether a recipe is reachable reads these two
+        // rather than a table written for the audit — a check against a second construction of the
+        // same tables is a check that both were written the same way, not that either is right.
+        var items = StarterItems.Register(registry);
+        var drops = StarterItems.Drops(registry, items);
+
         var generator = new TerrainGenerator(seed, ids, oceanCoverage);
         var world = new VoxelWorld(registry);
 
@@ -359,11 +366,18 @@ public static class WorldAudit
                   + "and six outlines wrapping the shape rather than the cell"
                 : $"{volumeFaults.Count} faults: {volumeFaults[0]}");
 
-        var itemFaults = ItemSelfTest(registry, ids);
+        var itemFaults = ItemSelfTest(registry, items, drops, ids);
         Check("what breaks can be picked up", itemFaults.Count == 0,
             itemFaults.Count == 0
                 ? $"drops land, merge and collect; {Inventory.Slots} slots of {ItemStack.MaxCount} lose nothing"
                 : $"{itemFaults.Count} faults: {itemFaults[0]}");
+
+        var catalogueFaults = ItemCatalogueSelfTest(registry, items, drops);
+        Check("every item is a thing in the world", catalogueFaults.Count == 0,
+            catalogueFaults.Count == 0
+                ? $"{items.Count - 1} items over {registry.Count} blocks, "
+                  + $"{drops.BlocksLeavingNothing} of them leaving nothing, every icon painted"
+                : $"{catalogueFaults.Count} faults: {catalogueFaults[0]}");
 
         var vitalsFaults = VitalsSelfTest(registry, ids);
         Check("falls and water cost health", vitalsFaults.Count == 0,
@@ -398,10 +412,10 @@ public static class WorldAudit
                   + "every wall between a cloud and a gap, both seams wrapping"
                 : $"{cloudFaults.Count} faults: {cloudFaults[0]}");
 
-        var placementFaults = PlacementSelfTest(registry);
+        var placementFaults = PlacementSelfTest(registry, items);
         Check("placement picks the right form", placementFaults.Count == 0,
             placementFaults.Count == 0
-                ? $"{StarterBlocks.Hand(registry).Length} things in hand, every face, height and heading"
+                ? $"{Placeables(items)} things that can be put down, every face, height and heading"
                 : $"{placementFaults.Count} faults: {placementFaults[0]}");
 
         // A material nobody can find is a material that does not exist, and this is the check that
@@ -694,12 +708,14 @@ public static class WorldAudit
                 ? "full length in the open, gives way to a wall, never ends up inside one"
                 : $"{boomFaults.Count} faults: {string.Join("; ", boomFaults)}");
 
-        var miningFaults = MiningSelfTest(registry, ids);
+        var miningFaults = MiningSelfTest(registry, items, ids);
+        var woodPick = items.ByName("wood_pickaxe");
         Check("mining takes the right work", miningFaults.Count == 0,
             miningFaults.Count == 0
-                ? $"soft ground {MiningRules.SecondsToBreak(registry[ids.Dirt]):F2}s, "
-                  + $"stone {MiningRules.SecondsToBreak(registry[ids.Stone]):F2}s, "
-                  + $"ore {MiningRules.SecondsToBreak(registry[ids.IronOre]):F2}s, bedrock never"
+                ? $"soft ground {MiningRules.SecondsToBreak(registry[ids.Dirt], null):F2}s, "
+                  + $"stone {MiningRules.SecondsToBreak(registry[ids.Stone], null):F2}s by hand and "
+                  + $"{MiningRules.SecondsToBreak(registry[ids.Stone], woodPick):F2}s with the first pickaxe, "
+                  + $"ore {MiningRules.SecondsToBreak(registry[ids.IronOre], null):F2}s, bedrock never"
                 : $"{miningFaults.Count} faults: {string.Join("; ", miningFaults)}");
 
         var crackFaults = CrackSelfTest();
@@ -1051,25 +1067,48 @@ public static class WorldAudit
     /// its own physics and its own draw call, and the frame rate says so long before anybody counts
     /// them.</para>
     /// </remarks>
-    private static List<string> ItemSelfTest(BlockRegistry registry, StarterBlocks.Ids ids)
+    private static List<string> ItemSelfTest(
+        BlockRegistry registry, ItemRegistry items, BlockDrops drops, StarterBlocks.Ids ids)
     {
         var faults = new List<string>();
         const float Step = 1f / 60f;
 
-        // Every block leaves something sensible: itself, or a named substitute, or nothing at all.
+        var stone = items.ByName("rubble").Id;      // what stone actually leaves
+        var log = items.ByName("driftoak_log").Id;
+        var dirt = items.ByName("dirt").Id;
+        var sand = items.ByName("sand").Id;
+
+        // Every block leaves a sensible number of something, or an honest nothing.
         var leaveNothing = 0;
         for (ushort id = 1; id < registry.Count; id++)
         {
-            var type = registry[id];
-            var drop = type.Drop ?? type.Id;
-
-            if (drop.IsAir) { leaveNothing++; continue; }
-            if (type.DropCount >= 1) continue;
-            faults.Add($"'{type.Name}' drops {type.DropCount} of something");
+            var left = drops.Of(new BlockId(id));
+            if (left.IsEmpty) { leaveNothing++; continue; }
+            if (left.Count >= 1) continue;
+            faults.Add($"'{registry[id].Name}' drops {left.Count} of something");
         }
 
         if (leaveNothing == 0) faults.Add("every block in the world leaves something, including the foliage");
         if (leaveNothing > registry.Count / 2) faults.Add($"{leaveNothing} of {registry.Count} blocks leave nothing");
+
+        // The tier gate, both ways round. A bare hand breaks stone and keeps none of it; the first
+        // wooden pickaxe keeps it. Checking only the second half passes a build with no gate at all.
+        var bareStone = drops.Harvest(registry[ids.Stone], null);
+        var pickStone = drops.Harvest(registry[ids.Stone], items.ByName("wood_pickaxe"));
+        var shovelStone = drops.Harvest(registry[ids.Stone], items.ByName("iron_shovel"));
+        var pickDirt = drops.Harvest(registry[ids.Dirt], null);
+
+        if (!bareStone.IsEmpty) faults.Add("stone taken bare-handed still left something");
+        if (pickStone.IsEmpty) faults.Add("stone taken with a wooden pickaxe left nothing");
+        if (!shovelStone.IsEmpty) faults.Add("stone taken with a shovel left something, so the class is not read");
+        if (pickDirt.IsEmpty) faults.Add("dirt taken bare-handed left nothing, so ordinary digging is gated");
+
+        // And the ladder has rungs: the tier a block asks for is the tier it takes.
+        var deepGem = registry.ByName("stormglass_ore");
+        if (!drops.Harvest(deepGem, items.ByName("copper_pickaxe")).IsEmpty)
+            faults.Add("a copper pickaxe brought up stormglass, which wants iron");
+        if (drops.Harvest(deepGem, items.ByName("iron_pickaxe")).IsEmpty)
+            faults.Add("an iron pickaxe left no stormglass");
 
         var world = new VoxelWorld(registry);
         for (var z = -4; z <= 4; z++)
@@ -1078,8 +1117,8 @@ public static class WorldAudit
             world.SetBlock(x, y, z, ids.Stone);
 
         // A stack thrown out of a cell has to land on the floor rather than through it.
-        var ground = new DroppedItems(registry, 0x515A6E);
-        ground.Drop(new ItemStack(ids.Stone, 1), new Vector3(0.5f, 12.5f, 0.5f));
+        var ground = new DroppedItems(registry, items, 0x515A6E);
+        ground.Drop(new ItemStack(stone, 1), new Vector3(0.5f, 12.5f, 0.5f));
         for (var i = 0; i < 240; i++) ground.Update(world, Step, null, null);
 
         if (ground.Count != 1) faults.Add($"{ground.Count} stacks on the ground after dropping one");
@@ -1087,8 +1126,8 @@ public static class WorldAudit
             faults.Add($"a dropped stack reached y {ground.Live[0].Position.Y:F2}, under the floor at 11");
 
         // Stacks lying together become one.
-        var heap = new DroppedItems(registry, 0x4D3267);
-        for (var i = 0; i < 12; i++) heap.Drop(new ItemStack(ids.Log, 1), new Vector3(0.5f, 11.6f, 0.5f), scatter: 0.05f);
+        var heap = new DroppedItems(registry, items, 0x4D3267);
+        for (var i = 0; i < 12; i++) heap.Drop(new ItemStack(log, 1), new Vector3(0.5f, 11.6f, 0.5f), scatter: 0.05f);
         for (var i = 0; i < 240; i++) heap.Update(world, Step, null, null);
 
         if (heap.Count >= 12) faults.Add($"{heap.Count} stacks of 12 dropped together never merged");
@@ -1097,50 +1136,162 @@ public static class WorldAudit
         if (carried != 12) faults.Add($"merging 12 logs left {carried}");
 
         // And a collector standing in them ends up with all of it.
-        var pockets = new Inventory();
+        var pockets = new Inventory(items);
         var walker = new Vector3(0.5f, 11.9f, 0.5f);
         for (var i = 0; i < 600 && heap.Count > 0; i++) heap.Update(world, Step, walker, pockets);
 
         if (heap.Count != 0) faults.Add($"{heap.Count} stacks were left on the ground after standing in them");
-        if (pockets.CountOf(ids.Log) != 12)
-            faults.Add($"walking into 12 logs collected {pockets.CountOf(ids.Log)}");
+        if (pockets.CountOf(log) != 12)
+            faults.Add($"walking into 12 logs collected {pockets.CountOf(log)}");
 
         // A full inventory refuses rather than losing the overflow.
-        var full = new Inventory();
-        for (var i = 0; i < Inventory.Slots; i++) full.Add(new ItemStack(ids.Stone, ItemStack.MaxCount));
+        var full = new Inventory(items);
+        for (var i = 0; i < Inventory.Slots; i++) full.Add(new ItemStack(stone, ItemStack.MaxCount));
 
-        var over = full.Add(new ItemStack(ids.Dirt, 5));
+        var over = full.Add(new ItemStack(dirt, 5));
         if (over.Count != 5) faults.Add($"a full inventory swallowed {5 - over.Count} of 5 it had no room for");
-        if (full.CountOf(ids.Stone) != Inventory.Slots * ItemStack.MaxCount)
-            faults.Add($"a full inventory holds {full.CountOf(ids.Stone)}, not {Inventory.Slots * ItemStack.MaxCount}");
+        if (full.CountOf(stone) != Inventory.Slots * ItemStack.MaxCount)
+            faults.Add($"a full inventory holds {full.CountOf(stone)}, not {Inventory.Slots * ItemStack.MaxCount}");
 
         // Partial stacks fill before empty slots open.
-        var tidy = new Inventory();
-        tidy.Add(new ItemStack(ids.Sand, 10));
-        tidy.Add(new ItemStack(ids.Sand, 10));
+        var tidy = new Inventory(items);
+        tidy.Add(new ItemStack(sand, 10));
+        tidy.Add(new ItemStack(sand, 10));
 
-        var used = 0;
-        foreach (var slot in tidy.All) if (!slot.IsEmpty) used++;
-        if (used != 1) faults.Add($"twenty sand went into {used} slots instead of one");
-        if (tidy.CountOf(ids.Sand) != 20) faults.Add($"twenty sand came to {tidy.CountOf(ids.Sand)}");
+        if (tidy.Used != 1) faults.Add($"twenty sand went into {tidy.Used} slots instead of one");
+        if (tidy.CountOf(sand) != 20) faults.Add($"twenty sand came to {tidy.CountOf(sand)}");
+
+        // A thing that wears out takes a slot to itself however many are picked up.
+        var toolbelt = new Inventory(items);
+        var axe = items.ByName("stone_axe").Id;
+        toolbelt.Add(new ItemStack(axe, 1));
+        toolbelt.Add(new ItemStack(axe, 1));
+        if (toolbelt.Used != 2) faults.Add($"two axes went into {toolbelt.Used} slots, so wear has nowhere to live");
+
+        // And wearing it through empties the slot rather than leaving a broken one in it.
+        var wearing = new Inventory(items);
+        wearing.Add(new ItemStack(axe, 1));
+        var life = items[wearing.Held.Item].Durability;
+        var broke = false;
+        for (var i = 0; i < life + 4 && !broke; i++) broke = wearing.WearHeld();
+
+        if (!broke) faults.Add($"an axe survived {life + 4} uses of a claimed {life}");
+        else if (!wearing.Held.IsEmpty) faults.Add("a tool that broke left something in the slot");
 
         // Placing spends exactly one.
-        var spender = new Inventory();
-        spender.Add(new ItemStack(ids.Dirt, 3));
+        var spender = new Inventory(items);
+        spender.Add(new ItemStack(dirt, 3));
         spender.SpendHeld();
-        if (spender.CountOf(ids.Dirt) != 2) faults.Add($"placing one of three left {spender.CountOf(ids.Dirt)}");
+        if (spender.CountOf(dirt) != 2) faults.Add($"placing one of three left {spender.CountOf(dirt)}");
         spender.SpendHeld();
         spender.SpendHeld();
         if (!spender.Held.IsEmpty) faults.Add("spending the last one left something in hand");
 
+        // Paying for a craft takes from the smallest stacks and takes exactly what it asked for.
+        var purse = new Inventory(items);
+        purse.Add(new ItemStack(dirt, 40));
+        purse.Add(new ItemStack(sand, 3));
+        purse.Add(new ItemStack(dirt, 5));
+
+        if (purse.Take(dirt, 7) != 7) faults.Add("taking seven of forty-five got a different number");
+        if (purse.CountOf(dirt) != 38) faults.Add($"taking seven of forty-five left {purse.CountOf(dirt)}");
+        if (purse.Take(sand, 9) != 3) faults.Add("taking nine of three claimed more than there was");
+        if (purse.CountOf(sand) != 0) faults.Add("taking more than there was left some behind");
+
         // The ground refuses past its end rather than growing.
-        var flooded = new DroppedItems(registry, 0x7E11);
+        var flooded = new DroppedItems(registry, items, 0x7E11);
         for (var i = 0; i < DroppedItems.Capacity + 40; i++)
-            flooded.Drop(new ItemStack(ids.Stone, 1), new Vector3(i * 4f, 40f, 0f));
+            flooded.Drop(new ItemStack(stone, 1), new Vector3(i * 4f, 40f, 0f));
 
         if (flooded.Count != DroppedItems.Capacity)
             faults.Add($"the ground holds {flooded.Count}, not the {DroppedItems.Capacity} it claims");
         if (flooded.Refused == 0) faults.Add("the ground never refused a drop, so it grew instead");
+
+        return faults;
+    }
+
+    /// <summary>How many distinct things a player can put down.</summary>
+    private static int Placeables(ItemRegistry items)
+    {
+        var count = 0;
+        foreach (var item in items.All) if (item.Places is not null) count++;
+        return count;
+    }
+
+    /// <summary>
+    /// Walks the whole item catalogue against the whole block table and checks they agree.
+    /// </summary>
+    /// <remarks>
+    /// <para>Two registries built one after the other is two chances to disagree, and none of the
+    /// disagreements are visible: an item whose icon layer does not exist draws magenta somewhere
+    /// nobody is looking, a block that leaves an item nothing places is a one-way trip, and a
+    /// placeable whose variants belong to two different items is a stair that turns into a slab
+    /// when you pick it up.</para>
+    /// <para>The count of things that leave nothing is checked as a band rather than a floor. Zero
+    /// means the foliage rules were dropped; most of the table means the defaults stopped working
+    /// and every block silently became unobtainable.</para>
+    /// </remarks>
+    private static List<string> ItemCatalogueSelfTest(
+        BlockRegistry registry, ItemRegistry items, BlockDrops drops)
+    {
+        var faults = new List<string>();
+
+        for (ushort id = 1; id < items.Count; id++)
+        {
+            var item = items[id];
+
+            if (item.IconLayer >= StarterBlocks.LayerCount)
+                faults.Add($"'{item.Name}' wears layer {item.IconLayer}, past the {StarterBlocks.LayerCount} that exist");
+
+            if (item.MaxStack is < 1 or > ItemStack.MaxCount)
+                faults.Add($"'{item.Name}' stacks to {item.MaxStack}");
+
+            if (item.IsTool && item.Durability <= 0)
+                faults.Add($"tool '{item.Name}' never wears out");
+
+            if (item.Places is { } places && places.Variants.Length == 0)
+                faults.Add($"'{item.Name}' places nothing");
+
+            // A thing drawn as a cube has to have a cube to be drawn as.
+            if (item.DrawsAsCube && item.PlainBlock.IsAir)
+                faults.Add($"'{item.Name}' draws as a cube and puts no block down");
+        }
+
+        // Every block that leaves something leaves something real, and every placeable block is
+        // reachable back through what it leaves.
+        for (ushort id = 1; id < registry.Count; id++)
+        {
+            var block = registry[id];
+            var left = drops.Of(block.Id);
+            if (left.IsEmpty) continue;
+
+            if (left.Item.Value >= items.Count)
+            {
+                faults.Add($"'{block.Name}' leaves item {left.Item.Value}, past the {items.Count} that exist");
+                continue;
+            }
+
+            if (block.Unbreakable)
+                faults.Add($"'{block.Name}' can never be broken and still leaves {items[left.Item].Name}");
+        }
+
+        // Nothing places a block that nothing leaves — a one-way trip out of the inventory.
+        foreach (var item in items.All)
+        {
+            if (item.Places is not { } places) continue;
+
+            foreach (var variant in places.Variants)
+            {
+                var back = drops.Of(variant);
+                if (!back.IsEmpty) continue;
+                faults.Add($"'{item.Name}' puts down '{registry[variant].Name}', which leaves nothing");
+            }
+        }
+
+        var nothing = drops.BlocksLeavingNothing;
+        if (nothing == 0) faults.Add("nothing in the world leaves nothing, so the foliage rules are gone");
+        if (nothing > registry.Count / 2)
+            faults.Add($"{nothing} of {registry.Count} blocks leave nothing, so the defaults are not running");
 
         return faults;
     }
@@ -1723,10 +1874,9 @@ public static class WorldAudit
     /// "the half the ray landed in" is a comparison against one half and both sides of it have to
     /// be walked.</para>
     /// </remarks>
-    private static List<string> PlacementSelfTest(BlockRegistry registry)
+    private static List<string> PlacementSelfTest(BlockRegistry registry, ItemRegistry items)
     {
         var faults = new List<string>();
-        var hand = StarterBlocks.Hand(registry);
 
         (Vector3 Look, int Facing)[] looks =
         [
@@ -1741,44 +1891,100 @@ public static class WorldAudit
         float[] heights = [0f, 0.25f, 0.5f, 0.501f, 0.75f, 1f];
         int[] hitFaces = [Faces.PosY, Faces.NegY, Faces.PosX, Faces.NegZ];
 
-        foreach (var entry in hand)
-        foreach (var face in hitFaces)
-        foreach (var height in heights)
-        foreach (var (look, wantFacing) in looks)
+        foreach (var item in items.All)
         {
-            var where = $"{entry.Label} on face {face} at height {height:F3} looking {wantFacing}";
-            var placed = entry.TryResolve(face, height, look, out var id);
+            if (item.Places is not { } entry) continue;
 
-            if (entry.Kind == PlacementKind.Standing)
+            foreach (var face in hitFaces)
+            foreach (var height in heights)
+            foreach (var (look, wantFacing) in looks)
             {
-                if (placed != (face == Faces.PosY))
-                    faults.Add($"{where}: {(placed ? "stood on nothing" : "refused a floor")}");
-                continue;
+                var where = $"{entry.Label} on face {face} at height {height:F3} looking {wantFacing}";
+                var placed = entry.TryResolve(face, height, look, out var id);
+
+                if (entry.Kind == PlacementKind.Standing)
+                {
+                    if (placed != (face == Faces.PosY))
+                        faults.Add($"{where}: {(placed ? "stood on nothing" : "refused a floor")}");
+                    continue;
+                }
+
+                if (!placed)
+                {
+                    faults.Add($"{where}: refused to place at all");
+                    continue;
+                }
+
+                if (entry.Kind == PlacementKind.Plain) continue;
+
+                var model = registry[id].Model;
+
+                // A facing block has no halves. Its face has to end up looking back at whoever put
+                // it down, which is the opposite cardinal to the one a stair's step points along —
+                // and getting that backwards is a furnace you have to walk round to use.
+                if (entry.Kind == PlacementKind.Facing)
+                {
+                    var front = FrontFace(model);
+                    if (front != Opposite(wantFacing))
+                        faults.Add($"{where}: face ended up pointing {front}, wanted {Opposite(wantFacing)}");
+                    continue;
+                }
+
+                var wantUpper = height > 0.5f;
+                var gotUpper = SitsInUpperHalf(model);
+
+                if (gotUpper != wantUpper)
+                    faults.Add($"{where}: landed in the {(gotUpper ? "upper" : "lower")} half, wanted the other");
+
+                if (entry.Kind != PlacementKind.Stairs) continue;
+
+                var gotFacing = StepFacing(model);
+                if (gotFacing != wantFacing)
+                    faults.Add($"{where}: step ended up facing {gotFacing}");
             }
-
-            if (!placed)
-            {
-                faults.Add($"{where}: refused to place at all");
-                continue;
-            }
-
-            if (entry.Kind == PlacementKind.Plain) continue;
-
-            var model = registry[id].Model;
-            var wantUpper = height > 0.5f;
-            var gotUpper = SitsInUpperHalf(model);
-
-            if (gotUpper != wantUpper)
-                faults.Add($"{where}: landed in the {(gotUpper ? "upper" : "lower")} half, wanted the other");
-
-            if (entry.Kind != PlacementKind.Stairs) continue;
-
-            var gotFacing = StepFacing(model);
-            if (gotFacing != wantFacing)
-                faults.Add($"{where}: step ended up facing {gotFacing}");
         }
 
         return faults;
+    }
+
+    /// <summary>The cardinal opposite a face, for reading a rule written the other way round.</summary>
+    private static int Opposite(int face) => face switch
+    {
+        Faces.PosX => Faces.NegX,
+        Faces.NegX => Faces.PosX,
+        Faces.PosZ => Faces.NegZ,
+        Faces.NegZ => Faces.PosZ,
+        Faces.PosY => Faces.NegY,
+        _ => Faces.PosY,
+    };
+
+    /// <summary>
+    /// Which side of a facing cube wears the odd texture out — read back off the model, not the id.
+    /// </summary>
+    /// <remarks>
+    /// Asking the model which face is different is what makes this a check rather than a
+    /// restatement. Comparing the placed id against a table of expected names would pass a build
+    /// where the model and the name disagree, which is exactly the failure a facing block invites.
+    /// </remarks>
+    private static int FrontFace(BlockModel model)
+    {
+        // The four sides of a cube share one layer except the front, so the odd one out is the face.
+        for (var face = 0; face < Faces.Count; face++)
+        {
+            if (face is Faces.PosY or Faces.NegY) continue;
+
+            var layer = model.PassLayer(0, face);
+            var matches = 0;
+            for (var other = 0; other < Faces.Count; other++)
+            {
+                if (other == face || other is Faces.PosY or Faces.NegY) continue;
+                if (model.PassLayer(0, other) == layer) matches++;
+            }
+
+            if (matches == 0) return face;
+        }
+
+        return -1;
     }
 
     /// <summary>Whether the box covering the whole footprint sits in the cell's upper half.</summary>
@@ -2662,17 +2868,18 @@ public static class WorldAudit
     /// <para>Bedrock gets its own case because "unbreakable" is not "very slow": it must still be
     /// there after a minute of holding, and it must never show a crack.</para>
     /// </remarks>
-    private static List<string> MiningSelfTest(BlockRegistry registry, StarterBlocks.Ids ids)
+    private static List<string> MiningSelfTest(
+        BlockRegistry registry, ItemRegistry items, StarterBlocks.Ids ids)
     {
         var faults = new List<string>();
         const float dt = 1f / 60f;
         var cell = (0, 64, 0);
 
-        float Break(BlockType type, int maxFrames = 7200)
+        float Break(BlockType type, ItemType? held = null, int maxFrames = 7200)
         {
             var mining = new PlayerMining();
             for (var frame = 1; frame <= maxFrames; frame++)
-                if (mining.Update(dt, type, cell, mining: true)) return frame * dt;
+                if (mining.Update(dt, type, cell, mining: true, held)) return frame * dt;
 
             return -1f;
         }
@@ -2685,7 +2892,7 @@ public static class WorldAudit
         foreach (var type in (ReadOnlySpan<BlockType>)[leaves, dirt, stone, iron])
         {
             var measured = Break(type);
-            var wanted = MiningRules.SecondsToBreak(type);
+            var wanted = MiningRules.SecondsToBreak(type, null);
 
             if (measured < 0f) faults.Add($"{type.Name} never broke");
             else if (MathF.Abs(measured - wanted) > dt * 2f)
@@ -2702,6 +2909,51 @@ public static class WorldAudit
 
         if (ironTime / leafTime < 10f)
             faults.Add($"hardest is only {ironTime / leafTime:F1}x the softest — materials barely differ");
+
+        // The whole point of a tool. Every rung of the ladder has to be quicker than the one below
+        // it on the block it is for, and none of them may help on a block of another class — a
+        // shovel that speeds up stone is a tool table read without its class.
+        var byTier = new List<(string Name, float Seconds)>();
+        foreach (var tier in StarterItems.Tiers)
+            byTier.Add((tier.Name, Break(stone, items.ByName($"{tier.Name}_pickaxe"))));
+
+        var bareStone = Break(stone);
+        foreach (var rung in byTier)
+        {
+            if (rung.Seconds < bareStone) continue;
+            faults.Add($"a {rung.Name} pickaxe took {rung.Seconds:F2}s on stone, no better than the {bareStone:F2}s a hand takes");
+        }
+
+        // Ordered by speed rather than by tier, because gold is deliberately out of tier order —
+        // it cuts faster than iron and reaches less far, and a check written as "each rung beats
+        // the last" would fail a design decision rather than a defect.
+        var fastest = byTier[0];
+        var slowest = byTier[0];
+        foreach (var rung in byTier)
+        {
+            if (rung.Seconds < fastest.Seconds) fastest = rung;
+            if (rung.Seconds > slowest.Seconds) slowest = rung;
+        }
+
+        if (fastest.Name != "gold")
+            faults.Add($"the quickest pickaxe is {fastest.Name}, and gold is meant to be the quick one");
+
+        // The spread, not the order. A build that ignores the speed column entirely still puts the
+        // rungs in *some* order, and the first one it happens to find is as likely to be right as
+        // wrong — a control run with the divide removed passed the ordering test on a coin toss and
+        // failed here. Nominally the ends are six times apart; four is the band's floor.
+        if (slowest.Seconds / fastest.Seconds < 4f)
+            faults.Add(
+                $"the ladder spans only {slowest.Seconds / fastest.Seconds:F1}x from {slowest.Name} "
+                + $"to {fastest.Name}, so the speed column is barely read");
+
+        var shovelOnStone = Break(stone, items.ByName("iron_shovel"));
+        if (MathF.Abs(shovelOnStone - bareStone) > dt * 2f)
+            faults.Add($"an iron shovel took {shovelOnStone:F2}s on stone against a bare hand's {bareStone:F2}s");
+
+        // And the penalty for the wrong thing is real: stone by hand is the genre's own long wait.
+        if (bareStone < 6f)
+            faults.Add($"stone by hand takes {bareStone:F2}s, too short to be worth crafting a pickaxe over");
 
         // Unbreakable means unbreakable, and shows nothing while being hit.
         var bedrockMining = new PlayerMining();

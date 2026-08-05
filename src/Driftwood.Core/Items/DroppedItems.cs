@@ -61,6 +61,7 @@ public sealed class DroppedItems
     private const float Drag = 1.1f;
 
     private readonly DroppedItem[] _items = new DroppedItem[Capacity];
+    private readonly ItemRegistry _catalogue;
     private readonly bool[] _solid;
     private uint _rng;
 
@@ -71,8 +72,9 @@ public sealed class DroppedItems
 
     public ReadOnlySpan<DroppedItem> Live => _items.AsSpan(0, Count);
 
-    public DroppedItems(BlockRegistry registry, uint seed = 0x1D0BE17)
+    public DroppedItems(BlockRegistry registry, ItemRegistry items, uint seed = 0x1D0BE17)
     {
+        _catalogue = items;
         _solid = registry.BuildSolidTable();
         _rng = seed | 1u;
     }
@@ -184,16 +186,18 @@ public sealed class DroppedItems
                 ref var first = ref _items[a];
                 ref var second = ref _items[b];
 
+                var cap = _catalogue[first.Stack.Item].MaxStack;
+
                 if (second.Collecting > 0f
                     || !first.Stack.Matches(second.Stack)
-                    || first.Stack.Space == 0
+                    || first.Stack.Space(cap) == 0
                     || Vector3.DistanceSquared(first.Position, second.Position) > MergeRadius * MergeRadius)
                 {
                     b++;
                     continue;
                 }
 
-                first.Stack = first.Stack.Merge(second.Stack, out var left);
+                first.Stack = first.Stack.Merge(second.Stack, cap, out var left);
                 if (left.IsEmpty)
                 {
                     _items[b] = _items[--Count];
