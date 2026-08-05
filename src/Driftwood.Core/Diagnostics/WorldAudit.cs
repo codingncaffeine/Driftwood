@@ -1337,6 +1337,53 @@ public static class WorldAudit
                 faults.Add($"a stick and a plank in opposite corners made '{crooked!.Name}'");
         }
 
+        // Matching is not paying. Every recipe is now bought out of a real inventory holding exactly
+        // its cost and nothing else, which is what catches a payment that takes from the wrong slot,
+        // takes twice, or takes nothing — none of which the round trip above can see.
+        foreach (var recipe in book.Recipes)
+        {
+            var purse = new Inventory(items);
+            var owed = new Dictionary<ushort, int>();
+
+            foreach (var slot in recipe.Ingredients)
+            {
+                var pick = slot.Members[0];
+                owed[pick.Value] = owed.GetValueOrDefault(pick.Value) + 1;
+            }
+
+            foreach (var (id, count) in owed) purse.Add(new ItemStack(new ItemId(id), count));
+
+            if (!book.CanPay(purse, recipe))
+            {
+                faults.Add($"'{recipe.Name}' could not be paid for out of exactly its own ingredients");
+                continue;
+            }
+
+            if (!book.Craft(purse, recipe, out var made))
+            {
+                faults.Add($"'{recipe.Name}' matched and then refused to be made");
+                continue;
+            }
+
+            if (made != recipe.Result)
+                faults.Add($"'{recipe.Name}' made {made.Count} of item {made.Item.Value}, not its own result");
+
+            foreach (var (id, count) in owed)
+            {
+                var left = purse.CountOf(new ItemId(id));
+                if (left == 0) continue;
+                faults.Add($"'{recipe.Name}' left {left} of {count} {items[new ItemId(id)].Name} unspent");
+            }
+
+            // And one short is refused outright rather than half-paid.
+            var short1 = new Inventory(items);
+            foreach (var (id, count) in owed)
+                if (count > 1) short1.Add(new ItemStack(new ItemId(id), count - 1));
+
+            if (!book.CanPay(short1, recipe)) continue;
+            faults.Add($"'{recipe.Name}' claimed to be payable one ingredient short");
+        }
+
         _ = registry;
         return faults;
     }

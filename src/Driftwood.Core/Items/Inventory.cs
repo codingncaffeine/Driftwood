@@ -68,6 +68,15 @@ public sealed class Inventory
     public void SpendHeld() => _slots[Selected] = _slots[Selected].MinusOne();
 
     /// <summary>
+    /// Takes some off the held stack specifically, rather than off whichever slot holds that thing.
+    /// </summary>
+    /// <remarks>
+    /// Not the same as <see cref="Take"/>, and the difference shows the moment a player is carrying
+    /// two stacks of planks: feeding a furnace from the one in hand must empty the one in hand.
+    /// </remarks>
+    public void SpendHeld(int howMany) => _slots[Selected] = _slots[Selected].Minus(howMany);
+
+    /// <summary>
     /// Puts one use on whatever is in hand, and empties the slot when that use was its last.
     /// </summary>
     /// <returns>True when the tool broke on this use, for the sound that says so.</returns>

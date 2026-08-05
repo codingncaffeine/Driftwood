@@ -7,6 +7,37 @@ using Silk.NET.OpenGL;
 
 namespace Driftwood.Client.Render;
 
+/// <summary>Which screen, if any, is over the world.</summary>
+public enum HudScreenKind
+{
+    None,
+    Crafting,
+    Furnace,
+}
+
+/// <summary>
+/// Everything the overlay needs to know about the screen the player has open.
+/// </summary>
+/// <param name="Recipes">What this station can make, craftable or not.</param>
+/// <param name="Payable">Whether each of those can be paid for right now, in the same order.</param>
+/// <remarks>
+/// Uncraftable recipes are listed rather than hidden, greyed out. A book that shows only what you
+/// can already afford answers "what now" and never answers "what for" — and what a player wants
+/// from a recipe screen in this genre is mostly the second question.
+/// </remarks>
+public readonly record struct HudScreen(
+    HudScreenKind Kind,
+    IReadOnlyList<Recipe> Recipes,
+    IReadOnlyList<bool> Payable,
+    int Selected,
+    Furnace? Burning,
+    int Slot)
+{
+    public static readonly HudScreen None = new(HudScreenKind.None, [], [], 0, null, 0);
+
+    public bool IsOpen => Kind != HudScreenKind.None;
+}
+
 /// <summary>
 /// The screen-space layer: a crosshair, the hand, the hearts and the breath.
 /// </summary>
@@ -139,6 +170,7 @@ public sealed class HudRenderer : IDisposable
         ItemRegistry catalogue,
         Inventory inventory,
         PlayerVitals vitals,
+        in HudScreen screen,
         int screenWidth,
         int screenHeight)
     {
@@ -150,10 +182,18 @@ public sealed class HudRenderer : IDisposable
         var w = screenWidth / scale;
         var h = screenHeight / scale;
 
-        Crosshair(w, h);
+        // A screen covers the world and the crosshair with it: a reticle over an inventory is
+        // aiming at nothing, and it sits exactly where the eye is trying to read.
+        if (screen.IsOpen) Screen(catalogue, screen, w, h);
+        else Crosshair(w, h);
+
         Hotbar(catalogue, inventory, w, h);
-        Hearts(vitals, w, h);
-        Bubbles(vitals, w, h);
+
+        if (!screen.IsOpen)
+        {
+            Hearts(vitals, w, h);
+            Bubbles(vitals, w, h);
+        }
 
         _shader.Use();
         _shader.SetVec2("uScreen", new Vector2(w, h));
@@ -262,6 +302,176 @@ public sealed class HudRenderer : IDisposable
             if (stack.Count <= 1) continue;
             Number(stack.Count, x + Slot - 1.5f, top + Slot - 8.5f);
         }
+    }
+
+    /// <summary>
+    /// A screen over the world: what can be made here, and what the selected one costs.
+    /// </summary>
+    /// <remarks>
+    /// <para>There is no text renderer yet, so nothing here is labelled and nothing needs to be.
+    /// A recipe is a picture of its ingredients and its result — which is what a recipe is anyway —
+    /// and the arrangement in the panel is the arrangement in the grid, so the screen teaches the
+    /// bench rather than describing it.</para>
+    /// <para>Uncraftable recipes are drawn dark rather than left out. Half the value of the screen
+    /// is seeing that a stormglass pickaxe exists long before there is any stormglass.</para>
+    /// </remarks>
+    private void Screen(ItemRegistry catalogue, in HudScreen screen, float w, float h)
+    {
+        Rect(_plain, 0f, 0f, w, h, new Vector4(0.02f, 0.02f, 0.04f, 0.62f));
+
+        const float Panel = 232f;
+        var left = MathF.Round((w - Panel) / 2f);
+        var top = MathF.Round(h * 0.16f);
+
+        if (screen.Kind == HudScreenKind.Furnace)
+        {
+            Hearth(catalogue, screen, left, top, Panel);
+            return;
+        }
+
+        Book(catalogue, screen, left, top, Panel);
+    }
+
+    /// <summary>The recipe list, and the selected recipe laid out as it would be in the grid.</summary>
+    private void Book(ItemRegistry catalogue, in HudScreen screen, float left, float top, float panel)
+    {
+        const float Cell = 22f;
+        const int Columns = 10;
+
+        var rows = Math.Max(1, (screen.Recipes.Count + Columns - 1) / Columns);
+        var listHeight = rows * Cell;
+
+        Frame(left - 4f, top - 4f, panel + 8f, listHeight + 8f);
+
+        for (var i = 0; i < screen.Recipes.Count; i++)
+        {
+            var x = left + i % Columns * Cell;
+            var y = top + i / Columns * Cell;
+            var payable = i < screen.Payable.Count && screen.Payable[i];
+
+            Rect(_plain, x, y, Cell - 1f, Cell - 1f,
+                payable ? new Vector4(0.16f, 0.18f, 0.20f, 0.85f) : new Vector4(0.09f, 0.09f, 0.10f, 0.85f));
+
+            var result = screen.Recipes[i].Result;
+            var shade = payable ? Vector4.One : new Vector4(0.42f, 0.42f, 0.46f, 0.75f);
+            Rect(_blocks, x + 3f, y + 3f, Cell - 7f, Cell - 7f, shade, catalogue[result.Item].IconLayer);
+
+            if (i == screen.Selected) Select(x - 1f, y - 1f, Cell + 1f, Cell + 1f);
+        }
+
+        // The selected recipe, drawn as its own picture: the grid on the left, the result on the
+        // right, at the size a player is about to reproduce.
+        var chosen = screen.Selected >= 0 && screen.Selected < screen.Recipes.Count
+            ? screen.Recipes[screen.Selected]
+            : null;
+
+        var detailTop = top + listHeight + 14f;
+        Frame(left - 4f, detailTop - 4f, panel + 8f, 3f * Cell + 8f);
+        if (chosen is null) return;
+
+        for (var y = 0; y < 3; y++)
+        for (var x = 0; x < 3; x++)
+        {
+            var px = left + x * Cell;
+            var py = detailTop + y * Cell;
+
+            // Shapeless recipes have no arrangement, so they are laid out in reading order rather
+            // than pretended into a shape the grid would not accept.
+            var slot = chosen.Shapeless
+                ? Nth(chosen, y * 3 + x)
+                : x < chosen.Width && y < chosen.Height ? chosen.At(x, y) : null;
+
+            Rect(_plain, px, py, Cell - 1f, Cell - 1f,
+                slot is null ? new Vector4(0.07f, 0.07f, 0.08f, 0.8f) : new Vector4(0.16f, 0.18f, 0.20f, 0.9f));
+
+            if (slot is null) continue;
+            Rect(_blocks, px + 3f, py + 3f, Cell - 7f, Cell - 7f, Vector4.One,
+                catalogue[slot.Members[0]].IconLayer);
+
+            // A slot that will take more than one thing wears a corner mark, so a tag does not read
+            // as "exactly this plank".
+            if (slot.Members.Length > 1)
+                Rect(_plain, px + Cell - 6f, py + 2f, 3f, 3f, new Vector4(0.95f, 0.82f, 0.35f, 0.95f));
+        }
+
+        // The result, out to the right of the grid with a bar pointing at it.
+        var arrowY = detailTop + Cell * 1.5f - 1.5f;
+        Rect(_plain, left + 3f * Cell + 6f, arrowY, 20f, 3f, new Vector4(0.8f, 0.8f, 0.85f, 0.9f));
+
+        var resultX = left + 3f * Cell + 34f;
+        var resultY = detailTop + Cell - 4f;
+        Rect(_plain, resultX - 3f, resultY - 3f, 34f, 34f, new Vector4(0.16f, 0.18f, 0.20f, 0.9f));
+        Rect(_blocks, resultX, resultY, 28f, 28f, Vector4.One, catalogue[chosen.Result.Item].IconLayer);
+        if (chosen.Result.Count > 1) Number(chosen.Result.Count, resultX + 29f, resultY + 20f);
+    }
+
+    /// <summary>The nth filled slot of a shapeless recipe, or null past the end.</summary>
+    private static Ingredient? Nth(Recipe recipe, int index)
+    {
+        foreach (var slot in recipe.Ingredients)
+            if (index-- == 0) return slot;
+        return null;
+    }
+
+    /// <summary>A furnace: what is in it, what is burning, and how far through it is.</summary>
+    private void Hearth(ItemRegistry catalogue, in HudScreen screen, float left, float top, float panel)
+    {
+        const float Slot = 30f;
+
+        Frame(left - 4f, top - 4f, panel + 8f, 92f);
+        if (screen.Burning is not { } furnace) return;
+
+        var inputY = top + 6f;
+        var fuelY = top + 52f;
+        var outX = left + 132f;
+        var chosen = screen.Slot;
+
+        Cell(left + 8f, inputY, furnace.Input, 0);
+        Cell(left + 8f, fuelY, furnace.Fuel, 1);
+        Cell(outX, top + 29f, furnace.Output, 2);
+
+        // The flame between the two, burning down. Drawn as a bar rather than a picture because
+        // what it has to say is how much is left, and a flickering icon says nothing about that.
+        var flameH = 26f * furnace.FuelLeft;
+        Rect(_plain, left + 52f, inputY + 34f, 8f, 26f, new Vector4(0.10f, 0.09f, 0.09f, 0.9f));
+        Rect(_plain, left + 52f, inputY + 34f + (26f - flameH), 8f, flameH,
+            new Vector4(1f, 0.55f + furnace.FuelLeft * 0.3f, 0.18f, 1f));
+
+        // And the work, filling toward the output.
+        Rect(_plain, left + 70f, top + 40f, 56f, 6f, new Vector4(0.10f, 0.10f, 0.12f, 0.9f));
+        Rect(_plain, left + 70f, top + 40f, 56f * furnace.Fraction, 6f,
+            new Vector4(0.75f, 0.80f, 0.86f, 1f));
+
+        void Cell(float x, float y, ItemStack stack, int index)
+        {
+            Rect(_plain, x, y, Slot, Slot, new Vector4(0.16f, 0.18f, 0.20f, 0.9f));
+            if (index == chosen) Select(x - 1f, y - 1f, Slot + 2f, Slot + 2f);
+
+            if (stack.IsEmpty) return;
+            Rect(_blocks, x + 4f, y + 4f, Slot - 8f, Slot - 8f, Vector4.One,
+                catalogue[stack.Item].IconLayer);
+            if (stack.Count > 1) Number(stack.Count, x + Slot - 2f, y + Slot - 9f);
+        }
+    }
+
+    private void Frame(float x, float y, float w, float h)
+    {
+        Rect(_plain, x, y, w, h, new Vector4(0.06f, 0.07f, 0.09f, 0.94f));
+        var edge = new Vector4(0.32f, 0.34f, 0.38f, 0.95f);
+        Rect(_plain, x, y, w, 1f, edge);
+        Rect(_plain, x, y + h - 1f, w, 1f, edge);
+        Rect(_plain, x, y, 1f, h, edge);
+        Rect(_plain, x + w - 1f, y, 1f, h, edge);
+    }
+
+    /// <summary>Four thin bars round a slot. The same frame the held hotbar slot wears.</summary>
+    private void Select(float x, float y, float w, float h)
+    {
+        var frame = new Vector4(1f, 1f, 1f, 0.92f);
+        Rect(_plain, x, y, w, 1.5f, frame);
+        Rect(_plain, x, y + h - 1.5f, w, 1.5f, frame);
+        Rect(_plain, x, y, 1.5f, h, frame);
+        Rect(_plain, x + w - 1.5f, y, 1.5f, h, frame);
     }
 
     /// <summary>Draws a number right-aligned at a point, digit by digit.</summary>

@@ -161,6 +161,28 @@ public sealed class ClientHost : IDisposable
     private ItemRegistry _items = null!;
     private BlockDrops _dropTable = null!;
 
+    /// <summary>Everything that can be made, and every furnace in the world.</summary>
+    private RecipeBook _book = null!;
+    private FurnaceBank _furnaces = null!;
+
+    /// <summary>Which screen is over the world, and what it is showing.</summary>
+    private HudScreenKind _screen = HudScreenKind.None;
+    private bool _atBench;
+    private (int X, int Y, int Z) _station;
+    private int _recipeIndex;
+    private int _furnaceSlot;
+
+    /// <summary>What the open screen can make, and which of those can be paid for now.</summary>
+    private readonly List<Recipe> _shown = [];
+    private readonly List<bool> _payable = [];
+
+    /// <summary>Furnaces whose flame changed this frame, so the block drawn can follow.</summary>
+    private readonly List<(int X, int Y, int Z, bool Lit)> _relit = [];
+
+    /// <summary>The four facings of the furnace, unlit and lit, for swapping between them.</summary>
+    private BlockId[] _furnaceCold = null!;
+    private BlockId[] _furnaceHot = null!;
+
     /// <summary>Nine pockets, one of them in hand.</summary>
     private Inventory _inventory = null!;
 
@@ -459,6 +481,10 @@ public sealed class ClientHost : IDisposable
         // already handed out.
         _items = StarterItems.Register(registry);
         _dropTable = StarterItems.Drops(registry, _items);
+        _book = StarterRecipes.Build(_items);
+        _furnaces = new FurnaceBank(_items, _book);
+        _furnaceCold = StarterBlocks.Furnaces(registry, lit: false);
+        _furnaceHot = StarterBlocks.Furnaces(registry, lit: true);
 
         var generator = new TerrainGenerator(_options.Seed, ids, _options.OceanCoverage);
 
@@ -487,16 +513,9 @@ public sealed class ClientHost : IDisposable
         _drops = new DroppedItems(registry, _items);
         _solid = registry.BuildSolidTable();
 
-        // A starting kit, and it is scaffolding. The design is to spawn with nothing, but the only
-        // way to obtain a slab, a stair, a torch or a furnace is to craft one and there is no
-        // crafting yet — so without this everything built rather than dug would be unreachable.
-        // It goes the day recipes land, which is why it is a filter over Crafted rather than a list.
-        foreach (var item in _items.All)
-        {
-            if (item.PlainBlock.IsAir || !registry[item.PlainBlock].Crafted) continue;
-            if (_inventory.Add(new ItemStack(item.Id, ItemStack.MaxCount)).IsEmpty) continue;
-            break;      // the bar is full; the rest waits for recipes
-        }
+        // Nothing in the pockets. That is the design — punch wood, make planks, make a pickaxe —
+        // and the starting kit that used to be here was scaffolding for the days when a slab could
+        // be obtained no other way. The audit walks the whole tree from here every run.
 
         _outlines = new (Vector3, Vector3)[registry.Count];
         for (var id = 0; id < registry.Count; id++) _outlines[id] = registry[(ushort)id].Model.Outline;
@@ -618,10 +637,22 @@ public sealed class ClientHost : IDisposable
 
     private void OnKeyDown(IKeyboard keyboard, Key key, int _)
     {
+        // A screen takes the keyboard while it is open, and gives it back on the way out. Letting
+        // the world keep reading keys underneath is how a player closes an inventory by walking
+        // into a wall.
+        if (_screen != HudScreenKind.None && ScreenKey(key)) return;
+
         switch (key)
         {
             case Key.Escape:
                 SetMouseCaptured(!_mouseCaptured);
+                break;
+
+            // The bench a player always has: two by two, in their own hands. Anything wider needs
+            // a real one, and the screen says so by simply not listing it.
+            case Key.E:
+                if (_bench is not null) break;
+                OpenCrafting(atBench: false, default);
                 break;
             case Key.F1:
                 _wireframe = !_wireframe;
@@ -680,6 +711,205 @@ public sealed class ClientHost : IDisposable
         }
     }
 
+    /// <summary>
+    /// Handles a key while a screen is open. Returns true when the screen took it.
+    /// </summary>
+    /// <remarks>
+    /// Arrow keys, because the hands are already there — they are this player's movement keys, and
+    /// while a screen is up nothing is moving. Enter acts, shift makes it act as many times as it
+    /// can, and both E and escape close.
+    /// </remarks>
+    private bool ScreenKey(Key key)
+    {
+        var many = _keyboard.IsKeyPressed(Key.ShiftLeft) || _keyboard.IsKeyPressed(Key.ShiftRight);
+
+        switch (key)
+        {
+            case Key.Escape or Key.E:
+                CloseScreen();
+                return true;
+
+            case Key.Enter or Key.KeypadEnter or Key.Space:
+                if (_screen == HudScreenKind.Crafting) CraftSelected(many);
+                else MoveFurnaceSlot();
+                return true;
+
+            case Key.Left or Key.A:
+                Step(-1);
+                return true;
+
+            case Key.Right or Key.D:
+                Step(1);
+                return true;
+
+            case Key.Up or Key.W:
+                Step(_screen == HudScreenKind.Crafting ? -10 : -1);
+                return true;
+
+            case Key.Down or Key.S:
+                Step(_screen == HudScreenKind.Crafting ? 10 : 1);
+                return true;
+
+            // The bar still picks, so a player can choose what to feed a furnace without closing it.
+            case >= Key.Number1 and <= Key.Number9:
+                SelectHandSlot(key - Key.Number1);
+                RefreshScreen();
+                return true;
+        }
+
+        return false;
+
+        void Step(int by)
+        {
+            if (_screen == HudScreenKind.Furnace)
+            {
+                _furnaceSlot = Math.Clamp(_furnaceSlot + Math.Sign(by), 0, 2);
+                return;
+            }
+
+            if (_shown.Count == 0) return;
+            _recipeIndex = Math.Clamp(_recipeIndex + by, 0, _shown.Count - 1);
+        }
+    }
+
+    private void OpenCrafting(bool atBench, (int X, int Y, int Z) at)
+    {
+        _screen = HudScreenKind.Crafting;
+        _atBench = atBench;
+        _station = at;
+        _recipeIndex = 0;
+        _holdingBreak = false;
+        _holdingPlace = false;
+        _mining.Cancel();
+        RefreshScreen();
+    }
+
+    private void OpenFurnace(int x, int y, int z)
+    {
+        _screen = HudScreenKind.Furnace;
+        _station = (x, y, z);
+        _furnaceSlot = 0;
+        _holdingBreak = false;
+        _holdingPlace = false;
+        _mining.Cancel();
+        _furnaces.Open(x, y, z);
+    }
+
+    private void CloseScreen()
+    {
+        _screen = HudScreenKind.None;
+        _shown.Clear();
+        _payable.Clear();
+    }
+
+    /// <summary>
+    /// Rebuilds what the open crafting screen shows and what of it can be afforded.
+    /// </summary>
+    /// <remarks>
+    /// Everything the station could ever make is listed; only the affordability is recomputed. A
+    /// list that changes length as a player picks things up would move the selection out from under
+    /// them on the frame they pressed enter.
+    /// </remarks>
+    private void RefreshScreen()
+    {
+        if (_screen != HudScreenKind.Crafting) return;
+
+        if (_shown.Count == 0)
+        {
+            foreach (var recipe in _book.Recipes)
+                if (!recipe.NeedsBench || _atBench) _shown.Add(recipe);
+        }
+
+        _payable.Clear();
+        foreach (var recipe in _shown) _payable.Add(_book.CanPay(_inventory, recipe));
+    }
+
+    /// <summary>Makes one of the selected recipe, or as many as the pockets will pay for.</summary>
+    private void CraftSelected(bool many)
+    {
+        if (_recipeIndex < 0 || _recipeIndex >= _shown.Count) return;
+
+        var recipe = _shown[_recipeIndex];
+        var made = 0;
+
+        // Bounded even when asked for as many as possible: a bar of logs against a one-log recipe
+        // is a few hundred crafts, and every one of them that will not fit goes on the floor.
+        for (var i = 0; i < (many ? 64 : 1); i++)
+        {
+            if (!_book.Craft(_inventory, recipe, out var result)) break;
+
+            var left = _inventory.Add(result);
+            if (!left.IsEmpty) _drops.Drop(left, _player.Position + new Vector3(0f, 1f, 0f), 0.4f);
+            made++;
+        }
+
+        if (made > 0) PlaySound(MaterialOf(recipe.Result), SoundEvent.Place, _viewPosition, 0.7f);
+        RefreshScreen();
+    }
+
+    /// <summary>
+    /// Moves the held stack into the selected furnace slot, or takes that slot back into the hand.
+    /// </summary>
+    /// <remarks>
+    /// The output slot only ever gives. Putting an ingot into the tray a furnace is about to fill
+    /// would either be swallowed or block the smelt, and neither is what the player meant.
+    /// </remarks>
+    private void MoveFurnaceSlot()
+    {
+        if (!_furnaces.TryGet(_station.X, _station.Y, _station.Z, out var furnace)) return;
+
+        var taking = _furnaceSlot == 2 || _inventory.Held.IsEmpty;
+
+        if (taking)
+        {
+            ref var slot = ref _furnaceSlot == 0 ? ref furnace.Input
+                : ref _furnaceSlot == 1 ? ref furnace.Fuel
+                : ref furnace.Output;
+
+            if (slot.IsEmpty) return;
+            slot = _inventory.Add(slot);
+            PlaySound(SoundMaterial.Wood, SoundEvent.Place, _viewPosition, 0.5f);
+            return;
+        }
+
+        var held = _inventory.Held;
+        var target = _furnaceSlot == 0 ? furnace.Input : furnace.Fuel;
+
+        // Fuel that will not burn and ore that will not smelt are refused rather than accepted and
+        // sat on, so a slot that takes something is a slot that is going to use it.
+        if (_furnaceSlot == 0 && _book.SmeltFor(held.Item) is null) return;
+        if (_furnaceSlot == 1 && _items[held.Item].BurnSeconds <= 0f) return;
+
+        var merged = target.Merge(held, _items[held.Item].MaxStack, out var over);
+        if (merged.Count == target.Count) return;
+
+        if (_furnaceSlot == 0) furnace.Input = merged; else furnace.Fuel = merged;
+        _inventory.SpendHeld(held.Count - over.Count);
+        PlaySound(SoundMaterial.Wood, SoundEvent.Place, _viewPosition, 0.5f);
+    }
+
+    /// <summary>Advances every furnace and swaps the block under any whose flame changed.</summary>
+    private void StepFurnaces(float dt)
+    {
+        if (_furnaces.Count == 0) return;
+
+        _furnaces.Update(dt, _relit);
+
+        foreach (var (x, y, z, lit) in _relit)
+        {
+            // Which way it faces is carried by the id, so the swap has to find the facing first —
+            // otherwise a furnace lights up pointing a different way than it did unlit.
+            var here = _streamer.World.GetBlock(x, y, z);
+            var from = lit ? _furnaceCold : _furnaceHot;
+            var to = lit ? _furnaceHot : _furnaceCold;
+
+            var facing = Array.IndexOf(from, here);
+            if (facing < 0) continue;
+
+            _streamer.EditBlock(x, y, z, to[facing]);
+        }
+    }
+
     /// <summary>The time of day as a clock face, since 0.62 of a day means nothing to anybody.</summary>
     private static string ClockFace(float time)
     {
@@ -708,6 +938,9 @@ public sealed class ClientHost : IDisposable
     private void OnMouseDown(IMouse mouse, MouseButton button)
     {
         if (_bench is not null) return;
+
+        // A screen swallows the buttons rather than digging through itself.
+        if (_screen != HudScreenKind.None) return;
 
         // A click into a released cursor takes the mouse back rather than editing the world —
         // otherwise clicking the window to focus it digs a hole in whatever was under the crosshair.
@@ -768,7 +1001,9 @@ public sealed class ClientHost : IDisposable
         var delta = position - _lastMousePos;
         _lastMousePos = position;
 
-        if (_mouseCaptured) _camera.ApplyMouseDelta(delta.X, delta.Y);
+        // The view holds still under a screen. It is still tracked above, so closing the screen
+        // does not snap the camera to wherever the cursor drifted while it was up.
+        if (_mouseCaptured && _screen == HudScreenKind.None) _camera.ApplyMouseDelta(delta.X, delta.Y);
     }
 
     private void OnUpdate(double dt)
@@ -810,7 +1045,13 @@ public sealed class ClientHost : IDisposable
         StepFootfall((float)dt);
         StepVitals((float)dt);
         StepLeaffall((float)dt);
+        StepFurnaces((float)dt);
         _particles.Update(_streamer.World, (float)dt);
+
+        // What a screen can afford changes as the world hands things over, so it is recomputed
+        // rather than only rebuilt on a keypress: a stack flying into the bar while the book is
+        // open should light up what it just made possible.
+        if (_screen == HudScreenKind.Crafting) RefreshScreen();
 
         // Collected from the middle of the body rather than the feet, so a stack lying against a
         // wall is still reachable from the other side of it.
@@ -1168,11 +1409,21 @@ public sealed class ClientHost : IDisposable
                 : null;
     }
 
-    /// <summary>Removes the targeted block.</summary>
+    /// <summary>Removes the targeted block, and empties it first if it was holding anything.</summary>
     private void BreakTarget()
     {
         if (_target is not { } hit) return;
+
+        // A furnace comes apart with its contents on the floor rather than taking them with it.
+        // The state lives beside the world rather than in the cell, so nothing else would ever
+        // clean it up — and a player who mines one mid-smelt has lost both the ore and the coal.
+        var centre = new Vector3(hit.X + 0.5f, hit.Y + 0.5f, hit.Z + 0.5f);
+        foreach (var spilled in _furnaces.Remove(hit.X, hit.Y, hit.Z)) _drops.Drop(spilled, centre);
+
         _streamer.EditBlock(hit.X, hit.Y, hit.Z, BlockId.Air);
+
+        // Standing in front of a furnace that is no longer there.
+        if (_screen != HudScreenKind.None && _station == (hit.X, hit.Y, hit.Z)) CloseScreen();
     }
 
     /// <summary>
@@ -1186,6 +1437,18 @@ public sealed class ClientHost : IDisposable
     private void PlaceOnTarget()
     {
         if (_target is not { } hit) return;
+
+        // Using comes before building. A block that does something answers the right button itself,
+        // so a bench cannot be buried under the plank a player meant to open it with. The general
+        // machinery for this — a block deciding what a right click means — is still ahead of us;
+        // this is the narrow version the two blocks that exist need.
+        var struck = _registry[_streamer.World.GetBlock(hit.X, hit.Y, hit.Z)];
+        if (struck.Interactive)
+        {
+            if (struck.Name == "bench") OpenCrafting(atBench: true, (hit.X, hit.Y, hit.Z));
+            else OpenFurnace(hit.X, hit.Y, hit.Z);
+            return;
+        }
 
         var (x, y, z) = hit.Adjacent;
         if (!_streamer.World.GetBlock(x, y, z).IsAir) return;
@@ -1248,6 +1511,15 @@ public sealed class ClientHost : IDisposable
         var yaw = float.DegreesToRadians(_camera.Yaw);
         var forward = new Vector3(MathF.Cos(yaw), 0f, MathF.Sin(yaw));
         var right = new Vector3(-forward.Z, 0f, forward.X);
+
+        // A screen has the keyboard, so the body stands still — but it is still stepped, because
+        // stopping the simulation would leave a player who opened a bench in mid-air hanging there.
+        if (_screen != HudScreenKind.None)
+        {
+            _player.Step(_streamer.World, dt, Vector3.Zero, false, false, false);
+            _camera.Position = _player.EyePosition;
+            return;
+        }
 
         var wish = Vector3.Zero;
         if (_keyboard.IsKeyPressed(Key.Up) || _keyboard.IsKeyPressed(Key.W)) wish += forward;
@@ -1446,7 +1718,15 @@ public sealed class ClientHost : IDisposable
 
         // Over everything, in screen space. The benchmark flies itself and wants a clean picture.
         if (_bench is null)
-            _hud.Draw(_blockTextures, _items, _inventory, _vitals, size.X, size.Y);
+        {
+            _furnaces.TryGet(_station.X, _station.Y, _station.Z, out var open);
+            _hud.Draw(
+                _blockTextures, _items, _inventory, _vitals,
+                new HudScreen(
+                    _screen, _shown, _payable, _recipeIndex,
+                    _screen == HudScreenKind.Furnace ? open : null, _furnaceSlot),
+                size.X, size.Y);
+        }
 
         _renderMs = (Stopwatch.GetTimestamp() - renderStart) * TicksToMs;
     }
