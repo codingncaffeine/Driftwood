@@ -5,6 +5,7 @@ using Driftwood.Core.Audio;
 using Driftwood.Core.Blocks;
 using Driftwood.Core.Entities;
 using Driftwood.Core.Gen;
+using Driftwood.Core.Items;
 using Driftwood.Core.Lighting;
 using Driftwood.Core.Meshing;
 using Driftwood.Core.Particles;
@@ -357,6 +358,12 @@ public static class WorldAudit
                 ? "slab half a cell, stairs three quarters, a dusting three sixteenths, a slender torch, "
                   + "and six outlines wrapping the shape rather than the cell"
                 : $"{volumeFaults.Count} faults: {volumeFaults[0]}");
+
+        var itemFaults = ItemSelfTest(registry, ids);
+        Check("what breaks can be picked up", itemFaults.Count == 0,
+            itemFaults.Count == 0
+                ? $"drops land, merge and collect; {Inventory.Slots} slots of {ItemStack.MaxCount} lose nothing"
+                : $"{itemFaults.Count} faults: {itemFaults[0]}");
 
         var vitalsFaults = VitalsSelfTest(registry, ids);
         Check("falls and water cost health", vitalsFaults.Count == 0,
@@ -1027,6 +1034,113 @@ public static class WorldAudit
 
         if (ChunkVertex.Quantise(Chunk.Size + 1) > 0xFFF)
             faults.Add("the position field cannot address a model reaching past the chunk");
+
+        return faults;
+    }
+
+    /// <summary>
+    /// Breaks one of everything, drops it on a floor, and walks a collector into the pile.
+    /// </summary>
+    /// <remarks>
+    /// <para>The one thing an inventory must never do is lose something. Everything else here is a
+    /// nicety by comparison: a stack that falls through the floor is visible, a pool that leaks
+    /// shows up in a frame time, but a pickup that quietly swallows what would not fit looks
+    /// exactly like a pickup that worked and is only ever noticed as "I'm sure I mined more than
+    /// that".</para>
+    /// <para>The merge is checked because without it one felled tree is forty entities, each with
+    /// its own physics and its own draw call, and the frame rate says so long before anybody counts
+    /// them.</para>
+    /// </remarks>
+    private static List<string> ItemSelfTest(BlockRegistry registry, StarterBlocks.Ids ids)
+    {
+        var faults = new List<string>();
+        const float Step = 1f / 60f;
+
+        // Every block leaves something sensible: itself, or a named substitute, or nothing at all.
+        var leaveNothing = 0;
+        for (ushort id = 1; id < registry.Count; id++)
+        {
+            var type = registry[id];
+            var drop = type.Drop ?? type.Id;
+
+            if (drop.IsAir) { leaveNothing++; continue; }
+            if (type.DropCount >= 1) continue;
+            faults.Add($"'{type.Name}' drops {type.DropCount} of something");
+        }
+
+        if (leaveNothing == 0) faults.Add("every block in the world leaves something, including the foliage");
+        if (leaveNothing > registry.Count / 2) faults.Add($"{leaveNothing} of {registry.Count} blocks leave nothing");
+
+        var world = new VoxelWorld(registry);
+        for (var z = -4; z <= 4; z++)
+        for (var x = -4; x <= 4; x++)
+        for (var y = 0; y <= 10; y++)
+            world.SetBlock(x, y, z, ids.Stone);
+
+        // A stack thrown out of a cell has to land on the floor rather than through it.
+        var ground = new DroppedItems(registry, 0x515A6E);
+        ground.Drop(new ItemStack(ids.Stone, 1), new Vector3(0.5f, 12.5f, 0.5f));
+        for (var i = 0; i < 240; i++) ground.Update(world, Step, null, null);
+
+        if (ground.Count != 1) faults.Add($"{ground.Count} stacks on the ground after dropping one");
+        else if (ground.Live[0].Position.Y < 11f - 0.01f)
+            faults.Add($"a dropped stack reached y {ground.Live[0].Position.Y:F2}, under the floor at 11");
+
+        // Stacks lying together become one.
+        var heap = new DroppedItems(registry, 0x4D3267);
+        for (var i = 0; i < 12; i++) heap.Drop(new ItemStack(ids.Log, 1), new Vector3(0.5f, 11.6f, 0.5f), scatter: 0.05f);
+        for (var i = 0; i < 240; i++) heap.Update(world, Step, null, null);
+
+        if (heap.Count >= 12) faults.Add($"{heap.Count} stacks of 12 dropped together never merged");
+        var carried = 0;
+        foreach (var item in heap.Live) carried += item.Stack.Count;
+        if (carried != 12) faults.Add($"merging 12 logs left {carried}");
+
+        // And a collector standing in them ends up with all of it.
+        var pockets = new Inventory();
+        var walker = new Vector3(0.5f, 11.9f, 0.5f);
+        for (var i = 0; i < 600 && heap.Count > 0; i++) heap.Update(world, Step, walker, pockets);
+
+        if (heap.Count != 0) faults.Add($"{heap.Count} stacks were left on the ground after standing in them");
+        if (pockets.CountOf(ids.Log) != 12)
+            faults.Add($"walking into 12 logs collected {pockets.CountOf(ids.Log)}");
+
+        // A full inventory refuses rather than losing the overflow.
+        var full = new Inventory();
+        for (var i = 0; i < Inventory.Slots; i++) full.Add(new ItemStack(ids.Stone, ItemStack.MaxCount));
+
+        var over = full.Add(new ItemStack(ids.Dirt, 5));
+        if (over.Count != 5) faults.Add($"a full inventory swallowed {5 - over.Count} of 5 it had no room for");
+        if (full.CountOf(ids.Stone) != Inventory.Slots * ItemStack.MaxCount)
+            faults.Add($"a full inventory holds {full.CountOf(ids.Stone)}, not {Inventory.Slots * ItemStack.MaxCount}");
+
+        // Partial stacks fill before empty slots open.
+        var tidy = new Inventory();
+        tidy.Add(new ItemStack(ids.Sand, 10));
+        tidy.Add(new ItemStack(ids.Sand, 10));
+
+        var used = 0;
+        foreach (var slot in tidy.All) if (!slot.IsEmpty) used++;
+        if (used != 1) faults.Add($"twenty sand went into {used} slots instead of one");
+        if (tidy.CountOf(ids.Sand) != 20) faults.Add($"twenty sand came to {tidy.CountOf(ids.Sand)}");
+
+        // Placing spends exactly one.
+        var spender = new Inventory();
+        spender.Add(new ItemStack(ids.Dirt, 3));
+        spender.SpendHeld();
+        if (spender.CountOf(ids.Dirt) != 2) faults.Add($"placing one of three left {spender.CountOf(ids.Dirt)}");
+        spender.SpendHeld();
+        spender.SpendHeld();
+        if (!spender.Held.IsEmpty) faults.Add("spending the last one left something in hand");
+
+        // The ground refuses past its end rather than growing.
+        var flooded = new DroppedItems(registry, 0x7E11);
+        for (var i = 0; i < DroppedItems.Capacity + 40; i++)
+            flooded.Drop(new ItemStack(ids.Stone, 1), new Vector3(i * 4f, 40f, 0f));
+
+        if (flooded.Count != DroppedItems.Capacity)
+            faults.Add($"the ground holds {flooded.Count}, not the {DroppedItems.Capacity} it claims");
+        if (flooded.Refused == 0) faults.Add("the ground never refused a drop, so it grew instead");
 
         return faults;
     }

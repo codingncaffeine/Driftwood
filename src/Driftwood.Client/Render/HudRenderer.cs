@@ -1,6 +1,7 @@
 using System.Numerics;
 using Driftwood.Core.Blocks;
 using Driftwood.Core.Entities;
+using Driftwood.Core.Items;
 using Driftwood.Core.Textures;
 using Silk.NET.OpenGL;
 
@@ -81,15 +82,19 @@ public sealed class HudRenderer : IDisposable
 
     private float[] _upload = new float[8192];
 
-    /// <summary>Icon array layers.</summary>
+    /// <summary>Icon array layers. Digits run from <see cref="IconDigit"/> upward.</summary>
     private const int IconHeart = 0;
     private const int IconBubble = 1;
+    private const int IconDigit = 2;
 
     public unsafe HudRenderer(GL gl)
     {
         _gl = gl;
         _shader = new Shader(gl, VertexSource, FragmentSource);
-        _icons = new BlockTextureArray(gl, [TileGen.Heart(), TileGen.Bubble()], TileGen.Size);
+
+        var icons = new List<byte[]> { TileGen.Heart(), TileGen.Bubble() };
+        icons.AddRange(TileGen.Digits());
+        _icons = new BlockTextureArray(gl, [.. icons], TileGen.Size);
 
         _vao = _gl.GenVertexArray();
         _gl.BindVertexArray(_vao);
@@ -132,8 +137,7 @@ public sealed class HudRenderer : IDisposable
     public void Draw(
         BlockTextureArray blocks,
         BlockRegistry registry,
-        Placeable[] hand,
-        int handSlot,
+        Inventory inventory,
         PlayerVitals vitals,
         int screenWidth,
         int screenHeight)
@@ -147,7 +151,7 @@ public sealed class HudRenderer : IDisposable
         var h = screenHeight / scale;
 
         Crosshair(w, h);
-        Hotbar(registry, hand, handSlot, w, h);
+        Hotbar(registry, inventory, w, h);
         Hearts(vitals, w, h);
         Bubbles(vitals, w, h);
 
@@ -209,29 +213,26 @@ public sealed class HudRenderer : IDisposable
         Rect(_plain, cx - 0.5f, cy - 5f, 1f, 10f, bright);
     }
 
-    /// <summary>The hand, one slot per thing in it, with the block's own tile in each.</summary>
-    private void Hotbar(BlockRegistry registry, Placeable[] hand, int handSlot, float w, float h)
+    /// <summary>The bar, one slot per pocket, with each block's own tile and its count.</summary>
+    private void Hotbar(BlockRegistry registry, Inventory inventory, float w, float h)
     {
-        if (hand.Length == 0) return;
-
         const float Slot = 22f;
         const float Pad = 2f;
 
-        var width = hand.Length * Slot;
+        var width = Inventory.Slots * Slot;
         var left = MathF.Round((w - width) / 2f);
         var top = h - Slot - 6f;
 
         Rect(_plain, left - 2f, top - 2f, width + 4f, Slot + 4f, new Vector4(0.05f, 0.05f, 0.07f, 0.55f));
 
-        for (var i = 0; i < hand.Length; i++)
+        for (var i = 0; i < Inventory.Slots; i++)
         {
             var x = left + i * Slot;
-            var selected = i == handSlot;
 
             Rect(_plain, x, top, Slot, Slot, new Vector4(0.12f, 0.12f, 0.15f, 0.55f));
 
             // The selected slot gets a frame rather than a fill, so the icon in it is not tinted.
-            if (selected)
+            if (i == inventory.Selected)
             {
                 var frame = new Vector4(1f, 1f, 1f, 0.9f);
                 Rect(_plain, x - 1f, top - 1f, Slot + 2f, 1.5f, frame);
@@ -240,9 +241,37 @@ public sealed class HudRenderer : IDisposable
                 Rect(_plain, x + Slot - 0.5f, top - 1f, 1.5f, Slot + 2f, frame);
             }
 
-            var layer = registry[hand[i].Variants[0]].Model.ParticleLayer;
+            var stack = inventory[i];
+            if (stack.IsEmpty) continue;
+
+            var layer = registry[stack.Block].Model.ParticleLayer;
             Rect(_blocks, x + Pad, top + Pad, Slot - Pad * 2f, Slot - Pad * 2f, Vector4.One, layer);
+
+            // Counts sit in the bottom right of the slot, right-aligned, one digit at a time. A
+            // single item shows no number: nine slots each labelled "1" is noise, not information.
+            if (stack.Count <= 1) continue;
+            Number(stack.Count, x + Slot - 1.5f, top + Slot - 8.5f);
         }
+    }
+
+    /// <summary>Draws a number right-aligned at a point, digit by digit.</summary>
+    private void Number(int value, float right, float top)
+    {
+        const float Glyph = 6f;
+        var shadow = new Vector4(0f, 0f, 0f, 0.75f);
+        var bright = Vector4.One;
+
+        var at = right;
+        do
+        {
+            var digit = value % 10;
+            value /= 10;
+            at -= Glyph;
+
+            Rect(_iconQuads, at + 0.75f, top + 0.75f, Glyph, Glyph, shadow, IconDigit + digit);
+            Rect(_iconQuads, at, top, Glyph, Glyph, bright, IconDigit + digit);
+        }
+        while (value > 0);
     }
 
     /// <summary>Ten hearts, each worth two of the model's units.</summary>

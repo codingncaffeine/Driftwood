@@ -98,6 +98,20 @@ public sealed class BlockType
     /// </remarks>
     public bool Crafted { get; init; }
 
+    /// <summary>
+    /// What breaking this leaves behind. Null means itself; air means nothing.
+    /// </summary>
+    /// <remarks>
+    /// Nullable rather than defaulted to the block's own id, because the id is not known until it
+    /// is registered and "leaves nothing" has to be sayable. Grass leaves dirt, foliage leaves
+    /// nothing, and everything else leaves what it was — which is the rule until tool tiers arrive
+    /// and turn this into a table with conditions in it.
+    /// </remarks>
+    public BlockId? Drop { get; internal set; }
+
+    /// <summary>How many of <see cref="Drop"/> one block leaves.</summary>
+    public int DropCount { get; init; } = 1;
+
     /// <summary>What this sounds like underfoot, under a blow, and coming apart.</summary>
     /// <remarks>
     /// Coarser than the block, because fifty-odd blocks share about a dozen surfaces. Stone is the

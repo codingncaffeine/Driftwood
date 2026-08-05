@@ -8,6 +8,7 @@ using Driftwood.Core.Audio;
 using Driftwood.Core.Blocks;
 using Driftwood.Core.Entities;
 using Driftwood.Core.Gen;
+using Driftwood.Core.Items;
 using Driftwood.Core.Lighting;
 using Driftwood.Core.Meshing;
 using Driftwood.Core.Particles;
@@ -164,7 +165,16 @@ public sealed class ClientHost : IDisposable
     /// unreachable and unlookable-at, which is the same as not having built it.
     /// </remarks>
     private Placeable[] _hand = null!;
-    private int _handSlot;
+
+    /// <summary>Which <see cref="Placeable"/> a held block places as, for the shapes that have one.</summary>
+    private Dictionary<ushort, Placeable> _placeables = null!;
+
+    /// <summary>Nine pockets, one of them in hand.</summary>
+    private Inventory _inventory = null!;
+
+    /// <summary>Stacks lying on the ground, and the entities that draw them.</summary>
+    private DroppedItems _drops = null!;
+    private ItemRenderer _itemRenderer = null!;
 
     /// <summary>Each block's own box, so the selection and cracking overlays wrap the shape.</summary>
     private (Vector3 Min, Vector3 Max)[] _outlines = null!;
@@ -403,6 +413,7 @@ public sealed class ClientHost : IDisposable
         _outline = new BlockOutline(_gl);
 
         _particleRenderer = new ParticleRenderer(_gl);
+        _itemRenderer = new ItemRenderer(_gl);
         _hud = new HudRenderer(_gl);
 
         // The benchmark opens no device at all. It flies a scripted path and hears nothing worth
@@ -468,7 +479,23 @@ public sealed class ClientHost : IDisposable
         _vitals = new PlayerVitals(registry);
         _particles = new ParticleSystem(registry);
         _hand = StarterBlocks.Hand(registry);
+        _inventory = new Inventory();
+        _drops = new DroppedItems(registry);
         _solid = registry.BuildSolidTable();
+
+        // Every orientation of every shape maps back to the family that placed it, so a slab picked
+        // up off the floor still lands the right way up when it goes back down.
+        _placeables = [];
+        foreach (var entry in _hand)
+        foreach (var variant in entry.Variants)
+            _placeables[variant.Value] = entry;
+
+        // A starting kit, and it is scaffolding. The design is to spawn with nothing, but the only
+        // way to obtain a slab, a stair or a torch is to craft one and there is no crafting yet —
+        // so without this the shapes the last commit added would be unreachable. It goes the day
+        // recipes land.
+        foreach (var entry in _hand)
+            _inventory.Add(new ItemStack(entry.Variants[0], ItemStack.MaxCount));
 
         _outlines = new (Vector3, Vector3)[registry.Count];
         for (var id = 0; id < registry.Count; id++) _outlines[id] = registry[(ushort)id].Model.Outline;
@@ -659,16 +686,12 @@ public sealed class ClientHost : IDisposable
         return $"{minutes / 60:00}:{minutes % 60:00}";
     }
 
-    private void SelectHandSlot(int slot)
-    {
-        if (_hand.Length == 0) return;
-        _handSlot = ((slot % _hand.Length) + _hand.Length) % _hand.Length;
-    }
+    private void SelectHandSlot(int slot) => _inventory.Select(slot);
 
     private void OnScroll(IMouse mouse, ScrollWheel wheel)
     {
         if (wheel.Y == 0f) return;
-        SelectHandSlot(_handSlot - Math.Sign(wheel.Y));
+        _inventory.Scroll(-Math.Sign(wheel.Y));
     }
 
     /// <summary>
@@ -786,6 +809,16 @@ public sealed class ClientHost : IDisposable
         StepFootfall((float)dt);
         StepVitals((float)dt);
         _particles.Update(_streamer.World, (float)dt);
+
+        // Collected from the middle of the body rather than the feet, so a stack lying against a
+        // wall is still reachable from the other side of it.
+        var collector = _bench is null && _walking && _spawned
+            ? _player.Position + new Vector3(0f, PlayerBody.Height * 0.5f, 0f)
+            : (Vector3?)null;
+
+        var picked = _drops.Update(_streamer.World, (float)dt, collector, collector is null ? null : _inventory);
+        if (picked > 0 && collector is { } where)
+            PlaySound(_registry[_inventory.Held.Block], SoundEvent.Place, where, 0.5f);
         PlaceCamera();
         PumpStreaming();
 
@@ -817,7 +850,11 @@ public sealed class ClientHost : IDisposable
                 : $"Driftwood — {_fps:F0} fps | seed {_options.Seed} | "
                   + $"xyz {p.X:F0} {p.Y:F0} {p.Z:F0} | "
                   + $"{ClockFace(_clock.TimeOfDay)}{(_clock.Running ? "" : " held")} | "
-                  + $"holding {_handSlot + 1}. {_hand[_handSlot].Label} | "
+                  + $"holding {_inventory.Selected + 1}. "
+                  + (_inventory.Held.IsEmpty
+                      ? "nothing"
+                      : $"{_registry[_inventory.Held.Block].Name} x{_inventory.Held.Count}")
+                  + " | "
                   + $"{_drawnChunks}/{_meshes.Count} drawn, {_drawnTriangles:N0} tris"
                   + (queued > 0 ? $" | {queued} queued" : "")
                   + (_frustumCulling ? "" : " | CULLING OFF");
@@ -874,6 +911,9 @@ public sealed class ClientHost : IDisposable
             var centre = new Vector3(broken.Item1 + 0.5f, broken.Item2 + 0.5f, broken.Item3 + 0.5f);
             _particles.Burst(target, broken.Item1, broken.Item2, broken.Item3);
             PlaySound(target, SoundEvent.Break, centre);
+
+            var drop = target.Drop ?? target.Id;
+            if (!drop.IsAir) _drops.Drop(new ItemStack(drop, target.DropCount), centre);
         }
 
         BreakTarget();
@@ -1080,7 +1120,13 @@ public sealed class ClientHost : IDisposable
         var (x, y, z) = hit.Adjacent;
         if (!_streamer.World.GetBlock(x, y, z).IsAir) return;
 
-        var held = _hand[_handSlot];
+        var stack = _inventory.Held;
+        if (stack.IsEmpty) return;
+
+        // A shape places as its family so the orientation rules run; anything else places as itself.
+        var held = _placeables.TryGetValue(stack.Block.Value, out var family)
+            ? family
+            : new Placeable { Label = "", Kind = PlacementKind.Plain, Variants = [stack.Block] };
 
         // Where in the target cell the ray landed, which is what decides a slab's half. Taken from
         // the ray rather than from which face was struck: clicking a block's top lands at the floor
@@ -1103,6 +1149,7 @@ public sealed class ClientHost : IDisposable
         }
 
         _streamer.EditBlock(x, y, z, block);
+        _inventory.SpendHeld();
         PlaySound(_registry[block], SoundEvent.Place, new Vector3(x + 0.5f, y + 0.5f, z + 0.5f), 0.85f);
     }
 
@@ -1313,9 +1360,11 @@ public sealed class ClientHost : IDisposable
             _cracks.Draw(viewProj, new Vector3(cell.X, cell.Y, cell.Z), min, max, _mining.Stage);
         }
 
-        // Debris while depth still describes the world, so a chip is hidden by the hill it flew
-        // behind. The texture array is re-bound because the cracking pass owns unit zero by now.
+        // Debris and dropped stacks while depth still describes the world, so a chip is hidden by
+        // the hill it flew behind. The texture array is re-bound because the cracking pass owns
+        // unit zero by now.
         _blockTextures.Bind();
+        _itemRenderer.Draw(_drops, _registry, viewProj, at => ParticleLight(at));
         _particleRenderer.Draw(
             _particles, viewProj, _viewPosition, _viewForward,
             at => ParticleLight(at), _skyState.Horizon, _fogStart, _fogEnd);
@@ -1333,7 +1382,7 @@ public sealed class ClientHost : IDisposable
 
         // Over everything, in screen space. The benchmark flies itself and wants a clean picture.
         if (_bench is null)
-            _hud.Draw(_blockTextures, _registry, _hand, _handSlot, _vitals, size.X, size.Y);
+            _hud.Draw(_blockTextures, _registry, _inventory, _vitals, size.X, size.Y);
 
         _renderMs = (Stopwatch.GetTimestamp() - renderStart) * TicksToMs;
     }
@@ -1395,6 +1444,7 @@ public sealed class ClientHost : IDisposable
         _sky?.Dispose();
         _clouds?.Dispose();
         _particleRenderer?.Dispose();
+        _itemRenderer?.Dispose();
         _hud?.Dispose();
         _audio?.Dispose();
         _blockTextures?.Dispose();

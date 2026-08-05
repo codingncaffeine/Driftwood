@@ -40,6 +40,9 @@ public sealed class BlockRegistry
             throw new InvalidOperationException($"block '{type.Name}' is opaque but its model is not a full cube");
 
         type.Id = new BlockId((ushort)_byId.Count);
+
+        // "Itself" cannot be written in the initialiser, because the id is handed out here.
+        type.Drop ??= type.Id;
         _byId.Add(type);
         _byName[type.Name] = type;
         return type.Id;

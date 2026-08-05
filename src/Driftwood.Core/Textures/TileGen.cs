@@ -437,6 +437,54 @@ public static class TileGen
             MathF.Sqrt((x - cx) * (x - cx) + (y - cy) * (y - cy)) - r;
     }
 
+    /// <summary>The ten digits, as white glyphs on a transparent tile.</summary>
+    /// <remarks>
+    /// A three by five grid blown up to the tile, which is the smallest shape a digit is still
+    /// legible at and the shape every low-resolution font in the genre uses. Written as bit rows
+    /// rather than drawn, because a digit is a fixed thing and generating one procedurally would
+    /// mean inventing a typeface.
+    /// </remarks>
+    public static byte[][] Digits()
+    {
+        // Five rows of three bits each, most significant bit on the left.
+        ushort[] glyphs =
+        [
+            0b111_101_101_101_111,
+            0b010_110_010_010_111,
+            0b111_001_111_100_111,
+            0b111_001_111_001_111,
+            0b101_101_111_001_001,
+            0b111_100_111_001_111,
+            0b111_100_111_101_111,
+            0b111_001_001_001_001,
+            0b111_101_111_101_111,
+            0b111_101_111_001_111,
+        ];
+
+        var tiles = new byte[10][];
+        for (var d = 0; d < 10; d++)
+        {
+            var tile = new byte[BytesPerTile];
+            var cell = Size / 5;                 // one glyph pixel, in tile pixels
+            var left = (Size - cell * 3) / 2;
+
+            for (var row = 0; row < 5; row++)
+            for (var column = 0; column < 3; column++)
+            {
+                var bit = (glyphs[d] >> (14 - (row * 3 + column))) & 1;
+                if (bit == 0) continue;
+
+                for (var y = 0; y < cell; y++)
+                for (var x = 0; x < cell; x++)
+                    Put(tile, left + column * cell + x, row * cell + y, 255, 255, 255, 255);
+            }
+
+            tiles[d] = tile;
+        }
+
+        return tiles;
+    }
+
     /// <summary>The bubble the breath meter is counted in, likewise white.</summary>
     public static byte[] Bubble()
     {

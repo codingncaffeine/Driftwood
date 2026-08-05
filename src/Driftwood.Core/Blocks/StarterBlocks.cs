@@ -123,6 +123,7 @@ public static class StarterBlocks
         var grass = registry.Register(new BlockType
         {
             Name = "grass", Hardness = 0.6f, Tint = TintSource.Grass, Sounds = SoundMaterial.Grass,
+            Drop = dirt,
             Model = BlockModel.CubeWithSideOverlay(
                 LayerGrassTop, LayerGrassSide, LayerDirt, LayerGrassSideOverlay),
         });
@@ -163,7 +164,7 @@ public static class StarterBlocks
         var leaves = registry.Register(new BlockType
         {
             Name = "driftoak_leaves", Hardness = 0.2f, Opaque = false, LightAttenuation = 1,
-            Sounds = SoundMaterial.Leaves,
+            Sounds = SoundMaterial.Leaves, Drop = BlockId.Air,
             Tint = TintSource.Foliage,
             TopLayer = LayerLeaves, SideLayer = LayerLeaves, BottomLayer = LayerLeaves,
         });
@@ -212,7 +213,7 @@ public static class StarterBlocks
         var vine = registry.Register(new BlockType
         {
             Name = "vine", Hardness = 0.2f, Solid = false, Opaque = false, LightAttenuation = 1,
-            Sounds = SoundMaterial.Plant,
+            Sounds = SoundMaterial.Plant, Drop = BlockId.Air,
             Tint = TintSource.Foliage,
             Model = BlockModel.Cross(LayerVine),
         });
@@ -299,6 +300,7 @@ public static class StarterBlocks
         var snowLayer = registry.Register(new BlockType
         {
             Name = "snow_layer", Hardness = 0.1f, Solid = false, Opaque = false, Sounds = SoundMaterial.Snow,
+            Drop = BlockId.Air,
             Model = BlockModel.Layer(LayerSnow, LayerSnow, LayerSnow, 3f),
         });
 
@@ -309,6 +311,7 @@ public static class StarterBlocks
         var meadowgrass = registry.Register(new BlockType
         {
             Name = "meadowgrass", Hardness = 0.05f, Solid = false, Opaque = false, Sounds = SoundMaterial.Plant,
+            Drop = BlockId.Air,
             Tint = TintSource.Grass,
             Model = BlockModel.Cross(LayerMeadowgrass),
         });
