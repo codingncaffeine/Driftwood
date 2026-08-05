@@ -28,6 +28,17 @@ public sealed class Inventory
     /// <summary>Which slot is in hand.</summary>
     public int Selected { get; private set; }
 
+    /// <summary>
+    /// Bumped whenever what is being carried changes. Not when the selection moves.
+    /// </summary>
+    /// <remarks>
+    /// So anything that wants to react to a pickup can ask one integer instead of doing its own
+    /// work every frame. Working out what has become craftable means paying for forty recipes
+    /// against nine slots, and doing that sixty times a second to answer "nothing changed" is the
+    /// kind of cost that never shows up as one thing.
+    /// </remarks>
+    public int Version { get; private set; }
+
     public ItemStack this[int slot] => _slots[slot];
 
     /// <summary>What is in hand right now.</summary>
@@ -61,11 +72,16 @@ public sealed class Inventory
             _slots[i] = _slots[i].Merge(stack, cap, out stack);
         }
 
+        Version++;
         return stack;
     }
 
     /// <summary>Takes one off the held stack, for a block that has just been put down.</summary>
-    public void SpendHeld() => _slots[Selected] = _slots[Selected].MinusOne();
+    public void SpendHeld()
+    {
+        _slots[Selected] = _slots[Selected].MinusOne();
+        Version++;
+    }
 
     /// <summary>
     /// Takes some off the held stack specifically, rather than off whichever slot holds that thing.
@@ -74,7 +90,11 @@ public sealed class Inventory
     /// Not the same as <see cref="Take"/>, and the difference shows the moment a player is carrying
     /// two stacks of planks: feeding a furnace from the one in hand must empty the one in hand.
     /// </remarks>
-    public void SpendHeld(int howMany) => _slots[Selected] = _slots[Selected].Minus(howMany);
+    public void SpendHeld(int howMany)
+    {
+        _slots[Selected] = _slots[Selected].Minus(howMany);
+        Version++;
+    }
 
     /// <summary>
     /// Puts one use on whatever is in hand, and empties the slot when that use was its last.
@@ -86,11 +106,16 @@ public sealed class Inventory
         if (before.IsEmpty) return false;
 
         _slots[Selected] = before.Worn(_items[before.Item].Durability);
+        Version++;
         return _slots[Selected].IsEmpty;
     }
 
     /// <summary>Empties everything. What a fresh world or a respawn does.</summary>
-    public void Clear() => Array.Clear(_slots);
+    public void Clear()
+    {
+        Array.Clear(_slots);
+        Version++;
+    }
 
     /// <summary>How many of one thing are being carried, across every slot.</summary>
     public int CountOf(ItemId item)
@@ -130,6 +155,7 @@ public sealed class Inventory
             taken += take;
         }
 
+        if (taken > 0) Version++;
         return taken;
     }
 

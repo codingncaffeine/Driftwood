@@ -198,6 +198,17 @@ public sealed class ClientHost : IDisposable
     /// <summary>Furnaces whose flame changed this frame, so the block drawn can follow.</summary>
     private readonly List<(int X, int Y, int Z, bool Lit)> _relit = [];
 
+    /// <summary>What has become makeable, and the notices on screen saying so.</summary>
+    private readonly RecipeUnlocks _unlocks = new();
+    private readonly List<Recipe> _justUnlocked = [];
+    private readonly List<Toast> _toasts = [];
+
+    /// <summary>How long a notice sits there. Long enough to read twice.</summary>
+    private const float ToastSeconds = 5.5f;
+
+    /// <summary>Notices on screen at once before the oldest is pushed off.</summary>
+    private const int MaxToasts = 3;
+
     /// <summary>The four facings of the furnace, unlit and lit, for swapping between them.</summary>
     private BlockId[] _furnaceCold = null!;
     private BlockId[] _furnaceHot = null!;
@@ -433,6 +444,9 @@ public sealed class ClientHost : IDisposable
         // itself into the file — starting once with --vsync should not turn it on for good.
         if (_options.VSync) _settings.VSync = true;
         if (_options.Mute) _settings.Mute = true;
+
+        // What earlier sessions already announced. Achievements fire once ever, not once a launch.
+        _unlocks.Restore();
 
         Console.WriteLine($"settings    {GameSettings.Path}");
 
@@ -1032,6 +1046,14 @@ public sealed class ClientHost : IDisposable
                     "wait for the display", OnOff(_settings.VSync),
                     Note: "smoother, and the frame counter stops meaning anything"));
 
+                _hudScreen.Rows.Add(new MenuRow("notices", Heading: true));
+                _hudScreen.Rows.Add(new MenuRow(
+                    "new recipe notices", OnOff(_settings.RecipeNotices),
+                    Note: "said once ever, not once a session"));
+                _hudScreen.Rows.Add(new MenuRow(
+                    "forget what has been said", $"{_unlocks.Announced} remembered",
+                    Note: "enter to hear the whole tree announce itself again"));
+
                 _hudScreen.Rows.Add(new MenuRow("looking at things", Heading: true));
                 _hudScreen.Rows.Add(new MenuRow("wireframe", OnOff(_wireframe)));
                 _hudScreen.Rows.Add(new MenuRow(
@@ -1098,6 +1120,11 @@ public sealed class ClientHost : IDisposable
                     case "field of view": _settings.FieldOfView = Nudge(_settings.FieldOfView, by * 5, 50, 110); break;
                     case "fullscreen": _settings.Fullscreen = !_settings.Fullscreen; break;
                     case "wait for the display": _settings.VSync = !_settings.VSync; break;
+                    case "new recipe notices": _settings.RecipeNotices = !_settings.RecipeNotices; break;
+                    case "forget what has been said":
+                        _unlocks.Forget();
+                        _unlocks.Persist();
+                        return;
                     case "wireframe":
                         _wireframe = !_wireframe;
                         _gl.PolygonMode(TriangleFace.FrontAndBack, _wireframe ? PolygonMode.Line : PolygonMode.Fill);
@@ -1284,6 +1311,46 @@ public sealed class ClientHost : IDisposable
         PlaySound(SoundMaterial.Wood, SoundEvent.Place, _viewPosition, 0.5f);
     }
 
+    /// <summary>
+    /// Ages the notices, and puts up a new one when something has become makeable.
+    /// </summary>
+    /// <remarks>
+    /// <para>A burst becomes one notice rather than six. The first pickaxe opens four recipes at
+    /// once and stacking them would fill the corner with a list nobody reads — the one that names
+    /// itself and counts the rest says the same thing and can be taken in at a glance.</para>
+    /// <para>The whole trigger is a diff of what the pockets can pay for. Nothing here knows what
+    /// coal is for; picking one up changes the answer and this notices.</para>
+    /// </remarks>
+    private void StepToasts(float dt)
+    {
+        for (var i = _toasts.Count - 1; i >= 0; i--)
+        {
+            _toasts[i].Age += dt;
+            if (_toasts[i].Gone) _toasts.RemoveAt(i);
+        }
+
+        if (_bench is not null || !_settings.RecipeNotices) return;
+        if (!_unlocks.Poll(_book, _inventory, _justUnlocked) || _justUnlocked.Count == 0) return;
+
+        // Written out as it happens rather than on the way out, because an achievement nobody
+        // recorded is one the game will cheerfully award again next time, and a crash is exactly
+        // the session somebody would rather not repeat the whole tutorial after.
+        _unlocks.Persist();
+
+        var first = _justUnlocked[0];
+        var line = _justUnlocked.Count == 1
+            ? first.Name
+            : $"{first.Name} and {_justUnlocked.Count - 1} more";
+
+        _toasts.Add(new Toast(
+            "you can now make", line, _items[first.Result.Item].IconLayer, ToastSeconds));
+
+        // Oldest first out. Three is what fits down the corner without meeting the hearts.
+        while (_toasts.Count > MaxToasts) _toasts.RemoveAt(0);
+
+        PlaySound(SoundMaterial.Glass, SoundEvent.Place, _viewPosition, 0.35f);
+    }
+
     /// <summary>Advances every furnace and swaps the block under any whose flame changed.</summary>
     private void StepFurnaces(float dt)
     {
@@ -1442,6 +1509,7 @@ public sealed class ClientHost : IDisposable
         StepVitals((float)dt);
         StepLeaffall((float)dt);
         StepFurnaces((float)dt);
+        StepToasts((float)dt);
         _particles.Update(_streamer.World, (float)dt);
 
         // What a screen can afford changes as the world hands things over, so it is recomputed
@@ -2133,7 +2201,7 @@ public sealed class ClientHost : IDisposable
         {
             _furnaces.TryGet(_station.X, _station.Y, _station.Z, out var open);
             _hudScreen.Burning = _hudScreen.Kind == HudScreenKind.Furnace ? open : null;
-            _hud.Draw(_blockTextures, _items, _inventory, _vitals, _hudScreen, size.X, size.Y);
+            _hud.Draw(_blockTextures, _items, _inventory, _vitals, _hudScreen, _toasts, size.X, size.Y);
         }
 
         _renderMs = (Stopwatch.GetTimestamp() - renderStart) * TicksToMs;

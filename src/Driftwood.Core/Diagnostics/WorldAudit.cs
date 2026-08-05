@@ -393,6 +393,10 @@ public static class WorldAudit
         Check("everything is reachable from bare hands", reach.Count == 0,
             reach.Count == 0 ? reachDetail : $"{reach.Count} faults: {reach[0]}");
 
+        var unlockFaults = UnlockSelfTest(items, book, out var unlockDetail);
+        Check("a new recipe announces itself once", unlockFaults.Count == 0,
+            unlockFaults.Count == 0 ? unlockDetail : $"{unlockFaults.Count} faults: {unlockFaults[0]}");
+
         var settingsFaults = SettingsSelfTest(out var settingsDetail);
         Check("settings survive a round trip", settingsFaults.Count == 0,
             settingsFaults.Count == 0 ? settingsDetail : $"{settingsFaults.Count} faults: {settingsFaults[0]}");
@@ -2016,6 +2020,124 @@ public static class WorldAudit
 
         detail = $"{GameActions.All.Length} actions and 7 settings out and back unchanged, "
                + "a rebind takes the key off whatever had it, a missing file keeps the shipped keys";
+
+        return faults;
+    }
+
+    /// <summary>
+    /// Puts things in a player's pockets and checks the game notices exactly once.
+    /// </summary>
+    /// <remarks>
+    /// <para>Three things can go wrong and only one of them is visible in a running game. Saying
+    /// nothing when something opens up is noticed, eventually. Saying it again every time the
+    /// player picks up another log is noticed immediately and is infuriating. And doing the work on
+    /// a frame where nothing changed is noticed never, which is why the version gate is checked
+    /// here rather than trusted.</para>
+    /// <para>Priming is checked too. A world that started with a full inventory would otherwise
+    /// announce forty recipes at once, which is every one of them and therefore none.</para>
+    /// </remarks>
+    private static List<string> UnlockSelfTest(ItemRegistry items, RecipeBook book, out string detail)
+    {
+        var faults = new List<string>();
+        var found = new List<Recipe>();
+
+        var pockets = new Inventory(items);
+        var watch = new RecipeUnlocks();
+
+        // Nothing in hand, nothing to say.
+        watch.Poll(book, pockets, found);
+        if (found.Count != 0) faults.Add($"an empty inventory announced {found.Count} recipes");
+
+        // A log opens planks, and nothing else.
+        pockets.Add(items.Stack("driftoak_log", 1));
+        watch.Poll(book, pockets, found);
+
+        if (found.Count == 0) faults.Add("picking up a log announced nothing, and it makes planks");
+        else if (found.Count > 2) faults.Add($"one log announced {found.Count} recipes at once");
+
+        var announcedPlanks = false;
+        foreach (var recipe in found) announcedPlanks |= recipe.Result.Item.Value == items.ByName("driftoak_planks").Id.Value;
+        if (!announcedPlanks) faults.Add("picking up a log did not announce planks");
+
+        // A second log says nothing, because planks were already possible.
+        pockets.Add(items.Stack("driftoak_log", 1));
+        watch.Poll(book, pockets, found);
+        if (found.Count != 0) faults.Add($"a second log announced {found.Count} recipes again");
+
+        // And a frame where nothing moved does not even look.
+        if (watch.Poll(book, pockets, found)) faults.Add("an unchanged inventory was searched anyway");
+
+        // Once said, never said again — even after the ingredients go and come back.
+        var before = watch.Announced;
+        pockets.Clear();
+        watch.Poll(book, pockets, found);
+        pockets.Add(items.Stack("driftoak_log", 4));
+        watch.Poll(book, pockets, found);
+
+        if (found.Count != 0) faults.Add($"losing and regaining logs announced {found.Count} recipes over again");
+        if (watch.Announced != before) faults.Add("the set of things already said changed while nothing new happened");
+
+        // Priming a full inventory says nothing at all, and then a genuinely new thing still does.
+        var rich = new Inventory(items);
+        rich.Add(items.Stack("driftoak_planks", 64));
+        rich.Add(items.Stack("stick", 64));
+
+        var quiet = new RecipeUnlocks();
+        quiet.Prime(book, rich);
+        quiet.Poll(book, rich, found);
+        if (found.Count != 0) faults.Add($"a primed inventory still announced {found.Count} recipes");
+
+        var primed = quiet.Announced;
+        if (primed == 0) faults.Add("priming a bench-worth of planks and sticks marked nothing as known");
+
+        rich.Add(items.Stack("rubble", 8));
+        quiet.Poll(book, rich, found);
+        if (found.Count == 0) faults.Add("a primed watcher went quiet for good and missed the stone tools");
+
+        // And an achievement outlives the process. A watcher that starts fresh every launch would
+        // pass every check above and still tell a returning player about planks for the tenth time,
+        // which is exactly how somebody learns to stop reading the corner.
+        var remembered = System.IO.Path.Combine(
+            System.IO.Path.GetTempPath(), "driftwood-unlocks-check.txt");
+
+        try
+        {
+            var first = new RecipeUnlocks();
+            var pocket = new Inventory(items);
+            pocket.Add(items.Stack("driftoak_log", 1));
+            first.Poll(book, pocket, found);
+
+            if (found.Count == 0) faults.Add("nothing to persist: a log announced nothing");
+            if (!first.Dirty) faults.Add("something was announced and the record did not need writing");
+            if (!first.Persist(remembered)) faults.Add("the record of what has been said would not write");
+            if (first.Dirty) faults.Add("the record still wanted writing after it was written");
+
+            var next = new RecipeUnlocks();
+            next.Restore(remembered);
+            if (next.Announced != first.Announced)
+                faults.Add($"{first.Announced} things were said and {next.Announced} came back");
+
+            var again = new Inventory(items);
+            again.Add(items.Stack("driftoak_log", 1));
+            next.Poll(book, again, found);
+            if (found.Count != 0)
+                faults.Add($"a returning player was told about {found.Count} recipes all over again");
+
+            // And forgetting puts it back to a new player.
+            next.Forget();
+            var third = new Inventory(items);
+            third.Add(items.Stack("driftoak_log", 1));
+            next.Poll(book, third, found);
+            if (found.Count == 0) faults.Add("forgetting what had been said announced nothing afterwards");
+        }
+        finally
+        {
+            try { File.Delete(remembered); } catch (IOException) { }
+        }
+
+        detail = $"an empty bag says nothing, a log says planks once, a second log says nothing, "
+               + $"an unchanged bag is not searched, priming marks {primed} known without a word, "
+               + "and a returning player is not told twice";
 
         return faults;
     }

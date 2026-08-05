@@ -36,6 +36,16 @@ public sealed class GameSettings
     /// <summary>How fast looking around is, as a percentage of the old fixed rate.</summary>
     public int MouseSensitivity { get; set; } = 100;
 
+    /// <summary>
+    /// Whether to say so in the corner the first time something becomes makeable.
+    /// </summary>
+    /// <remarks>
+    /// On, because it is how a new player finds out that picking up coal has given them torches,
+    /// and it never repeats itself — what has been said is remembered between sessions. Off for
+    /// anyone who already knows the tree and would rather have the corner back.
+    /// </remarks>
+    public bool RecipeNotices { get; set; } = true;
+
     public Bindings Keys { get; set; } = Bindings.Defaults();
 
     /// <summary>Lines the reader did not recognise, kept so a newer build's file survives an older one.</summary>
@@ -102,6 +112,7 @@ public sealed class GameSettings
                 case "audio.volume": settings.Volume = Int(value, 0, 100, settings.Volume); break;
                 case "audio.mute": settings.Mute = Bool(value, settings.Mute); break;
                 case "input.sensitivity": settings.MouseSensitivity = Int(value, 10, 400, settings.MouseSensitivity); break;
+                case "ui.recipenotices": settings.RecipeNotices = Bool(value, settings.RecipeNotices); break;
                 default: settings._unknown[key] = value; break;
             }
         }
@@ -152,6 +163,8 @@ public sealed class GameSettings
         text.AppendLine($"audio.mute={Text(Mute)}");
         text.AppendLine();
         text.AppendLine($"input.sensitivity={MouseSensitivity}");
+        text.AppendLine();
+        text.AppendLine($"ui.recipenotices={Text(RecipeNotices)}");
         text.AppendLine();
 
         foreach (var action in GameActions.All)

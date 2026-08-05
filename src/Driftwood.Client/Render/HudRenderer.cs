@@ -19,6 +19,26 @@ public enum HudScreenKind
     Furnace,
 }
 
+/// <summary>
+/// One thing the game has to say, sitting in the corner until it fades.
+/// </summary>
+/// <param name="Icon">A texture layer to draw beside it, or -1 for none.</param>
+public sealed class Toast(string title, string line, int icon, float life)
+{
+    public const float FadeSeconds = 0.6f;
+
+    public string Title { get; } = title;
+    public string Line { get; } = line;
+    public int Icon { get; } = icon;
+    public float Life { get; } = life;
+    public float Age { get; set; }
+
+    public bool Gone => Age >= Life;
+
+    /// <summary>Full for most of its life, then out. Nothing appears part-way in.</summary>
+    public float Alpha => Math.Clamp((Life - Age) / FadeSeconds, 0f, 1f);
+}
+
 /// <summary>The tabs across the top of the menu, in the order they are shown.</summary>
 public enum MenuTab
 {
@@ -218,6 +238,7 @@ public sealed class HudRenderer : IDisposable
         Inventory inventory,
         PlayerVitals vitals,
         HudScreen screen,
+        IReadOnlyList<Toast> toasts,
         int screenWidth,
         int screenHeight)
     {
@@ -248,6 +269,8 @@ public sealed class HudRenderer : IDisposable
             Hearts(vitals, w, h);
             Bubbles(vitals, w, h);
         }
+
+        Toasts(toasts, w);
 
         _shader.Use();
         _shader.SetVec2("uScreen", new Vector2(w, h));
@@ -449,6 +472,49 @@ public sealed class HudRenderer : IDisposable
 
             if (row.Note.Length > 0 && lit)
                 Text(row.Note, left + 6f, y + 9f, 7f, new Vector4(0.55f, 0.58f, 0.64f, 1f));
+        }
+    }
+
+    /// <summary>
+    /// What the game has to say, stacked down from the top right corner.
+    /// </summary>
+    /// <remarks>
+    /// <para>Top right, because that corner holds nothing else and because everything a toast says
+    /// is optional — a player who is busy should be able to ignore it without it having covered
+    /// anything. The crosshair, the bar, the hearts and the breath all live elsewhere.</para>
+    /// <para>They fade rather than vanishing, and they fade out rather than in. Something appearing
+    /// gradually is a thing you notice after it has finished saying itself; something leaving
+    /// gradually is a thing you can still read while it goes.</para>
+    /// </remarks>
+    private void Toasts(IReadOnlyList<Toast> toasts, float w)
+    {
+        if (toasts.Count == 0) return;
+
+        const float Width = 132f;
+        const float Height = 30f;
+
+        var left = MathF.Round(w - Width - 8f);
+        var top = 8f;
+
+        foreach (var toast in toasts)
+        {
+            var alpha = toast.Alpha;
+            if (alpha <= 0f) continue;
+
+            Bevel(left, top, Width, Height, raised: true, PanelFill with { W = PanelFill.W * alpha });
+
+            var textLeft = left + 6f;
+            if (toast.Icon >= 0)
+            {
+                Bevel(left + 5f, top + 5f, 20f, 20f, raised: false, SlotFill with { W = SlotFill.W * alpha });
+                Rect(_blocks, left + 8f, top + 8f, 14f, 14f, new Vector4(1f, 1f, 1f, alpha), toast.Icon);
+                textLeft = left + 30f;
+            }
+
+            Text(toast.Title, textLeft, top + 5f, 7f, Highlight with { W = alpha });
+            Text(toast.Line, textLeft, top + 15f, 8f, new Vector4(1f, 1f, 1f, alpha));
+
+            top += Height + 4f;
         }
     }
 
