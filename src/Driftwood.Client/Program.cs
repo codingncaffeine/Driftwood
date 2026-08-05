@@ -38,6 +38,16 @@ public static class Program
 
             if (args.Contains("--audio-check")) return AudioCheck();
 
+            // Which of our own layers a pack actually supplied, and which kept ours. The count in
+            // the startup line says how many and never which, and "is the thing I am looking at one
+            // of them" is the only question anybody has when a pack looks like it did nothing.
+            if (args.Contains("--pack-report"))
+            {
+                Console.WriteLine(
+                    BlockTextureSet.Build(options.PackPath, options.TextureSize, 4096).Report());
+                return 0;
+            }
+
             if (args.Contains("--pack-coverage"))
             {
                 if (string.IsNullOrWhiteSpace(options.PackPath))
@@ -223,6 +233,7 @@ public static class Program
                 case "--audit":
                 case "--audio-check":
                 case "--pack-coverage":
+                case "--pack-report":
                     break;   // handled in Main; listed here so they are not unknown arguments
                 default:
                     throw new ArgumentException($"unknown argument '{args[i]}' (try --help)");

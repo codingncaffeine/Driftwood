@@ -22,8 +22,11 @@ namespace Driftwood.Core.Textures;
 /// that rename is a pack a player owns. Falling back costs one dictionary miss at load and is the
 /// difference between a texture importing and silently keeping ours.
 /// </remarks>
+/// <param name="Tinted">
+/// True when this layer is multiplied by a climate colour before it reaches the screen.
+/// </param>
 public readonly record struct BlockTextureLayer(
-    string Name, string PackPath, bool Cutout, string PackPathAlt = "");
+    string Name, string PackPath, bool Cutout, string PackPathAlt = "", bool Tinted = false);
 
 /// <summary>
 /// Builds the full set of block tiles, starting from Driftwood's own and letting a pack override
@@ -42,14 +45,14 @@ public static class BlockTextureSet
     [
         new("stone",       "textures/block/stone.png",            false),
         new("dirt",        "textures/block/dirt.png",             false),
-        new("grass_top",   "textures/block/grass_block_top.png",  false),
+        new("grass_top",   "textures/block/grass_block_top.png",  false, "", true),
         new("grass_side",  "textures/block/grass_block_side.png", false),
         new("sand",        "textures/block/sand.png",             false),
         new("water",       "textures/block/water_still.png",      false),
         new("gravel",      "textures/block/gravel.png",           false),
         new("driftoak_side", "textures/block/oak_log.png",        false),
         new("driftoak_top",  "textures/block/oak_log_top.png",    false),
-        new("driftoak_leaves", "textures/block/oak_leaves.png",   true),
+        new("driftoak_leaves", "textures/block/oak_leaves.png",   true, "", true),
         new("driftoak_planks", "textures/block/oak_planks.png",   false),
         new("coal_ore",    "textures/block/coal_ore.png",         false),
         new("iron_ore",    "textures/block/iron_ore.png",         false),
@@ -58,7 +61,7 @@ public static class BlockTextureSet
         // Emberstone is ours; glowstone is the nearest thing a pack will have painted, and a warm
         // glowing rock is close enough that borrowing its art reads correctly.
         new("emberstone",  "textures/block/glowstone.png",        false),
-        new("vine",        "textures/block/vine.png",             true),
+        new("vine",        "textures/block/vine.png",             true, "", true),
 
         // Everything from here down is named ours on the left and theirs on the right, which is the
         // whole reason this table exists: our vocabulary can be entirely our own and a pack is still
@@ -83,10 +86,10 @@ public static class BlockTextureSet
         // The fringe of grass rolling over a block's side, as its own cut-out for the climate
         // colour to run through. Every pack ships one and until models arrived there was nothing to
         // hang it on, which is why grass sides were plain dirt no matter what was imported.
-        new("grass_side_overlay", "textures/block/grass_block_side_overlay.png", true),
+        new("grass_side_overlay", "textures/block/grass_block_side_overlay.png", true, "", true),
 
         // Short grass was called grass.png until it was renamed, so both paths are worth trying.
-        new("meadowgrass", "textures/block/short_grass.png",      true, "textures/block/grass.png"),
+        new("meadowgrass", "textures/block/short_grass.png",      true, "textures/block/grass.png", true),
 
         // Ours are seaflax and marshlily; a pack has painted a small blue flower and a small white
         // one whatever anybody calls them, and those are the two nearest.
@@ -157,8 +160,45 @@ public static class BlockTextureSet
 
     /// <param name="GrassMap">Grass colormap, the pack's if it ships one.</param>
     /// <param name="FoliageMap">Foliage colormap, likewise.</param>
+    /// <summary>What happened to one layer, for the report that says whether a pack is being used.</summary>
+    /// <param name="From">The path it came from, or empty when it kept Driftwood's own art.</param>
+    public readonly record struct LayerOutcome(string Name, bool Replaced, string From, bool Neutralised);
+
     public sealed record Result(
-        byte[][] Tiles, int Size, string Summary, byte[] GrassMap, byte[] FoliageMap);
+        byte[][] Tiles, int Size, string Summary, byte[] GrassMap, byte[] FoliageMap,
+        IReadOnlyList<LayerOutcome> Outcomes)
+    {
+        /// <summary>
+        /// A line per layer: what we call it, whether the pack supplied it, and where from.
+        /// </summary>
+        /// <remarks>
+        /// Built because "twenty of seventy-nine replaced" answers how many and not <em>which</em>,
+        /// and the question anybody actually has when a pack looks like it did nothing is whether
+        /// the thing they are staring at is one of the twenty. A count cannot answer that and a
+        /// screenshot cannot either.
+        /// </remarks>
+        public string Report()
+        {
+            var text = new System.Text.StringBuilder();
+            text.AppendLine(Summary);
+            text.AppendLine();
+            text.AppendLine($"{"layer",-24} {"from the pack",-46} note");
+
+            var replaced = 0;
+            foreach (var outcome in Outcomes)
+            {
+                if (outcome.Replaced) replaced++;
+
+                text.AppendLine(
+                    $"{outcome.Name,-24} {(outcome.Replaced ? outcome.From : "— ours —"),-46} "
+                    + (outcome.Neutralised ? "hue divided out before tinting" : ""));
+            }
+
+            text.AppendLine();
+            text.AppendLine($"{replaced} of {Outcomes.Count} layers came from the pack, at {Size}x{Size}");
+            return text.ToString();
+        }
+    }
 
     /// <summary>
     /// Draws Driftwood's own tiles, then lets a pack replace the ones it has.
@@ -184,7 +224,7 @@ public static class BlockTextureSet
             var plain = new byte[Layers.Length][];
             for (var i = 0; i < Layers.Length; i++) plain[i] = Own(i, own);
 
-            return new Result(plain, own, $"{Layers.Length} built-in tiles at {own}x{own}", grass, foliage);
+            return new Result(plain, own, $"{Layers.Length} built-in tiles at {own}x{own}", grass, foliage, Untouched());
         }
 
         using var pack = TexturePack.Open(packPath);
@@ -194,7 +234,7 @@ public static class BlockTextureSet
             var plain = new byte[Layers.Length][];
             for (var i = 0; i < Layers.Length; i++) plain[i] = Own(i, own);
 
-            return new Result(plain, own, $"no pack at '{packPath}' — using built-in tiles", grass, foliage);
+            return new Result(plain, own, $"no pack at '{packPath}' — using built-in tiles", grass, foliage, Untouched());
         }
 
         // The pack's own resolution unless somebody said otherwise, clamped to what the machine
@@ -207,15 +247,37 @@ public static class BlockTextureSet
         for (var i = 0; i < Layers.Length; i++) tiles[i] = Own(i, chosen);
 
         size = chosen;
+        var neutralised = 0;
+        var outcomes = new List<LayerOutcome>(Layers.Length);
 
         for (var i = 0; i < Layers.Length; i++)
         {
-            if (Layers[i].PackPath.Length == 0) continue;
+            if (Layers[i].PackPath.Length == 0)
+            {
+                outcomes.Add(new LayerOutcome(Layers[i].Name, false, "", false));
+                continue;
+            }
 
+            var from = Layers[i].PackPath;
             var replacement = pack.TryLoadTile(Layers[i].PackPath, size);
+
             if (replacement is null && Layers[i].PackPathAlt.Length > 0)
+            {
+                from = Layers[i].PackPathAlt;
                 replacement = pack.TryLoadTile(Layers[i].PackPathAlt, size);
-            if (replacement is not null) tiles[i] = replacement;
+            }
+
+            if (replacement is null)
+            {
+                outcomes.Add(new LayerOutcome(Layers[i].Name, false, "", false));
+                continue;
+            }
+
+            var flattened = Layers[i].Tinted && Neutralise(replacement);
+            if (flattened) neutralised++;
+
+            tiles[i] = replacement;
+            outcomes.Add(new LayerOutcome(Layers[i].Name, true, from, flattened));
         }
 
         // Colormaps are loaded at their own fixed size rather than the tile size, because the
@@ -237,9 +299,78 @@ public static class BlockTextureSet
                     + $"{pack.Loaded - colormaps} of {Layers.Length} layers replaced"
                     + (colormaps > 0 ? $", {colormaps} colormaps" : ", built-in colormaps")
                     + (pack.Namespaces.Count > 1 ? $", {pack.Namespaces.Count} namespaces" : "")
+                    + (neutralised > 0 ? $", {neutralised} tinted layers flattened" : "")
                     + (pack.Faults.Count > 0 ? $", {pack.Faults.Count} unreadable: {pack.Faults[0]}" : "");
 
-        return new Result(tiles, size, summary, grass, foliage);
+        return new Result(tiles, size, summary, grass, foliage, outcomes);
+    }
+
+    /// <summary>Every layer, all of them ours. What a run with no pack reports.</summary>
+    private static List<LayerOutcome> Untouched()
+    {
+        var outcomes = new List<LayerOutcome>(Layers.Length);
+        foreach (var layer in Layers) outcomes.Add(new LayerOutcome(layer.Name, false, "", false));
+        return outcomes;
+    }
+
+    /// <summary>
+    /// Takes the baked-in hue out of a texture the climate colour is about to be multiplied over.
+    /// </summary>
+    /// <returns>True when the texture needed it.</returns>
+    /// <remarks>
+    /// <para>Grass, leaves and vines are drawn near-colourless by the format's own convention,
+    /// because the game is expected to multiply a climate colour over them. Plenty of packs do not
+    /// follow it — a "realistic" pack in particular paints its grass the green it wants and expects
+    /// to be left alone. Multiplying a green tint over an already-green texture gives a dark muddy
+    /// green that gets worse the better the pack is, and it looks like the pack rather than like us.
+    /// </para>
+    /// <para>The fix is to divide the hue back out rather than to skip the tint. Skipping it would
+    /// lose the biome variation entirely and make every meadow in the world the same colour; this
+    /// keeps the author's brightness and every bit of their detail, and hands the hue back to the
+    /// climate, which is what tinting is for. A texture already neutral is left completely alone.
+    /// </para>
+    /// </remarks>
+    private static bool Neutralise(byte[] tile)
+    {
+        double r = 0, g = 0, b = 0;
+        var counted = 0;
+
+        for (var i = 0; i < tile.Length; i += 4)
+        {
+            if (tile[i + 3] < 8) continue;      // clear pixels carry no colour to measure
+            r += tile[i];
+            g += tile[i + 1];
+            b += tile[i + 2];
+            counted++;
+        }
+
+        if (counted == 0) return false;
+
+        r /= counted;
+        g /= counted;
+        b /= counted;
+
+        var high = Math.Max(r, Math.Max(g, b));
+        var low = Math.Min(r, Math.Min(g, b));
+        if (low < 1.0) low = 1.0;
+
+        // A vanilla grass tile sits within a few percent of grey. A third out is well past anything
+        // that could be called incidental, and well under anything that would catch a stone.
+        if (high / low < 1.25) return false;
+
+        var mean = (r + g + b) / 3.0;
+        double sr = mean / r, sg = mean / g, sb = mean / b;
+
+        for (var i = 0; i < tile.Length; i += 4)
+        {
+            tile[i] = Clamp(tile[i] * sr);
+            tile[i + 1] = Clamp(tile[i + 1] * sg);
+            tile[i + 2] = Clamp(tile[i + 2] * sb);
+        }
+
+        return true;
+
+        static byte Clamp(double v) => (byte)Math.Clamp(v, 0.0, 255.0);
     }
 
     /// <summary>Driftwood's own art for one layer.</summary>
