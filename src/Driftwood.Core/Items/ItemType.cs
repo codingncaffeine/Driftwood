@@ -96,6 +96,16 @@ public sealed class ItemType
     /// <summary>Assigned by <see cref="ItemRegistry.Register"/>.</summary>
     public ItemId Id { get; internal set; }
 
+    /// <summary>
+    /// The shape of the block this puts down, for a slot that wants to draw it as a block.
+    /// </summary>
+    /// <remarks>
+    /// Filled in by <see cref="ItemRegistry.Seal"/> rather than looked up per frame. An inventory
+    /// draws every visible slot every frame and the answer never changes, so the one place that
+    /// already walks items against blocks is the place to answer it.
+    /// </remarks>
+    public BlockModel? IconModel { get; internal set; }
+
     public bool IsTool => Tool != ToolClass.None;
 
     public bool IsFuel => BurnSeconds > 0f;

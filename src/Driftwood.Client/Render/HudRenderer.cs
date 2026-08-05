@@ -619,7 +619,7 @@ public sealed class HudRenderer : IDisposable
             if (stack.IsEmpty) continue;
 
             var type = catalogue[stack.Item];
-            Rect(_blocks, x + Pad, top + Pad, Slot - Pad * 2f, Slot - Pad * 2f, Vector4.One, type.IconLayer);
+            SlotIcon(catalogue, stack, x + Pad, top + Pad, Slot - Pad * 2f, Vector4.One);
 
             // How much life a tool has left, as a bar across the bottom of its slot. A count would
             // say nothing — a tool is always one — and wear is the only thing about it that changes.
@@ -966,9 +966,8 @@ public sealed class HudRenderer : IDisposable
 
             var result = screen.Recipes[zone.Index].Result;
             var inset = MathF.Round(z * 2f);
-            Rect(_blocks, zone.X + inset, zone.Y + inset, zone.W - inset * 2f, zone.H - inset * 2f,
-                payable ? Vector4.One : new Vector4(0.45f, 0.45f, 0.45f, 0.85f),
-                catalogue[result.Item].IconLayer);
+            SlotIcon(catalogue, result, zone.X + inset, zone.Y + inset, zone.W - inset * 2f,
+                payable ? Vector4.One : new Vector4(0.45f, 0.45f, 0.45f, 0.85f));
 
             if (result.Count > 1)
                 Number(result.Count, zone.X + zone.W, zone.Y + zone.H - cell * 0.32f, MathF.Max(5f, z * 4f));
@@ -1188,8 +1187,7 @@ public sealed class HudRenderer : IDisposable
 
             var type = catalogue[stack.Item];
             var inset = MathF.Round(z);
-            Rect(_blocks, zone.X + inset, zone.Y + inset, zone.W - inset * 2f, zone.H - inset * 2f,
-                Vector4.One, type.IconLayer);
+            SlotIcon(catalogue, stack, zone.X + inset, zone.Y + inset, zone.W - inset * 2f, Vector4.One);
 
             if (type.Durability > 0 && stack.Damage > 0)
             {
@@ -1223,8 +1221,7 @@ public sealed class HudRenderer : IDisposable
 
                 var offer = screen.Cuts[zone.Index].Result;
                 var inset = MathF.Round(z);
-                Rect(_blocks, zone.X + inset, zone.Y + inset, zone.W - inset * 2f, zone.H - inset * 2f,
-                    Vector4.One, catalogue[offer.Item].IconLayer);
+                SlotIcon(catalogue, offer, zone.X + inset, zone.Y + inset, zone.W - inset * 2f, Vector4.One);
 
                 if (offer.Count > 1)
                     Number(offer.Count, zone.X + zone.W, zone.Y + zone.H - digits - 1f, digits);
@@ -1456,7 +1453,7 @@ public sealed class HudRenderer : IDisposable
             var hx = at.X - held * 0.30f;
             var hy = at.Y - held * 0.30f;
 
-            Rect(_blocks, hx, hy, held, held, Vector4.One, catalogue[screen.Carried.Item].IconLayer);
+            SlotIcon(catalogue, screen.Carried, hx, hy, held, Vector4.One);
             if (screen.Carried.Count > 1)
                 Number(screen.Carried.Count, hx + held, hy + held - 6f, MathF.Max(5f, held * 0.42f));
         }
@@ -1687,6 +1684,85 @@ public sealed class HudRenderer : IDisposable
         Vertex(into, x + w, y, uWidth, 0f, layer, colour);
         Vertex(into, x + w, y + h, uWidth, 1f, layer, colour);
         Vertex(into, x, y + h, 0f, 1f, layer, colour);
+    }
+
+    /// <summary>
+    /// One thing in a slot: a flat sprite, or a block seen as a block.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛔ <b>A block drawn as one of its faces is not recognisable and the packs cannot help.</b>
+    /// This was reported from the game — "I couldn't even tell that was a bench in the crafting
+    /// window" — and the reason is that a bench's icon was its <em>top</em> tile, which is scored
+    /// planks, which at sixteen pixels in a small square is a plank. Every wooden block in the game
+    /// looked like every other one.</para>
+    /// <para>⚠ <b>And there is no texture to import for it.</b> Measured: a real pack ships 795 item
+    /// textures and not one of them is a block — no crafting table, no furnace, no stone. The genre
+    /// does not have block icons; it <em>renders the block</em> into the slot at a fixed isometric
+    /// angle, which is why a crafting table is recognisable there: you see its top and two sides at
+    /// once. So this draws three faces rather than one, and the difference between a bench and a
+    /// plank becomes the front face with the tools on it.</para>
+    /// <para>Only for blocks that actually fill their cell. A torch is flat art on crossed planes
+    /// and a chest is a box standing clear of its cell — neither has three cube faces to show, and
+    /// both already have a distinctive tile of their own.</para>
+    /// </remarks>
+    private void SlotIcon(ItemRegistry catalogue, ItemStack stack, float x, float y, float size, Vector4 tint)
+    {
+        if (stack.IsEmpty) return;
+
+        var type = catalogue[stack.Item];
+        var model = type.IconModel;
+
+        if (!type.DrawsAsCube || model is not { IsFullCube: true })
+        {
+            Rect(_blocks, x, y, size, size, tint, type.IconLayer);
+            return;
+        }
+
+        var half = size * 0.5f;
+        var quarter = size * 0.25f;
+
+        // The three faces a cube shows from the south-east, and the shade that tells them apart.
+        // Without the shading the three parallelograms read as one flat hexagon.
+        var top = model.PassLayer(0, Faces.PosY);
+        var left = model.PassLayer(0, Faces.PosZ);
+        var right = model.PassLayer(0, Faces.PosX);
+
+        if (top == BlockModel.NoLayer) top = type.IconLayer;
+        if (left == BlockModel.NoLayer) left = type.IconLayer;
+        if (right == BlockModel.NoLayer) right = type.IconLayer;
+
+        // Top: a diamond, its texture turned a quarter turn onto the corners.
+        Quad(_blocks, top, tint,
+            x, y + quarter, 0f, 0f,
+            x + half, y, 1f, 0f,
+            x + size, y + quarter, 1f, 1f,
+            x + half, y + half, 0f, 1f);
+
+        Quad(_blocks, left, tint * new Vector4(0.80f, 0.80f, 0.80f, 1f),
+            x, y + quarter, 0f, 0f,
+            x + half, y + half, 1f, 0f,
+            x + half, y + size, 1f, 1f,
+            x, y + quarter * 3f, 0f, 1f);
+
+        Quad(_blocks, right, tint * new Vector4(0.62f, 0.62f, 0.62f, 1f),
+            x + half, y + half, 0f, 0f,
+            x + size, y + quarter, 1f, 0f,
+            x + size, y + quarter * 3f, 1f, 1f,
+            x + half, y + size, 0f, 1f);
+    }
+
+    /// <summary>Four corners in any arrangement, for the shapes a rectangle cannot describe.</summary>
+    private static void Quad(
+        List<float> into, float layer, Vector4 colour,
+        float x0, float y0, float u0, float v0,
+        float x1, float y1, float u1, float v1,
+        float x2, float y2, float u2, float v2,
+        float x3, float y3, float u3, float v3)
+    {
+        Vertex(into, x0, y0, u0, v0, layer, colour);
+        Vertex(into, x1, y1, u1, v1, layer, colour);
+        Vertex(into, x2, y2, u2, v2, layer, colour);
+        Vertex(into, x3, y3, u3, v3, layer, colour);
     }
 
     /// <summary>A rectangle reading an arbitrary patch of its texture, rather than the whole of it.</summary>

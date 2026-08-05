@@ -62,6 +62,10 @@ public sealed class ItemRegistry
         {
             if (type.Places is not { } places) continue;
 
+            // What this puts down, so a slot can draw it as the block it is rather than as one of
+            // its faces. The first variant is the one an item is thought of as.
+            if (places.Variants.Length > 0) type.IconModel = blocks[places.Variants[0]].Model;
+
             foreach (var variant in places.Variants)
             {
                 if (!_forBlock[variant.Value].IsNone)

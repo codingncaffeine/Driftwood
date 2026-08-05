@@ -3340,6 +3340,45 @@ public static class WorldAudit
             }
         }
 
+        // ⛔ A block in a slot has to be recognisable AS that block, and this is the check written
+        // from a user's own report: "I couldn't even tell that was a bench in the crafting window."
+        // A bench's icon was its top tile — scored planks — which at sixteen pixels beside plain
+        // planks is plain planks. The slot draws three faces now, so what has to be true is that
+        // the shape a slot would draw from is actually there, and that a block with three DIFFERENT
+        // faces really does offer three different textures to draw.
+        var cubes = 0;
+        var manyFaced = 0;
+
+        foreach (var item in items.All)
+        {
+            if (!item.DrawsAsCube || item.Places is null) continue;
+
+            if (item.IconModel is null)
+            {
+                faults.Add($"'{item.Name}' draws as a cube and has no shape to draw");
+                continue;
+            }
+
+            if (!item.IconModel.IsFullCube) continue;
+            cubes++;
+
+            var top = item.IconModel.PassLayer(0, Faces.PosY);
+            var front = item.IconModel.PassLayer(0, Faces.PosZ);
+            var side = item.IconModel.PassLayer(0, Faces.PosX);
+            if (top != front && front != side && top != side) manyFaced++;
+        }
+
+        if (cubes == 0) faults.Add("no item draws as a cube, so nothing in a slot is drawn as a block");
+        if (manyFaced == 0)
+            faults.Add("every block that draws as a cube wears one texture on all three visible faces, "
+                     + "so a bench and a plank are the same picture");
+
+        var bench = items.ByName("bench");
+        if (bench.IconModel is not { IsFullCube: true })
+            faults.Add("a bench does not draw as a cube, which is the one that was reported unreadable");
+        else if (bench.IconModel.PassLayer(0, Faces.PosZ) == bench.IconModel.PassLayer(0, Faces.PosX))
+            faults.Add("a bench's front and side are the same texture, so it still reads as a crate");
+
         var nothing = drops.BlocksLeavingNothing;
         if (nothing == 0) faults.Add("nothing in the world leaves nothing, so the foliage rules are gone");
         if (nothing > registry.Count / 2)
