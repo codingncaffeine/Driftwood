@@ -561,6 +561,31 @@ public static class StarterBlocks
         }
     }
 
+    /// <summary>What a material's two slabs add up to.</summary>
+    /// <remarks>
+    /// Named rather than derived, because a slab's whole block is not always the block it is cut
+    /// from: driftoak slabs are cut from planks and make planks, but a stone slab is cut from stone
+    /// and a rubble slab from rubble. The day a material's slab is made of something else, this is
+    /// where that is said.
+    /// </remarks>
+    private static readonly (string Material, string Full)[] SlabDoubles =
+    [
+        ("driftoak", "driftoak_planks"),
+        ("stone", "stone"),
+        ("rubble", "rubble"),
+    ];
+
+    /// <summary>Each half-slab, and the whole block two of them become.</summary>
+    public static IEnumerable<(BlockId Slab, BlockId Full)> SlabMerges(BlockRegistry registry)
+    {
+        foreach (var (material, full) in SlabDoubles)
+        {
+            var whole = registry.ByName(full).Id;
+            yield return (registry.ByName($"{material}_slab_lower").Id, whole);
+            yield return (registry.ByName($"{material}_slab_upper").Id, whole);
+        }
+    }
+
     /// <summary>All sixteen forms of one connecting material, in mask order.</summary>
     public static BlockId[] Connected(BlockRegistry registry, string material)
     {

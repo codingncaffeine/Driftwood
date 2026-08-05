@@ -183,6 +183,9 @@ public sealed class ClientHost : IDisposable
     private BlockId[] _furnaceCold = null!;
     private BlockId[] _furnaceHot = null!;
 
+    /// <summary>Each half-slab and the whole block a second one laid on it makes.</summary>
+    private readonly Dictionary<ushort, BlockId> _slabMerge = [];
+
     /// <summary>Nine pockets, one of them in hand.</summary>
     private Inventory _inventory = null!;
 
@@ -485,6 +488,7 @@ public sealed class ClientHost : IDisposable
         _furnaces = new FurnaceBank(_items, _book);
         _furnaceCold = StarterBlocks.Furnaces(registry, lit: false);
         _furnaceHot = StarterBlocks.Furnaces(registry, lit: true);
+        foreach (var (slab, whole) in StarterBlocks.SlabMerges(registry)) _slabMerge[slab.Value] = whole;
 
         var generator = new TerrainGenerator(_options.Seed, ids, _options.OceanCoverage);
 
@@ -1452,6 +1456,22 @@ public sealed class ClientHost : IDisposable
         {
             if (struck.Name == "bench") OpenCrafting(atBench: true, (hit.X, hit.Y, hit.Z));
             else OpenFurnace(hit.X, hit.Y, hit.Z);
+            return;
+        }
+
+        // A slab laid on a matching slab fills the cell rather than starting a second one above it.
+        // Genre-standard, and the reason placement cannot simply test for air: what is already
+        // there sometimes decides what happens, and until now it only ever decided whether to give
+        // up. Merging into the cell that was struck, not the one beside it.
+        if (_inventory.HeldType is { Places: { } holding }
+            && _slabMerge.TryGetValue(_streamer.World.GetBlock(hit.X, hit.Y, hit.Z).Value, out var whole)
+            && Array.IndexOf(holding.Variants, _streamer.World.GetBlock(hit.X, hit.Y, hit.Z)) >= 0)
+        {
+            _streamer.EditBlock(hit.X, hit.Y, hit.Z, whole);
+            _inventory.SpendHeld();
+            PlaySound(
+                _registry[whole], SoundEvent.Place,
+                new Vector3(hit.X + 0.5f, hit.Y + 0.5f, hit.Z + 0.5f), 0.85f);
             return;
         }
 
