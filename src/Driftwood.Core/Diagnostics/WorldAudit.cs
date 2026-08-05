@@ -423,6 +423,11 @@ public static class WorldAudit
         Check("a world survives being written down", saveFaults.Count == 0,
             saveFaults.Count == 0 ? saveDetail : $"{saveFaults.Count} faults: {saveFaults[0]}");
 
+        var loadFaults = LoadIntoStreamerSelfTest(
+            seed, registry, items, book, ids, oceanCoverage, out var loadDetail);
+        Check("a loaded world is still the world the generator makes", loadFaults.Count == 0,
+            loadFaults.Count == 0 ? loadDetail : $"{loadFaults.Count} faults: {loadFaults[0]}");
+
         var chestFaults = ChestSelfTest(items, out var chestDetail);
         Check("a chest keeps what it is given", chestFaults.Count == 0,
             chestFaults.Count == 0 ? chestDetail : $"{chestFaults.Count} faults: {chestFaults[0]}");
@@ -2578,11 +2583,23 @@ public static class WorldAudit
             if (missing.Count > 0)
                 faults.Add($"a world written by this build reported {missing.Count} names it does not have: {missing[0]}");
 
-            if (back.GetBlock(1, 65, 1) != bench) faults.Add("the bench did not come back");
-            if (back.GetBlock(2, 65, 1) != torch) faults.Add("the torch did not come back");
-            if (back.GetBlock(0, 64, 0) != stone) faults.Add("the floor did not come back");
+            // ⚠ Asked of the record rather than of the blocks, and the distinction is the whole
+            // reason the load fault went unseen for a commit. A world read back holds its edits as a
+            // list waiting for the chunks they belong to — nothing writes a block into a chunk the
+            // generator has not made yet, because generation would only overwrite it. This world has
+            // no generator behind it at all, so nothing will ever arrive to take delivery of them,
+            // and asking GetBlock here would be asking a question this check is not the one to ask.
+            // "The edits reach the world" is the load check's job and it runs a real streamer.
+            if (!back.Edits.TryGetValue((1, 65, 1), out var backBench) || backBench != bench)
+                faults.Add("the bench did not come back");
+            if (!back.Edits.TryGetValue((2, 65, 1), out var backTorch) || backTorch != torch)
+                faults.Add("the torch did not come back");
+            if (!back.Edits.TryGetValue((0, 64, 0), out var backFloor) || backFloor != stone)
+                faults.Add("the floor did not come back");
             if (back.Edits.Count != world.Edits.Count)
                 faults.Add($"{back.Edits.Count} edits came back of {world.Edits.Count}");
+            if (back.PendingEdits != world.Edits.Count)
+                faults.Add($"{back.PendingEdits} edits are waiting for a chunk of {world.Edits.Count}");
 
             if (back.Changed) faults.Add("a world is marked changed the instant it is loaded, so every load autosaves");
 
@@ -2661,6 +2678,177 @@ public static class WorldAudit
         }
 
         return faults;
+    }
+
+    /// <summary>
+    /// Loads a saved world into a real streamer, and checks that what comes out is the generator's
+    /// world with the save's changes in it.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛔ <b>The reason this exists, and the reason <see cref="SaveSelfTest"/> could not have
+    /// caught what it is for.</b> That check reads a world back into a bare <see cref="VoxelWorld"/>
+    /// with no generator behind it — where creating a chunk to hold an edit is exactly the right
+    /// thing to do, because nothing else was ever going to make one. Put the same read in front of a
+    /// streamer and it stops being right, and what happens to the edit next is the whole
+    /// question.</para>
+    /// <para>So this runs the real sequence: write a world, then read it into a fresh streamer's
+    /// world <em>before</em> the streamer has been told where the viewer is, which is the order
+    /// startup actually uses. Then it asks the world what is in it.</para>
+    /// <para><b>Two cells, and the second is the point.</b> One under the spawn and one six hundred
+    /// blocks away, because "somebody built away from spawn" is precisely the case a load radius
+    /// makes different — the far chunk is not generated when the save is read, is not generated when
+    /// the world opens, and only arrives once somebody walks to it.</para>
+    /// <para><b>A bench is the marker</b> because the generator has never placed one anywhere. "The
+    /// bench is there" therefore cannot be terrain agreeing with the save by coincidence, which
+    /// stone or dirt could easily do.</para>
+    /// </remarks>
+    private static List<string> LoadIntoStreamerSelfTest(
+        WorldSeed seed,
+        BlockRegistry registry,
+        ItemRegistry items,
+        RecipeBook book,
+        StarterBlocks.Ids ids,
+        float oceanCoverage,
+        out string detail)
+    {
+        const int radius = 2;
+        const int settleTimeoutMs = 30_000;
+
+        var faults = new List<string>();
+        var bench = registry.ByName("bench").Id;
+
+        // Deep enough to be inside solid ground rather than in the open air, so a chunk that came
+        // back hollow is a chunk whose neighbours are obviously not.
+        var near = (X: 5, Y: 40, Z: 5);
+        var far = (X: 600, Y: 40, Z: 600);
+        var untouched = (X: 7, Y: 2, Z: 7);
+
+        var name = $"driftwood-audit-load-{Environment.ProcessId}";
+        var path = WorldSave.PathFor(name);
+
+        try
+        {
+            var built = new VoxelWorld(registry);
+            built.SetBlock(near.X, near.Y, near.Z, bench);
+            built.SetBlock(far.X, far.Y, far.Z, bench);
+
+            var saved = new WorldState(
+                seed.ToString(), items, built,
+                new FurnaceBank(items, book), new ChestBank(items),
+                new Inventory(items), new Equipment(items),
+                new PlayerVitals(registry), new RecipeUnlocks());
+
+            if (WorldSave.Write(name, saved) is { } wrote)
+            {
+                detail = $"could not write the world to load: {wrote}";
+                faults.Add(detail);
+                return faults;
+            }
+
+            using var streamer = new WorldStreamer(
+                registry, new TerrainGenerator(seed, ids, oceanCoverage), radius);
+
+            // ⛳ Before Update, which is the order startup uses: the save is read into a world whose
+            // streamer has not generated a single chunk yet.
+            var into = new WorldState(
+                "", items, streamer.World,
+                new FurnaceBank(items, book), new ChestBank(items),
+                new Inventory(items), new Equipment(items),
+                new PlayerVitals(registry), new RecipeUnlocks());
+
+            var missing = new List<string>();
+            if (WorldSave.Read(path, registry, items, into, missing) is { } read)
+            {
+                detail = $"could not read the world back: {read}";
+                faults.Add(detail);
+                return faults;
+            }
+
+            Settle(streamer, new Vector3(0.5f, 0f, 0.5f));
+
+            // The positive control. Everything below is a claim about a cell in a chunk the streamer
+            // was supposed to have generated, and all of it passes vacuously in a world where
+            // generation never ran at all.
+            if (streamer.World.GetBlock(untouched.X, untouched.Y, untouched.Z) == BlockId.Air)
+                faults.Add(
+                    $"nothing generated at all — ({untouched.X},{untouched.Y},{untouched.Z}) is air, "
+                    + "so every check below is measuring an empty world");
+
+            Judge("under the spawn", near, streamer);
+
+            // Walking to it is the only way the far chunk ever generates, and it is where a load
+            // that replays edits into ungenerated chunks does its damage.
+            Settle(streamer, new Vector3(far.X + 0.5f, 0f, far.Z + 0.5f));
+            Judge("six hundred blocks out", far, streamer);
+
+            detail = faults.Count > 0
+                ? faults[0]
+                : $"a bench saved at spawn and one at {far.X},{far.Z} both come back, "
+                  + "each in a chunk of full terrain, after the streamer generated over them";
+        }
+        finally
+        {
+            try { File.Delete(path); } catch (Exception) { }
+        }
+
+        return faults;
+
+        void Judge(string where, (int X, int Y, int Z) cell, WorldStreamer streamer)
+        {
+            var chunkAt = ChunkPos.FromWorld(cell.X, cell.Y, cell.Z);
+
+            if (!streamer.World.TryGetChunk(chunkAt, out var chunk))
+            {
+                faults.Add($"the chunk {where} is not loaded at all after settling on it");
+                return;
+            }
+
+            var found = streamer.World.GetBlock(cell.X, cell.Y, cell.Z);
+            if (found != bench)
+                faults.Add(
+                    $"the bench {where} came back as '{registry[found.Value].Name}' — "
+                    + "a saved edit did not survive the chunk being generated");
+
+            // ⛔ The other half, and the one that says which fault it is. A chunk holding only the
+            // restored block is a chunk generation never filled: a hollow 32-cube punched into the
+            // world wherever somebody had built. Solid ground this far down is very nearly the whole
+            // volume, so the two outcomes are nowhere near each other.
+            if (chunk.SolidCount < 1000)
+                faults.Add(
+                    $"the chunk {where} holds {chunk.SolidCount} blocks of a possible {Chunk.Volume} — "
+                    + "loading punched a hollow chunk into the world instead of filling it");
+        }
+
+        static void Settle(WorldStreamer streamer, Vector3 viewer)
+        {
+            streamer.Update(viewer);
+
+            var watch = Stopwatch.StartNew();
+            var idleSweeps = 0;
+
+            while (watch.ElapsedMilliseconds < settleTimeoutMs)
+            {
+                streamer.PromoteReadyChunks();
+
+                var drained = false;
+                while (streamer.TryDequeueMesh(out _)) drained = true;
+                while (streamer.TryDequeueDropped(out _)) { }
+
+                var busy = streamer.PendingGenerate > 0
+                        || streamer.PendingLight > 0
+                        || streamer.PendingMesh > 0;
+
+                if (busy || drained)
+                {
+                    idleSweeps = 0;
+                    Thread.Sleep(2);
+                    continue;
+                }
+
+                if (++idleSweeps >= 25) break;
+                Thread.Sleep(2);
+            }
+        }
     }
 
     /// <summary>

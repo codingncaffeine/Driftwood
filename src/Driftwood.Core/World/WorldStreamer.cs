@@ -91,8 +91,20 @@ public sealed class WorldStreamer : IDisposable
     private int _generatingCount;
     private int _lightingCount;
     private int _meshingCount;
+    private int _restoredEdits;
 
     public VoxelWorld World => _world;
+
+    /// <summary>
+    /// Cells a loaded save has put back so far, as their chunks arrive.
+    /// </summary>
+    /// <remarks>
+    /// Worth counting because the alternative to noticing is not noticing: edits belonging to
+    /// chunks nobody ever walks to stay held, which is correct, so "some are still waiting" is the
+    /// normal state and cannot be an error on its own. This against
+    /// <see cref="VoxelWorld.PendingEdits"/> is what says whether a load is progressing.
+    /// </remarks>
+    public int RestoredEdits => Volatile.Read(ref _restoredEdits);
 
     public int WorkerCount => _workers.Length;
     public int LoadedChunks => _world.ChunkCount;
@@ -318,6 +330,14 @@ public sealed class WorldStreamer : IDisposable
                     var chunk = _world.GetOrCreateChunk(genPos);
                     _generator.GenerateChunk(chunk);
                     _generator.DecorateChunk(chunk);
+
+                    // ⛳ Whatever a loaded save put here, on top of the terrain and before the chunk
+                    // is declared generated. Everything downstream — the first light flood, the
+                    // mesher, a raycast — waits on that flag, so putting the edits in ahead of it
+                    // means the world is never seen in a state somebody had already changed.
+                    var restored = _world.ApplyPending(chunk);
+                    if (restored > 0) Interlocked.Add(ref _restoredEdits, restored);
+
                     _generated[genPos] = true;
                 }
                 finally

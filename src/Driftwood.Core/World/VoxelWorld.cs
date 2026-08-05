@@ -52,16 +52,92 @@ public sealed class VoxelWorld
     /// <summary>True once anything has been changed that a save would have to remember.</summary>
     public bool Changed { get; private set; }
 
-    /// <summary>Puts a saved edit back without counting it as a fresh change.</summary>
+    /// <summary>
+    /// Loaded edits waiting for the chunk they belong to, keyed by that chunk.
+    /// </summary>
     /// <remarks>
-    /// What loading does. Replaying edits through <see cref="SetBlock"/> would work and would leave
-    /// the world marked dirty the instant it was opened, so every load would be followed by an
-    /// autosave of the thing just loaded.
+    /// Guarded rather than concurrent because the two sides are not symmetric: it is filled once, by
+    /// whoever is reading a save, and then drained one chunk at a time by whichever generation
+    /// worker happens to build that chunk. A lock held for a dictionary lookup, once per chunk
+    /// generated, is not measurable next to generating the chunk.
+    /// </remarks>
+    private readonly Dictionary<ChunkPos, List<(int X, int Y, int Z, BlockId Id)>> _pending = [];
+
+    /// <summary>How many loaded edits are still waiting for their chunk.</summary>
+    public int PendingEdits
+    {
+        get
+        {
+            lock (_pending)
+            {
+                var held = 0;
+                foreach (var list in _pending.Values) held += list.Count;
+                return held;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Takes a saved edit, to be put back when the chunk it belongs to has been generated.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛔ <b>It does not write the block, and that is the entire point.</b> This used to call
+    /// <see cref="SetBlock"/>, which calls <see cref="GetOrCreateChunk"/> — so a saved edit landing
+    /// in a chunk the streamer had not generated yet made an empty chunk to hold it, and generation
+    /// then filled that chunk in over the top. Every edit in a loaded world came back as whatever
+    /// the generator would have put there, which is to say the world came back without anything
+    /// anybody had built in it. Measured, not argued: the audit's load check reported a saved bench
+    /// coming back as stone.</para>
+    /// <para>So the cell is recorded — in <see cref="Edits"/>, so re-saving keeps it whether or not
+    /// anybody ever walks to it — and held until <see cref="ApplyPending"/> is called with the chunk
+    /// it belongs to, which generation does the moment it has finished making one.</para>
+    /// <para>⚠ <b>A save has to be read before streaming starts.</b> Nothing here can put an edit
+    /// into a chunk that has already been generated, because by then generation has been and gone.
+    /// The order is a requirement on the caller, and the audit's load check runs in that order on
+    /// purpose.</para>
+    /// <para>It also leaves <see cref="Changed"/> alone. Marking a world dirty as it opens is how
+    /// every load ends up followed by an autosave of the thing just loaded.</para>
     /// </remarks>
     public void Restore(int wx, int wy, int wz, BlockId id)
     {
-        SetBlock(wx, wy, wz, id);
-        Changed = false;
+        _edits[(wx, wy, wz)] = id;
+
+        var pos = ChunkPos.FromWorld(wx, wy, wz);
+
+        lock (_pending)
+        {
+            if (!_pending.TryGetValue(pos, out var held)) _pending[pos] = held = [];
+            held.Add((wx, wy, wz, id));
+        }
+    }
+
+    /// <summary>
+    /// Puts any loaded edits belonging to this chunk into it, and forgets them.
+    /// </summary>
+    /// <remarks>
+    /// <para>Called by generation once a chunk is made and decorated and <em>before</em> it is
+    /// declared generated, so nothing has read it yet — not the mesher, and not the first light
+    /// flood, which waits on that same flag and therefore lights the world as it actually is rather
+    /// than as the generator left it. That ordering is what makes a loaded world need no relight.
+    /// </para>
+    /// <para>Taking the list out under the lock is what makes it safe to call from several workers
+    /// at once: whichever one gets it is the only one that can, and the writes that follow go to a
+    /// chunk nobody else is touching.</para>
+    /// </remarks>
+    /// <returns>How many cells were put back.</returns>
+    public int ApplyPending(Chunk chunk)
+    {
+        List<(int X, int Y, int Z, BlockId Id)>? held;
+
+        lock (_pending)
+        {
+            if (!_pending.Remove(chunk.Position, out held)) return 0;
+        }
+
+        foreach (var (wx, wy, wz, id) in held)
+            chunk.Set(wx & Chunk.SizeMask, wy & Chunk.SizeMask, wz & Chunk.SizeMask, id);
+
+        return held.Count;
     }
 
     /// <summary>Forgets that anything has changed. What a save does once it is safely written.</summary>
