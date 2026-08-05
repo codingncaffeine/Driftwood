@@ -4,21 +4,31 @@ namespace Driftwood.Core.Items;
 /// What the player is carrying: a row of slots, one of them in hand.
 /// </summary>
 /// <remarks>
-/// <para>The hotbar is the whole inventory for now. A backpack is a second row and a screen to
-/// show it on, and neither exists yet; making the row the inventory means everything that puts
-/// something in — a pickup, a craft, a starting kit — goes through one door, and the day the
-/// backpack arrives it widens rather than being bolted on beside.</para>
+/// <para><b>The bar is the first row of the inventory, not a separate thing.</b> One array, with
+/// the nine slots a player can reach without opening anything at the front of it and the rest
+/// behind. That is what makes dragging between the two free — it is moving between indices, not
+/// copying between containers — and it is why <see cref="Selected"/>, <see cref="Held"/> and
+/// everything the world already does with the bar kept working unchanged when the backpack
+/// arrived.</para>
 /// <para>Adding fills partial stacks before it opens empty ones, which is what a player expects and
-/// also what stops a pocketful of single logs. Anything that will not fit comes back rather than
-/// vanishing: an inventory that silently eats what it cannot hold is the one bug in this area that
-/// nobody forgives.</para>
+/// also what stops a pocketful of single logs. Empty slots in the bar are taken before empty slots
+/// behind it, so what has just been picked up is in reach. Anything that will not fit comes back
+/// rather than vanishing: an inventory that silently eats what it cannot hold is the one bug in
+/// this area that nobody forgives.</para>
 /// <para>It holds the item registry because the per-slot ceiling is a property of the item — sixty
 /// four planks and exactly one pickaxe — and the slot is the only place that knows both.</para>
 /// </remarks>
 public sealed class Inventory
 {
     /// <summary>Slots in the bar. Nine, which is the row every player in the genre knows.</summary>
-    public const int Slots = 9;
+    /// <remarks>
+    /// They are the first nine of <see cref="Slots"/>, so the wheel and the number row index
+    /// straight into the same array the backpack lives in.
+    /// </remarks>
+    public const int HotbarSlots = 9;
+
+    /// <summary>Every slot: the bar, then three rows behind it.</summary>
+    public const int Slots = HotbarSlots + 27;
 
     private readonly ItemStack[] _slots = new ItemStack[Slots];
     private readonly ItemRegistry _items;
@@ -47,7 +57,8 @@ public sealed class Inventory
     /// <summary>What is in hand, described. Null when the hand is empty.</summary>
     public ItemType? HeldType => Held.IsEmpty ? null : _items[Held.Item];
 
-    public void Select(int slot) => Selected = ((slot % Slots) + Slots) % Slots;
+    /// <summary>Which of the bar's nine is in hand. Wraps within the bar, never into the backpack.</summary>
+    public void Select(int slot) => Selected = ((slot % HotbarSlots) + HotbarSlots) % HotbarSlots;
 
     /// <summary>Moves the selection by a step, wrapping either way.</summary>
     public void Scroll(int by) => Select(Selected + by);
@@ -61,15 +72,20 @@ public sealed class Inventory
 
         var cap = _items[stack.Item].MaxStack;
 
-        // Partial stacks of the same thing first, then empty slots. The other order leaves a row
-        // of half-full slots and an empty one at the end of every gathering trip.
-        for (var pass = 0; pass < 2; pass++)
-        for (var i = 0; i < Slots && !stack.IsEmpty; i++)
+        // Three passes, in the order a player would do it themselves. Partial stacks of the same
+        // thing anywhere first — the other order leaves a row of half-full slots and an empty one
+        // at the end of every gathering trip. Then empty slots in the bar, so what has just been
+        // picked up is in reach. Then the backpack.
+        for (var pass = 0; pass < 3; pass++)
         {
-            var wantEmpty = pass == 1;
-            if (_slots[i].IsEmpty != wantEmpty) continue;
+            var from = pass == 2 ? HotbarSlots : 0;
+            var to = pass == 0 ? Slots : pass == 1 ? HotbarSlots : Slots;
 
-            _slots[i] = _slots[i].Merge(stack, cap, out stack);
+            for (var i = from; i < to && !stack.IsEmpty; i++)
+            {
+                if (_slots[i].IsEmpty == (pass == 0)) continue;
+                _slots[i] = _slots[i].Merge(stack, cap, out stack);
+            }
         }
 
         Version++;
@@ -157,6 +173,114 @@ public sealed class Inventory
 
         if (taken > 0) Version++;
         return taken;
+    }
+
+    /// <summary>True when a slot number is one of the nine the player can reach without opening anything.</summary>
+    public static bool InHotbar(int slot) => slot is >= 0 and < HotbarSlots;
+
+    /// <summary>
+    /// Puts a stack into one particular slot, and hands back whatever was there or would not fit.
+    /// </summary>
+    /// <remarks>
+    /// <para>The one move a screen needs and a pickup does not: everything else in here decides for
+    /// itself where something should go, and a player dragging has already decided.</para>
+    /// <para>Same thing on both sides merges, up to the ceiling, and the remainder comes back on
+    /// the cursor. Different things swap. Both are what the hand expects and neither loses
+    /// anything, which is the only rule that matters.</para>
+    /// </remarks>
+    public ItemStack PutInto(int slot, ItemStack carried)
+    {
+        if ((uint)slot >= Slots || carried.IsEmpty) return carried;
+
+        var there = _slots[slot];
+        Version++;
+
+        if (there.IsEmpty || there.Matches(carried))
+        {
+            _slots[slot] = there.Merge(carried, _items[carried.Item].MaxStack, out var over);
+            return over;
+        }
+
+        _slots[slot] = carried;
+        return there;
+    }
+
+    /// <summary>Lifts a whole slot onto the cursor, leaving it empty.</summary>
+    public ItemStack TakeAll(int slot)
+    {
+        if ((uint)slot >= Slots || _slots[slot].IsEmpty) return ItemStack.Empty;
+
+        var lifted = _slots[slot];
+        _slots[slot] = ItemStack.Empty;
+        Version++;
+        return lifted;
+    }
+
+    /// <summary>
+    /// Lifts half a slot onto the cursor, rounded up, leaving the rest.
+    /// </summary>
+    /// <remarks>
+    /// Rounded up so that splitting one thing gives you the one thing rather than nothing, which is
+    /// the case a player tries first when they are working out what the button does.
+    /// </remarks>
+    public ItemStack TakeHalf(int slot)
+    {
+        if ((uint)slot >= Slots || _slots[slot].IsEmpty) return ItemStack.Empty;
+
+        var there = _slots[slot];
+        var half = (there.Count + 1) / 2;
+
+        _slots[slot] = there.Minus(half);
+        Version++;
+        return there with { Count = half };
+    }
+
+    /// <summary>Drops one off the cursor into a slot, for painting a stack out one at a time.</summary>
+    public ItemStack PutOne(int slot, ItemStack carried)
+    {
+        if ((uint)slot >= Slots || carried.IsEmpty) return carried;
+
+        var there = _slots[slot];
+        if (!there.IsEmpty && !there.Matches(carried)) return carried;
+        if (!there.IsEmpty && there.Count >= _items[carried.Item].MaxStack) return carried;
+
+        _slots[slot] = there.IsEmpty ? carried with { Count = 1 } : there with { Count = there.Count + 1 };
+        Version++;
+        return carried.MinusOne();
+    }
+
+    /// <summary>
+    /// Sends a slot to the other half of the inventory, the way a shift-click does.
+    /// </summary>
+    /// <remarks>
+    /// Bar to backpack and backpack to bar, filling partial stacks of the same thing before opening
+    /// an empty one — the same order <see cref="Add"/> uses, for the same reason. Whatever will not
+    /// fit stays where it was rather than being dropped on the floor: a shift-click that empties a
+    /// slot it could not empty is how a player loses a stack without seeing it happen.
+    /// </remarks>
+    public bool Sweep(int slot)
+    {
+        if ((uint)slot >= Slots || _slots[slot].IsEmpty) return false;
+
+        var moving = _slots[slot];
+        var cap = _items[moving.Item].MaxStack;
+
+        var from = InHotbar(slot) ? HotbarSlots : 0;
+        var to = InHotbar(slot) ? Slots : HotbarSlots;
+
+        for (var pass = 0; pass < 2; pass++)
+        for (var i = from; i < to && !moving.IsEmpty; i++)
+        {
+            if (i == slot) continue;
+            if (_slots[i].IsEmpty != (pass == 1)) continue;
+
+            _slots[i] = _slots[i].Merge(moving, cap, out moving);
+        }
+
+        var moved = moving.Count != _slots[slot].Count;
+        _slots[slot] = moving;
+        if (moved) Version++;
+        return moved;
     }
 
     /// <summary>Everything being carried, for the display and the checks.</summary>

@@ -1232,6 +1232,79 @@ public static class WorldAudit
         if (purse.Take(sand, 9) != 3) faults.Add("taking nine of three claimed more than there was");
         if (purse.CountOf(sand) != 0) faults.Add("taking more than there was left some behind");
 
+        // The moves a screen makes with a cursor. Every one of them can lose something, and losing
+        // something is the only bug in an inventory nobody forgives — so each is checked by
+        // counting what went in against what came out rather than by looking at where it landed.
+        var bench = new Inventory(items);
+        bench.Add(new ItemStack(dirt, 20));
+
+        var lifted = bench.TakeAll(0);
+        if (lifted.Count != 20) faults.Add($"lifting a slot of 20 got {lifted.Count}");
+        if (bench.CountOf(dirt) != 0) faults.Add("lifting a whole slot left something in it");
+
+        var back = bench.PutInto(20, lifted);
+        if (!back.IsEmpty) faults.Add($"putting 20 into an empty backpack slot returned {back.Count}");
+        if (bench.CountOf(dirt) != 20) faults.Add($"20 into an empty slot came to {bench.CountOf(dirt)}");
+        if (Inventory.InHotbar(20)) faults.Add("slot 20 counts as the bar, which it is not");
+
+        // Half, rounded up, so splitting one gives the one.
+        var half = bench.TakeHalf(20);
+        if (half.Count != 10 || bench.CountOf(dirt) != 10)
+            faults.Add($"splitting 20 gave {half.Count} and left {bench.CountOf(dirt)}");
+
+        var single = new Inventory(items);
+        single.Add(new ItemStack(sand, 1));
+        if (single.TakeHalf(0).Count != 1) faults.Add("splitting a single left the player holding nothing");
+
+        // Different things swap rather than one eating the other.
+        var swapper = new Inventory(items);
+        swapper.Add(new ItemStack(dirt, 5));
+        var displaced = swapper.PutInto(0, new ItemStack(sand, 3));
+        if (displaced.Item.Value != dirt.Value || displaced.Count != 5)
+            faults.Add("dropping sand on dirt did not hand the dirt back");
+        if (swapper.CountOf(sand) != 3) faults.Add("the sand did not land");
+
+        // A full slot refuses the overflow instead of swallowing it.
+        var brimming = new Inventory(items);
+        brimming.Add(new ItemStack(stone, ItemStack.MaxCount));
+        var refused = brimming.PutInto(0, new ItemStack(stone, 10));
+        if (refused.Count != 10) faults.Add($"a full slot swallowed {10 - refused.Count} of 10");
+
+        // Shift-click moves between the bar and the backpack and never off the end of the world.
+        var sweeper = new Inventory(items);
+        sweeper.Add(new ItemStack(stone, 30));
+        var whereFrom = sweeper.CountOf(stone);
+        if (!sweeper.Sweep(0)) faults.Add("sweeping a full bar slot moved nothing");
+        if (sweeper.CountOf(stone) != whereFrom) faults.Add("sweeping lost some of the stack");
+        if (sweeper[0].Count != 0) faults.Add("sweeping left the slot it came from occupied");
+
+        var landed = 0;
+        for (var i = Inventory.HotbarSlots; i < Inventory.Slots; i++) landed += sweeper[i].Count;
+        if (landed != 30) faults.Add($"sweeping the bar put {landed} of 30 in the backpack");
+
+        // And back again.
+        var home = 0;
+        for (var i = Inventory.HotbarSlots; i < Inventory.Slots; i++)
+            if (!sweeper[i].IsEmpty) { sweeper.Sweep(i); break; }
+        for (var i = 0; i < Inventory.HotbarSlots; i++) home += sweeper[i].Count;
+        if (home == 0) faults.Add("sweeping out of the backpack put nothing back in the bar");
+
+        // A backpack with nowhere to go keeps what it has rather than dropping it.
+        var stuffed = new Inventory(items);
+        for (var i = Inventory.HotbarSlots; i < Inventory.Slots; i++)
+            stuffed.PutInto(i, new ItemStack(stone, ItemStack.MaxCount));
+        stuffed.PutInto(0, new ItemStack(sand, 4));
+
+        var beforeSweep = stuffed.CountOf(sand);
+        stuffed.Sweep(0);
+        if (stuffed.CountOf(sand) != beforeSweep)
+            faults.Add("sweeping into a full backpack lost the stack");
+
+        // The bar is the front of the same array, so a pickup fills it before the backpack.
+        var reach = new Inventory(items);
+        reach.Add(new ItemStack(dirt, 1));
+        if (reach[0].IsEmpty) faults.Add("a pickup went into the backpack while the bar was empty");
+
         // The ground refuses past its end rather than growing.
         var flooded = new DroppedItems(registry, items, 0x7E11);
         for (var i = 0; i < DroppedItems.Capacity + 40; i++)

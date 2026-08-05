@@ -337,13 +337,16 @@ public sealed class HudRenderer : IDisposable
         const float Slot = 22f;
         const float Pad = 2f;
 
-        var width = Inventory.Slots * Slot;
+        var width = Inventory.HotbarSlots * Slot;
         var left = MathF.Round((w - width) / 2f);
         var top = MathF.Round(h - Slot - 8f);
 
         Bevel(left - 3f, top - 3f, width + 6f, Slot + 6f, raised: true, PanelFill);
 
-        for (var i = 0; i < Inventory.Slots; i++)
+        // The bar is the first nine of the inventory, not a container of its own — so this draws a
+        // window onto the same array the backpack lives in, and dragging between the two is a move
+        // between indices rather than a transfer.
+        for (var i = 0; i < Inventory.HotbarSlots; i++)
         {
             var x = left + i * Slot;
 
@@ -390,7 +393,7 @@ public sealed class HudRenderer : IDisposable
     /// </remarks>
     private void Screen(ItemRegistry catalogue, HudScreen screen, float w, float h)
     {
-        Rect(_plain, 0f, 0f, w, h, new Vector4(0.02f, 0.02f, 0.04f, 0.72f));
+        Rect(_plain, 0f, 0f, w, h, new Vector4(0.04f, 0.04f, 0.04f, 0.72f));
 
         const float Panel = 232f;
         var left = MathF.Round((w - Panel) / 2f);
@@ -426,10 +429,10 @@ public sealed class HudRenderer : IDisposable
 
             // The open one stands out of the screen and the shut ones are pressed into it, which is
             // the oldest way of drawing a tab and still the one that needs no explaining.
-            Bevel(pen, top, width, 16f, open, open ? PanelFill : new Vector4(0.05f, 0.06f, 0.08f, 0.95f));
+            Bevel(pen, top, width, 16f, open, open ? PanelFill : new Vector4(0.22f, 0.22f, 0.22f, 0.95f));
 
             Text(name, pen + 5f, top + 4f, 8f,
-                open ? Highlight : new Vector4(0.52f, 0.55f, 0.62f, 1f));
+                open ? Highlight : InkFaint);
 
             pen += width + 2f;
         }
@@ -453,25 +456,25 @@ public sealed class HudRenderer : IDisposable
 
             if (row.Heading)
             {
-                Text(row.Label, left, y, 8f, new Vector4(0.95f, 0.80f, 0.35f, 1f));
+                Text(row.Label, left, y, 8f, Highlight);
                 continue;
             }
 
             if (i == screen.Selected)
-                Bevel(left - 2f, y - 2f, panel + 4f, Line, raised: false, new Vector4(0.22f, 0.24f, 0.30f, 0.97f));
+                Bevel(left - 2f, y - 2f, panel + 4f, Line, raised: false, new Vector4(0.50f, 0.50f, 0.50f, 0.97f));
 
             var lit = i == screen.Selected;
-            Text(row.Label, left + 6f, y, 8f, lit ? Vector4.One : new Vector4(0.74f, 0.76f, 0.80f, 1f));
+            Text(row.Label, left + 6f, y, 8f, lit ? Vector4.One : InkDim);
 
             if (row.Value.Length > 0)
             {
                 var width = TextWidth(row.Value, 8f);
                 Text(row.Value, left + panel - width - 4f, y, 8f,
-                    lit ? new Vector4(1f, 0.92f, 0.62f, 1f) : new Vector4(0.62f, 0.66f, 0.72f, 1f));
+                    lit ? Ink : InkDim);
             }
 
             if (row.Note.Length > 0 && lit)
-                Text(row.Note, left + 6f, y + 9f, 7f, new Vector4(0.55f, 0.58f, 0.64f, 1f));
+                Text(row.Note, left + 6f, y + 9f, 7f, InkFaint);
         }
     }
 
@@ -522,7 +525,7 @@ public sealed class HudRenderer : IDisposable
     private void Footer(HudScreen screen, float w, float h)
     {
         if (screen.Footer.Length == 0) return;
-        TextCentred(screen.Footer, w / 2f, h - 46f, 8f, new Vector4(0.72f, 0.75f, 0.80f, 1f));
+        TextCentred(screen.Footer, w / 2f, h - 46f, 8f, InkDim);
     }
 
     /// <summary>The recipe list, and the selected recipe laid out as it would be in the grid.</summary>
@@ -543,10 +546,10 @@ public sealed class HudRenderer : IDisposable
             var payable = i < screen.Payable.Count && screen.Payable[i];
 
             Bevel(x, y, Cell - 2f, Cell - 2f, raised: false,
-                payable ? SlotFill : new Vector4(0.07f, 0.07f, 0.09f, 0.95f));
+                payable ? SlotFill : new Vector4(0.19f, 0.19f, 0.19f, 0.95f));
 
             var result = screen.Recipes[i].Result;
-            var shade = payable ? Vector4.One : new Vector4(0.40f, 0.40f, 0.45f, 0.8f);
+            var shade = payable ? Vector4.One : new Vector4(0.45f, 0.45f, 0.45f, 0.85f);
             Rect(_blocks, x + 3f, y + 3f, Cell - 8f, Cell - 8f, shade, catalogue[result.Item].IconLayer);
 
             if (i == screen.Selected) Select(x, y, Cell - 2f, Cell - 2f);
@@ -575,7 +578,7 @@ public sealed class HudRenderer : IDisposable
                 : x < chosen.Width && y < chosen.Height ? chosen.At(x, y) : null;
 
             Bevel(px, py, Cell - 2f, Cell - 2f, raised: false,
-                slot is null ? new Vector4(0.06f, 0.06f, 0.08f, 0.95f) : SlotFill);
+                slot is null ? new Vector4(0.19f, 0.19f, 0.19f, 0.95f) : SlotFill);
 
             if (slot is null) continue;
             Rect(_blocks, px + 3f, py + 3f, Cell - 8f, Cell - 8f, Vector4.One,
@@ -589,7 +592,7 @@ public sealed class HudRenderer : IDisposable
 
         // The result, out to the right of the grid with a bar pointing at it.
         var arrowY = detailTop + Cell * 1.5f - 1.5f;
-        Rect(_plain, left + 3f * Cell + 6f, arrowY, 20f, 3f, new Vector4(0.8f, 0.8f, 0.85f, 0.9f));
+        Rect(_plain, left + 3f * Cell + 6f, arrowY, 20f, 3f, PanelLight);
 
         var resultX = left + 3f * Cell + 34f;
         var resultY = detailTop + Cell - 4f;
@@ -603,10 +606,10 @@ public sealed class HudRenderer : IDisposable
         var payableNow = screen.Selected < screen.Payable.Count && screen.Payable[screen.Selected];
 
         Text(chosen.Name, left, nameY, 9f,
-            payableNow ? Vector4.One : new Vector4(0.62f, 0.62f, 0.66f, 1f));
+            payableNow ? Vector4.One : InkDim);
 
         Text(chosen.NeedsBench ? "at a bench" : "in hand", left, nameY + 12f, 7f,
-            new Vector4(0.55f, 0.58f, 0.64f, 1f));
+            InkFaint);
     }
 
     /// <summary>The nth filled slot of a shapeless recipe, or null past the end.</summary>
@@ -638,14 +641,14 @@ public sealed class HudRenderer : IDisposable
         // what it has to say is how much is left, and a flickering icon says nothing about that.
         // Quantised to whole pixels so it steps rather than slides, which is the whole aesthetic.
         var flameH = MathF.Round(26f * furnace.FuelLeft);
-        Bevel(left + 52f, inputY + 34f, 10f, 30f, raised: false, new Vector4(0.08f, 0.07f, 0.07f, 0.95f));
+        Bevel(left + 52f, inputY + 34f, 10f, 30f, raised: false, new Vector4(0.17f, 0.17f, 0.17f, 0.95f));
         Rect(_plain, left + 54f, inputY + 36f + (26f - flameH), 6f, flameH,
             new Vector4(1f, 0.55f + furnace.FuelLeft * 0.3f, 0.18f, 1f));
 
         // And the work, filling toward the output.
-        Bevel(left + 70f, top + 38f, 58f, 10f, raised: false, new Vector4(0.08f, 0.08f, 0.10f, 0.95f));
+        Bevel(left + 70f, top + 38f, 58f, 10f, raised: false, new Vector4(0.17f, 0.17f, 0.17f, 0.95f));
         Rect(_plain, left + 72f, top + 40f, MathF.Round(54f * furnace.Fraction), 6f,
-            new Vector4(0.78f, 0.82f, 0.88f, 1f));
+            PanelLight);
 
         void Cell(float x, float y, ItemStack stack, int index)
         {
@@ -661,11 +664,23 @@ public sealed class HudRenderer : IDisposable
 
     // The interface's own palette. Named rather than written out at each use, so the whole thing
     // can be re-toned in one place and so two panels cannot drift apart by a hex digit.
-    private static readonly Vector4 PanelFill = new(0.09f, 0.10f, 0.13f, 0.97f);
-    private static readonly Vector4 PanelLight = new(0.42f, 0.45f, 0.52f, 1f);
-    private static readonly Vector4 PanelDark = new(0.03f, 0.03f, 0.05f, 1f);
-    private static readonly Vector4 SlotFill = new(0.16f, 0.17f, 0.21f, 0.97f);
-    private static readonly Vector4 Highlight = new(0.98f, 0.84f, 0.38f, 1f);
+    //
+    // Strictly greyscale, and two tones doing all the work: one light, one dark, either side of a
+    // mid fill. That is the whole of the look — a bevel is the two tones on opposite corners, a
+    // pressed slot is the same two swapped, and a selection is the light one at full brightness.
+    // There is deliberately no accent colour anywhere in the chrome: the moment one exists, every
+    // panel starts needing a decision about whether it gets one, and the only things left with any
+    // colour in them should be the blocks and the items, which are the point.
+    private static readonly Vector4 PanelFill = new(0.36f, 0.36f, 0.36f, 0.97f);
+    private static readonly Vector4 PanelLight = new(0.63f, 0.63f, 0.63f, 1f);
+    private static readonly Vector4 PanelDark = new(0.15f, 0.15f, 0.15f, 1f);
+    private static readonly Vector4 SlotFill = new(0.24f, 0.24f, 0.24f, 0.97f);
+    private static readonly Vector4 Highlight = new(0.96f, 0.96f, 0.96f, 1f);
+
+    /// <summary>Text on a panel, and text on a panel that is not the one selected.</summary>
+    private static readonly Vector4 Ink = new(0.95f, 0.95f, 0.95f, 1f);
+    private static readonly Vector4 InkDim = new(0.70f, 0.70f, 0.70f, 1f);
+    private static readonly Vector4 InkFaint = new(0.55f, 0.55f, 0.55f, 1f);
 
     /// <summary>
     /// A panel with a two-pixel bevel: lit from the top left, in shadow at the bottom right.
