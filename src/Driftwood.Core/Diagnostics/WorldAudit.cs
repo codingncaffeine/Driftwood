@@ -1680,9 +1680,11 @@ public static class WorldAudit
         {
             if (layer.PackPath.Length == 0) continue;
 
-            if (BedrockNames.Translate(layer.PackPath) is not { } other)
+            var candidates = PackLayouts.Legacy(layer.PackPath).ToList();
+
+            if (candidates.Count == 0)
             {
-                faults.Add($"'{layer.Name}' ({layer.PackPath}) translates to nothing at all");
+                faults.Add($"'{layer.Name}' ({layer.PackPath}) has nowhere to look on an old pack");
                 continue;
             }
 
@@ -1691,21 +1693,26 @@ public static class WorldAudit
             // Counted on the FILE, not the path. Every path differs — the folder is plural over
             // there — so "how many changed" was 75 of 75 and said nothing about whether the rename
             // table does anything at all.
-            if (!Path.GetFileName(other).Equals(Path.GetFileName(layer.PackPath), StringComparison.OrdinalIgnoreCase))
+            if (!Path.GetFileName(candidates[0]).Equals(
+                    Path.GetFileName(layer.PackPath), StringComparison.OrdinalIgnoreCase))
                 renamed++;
 
-            if (other.Contains("//") || other.StartsWith('/') || !other.EndsWith(".png"))
-                faults.Add($"'{layer.Name}' translates to a malformed path '{other}'");
+            foreach (var other in candidates)
+            {
+                if (other.Contains("//") || other.StartsWith('/') || !other.EndsWith(".png"))
+                    faults.Add($"'{layer.Name}' would look at a malformed path '{other}'");
 
-            if (!other.StartsWith("textures/", StringComparison.Ordinal))
-                faults.Add($"'{layer.Name}' translates outside textures/, to '{other}'");
+                if (!other.StartsWith("textures/", StringComparison.Ordinal))
+                    faults.Add($"'{layer.Name}' would look outside textures/, at '{other}'");
+            }
 
             // Two of our layers landing on one of their files would draw both with one picture, and
-            // nothing downstream would ever mention it.
-            if (seen.TryGetValue(other, out var already))
-                faults.Add($"'{layer.Name}' and '{already}' both translate to '{other}'");
+            // nothing downstream would ever mention it. Compared on the first candidate, which is
+            // the one that decides the answer when both exist.
+            if (seen.TryGetValue(candidates[0], out var already))
+                faults.Add($"'{layer.Name}' and '{already}' both look at '{candidates[0]}'");
             else
-                seen[other] = layer.Name;
+                seen[candidates[0]] = layer.Name;
         }
 
         // The renames that were actually read out of a real Bedrock pack, written out so gutting the
@@ -1725,9 +1732,10 @@ public static class WorldAudit
 
         foreach (var (java, bedrock) in measured)
         {
-            var got = BedrockNames.Translate(java);
-            if (!string.Equals(got, bedrock, StringComparison.OrdinalIgnoreCase))
-                faults.Add($"'{java}' should reach '{bedrock}' and reaches '{got ?? "nothing"}'");
+            if (!PackLayouts.Legacy(java).Contains(bedrock, StringComparer.OrdinalIgnoreCase))
+                faults.Add(
+                    $"'{java}' should look at '{bedrock}' and looks at "
+                    + $"'{string.Join(", ", PackLayouts.Legacy(java))}'");
         }
 
         // And a pack of each kind, on disk, opened for real.
@@ -1744,8 +1752,17 @@ public static class WorldAudit
             File.WriteAllBytes(
                 Path.Combine(root, "java", "assets", "minecraft", "textures", "block", "stone.png"), [1, 2, 3, 4]);
 
-            Check(Path.Combine(root, "bedrock"), PackDialect.Bedrock, "textures/blocks/stone.png");
-            Check(Path.Combine(root, "java"), PackDialect.Java, "assets/minecraft/textures/block/stone.png");
+            // The third one, and the reason this is a candidate list rather than a translation:
+            // pre-flattening Java is the Java shape with the other layout's folder and names.
+            Directory.CreateDirectory(Path.Combine(root, "legacy", "assets", "minecraft", "textures", "blocks"));
+            File.WriteAllText(Path.Combine(root, "legacy", "pack.mcmeta"), "{\"pack\":{\"pack_format\":3}}");
+            File.WriteAllBytes(
+                Path.Combine(root, "legacy", "assets", "minecraft", "textures", "blocks", "log_oak.png"),
+                [1, 2, 3, 4]);
+
+            Check(Path.Combine(root, "bedrock"), PackDialect.Bedrock, "textures/block/stone.png", "textures/blocks/stone.png");
+            Check(Path.Combine(root, "java"), PackDialect.Java, "textures/block/stone.png", "assets/minecraft/textures/block/stone.png");
+            Check(Path.Combine(root, "legacy"), PackDialect.JavaLegacy, "textures/block/oak_log.png", "assets/minecraft/textures/blocks/log_oak.png");
         }
         catch (IOException ex)
         {
@@ -1757,7 +1774,7 @@ public static class WorldAudit
             catch (IOException) { }
         }
 
-        void Check(string path, PackDialect want, string where)
+        void Check(string path, PackDialect want, string ask, string where)
         {
             using var pack = TexturePack.Open(path);
 
@@ -1769,12 +1786,14 @@ public static class WorldAudit
 
             if (pack.Dialect != want) faults.Add($"a {want} pack was read as {pack.Dialect}");
 
-            // Asked for by its Java name either way, which is the whole point: one table of paths
-            // and one place that knows the other layout exists.
-            pack.TryLoadTile("textures/block/stone.png", 16);
+            // Asked for by its modern name whatever the layout, which is the whole point: one
+            // column of paths, and one place that knows there is more than one shelf to look on.
+            pack.TryLoadTile(ask, 16, out var from);
 
             if (pack.Faults.Count == 0)
-                faults.Add($"a {want} pack was asked for stone and never reached {where}");
+                faults.Add($"a {want} pack was asked for '{ask}' and never reached {where}");
+            else if (!string.Equals(from, where, StringComparison.OrdinalIgnoreCase))
+                faults.Add($"a {want} pack answered '{ask}' from '{from}' rather than '{where}'");
 
             // The control. A name nothing could resolve must come back MISSING rather than as a
             // fault — otherwise "found and unreadable" is not actually telling us anything.

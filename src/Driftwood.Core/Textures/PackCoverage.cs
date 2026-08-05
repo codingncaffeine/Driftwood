@@ -153,13 +153,28 @@ public static class PackCoverage
         var consumed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var layer in BlockTextureSet.Layers)
         {
-            if (layer.PackPath.Length > 0) consumed.Add(Stem(layer.PackPath));
-            if (layer.PackPathAlt.Length > 0) consumed.Add(Stem(layer.PackPathAlt));
+            // Every name the layer could be filed under, not just the modern one. On an old pack
+            // our oak log is their log_oak, and counting only the modern stem reported a pack we
+            // read forty layers out of as one we had consumed nothing from.
+            if (layer.PackPath.Length > 0)
+                foreach (var stem in PackLayouts.AllStems(layer.PackPath)) consumed.Add(stem);
+
+            if (layer.PackPathAlt.Length > 0)
+                foreach (var stem in PackLayouts.AllStems(layer.PackPathAlt)) consumed.Add(stem);
         }
 
         var byFamily = new Dictionary<string, (int Total, int Have, List<string> Sample)>(StringComparer.Ordinal);
-        int blocks = 0, items = 0, entities = 0, models = 0, states = 0, other = 0, ungrouped = 0;
+        int blocks = 0, items = 0, entities = 0, models = 0, states = 0, other = 0, ungrouped = 0, have = 0;
         var ungroupedNames = new List<string>();
+
+        // A texture folder, however the pack spells the path to it. One layout reaches it through
+        // assets/ and a namespace, another has it at the root, so "contains /textures/x/" misses
+        // half of them and "starts with textures/x/" misses the other half.
+        static bool Under(string path, string folder) =>
+            path.Contains($"/textures/{folder}/", StringComparison.OrdinalIgnoreCase)
+            || path.StartsWith($"textures/{folder}/", StringComparison.OrdinalIgnoreCase);
+
+        var companions = 0;
 
         foreach (var entry in pack.Entries())
         {
@@ -168,9 +183,16 @@ public static class PackCoverage
 
             if (!entry.EndsWith(".png", StringComparison.OrdinalIgnoreCase)) { other++; continue; }
 
-            var isBlock = entry.Contains("/textures/block/");
-            var isItem = entry.Contains("/textures/item/");
-            var isEntity = entry.Contains("/textures/entity/");
+            // A normal or roughness map is not a picture of anything. Counting them as art doubles
+            // every number below and reads as a pack twice the size it is.
+            if (PackLayouts.IsCompanionMap(entry)) { companions++; continue; }
+
+            // Both spellings. The folder went plural before 2018 and stayed plural in the other
+            // layout, and the leading slash cannot be relied on either — a Bedrock pack's textures
+            // sit at its root, so the path starts with the folder rather than reaching it.
+            var isBlock = Under(entry, "block") || Under(entry, "blocks");
+            var isItem = Under(entry, "item") || Under(entry, "items");
+            var isEntity = Under(entry, "entity");
 
             if (isEntity) { entities++; continue; }
             if (!isBlock && !isItem) { other++; continue; }
@@ -186,16 +208,20 @@ public static class PackCoverage
                 continue;
             }
 
-            var have = consumed.Contains(name) ? 1 : 0;
+            var mine = consumed.Contains(name) ? 1 : 0;
+            have += mine;
+
             if (!byFamily.TryGetValue(family.Label, out var tally)) tally = (0, 0, []);
-            if (have == 0 && tally.Sample.Count < 5) tally.Sample.Add(name);
-            byFamily[family.Label] = (tally.Total + 1, tally.Have + have, tally.Sample);
+            if (mine == 0 && tally.Sample.Count < 5) tally.Sample.Add(name);
+            byFamily[family.Label] = (tally.Total + 1, tally.Have + mine, tally.Sample);
         }
 
-        sb.AppendLine($"pack          {pack.Name} (format {pack.Format})");
+        sb.AppendLine(
+            $"pack          {pack.Name} ({pack.Dialect.ToString().ToLowerInvariant()} layout, format {pack.Format})");
         sb.AppendLine($"files         {blocks:N0} block, {items:N0} item, {entities:N0} entity textures; "
-                    + $"{models:N0} models, {states:N0} blockstates, {other:N0} other");
-        sb.AppendLine($"we read       {consumed.Count} of them");
+                    + $"{models:N0} models, {states:N0} blockstates, {other:N0} other"
+                    + (companions > 0 ? $"; {companions:N0} normal and roughness maps set aside" : ""));
+        sb.AppendLine($"we read       {have} of them");
         sb.AppendLine();
         sb.AppendLine("Every entity texture is a creature, and there are no creatures here at all —");
         sb.AppendLine("that count is the size of the mob work on its own. Stairs, slabs, fences and walls");

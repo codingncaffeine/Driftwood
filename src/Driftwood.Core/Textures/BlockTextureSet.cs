@@ -258,14 +258,10 @@ public static class BlockTextureSet
                 continue;
             }
 
-            var from = Layers[i].PackPath;
-            var replacement = pack.TryLoadTile(Layers[i].PackPath, size);
+            var replacement = pack.TryLoadTile(Layers[i].PackPath, size, out var from);
 
             if (replacement is null && Layers[i].PackPathAlt.Length > 0)
-            {
-                from = Layers[i].PackPathAlt;
-                replacement = pack.TryLoadTile(Layers[i].PackPathAlt, size);
-            }
+                replacement = pack.TryLoadTile(Layers[i].PackPathAlt, size, out from);
 
             if (replacement is null)
             {
@@ -278,10 +274,7 @@ public static class BlockTextureSet
 
             tiles[i] = replacement;
 
-            // Reported as the path it actually came off, which for a Bedrock pack is not the path
-            // that was asked for. "ours or theirs, and from where" is the only question this report
-            // answers, and half an answer is worse than none.
-            outcomes.Add(new LayerOutcome(Layers[i].Name, true, pack.PathOf(from), flattened));
+            outcomes.Add(new LayerOutcome(Layers[i].Name, true, from, flattened));
         }
 
         // Colormaps are loaded at their own fixed size rather than the tile size, because the

@@ -78,6 +78,7 @@ public sealed class TexturePack : IDisposable
 
         _prefix = FindRoot();
         _namespaces = FindNamespaces();
+        Dialect = FindDialect();
     }
 
     /// <summary>
@@ -90,20 +91,10 @@ public sealed class TexturePack : IDisposable
     /// </remarks>
     private string FindRoot()
     {
-        // Whichever manifest is there says both where the root is and which layout this is. A Java
-        // pack never carries manifest.json and a Bedrock one never carries pack.mcmeta, so the file
-        // that turns up is the answer to both questions at once.
-        if (FindShallowest("pack.mcmeta") is { } java)
-        {
-            Dialect = PackDialect.Java;
-            return java;
-        }
-
-        if (FindShallowest("manifest.json") is { } bedrock)
-        {
-            Dialect = PackDialect.Bedrock;
-            return bedrock;
-        }
+        // Whichever manifest is there says where the root is. Neither layout carries the other's,
+        // so the file that turns up answers it without having to guess at folder names.
+        if (FindShallowest("pack.mcmeta") is { } java) return java;
+        if (FindShallowest("manifest.json") is { } bedrock) return bedrock;
 
         // No manifest anywhere. Some packs genuinely ship without one, so fall back to wherever the
         // textures begin rather than refusing — "assets/" for one layout, "textures/" for the other.
@@ -125,20 +116,57 @@ public sealed class TexturePack : IDisposable
             if (best is null || at < best.Length) best = path[..at];
         }
 
-        if (best is not null) Dialect = PackDialect.Bedrock;
         return best ?? "";
+    }
+
+    /// <summary>
+    /// Which layout the pack turned out to be, read off what it actually contains.
+    /// </summary>
+    /// <remarks>
+    /// <para>The folders decide it, not the manifest. A <c>pack_format</c> says which game version a
+    /// pack was written against and packs get that wrong constantly; whether the block folder is
+    /// singular or plural, and whether there is an <c>assets/</c> above it at all, are facts about
+    /// the files in front of us.</para>
+    /// <para>This only picks the order candidates are tried in and what the report says. Every
+    /// layout is tried for every texture regardless, so a pack that is half one thing and half
+    /// another — and merged packs exist — resolves per texture rather than per pack.</para>
+    /// </remarks>
+    private PackDialect FindDialect()
+    {
+        bool java = false, plural = false, textures = false, assets = false;
+
+        foreach (var path in RawEntries())
+        {
+            if (path.Contains("/textures/block/", StringComparison.OrdinalIgnoreCase)
+                || path.Contains("/textures/item/", StringComparison.OrdinalIgnoreCase)) java = true;
+
+            if (path.Contains("/textures/blocks/", StringComparison.OrdinalIgnoreCase)
+                || path.Contains("/textures/items/", StringComparison.OrdinalIgnoreCase)) plural = true;
+
+            if (path.StartsWith($"{_prefix}textures/", StringComparison.OrdinalIgnoreCase)) textures = true;
+            if (path.StartsWith($"{_prefix}assets/", StringComparison.OrdinalIgnoreCase)) assets = true;
+        }
+
+        // No assets/ above the textures at all is the thing only one layout does.
+        if (!assets && textures) return PackDialect.Bedrock;
+        if (java) return PackDialect.Java;
+        if (plural) return PackDialect.JavaLegacy;
+
+        return PackDialect.Unknown;
     }
 
     /// <summary>
     /// The directory holding the shallowest copy of a file, as a prefix ending in a slash.
     /// </summary>
     /// <remarks>
-    /// Shallowest, because a pack that happens to carry somebody else's pack inside it should be
-    /// read as itself.
+    /// Shallowest, because a pack that carries somebody else's pack inside it should be read as
+    /// itself — and one with art beside it beats one without, because an <c>.mcaddon</c> carries a
+    /// behaviour pack whose manifest is exactly as shallow and which holds no textures at all.
     /// </remarks>
     private string? FindShallowest(string fileName)
     {
-        var best = (string?)null;
+        string? best = null;
+        string? withArt = null;
 
         foreach (var path in RawEntries())
         {
@@ -146,9 +174,22 @@ public sealed class TexturePack : IDisposable
 
             var directory = path[..^fileName.Length];
             if (best is null || directory.Length < best.Length) best = directory;
+
+            if (!HasArtUnder(directory)) continue;
+            if (withArt is null || directory.Length < withArt.Length) withArt = directory;
         }
 
-        return best;
+        return withArt ?? best;
+    }
+
+    private bool HasArtUnder(string directory)
+    {
+        foreach (var path in RawEntries())
+            if (path.StartsWith($"{directory}textures/", StringComparison.OrdinalIgnoreCase)
+                || path.StartsWith($"{directory}assets/", StringComparison.OrdinalIgnoreCase))
+                return true;
+
+        return false;
     }
 
     private string[] FindNamespaces()
@@ -302,10 +343,14 @@ public sealed class TexturePack : IDisposable
         }
     }
 
-    /// <summary>Loads one texture by its path inside the pack, scaled to the given tile size.</summary>
-    public byte[]? TryLoadTile(string assetPath, int size)
+    /// <summary>Loads one texture by its modern path, scaled to the given tile size.</summary>
+    /// <param name="from">
+    /// Where it actually came off, which for an old pack is not the path that was asked for. The
+    /// report answers "ours or theirs, and from where", and half an answer is worse than none.
+    /// </param>
+    public byte[]? TryLoadTile(string assetPath, int size, out string from)
     {
-        var raw = ReadAsset(assetPath);
+        var raw = ReadAsset(assetPath, out from);
         if (raw is null)
         {
             Missing++;
@@ -314,13 +359,16 @@ public sealed class TexturePack : IDisposable
 
         if (!Png.TryDecode(raw, out var image, out var error))
         {
-            Faults.Add($"{assetPath}: {error}");
+            Faults.Add($"{from}: {error}");
             return null;
         }
 
         Loaded++;
         return Resample(image, size);
     }
+
+    /// <summary>Loads one texture without caring which of the layouts it came out of.</summary>
+    public byte[]? TryLoadTile(string assetPath, int size) => TryLoadTile(assetPath, size, out _);
 
     /// <summary>
     /// What resolution this pack is actually painted at.
@@ -351,7 +399,7 @@ public sealed class TexturePack : IDisposable
         var widest = 0;
         foreach (var probe in probes)
         {
-            var raw = ReadAsset(probe);
+            var raw = ReadAsset(probe, out _);
             if (raw is null) continue;
             if (!Png.TryDecode(raw, out var image, out _)) continue;
 
@@ -364,34 +412,57 @@ public sealed class TexturePack : IDisposable
     }
 
     /// <summary>
-    /// Reads one asset, given the path a Java pack would keep it at.
+    /// Every place a texture might be, in the order worth trying, given the path modern Java uses.
     /// </summary>
     /// <remarks>
-    /// Every caller names a Java path, and this is the one place that knows the other layout exists.
-    /// A Bedrock pack has no namespaces to try, keeps <c>textures/</c> at its root, and calls a
-    /// third of the files something else — see <see cref="BedrockNames"/>. Keeping the translation
-    /// here rather than in the layer table means the table stays one column of our names against
-    /// one column of theirs, which is what it is for.
+    /// <para>Every caller in the project names one path — the modern one — and this is the only
+    /// place that knows there is more than one layout. That is what keeps the layer table one column
+    /// of our names against one column of theirs, and what makes a new layout a few lines here
+    /// rather than a branch through everything.</para>
+    /// <para>Ordered by what the pack looks like, but <b>all of them are tried</b>. Detection only
+    /// decides which is quickest, never which is possible, so a merged or half-converted pack
+    /// resolves texture by texture instead of failing as a whole.</para>
     /// </remarks>
-    private byte[]? ReadAsset(string assetPath)
+    private IEnumerable<string> Candidates(string assetPath)
     {
         if (Dialect == PackDialect.Bedrock)
-            return BedrockNames.Translate(assetPath) is { } translated
-                ? ReadAllBytes($"{_prefix}{translated}")
-                : null;
-
-        foreach (var space in _namespaces)
         {
-            var raw = ReadAllBytes($"{_prefix}assets/{space}/{assetPath}");
-            if (raw is not null) return raw;
+            // No assets/, no namespace, and the old names.
+            foreach (var legacy in PackLayouts.Legacy(assetPath)) yield return $"{_prefix}{legacy}";
+            foreach (var space in _namespaces) yield return $"{_prefix}assets/{space}/{assetPath}";
+            yield break;
         }
 
-        return null;
+        if (Dialect != PackDialect.JavaLegacy)
+            foreach (var space in _namespaces) yield return $"{_prefix}assets/{space}/{assetPath}";
+
+        // Pre-flattening Java: the same shape, folders plural, and the names Bedrock still uses.
+        foreach (var legacy in PackLayouts.Legacy(assetPath))
+        foreach (var space in _namespaces)
+            yield return $"{_prefix}assets/{space}/{legacy}";
+
+        if (Dialect == PackDialect.JavaLegacy)
+            foreach (var space in _namespaces) yield return $"{_prefix}assets/{space}/{assetPath}";
+
+        // And the rootward one, for a pack with no assets/ that carries no manifest either.
+        foreach (var legacy in PackLayouts.Legacy(assetPath)) yield return $"{_prefix}{legacy}";
     }
 
-    /// <summary>Where a layer was actually read from, for the report that says ours or theirs.</summary>
-    public string PathOf(string assetPath) =>
-        Dialect == PackDialect.Bedrock ? BedrockNames.Translate(assetPath) ?? assetPath : assetPath;
+    /// <summary>Reads one asset, and says which of the candidates it actually came off.</summary>
+    private byte[]? ReadAsset(string assetPath, out string from)
+    {
+        foreach (var candidate in Candidates(assetPath))
+        {
+            var raw = ReadAllBytes(candidate);
+            if (raw is null) continue;
+
+            from = candidate.Length > _prefix.Length ? candidate[_prefix.Length..] : candidate;
+            return raw;
+        }
+
+        from = assetPath;
+        return null;
+    }
 
     /// <summary>
     /// Scales an image to a square tile with nearest-neighbour sampling.
