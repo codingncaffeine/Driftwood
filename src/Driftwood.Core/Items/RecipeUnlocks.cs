@@ -32,6 +32,26 @@ public sealed class RecipeUnlocks
     /// <summary>How many recipes have ever been announced, for the check to read back.</summary>
     public int Announced => _announced.Count;
 
+    /// <summary>Which ones, so a save can carry them with the world they belong to.</summary>
+    /// <remarks>
+    /// ⚠ <b>Per world, not per installation.</b> This began as a file beside the settings, on the
+    /// reading that an achievement fires once ever — but that was decided when there was one world
+    /// and no saves, so "ever" meant "this world" without anybody having to say it. A brand new
+    /// world months later is a new player who has forgotten what makes a torch, and it should tell
+    /// them again; the same world reloaded should not. So the set travels in the save.
+    /// </remarks>
+    public IReadOnlyCollection<string> Names => _announced;
+
+    /// <summary>Puts back what a save remembered, without announcing any of it.</summary>
+    public void Reload(IEnumerable<string> names)
+    {
+        _announced.Clear();
+        foreach (var name in names) _announced.Add(name);
+
+        _lastVersion = -1;
+        Dirty = false;
+    }
+
     /// <summary>True when something has been added since it was last written out.</summary>
     public bool Dirty { get; private set; }
 

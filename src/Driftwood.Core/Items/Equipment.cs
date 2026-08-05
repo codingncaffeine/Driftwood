@@ -103,6 +103,22 @@ public sealed class Equipment
         return spilled;
     }
 
+    /// <summary>
+    /// Puts a worn slot back exactly as a save left it, without asking whether it belongs there.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ Deliberately past the <see cref="Accepts"/> filter. Nothing in the game sets
+    /// <see cref="ItemType.Wears"/> yet, so every worn slot refuses everything — and a load that
+    /// went through <see cref="Put"/> would empty somebody's armour on the day armour exists and
+    /// its rules change. What was worn when it was saved is what is worn when it is opened.
+    /// </remarks>
+    public void Restore(EquipSlot slot, ItemStack stack)
+    {
+        if ((uint)slot >= (uint)Slots) return;
+        _worn[(int)slot] = stack;
+        Version++;
+    }
+
     public void Clear()
     {
         Array.Clear(_worn);

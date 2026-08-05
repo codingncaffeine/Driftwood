@@ -99,6 +99,21 @@ public sealed class PlayerVitals
         _wasOnGround = true;
     }
 
+    /// <summary>
+    /// Puts health and breath back where a save left them, and nothing else pending.
+    /// </summary>
+    /// <remarks>
+    /// Clamped rather than trusted. The numbers come off a file, and a health of minus one or of
+    /// four hundred is the kind of thing a corrupted save says — neither should be a state the
+    /// game can be put into by opening one.
+    /// </remarks>
+    public void Restore(int health, int breath)
+    {
+        Restore();
+        Health = Math.Clamp(health, 0, MaxHealth);
+        Breath = Math.Clamp(breath, 0, MaxBreath);
+    }
+
     /// <summary>Takes damage directly, for anything that is not a fall or a lungful of water.</summary>
     public void Hurt(int halfHearts)
     {

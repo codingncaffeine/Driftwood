@@ -10,6 +10,7 @@ using Driftwood.Core.Lighting;
 using Driftwood.Core.Meshing;
 using Driftwood.Core.Particles;
 using Driftwood.Core.Physics;
+using Driftwood.Core.Saves;
 using Driftwood.Core.Settings;
 using Driftwood.Core.Sky;
 using Driftwood.Core.Spatial;
@@ -417,6 +418,10 @@ public static class WorldAudit
         var lampFaults = CraftedLightSelfTest(registry, out var lampDetail);
         Check("light can be built, and blocked", lampFaults.Count == 0,
             lampFaults.Count == 0 ? lampDetail : $"{lampFaults.Count} faults: {lampFaults[0]}");
+
+        var saveFaults = SaveSelfTest(registry, items, book, out var saveDetail);
+        Check("a world survives being written down", saveFaults.Count == 0,
+            saveFaults.Count == 0 ? saveDetail : $"{saveFaults.Count} faults: {saveFaults[0]}");
 
         var chestFaults = ChestSelfTest(items, out var chestDetail);
         Check("a chest keeps what it is given", chestFaults.Count == 0,
@@ -2455,6 +2460,207 @@ public static class WorldAudit
                 if (table.TryRewire(into, x, y, z, out var become)) into.SetBlock(x, y, z, become);
             }
         }
+    }
+
+    /// <summary>
+    /// Builds a world, writes it, reads it back, and checks nothing changed on the way.
+    /// </summary>
+    /// <remarks>
+    /// <para>A round trip is the obvious check and on its own it is not enough — it passes on a
+    /// format that stores raw ids, which is exactly the format that quietly ruins a world the next
+    /// time a block is added. So the two failures that actually cost somebody their save are
+    /// checked separately, and neither is visible from a round trip:</para>
+    /// <para>⛔ <b>That the palette is doing something.</b> The same save is resolved against a
+    /// deliberately <em>shifted</em> registry — every id moved, as inserting one block does to every
+    /// id after it — and the names have to come back pointing at the right blocks. A format keyed on
+    /// ids passes every round trip ever run and fails this one.</para>
+    /// <para>⛔ <b>That a name this build no longer has is reported and skipped</b>, rather than
+    /// resolving to whatever now occupies that number. That is the difference between a player
+    /// noticing a missing block and a player finding their wall turned into glass.</para>
+    /// </remarks>
+    private static List<string> SaveSelfTest(
+        BlockRegistry registry, ItemRegistry items, RecipeBook book, out string detail)
+    {
+        var faults = new List<string>();
+
+        var world = new VoxelWorld(registry);
+        var furnaces = new FurnaceBank(items, book);
+        var chests = new ChestBank(items);
+        var pockets = new Inventory(items);
+        var worn = new Equipment(items);
+        var vitals = new PlayerVitals(registry);
+        var unlocks = new RecipeUnlocks();
+
+        var stone = registry.ByName("stone").Id;
+        var bench = registry.ByName("bench").Id;
+        var torch = registry.ByName("torch").Id;
+
+        // A world somebody has built in: a floor, a bench on it, a torch beside it.
+        for (var x = 0; x < 4; x++)
+        for (var z = 0; z < 4; z++)
+            world.SetBlock(x, 64, z, stone);
+
+        world.SetBlock(1, 65, 1, bench);
+        world.SetBlock(2, 65, 1, torch);
+
+        if (!world.Changed) faults.Add("a world that has been built in does not think anything changed");
+
+        var furnace = furnaces.Open(3, 65, 3);
+        furnace.Input = items.Stack("raw_iron", 5);
+        furnace.Fuel = items.Stack("coal", 2);
+        furnace.Output = items.Stack("iron_ingot", 1);
+        furnace.BurnLeft = 42.5f;
+        furnace.Progress = 3.25f;
+
+        var chest = chests.Open(0, 65, 0);
+        chest.Contents[0] = items.Stack("driftoak_planks", 37);
+        chest.Contents[26] = items.Stack("stormglass", 2);
+
+        pockets.Add(items.Stack("driftoak_log", 12));
+        pockets.Add(new ItemStack(items.ByName("wood_pickaxe").Id, 1, 17));
+        pockets.Select(3);
+        worn.Restore(EquipSlot.Offhand, items.Stack("torch", 8));
+        vitals.Restore(13, 220);
+        unlocks.Reload(["sticks", "bench"]);
+
+        var state = new WorldState(
+            "driftwood", items, world, furnaces, chests, pockets, worn, vitals, unlocks)
+        {
+            Position = new Vector3(1.5f, 65f, 2.5f),
+            Yaw = 47f,
+            Pitch = -12f,
+            Played = 3725.5,
+            DayTime = 0.375f,
+        };
+
+        var path = Path.Combine(Path.GetTempPath(), $"driftwood-audit-{Environment.ProcessId}.dws");
+
+        try
+        {
+            // ⚠ Written through the real writer to the real disk, because "it round-trips through a
+            // MemoryStream" says nothing about the atomic move, and that move is the part that keeps
+            // somebody's world when a save is interrupted.
+            if (WorldSave.Write(Path.GetFileNameWithoutExtension(path), state) is { } wrote)
+                faults.Add($"writing a world failed: {wrote}");
+
+            var written = WorldSave.PathFor(Path.GetFileNameWithoutExtension(path));
+
+            if (world.Changed) faults.Add("a world still thinks it has unsaved changes after being saved");
+
+            if (!WorldSave.TryReadHeader(written, out var header))
+            {
+                faults.Add("a world that was just written has no readable header");
+                detail = "the save could not be read back";
+                return faults;
+            }
+
+            if (header.Seed != "driftwood") faults.Add($"the header came back with seed '{header.Seed}'");
+            if (Math.Abs(header.Played - 3725.5) > 0.01) faults.Add($"played time came back as {header.Played}");
+            if (header.Edits != world.Edits.Count)
+                faults.Add($"the header says {header.Edits} edits where the world had {world.Edits.Count}");
+
+            // Back into a session that knows nothing.
+            var back = new VoxelWorld(registry);
+            var backFurnaces = new FurnaceBank(items, book);
+            var backChests = new ChestBank(items);
+            var backPockets = new Inventory(items);
+            var backWorn = new Equipment(items);
+            var backVitals = new PlayerVitals(registry);
+            var backUnlocks = new RecipeUnlocks();
+
+            var into = new WorldState(
+                "", items, back, backFurnaces, backChests, backPockets, backWorn, backVitals, backUnlocks);
+
+            var missing = new List<string>();
+            if (WorldSave.Read(written, registry, items, into, missing) is { } read)
+                faults.Add($"reading a world failed: {read}");
+
+            if (missing.Count > 0)
+                faults.Add($"a world written by this build reported {missing.Count} names it does not have: {missing[0]}");
+
+            if (back.GetBlock(1, 65, 1) != bench) faults.Add("the bench did not come back");
+            if (back.GetBlock(2, 65, 1) != torch) faults.Add("the torch did not come back");
+            if (back.GetBlock(0, 64, 0) != stone) faults.Add("the floor did not come back");
+            if (back.Edits.Count != world.Edits.Count)
+                faults.Add($"{back.Edits.Count} edits came back of {world.Edits.Count}");
+
+            if (back.Changed) faults.Add("a world is marked changed the instant it is loaded, so every load autosaves");
+
+            if (!backFurnaces.TryGet(3, 65, 3, out var backFurnace))
+            {
+                faults.Add("the furnace did not come back");
+            }
+            else
+            {
+                if (backFurnace.Input.Count != 5) faults.Add($"the furnace came back holding {backFurnace.Input.Count} ore");
+                if (Math.Abs(backFurnace.BurnLeft - 42.5f) > 0.01f)
+                    faults.Add($"the furnace came back with {backFurnace.BurnLeft:F2}s of burn, not 42.50");
+                if (Math.Abs(backFurnace.Progress - 3.25f) > 0.01f)
+                    faults.Add($"the furnace lost its progress: {backFurnace.Progress:F2}");
+            }
+
+            if (!backChests.TryGet(0, 65, 0, out var backChest))
+            {
+                faults.Add("the chest did not come back");
+            }
+            else
+            {
+                if (backChest.Contents[0].Count != 37)
+                    faults.Add($"the chest's first slot came back with {backChest.Contents[0].Count}");
+                if (backChest.Contents[26].IsEmpty) faults.Add("the chest's last slot came back empty");
+            }
+
+            if (backPockets.Selected != 3) faults.Add($"the held slot came back as {backPockets.Selected}");
+            if (backPockets.CountOf(items.ByName("driftoak_log").Id) != 12)
+                faults.Add("the logs did not come back");
+
+            var pick = ItemStack.Empty;
+            foreach (var slot in backPockets.All)
+                if (!slot.IsEmpty && items[slot.Item].Name == "wood_pickaxe") pick = slot;
+
+            if (pick.IsEmpty) faults.Add("the pickaxe did not come back");
+            else if (pick.Damage != 17) faults.Add($"the pickaxe came back with {pick.Damage} wear, not 17");
+
+            if (backWorn.At((int)EquipSlot.Offhand).Count != 8) faults.Add("what was in the other hand did not come back");
+            if (backVitals.Health != 13) faults.Add($"health came back as {backVitals.Health}");
+            if (backVitals.Breath != 220) faults.Add($"breath came back as {backVitals.Breath}");
+            if (backUnlocks.Announced != 2) faults.Add($"{backUnlocks.Announced} unlocks came back of 2");
+            if (Math.Abs(into.Position.X - 1.5f) > 0.001f) faults.Add("the player came back somewhere else");
+
+            // ⛔ THE PALETTE, and the only test that can tell it from a format keyed on ids. Every
+            // name is resolved against a registry whose ids have all moved, which is what adding one
+            // block does to every id after it.
+            var shifted = new Palette();
+            shifted.Add("stone");
+            shifted.Add("bench");
+
+            var shuffle = shifted.Resolve(n => registry.ByName(n).Id.Value + 1000, []);
+            if (shuffle[0] != stone.Value + 1000 || shuffle[1] != bench.Value + 1000)
+                faults.Add("a palette resolved against moved ids did not follow them, so names are not being used");
+
+            // ⛔ And a name this build has never heard of is reported and left alone, rather than
+            // resolving to whatever now occupies that number.
+            var gone = new Palette();
+            gone.Add("stone");
+            gone.Add("a_block_that_was_removed");
+
+            var lost = new List<string>();
+            var partial = gone.Resolve(n => registry.TryByName(n, out var b) ? b.Id.Value : -1, lost);
+
+            if (lost.Count != 1) faults.Add($"{lost.Count} names were reported missing where one was");
+            if (partial[1] >= 0) faults.Add("a block this build does not have resolved to one that it does");
+            if (partial[0] != stone.Value) faults.Add("a missing name took a real one down with it");
+
+            detail = $"{world.Edits.Count} edits, a furnace mid-smelt, a {Chest.Slots}-slot chest, "
+                   + $"{backPockets.Used} pockets and {backUnlocks.Announced} unlocks written and read back; "
+                   + "names survive every id moving, and a name this build lost is reported not guessed";
+        }
+        finally
+        {
+            try { File.Delete(WorldSave.PathFor(Path.GetFileNameWithoutExtension(path))); } catch (Exception) { }
+        }
+
+        return faults;
     }
 
     /// <summary>

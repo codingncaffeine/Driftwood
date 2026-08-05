@@ -1,0 +1,461 @@
+using System.Numerics;
+using Driftwood.Core.Blocks;
+using Driftwood.Core.Entities;
+using Driftwood.Core.Items;
+using Driftwood.Core.World;
+
+namespace Driftwood.Core.Saves;
+
+/// <summary>Everything about a world that is not the world, for a list to show.</summary>
+/// <param name="Saved">When it was written, in real time.</param>
+/// <param name="Played">Seconds anybody has spent in it.</param>
+/// <param name="DayTime">Where the sun was, 0 to 1 through a day.</param>
+public readonly record struct SaveHeader(
+    string Name, string Seed, DateTime Saved, double Played, float DayTime, int Edits)
+{
+    /// <summary>Played time as a person would say it.</summary>
+    public string PlayedFor
+    {
+        get
+        {
+            var span = TimeSpan.FromSeconds(Played);
+            return span.TotalHours >= 1
+                ? $"{(int)span.TotalHours}h {span.Minutes}m"
+                : $"{span.Minutes}m {span.Seconds}s";
+        }
+    }
+}
+
+/// <summary>
+/// Everything a session has that is worth keeping, handed over in one piece.
+/// </summary>
+/// <remarks>
+/// A record of references rather than a copy. Saving reads them on the thread that owns them and
+/// writes bytes; nothing here is held past that.
+/// </remarks>
+public sealed record WorldState(
+    string Seed,
+    ItemRegistry Catalogue,
+    VoxelWorld World,
+    FurnaceBank Furnaces,
+    ChestBank Chests,
+    Inventory Pockets,
+    Equipment Worn,
+    PlayerVitals Vitals,
+    RecipeUnlocks Unlocks)
+{
+    public Vector3 Position { get; set; }
+    public float Yaw { get; set; }
+    public float Pitch { get; set; }
+    public double Played { get; set; }
+    public float DayTime { get; set; }
+}
+
+/// <summary>
+/// Writes a world to disk and reads it back.
+/// </summary>
+/// <remarks>
+/// <para><b>The world itself is barely in here.</b> A chunk is a pure function of seed and position,
+/// decoration included, so terrain is never written down — a save is the seed and the difference
+/// between what the generator makes and what somebody built. A world somebody has walked across for
+/// an hour and changed forty blocks in is forty blocks on disk.</para>
+/// <para><b>Everything is written through a palette of names.</b> See <see cref="Palette"/> for why
+/// that is not optional: ids are handed out in registration order and adding a block shifts every
+/// one after it.</para>
+/// <para><b>The write is atomic.</b> Everything goes to a temporary file which is moved over the
+/// real one only once it is complete, so a save interrupted half way through leaves the previous
+/// one intact rather than a truncated file where a world used to be. The rule is inside this class
+/// rather than left to a caller to remember.</para>
+/// </remarks>
+public static class WorldSave
+{
+    /// <summary>Where worlds live.</summary>
+    public static string Folder => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Driftwood", "saves");
+
+    public static string PathFor(string name) => Path.Combine(Folder, $"{Sanitised(name)}.dws");
+
+    /// <summary>
+    /// A name that is safe to be a file name, and still recognisably what was typed.
+    /// </summary>
+    /// <remarks>
+    /// A world called "con" or "my/world" is a world somebody typed, not an attack — but both are
+    /// things a file system refuses or misreads, and the failure would land as "saving does not
+    /// work" rather than as anything to do with the name.
+    /// </remarks>
+    public static string Sanitised(string name)
+    {
+        var clean = new string([.. name.Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c)]).Trim();
+        if (clean.Length == 0) clean = "world";
+
+        string[] refused = ["CON", "PRN", "AUX", "NUL", "COM1", "COM2", "LPT1", "LPT2"];
+        if (refused.Contains(clean, StringComparer.OrdinalIgnoreCase)) clean += "_";
+
+        return clean.Length > 64 ? clean[..64] : clean;
+    }
+
+    /// <summary>
+    /// Writes a world, and leaves whatever was there before untouched until it is finished.
+    /// </summary>
+    /// <returns>Null on success, or what went wrong.</returns>
+    public static string? Write(string name, WorldState state)
+    {
+        try
+        {
+            Directory.CreateDirectory(Folder);
+
+            var blocks = new Palette();
+            var items = new Palette();
+
+            // Built before anything is written, because the palette has to be at the front of the
+            // file and it is not known until everything that uses it has been walked.
+            var edits = EditBytes(state.World, blocks);
+            var furnaces = FurnaceBytes(state.Furnaces, items, state.Catalogue);
+            var chests = ChestBytes(state.Chests, items, state.Catalogue);
+            var player = PlayerBytes(state, items);
+
+            var path = PathFor(name);
+            var temporary = path + ".writing";
+
+            using (var file = File.Create(temporary))
+            using (var into = new BinaryWriter(file))
+            {
+                into.Write(SaveSection.Magic);
+                into.Write(SaveSection.Version);
+
+                SaveSection.Write(into, "HEAD", Bytes(head =>
+                {
+                    head.Write(name);
+                    head.Write(state.Seed);
+                    head.Write(DateTime.UtcNow.ToBinary());
+                    head.Write(state.Played);
+                    head.Write(state.DayTime);
+                    head.Write(state.World.Edits.Count);
+                }));
+
+                SaveSection.Write(into, "PALB", Bytes(blocks.Write));
+                SaveSection.Write(into, "PALI", Bytes(items.Write));
+                SaveSection.Write(into, "EDIT", edits);
+                SaveSection.Write(into, "FURN", furnaces);
+                SaveSection.Write(into, "CHST", chests);
+                SaveSection.Write(into, "PLYR", player);
+
+                SaveSection.Write(into, "UNLK", Bytes(unlocked =>
+                {
+                    unlocked.Write(state.Unlocks.Names.Count);
+                    foreach (var recipe in state.Unlocks.Names) unlocked.Write(recipe);
+                }));
+            }
+
+            File.Move(temporary, path, overwrite: true);
+            state.World.Settled();
+            return null;
+        }
+        catch (Exception fault)
+        {
+            return fault.Message;
+        }
+    }
+
+    /// <summary>Every save on disk, newest first, without reading any of them past the header.</summary>
+    public static List<SaveHeader> List()
+    {
+        var found = new List<SaveHeader>();
+        if (!Directory.Exists(Folder)) return found;
+
+        foreach (var path in Directory.EnumerateFiles(Folder, "*.dws"))
+            if (TryReadHeader(path, out var header)) found.Add(header);
+
+        found.Sort((a, b) => b.Saved.CompareTo(a.Saved));
+        return found;
+    }
+
+    /// <summary>Reads only the first section, which is all a list needs.</summary>
+    public static bool TryReadHeader(string path, out SaveHeader header)
+    {
+        header = default;
+
+        try
+        {
+            using var file = File.OpenRead(path);
+            using var from = new BinaryReader(file);
+
+            if (!Opens(from)) return false;
+            if (!SaveSection.TryRead(from, out var tag, out var payload) || tag != "HEAD") return false;
+
+            using var head = new BinaryReader(new MemoryStream(payload));
+            header = new SaveHeader(
+                head.ReadString(), head.ReadString(),
+                DateTime.FromBinary(head.ReadInt64()),
+                head.ReadDouble(), head.ReadSingle(), head.ReadInt32());
+
+            return true;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Reads a world back into a session that is already standing.
+    /// </summary>
+    /// <param name="missing">
+    /// Filled with every name this build no longer knows. A load says so rather than quietly
+    /// dropping part of somebody's world.
+    /// </param>
+    /// <returns>Null on success, or what went wrong.</returns>
+    public static string? Read(
+        string path, BlockRegistry registry, ItemRegistry catalogue, WorldState into, List<string> missing)
+    {
+        try
+        {
+            using var file = File.OpenRead(path);
+            using var from = new BinaryReader(file);
+
+            if (!Opens(from)) return "this is not a Driftwood world";
+
+            Palette? blocks = null;
+            Palette? items = null;
+            byte[]? edits = null;
+            byte[]? furnaces = null;
+            byte[]? chests = null;
+            byte[]? player = null;
+            byte[]? unlocks = null;
+
+            while (SaveSection.TryRead(from, out var tag, out var payload))
+            {
+                switch (tag)
+                {
+                    case "HEAD": break;
+                    case "PALB": blocks = Palette.Read(Reader(payload)); break;
+                    case "PALI": items = Palette.Read(Reader(payload)); break;
+                    case "EDIT": edits = payload; break;
+                    case "FURN": furnaces = payload; break;
+                    case "CHST": chests = payload; break;
+                    case "PLYR": player = payload; break;
+                    case "UNLK": unlocks = payload; break;
+
+                    // Written by a newer build than this one. Skipped, and deliberately not an
+                    // error: the length said how far, which is the whole reason sections carry one.
+                    default: break;
+                }
+            }
+
+            if (blocks is null || items is null) return "this world has no palette, so nothing in it can be read";
+
+            var toBlock = blocks.Resolve(n => registry.TryByName(n, out var b) ? b.Id.Value : -1, missing);
+            var toItem = items.Resolve(n => catalogue.TryByName(n, out var i) ? i.Id.Value : -1, missing);
+
+            if (edits is not null) ReadEdits(Reader(edits), into.World, toBlock);
+            if (furnaces is not null) ReadFurnaces(Reader(furnaces), into.Furnaces, toItem);
+            if (chests is not null) ReadChests(Reader(chests), into.Chests, toItem);
+            if (player is not null) ReadPlayer(Reader(player), into, toItem);
+
+            if (unlocks is not null)
+            {
+                var reader = Reader(unlocks);
+                var count = reader.ReadInt32();
+                var names = new List<string>(Math.Clamp(count, 0, 4096));
+                for (var i = 0; i < count; i++) names.Add(reader.ReadString());
+                into.Unlocks.Reload(names);
+            }
+
+            into.World.Settled();
+            return null;
+        }
+        catch (Exception fault)
+        {
+            return fault.Message;
+        }
+    }
+
+    private static bool Opens(BinaryReader from)
+    {
+        var magic = from.ReadBytes(4);
+        if (magic.Length < 4 || !magic.AsSpan().SequenceEqual(SaveSection.Magic)) return false;
+
+        var version = from.ReadInt32();
+        return version is > 0 and <= SaveSection.Version;
+    }
+
+    private static BinaryReader Reader(byte[] payload) => new(new MemoryStream(payload));
+
+    private static byte[] Bytes(Action<BinaryWriter> fill)
+    {
+        using var buffer = new MemoryStream();
+        using var into = new BinaryWriter(buffer);
+        fill(into);
+        into.Flush();
+        return buffer.ToArray();
+    }
+
+    private static byte[] EditBytes(VoxelWorld world, Palette blocks) => Bytes(into =>
+    {
+        into.Write(world.Edits.Count);
+
+        foreach (var (cell, id) in world.Edits)
+        {
+            into.Write(cell.X);
+            into.Write(cell.Y);
+            into.Write(cell.Z);
+            into.Write(blocks.Of(world.Registry[id].Name));
+        }
+    });
+
+    private static void ReadEdits(BinaryReader from, VoxelWorld world, int[] toBlock)
+    {
+        var count = from.ReadInt32();
+
+        for (var i = 0; i < count; i++)
+        {
+            var x = from.ReadInt32();
+            var y = from.ReadInt32();
+            var z = from.ReadInt32();
+            var at = from.ReadInt32();
+
+            // A block this build no longer has leaves the cell as the generator made it, which is
+            // the least surprising thing that can happen and is already reported as missing.
+            if ((uint)at >= (uint)toBlock.Length || toBlock[at] < 0) continue;
+            world.Restore(x, y, z, new BlockId((ushort)toBlock[at]));
+        }
+    }
+
+    private static void Stack(BinaryWriter into, ItemStack stack, Palette items, ItemRegistry catalogue)
+    {
+        if (stack.IsEmpty) { into.Write(-1); return; }
+
+        into.Write(items.Of(catalogue[stack.Item].Name));
+        into.Write(stack.Count);
+        into.Write(stack.Damage);
+    }
+
+    private static ItemStack Stack(BinaryReader from, int[] toItem)
+    {
+        var at = from.ReadInt32();
+        if (at < 0) return ItemStack.Empty;
+
+        var count = from.ReadInt32();
+        var damage = from.ReadInt32();
+
+        if ((uint)at >= (uint)toItem.Length || toItem[at] < 0) return ItemStack.Empty;
+        return new ItemStack(new ItemId((ushort)toItem[at]), count, damage);
+    }
+
+    private static byte[] FurnaceBytes(FurnaceBank bank, Palette items, ItemRegistry catalogue) => Bytes(into =>
+    {
+        into.Write(bank.Count);
+
+        foreach (var (at, furnace) in bank.All)
+        {
+            into.Write(at.X);
+            into.Write(at.Y);
+            into.Write(at.Z);
+            Stack(into, furnace.Input, items, catalogue);
+            Stack(into, furnace.Fuel, items, catalogue);
+            Stack(into, furnace.Output, items, catalogue);
+            into.Write(furnace.BurnLeft);
+            into.Write(furnace.BurnTotal);
+            into.Write(furnace.Progress);
+        }
+    });
+
+    private static void ReadFurnaces(BinaryReader from, FurnaceBank bank, int[] toItem)
+    {
+        var count = from.ReadInt32();
+
+        for (var i = 0; i < count; i++)
+        {
+            var furnace = bank.Open(from.ReadInt32(), from.ReadInt32(), from.ReadInt32());
+            furnace.Input = Stack(from, toItem);
+            furnace.Fuel = Stack(from, toItem);
+            furnace.Output = Stack(from, toItem);
+            furnace.BurnLeft = from.ReadSingle();
+            furnace.BurnTotal = from.ReadSingle();
+            furnace.Progress = from.ReadSingle();
+        }
+    }
+
+    private static byte[] ChestBytes(ChestBank bank, Palette items, ItemRegistry catalogue) => Bytes(into =>
+    {
+        into.Write(bank.Count);
+
+        foreach (var (at, chest) in bank.All)
+        {
+            into.Write(at.X);
+            into.Write(at.Y);
+            into.Write(at.Z);
+            into.Write(Chest.Slots);
+            foreach (var stack in chest.Contents) Stack(into, stack, items, catalogue);
+        }
+    });
+
+    private static void ReadChests(BinaryReader from, ChestBank bank, int[] toItem)
+    {
+        var count = from.ReadInt32();
+
+        for (var i = 0; i < count; i++)
+        {
+            var chest = bank.Open(from.ReadInt32(), from.ReadInt32(), from.ReadInt32());
+            var slots = from.ReadInt32();
+
+            // Written by a build whose chests were a different size. Read what is there and put it
+            // where it fits, rather than refusing the whole world over a row of slots.
+            for (var slot = 0; slot < slots; slot++)
+            {
+                var stack = Stack(from, toItem);
+                if (slot < Chest.Slots) chest.Contents[slot] = stack;
+            }
+        }
+    }
+
+    private static byte[] PlayerBytes(WorldState state, Palette items) => Bytes(into =>
+    {
+        into.Write(state.Position.X);
+        into.Write(state.Position.Y);
+        into.Write(state.Position.Z);
+        into.Write(state.Yaw);
+        into.Write(state.Pitch);
+        into.Write(state.Vitals.Health);
+        into.Write(state.Vitals.Breath);
+        into.Write(state.Pockets.Selected);
+
+        into.Write(Inventory.Slots);
+        foreach (var stack in state.Pockets.All) Stack(into, stack, items, state.Catalogue);
+
+        into.Write(Equipment.Slots);
+        for (var slot = 0; slot < Equipment.Slots; slot++)
+            Stack(into, state.Worn.At(slot), items, state.Catalogue);
+    });
+
+    private static void ReadPlayer(BinaryReader from, WorldState into, int[] toItem)
+    {
+        into.Position = new Vector3(from.ReadSingle(), from.ReadSingle(), from.ReadSingle());
+        into.Yaw = from.ReadSingle();
+        into.Pitch = from.ReadSingle();
+
+        var health = from.ReadInt32();
+        var breath = from.ReadInt32();
+        into.Vitals.Restore(health, breath);
+
+        var selected = from.ReadInt32();
+
+        into.Pockets.Clear();
+        var pockets = from.ReadInt32();
+        for (var slot = 0; slot < pockets; slot++)
+        {
+            var stack = Stack(from, toItem);
+            if (slot < Inventory.Slots && !stack.IsEmpty) into.Pockets.PutInto(slot, stack);
+        }
+
+        into.Pockets.Select(selected);
+
+        into.Worn.Clear();
+        var worn = from.ReadInt32();
+        for (var slot = 0; slot < worn; slot++)
+        {
+            var stack = Stack(from, toItem);
+            if (slot < Equipment.Slots && !stack.IsEmpty) into.Worn.Restore((EquipSlot)slot, stack);
+        }
+    }
+}

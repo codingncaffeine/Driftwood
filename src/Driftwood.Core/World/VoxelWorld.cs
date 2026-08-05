@@ -28,6 +28,45 @@ public sealed class VoxelWorld
 
     public IEnumerable<Chunk> Chunks => _chunks.Values;
 
+    /// <summary>
+    /// Every cell anybody has changed since the world was made, and what it was changed to.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ <b>This is the whole of what a save has to store about the world.</b> A chunk is a
+    /// pure function of seed and position, decoration included — so terrain is never written down,
+    /// only the difference between what the generator makes and what somebody built.</para>
+    /// <para>⚠ <b>Recorded here rather than in <c>WorldStreamer.EditBlock</c>, and that is the whole
+    /// reason it is correct.</b> Generation writes through <see cref="Chunk.Set"/> directly and
+    /// never comes through this method, so this is exactly and only "somebody changed the world" —
+    /// which catches the connection rewire and the support-shed pass as well as a player's own
+    /// swing. Hooking the caller instead would have missed both, and missed them silently.</para>
+    /// <para>Kept even when an edit puts a cell back to what the generator would have made. Knowing
+    /// a cell was touched is cheaper than asking the generator what it would have been, and the
+    /// count of them is small enough that the tidy-up is not worth the risk of getting it wrong.
+    /// </para>
+    /// </remarks>
+    public IReadOnlyDictionary<(int X, int Y, int Z), BlockId> Edits => _edits;
+
+    private readonly Dictionary<(int X, int Y, int Z), BlockId> _edits = [];
+
+    /// <summary>True once anything has been changed that a save would have to remember.</summary>
+    public bool Changed { get; private set; }
+
+    /// <summary>Puts a saved edit back without counting it as a fresh change.</summary>
+    /// <remarks>
+    /// What loading does. Replaying edits through <see cref="SetBlock"/> would work and would leave
+    /// the world marked dirty the instant it was opened, so every load would be followed by an
+    /// autosave of the thing just loaded.
+    /// </remarks>
+    public void Restore(int wx, int wy, int wz, BlockId id)
+    {
+        SetBlock(wx, wy, wz, id);
+        Changed = false;
+    }
+
+    /// <summary>Forgets that anything has changed. What a save does once it is safely written.</summary>
+    public void Settled() => Changed = false;
+
     public bool TryGetChunk(ChunkPos pos, out Chunk chunk) => _chunks.TryGetValue(pos, out chunk!);
 
     public Chunk GetOrCreateChunk(ChunkPos pos) => _chunks.GetOrAdd(pos, static p => new Chunk(p));
@@ -65,6 +104,9 @@ public sealed class VoxelWorld
         var ly = wy & Chunk.SizeMask;
         var lz = wz & Chunk.SizeMask;
         chunk.Set(lx, ly, lz, id);
+
+        _edits[(wx, wy, wz)] = id;
+        Changed = true;
 
         if (lx == 0) DirtyNeighbour(pos.Offset(-1, 0, 0));
         else if (lx == Chunk.SizeMask) DirtyNeighbour(pos.Offset(1, 0, 0));

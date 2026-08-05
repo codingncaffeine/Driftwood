@@ -65,6 +65,12 @@ public sealed class FurnaceBank
 
     public int Count => _at.Count;
 
+    /// <summary>Every furnace and where it is, for a save to write down.</summary>
+    public IEnumerable<((int X, int Y, int Z) At, Furnace What)> All
+    {
+        get { foreach (var (cell, furnace) in _at) yield return (cell, furnace); }
+    }
+
     /// <summary>The furnace at a cell, made if this is the first time anybody opened it.</summary>
     public Furnace Open(int x, int y, int z)
     {

@@ -57,6 +57,12 @@ public sealed class ChestBank
 
     public int Count => _at.Count;
 
+    /// <summary>Every chest and where it is, for a save to write down.</summary>
+    public IEnumerable<((int X, int Y, int Z) At, Chest What)> All
+    {
+        get { foreach (var (cell, chest) in _at) yield return (cell, chest); }
+    }
+
     /// <summary>The chest at a cell, made if this is the first time anybody opened it.</summary>
     public Chest Open(int x, int y, int z)
     {
