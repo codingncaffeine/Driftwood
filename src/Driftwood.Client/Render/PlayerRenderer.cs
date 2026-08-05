@@ -45,18 +45,43 @@ public sealed class PlayerRenderer : IDisposable
     /// <summary>Where the torso turns, in model units. Everything above the waist hangs off it.</summary>
     private static readonly Vector3 BodyPivot = new(0f, 12f, 0f);
 
-    // Where the first-person arm sits in the camera's own space, and how it moves when it swings.
+    // ── The first-person view model. Every number a swing looks wrong by is in this block. ──
     //
-    // Pitch is the value that decides what you are looking at. Near a right angle the arm points
-    // straight away from the eye and you end up staring down the barrel at the flat cap on its end,
-    // which reads as the back of the arm rather than as an arm. Well under that, more of its length
-    // lies across the screen and it reads as a limb. Placed to the right of the eye it will always
-    // show its inner side, which is what looking down at your own arm actually looks like.
+    // What is meant to be on screen is the thing in the hand, and only part of it — or, holding
+    // nothing, the hand alone. No forearm, no shoulder. So the arm is aimed nearly straight away
+    // from the eye and its shoulder is put *below the bottom edge of the frame*: at that angle its
+    // whole length is foreshortened into almost nothing and the only part still inside the picture
+    // is the fist at the far end, low and to the right.
     //
-    // Provisional: to be dialled in together with the swing once mining takes more than one blow.
-    private const float RestPitch = 1.05f;    // radians; how far the arm points away from the eye
-    private const float RestRoll = -0.30f;    // and how far it tilts in toward the centre
-    private static readonly Vector3 RestOffset = new(0.52f, -0.20f, -0.42f);
+    // The arm hangs down its own −Y, so pitch is the angle that decides all of this. Near a right
+    // angle it points straight away; under that it swings down out of frame, over it the whole limb
+    // rises back into view broadside on. The rest yaw turns the hand in toward the crosshair, so
+    // what is held leans at what it is about to hit.
+    //
+    // The geometry these are placed against: the view is 70 degrees vertical, so the frame's half
+    // height at distance z is 0.70·z. The shoulder sits at z 0.58 where that is 0.41 — well above
+    // its own −0.76 — and the fist ends up at z 1.26 where it is 0.88, which puts the fist just
+    // inside the bottom edge. Dial the offset and this is the arithmetic that decides what shows.
+    private const float RestPitch = 1.58f;     // radians away from straight down: aimed down the barrel
+    private const float RestYaw = 0.26f;       // and in toward the middle of the screen
+    private const float RestRoll = -0.18f;
+    private static readonly Vector3 RestOffset = new(0.58f, -0.76f, -0.58f);
+
+    // The swing is a diagonal slash: out and across, right to left. It cocks back to the right,
+    // sweeps forward and over to the left, then recovers.
+    //
+    // The crossing is carried by yaw and by the sideways shift together — yaw turns the tool to
+    // face the way it is travelling, the shift moves it across the frame — and that pairing is what
+    // makes it read as a stroke rather than as a tool sliding sideways. Vertical travel is
+    // deliberately the smaller part of it: a chop that mostly goes up and down reads as a jab from
+    // behind the eye, which is what this was.
+    private const float WindUpShare = 0.30f;   // of the swing spent cocking back to the right
+    private const float DriveShare = 0.28f;    // of it spent crossing; the rest recovers
+    private const float SwingCock = 0.30f;     // radians raised above rest at the top of the wind-up
+    private const float SwingFollow = 0.30f;   // radians below rest at the end of the follow-through
+    private const float SwingCross = 0.80f;    // how far the tool turns across the screen, the big one
+    private const float SwingTwist = 0.45f;    // how far the forearm rolls over through the stroke
+    private static readonly Vector3 SwingShift = new(-0.26f, -0.04f, -0.16f);
 
     public ArmStyle Arms { get; }
 
@@ -241,18 +266,7 @@ public sealed class PlayerRenderer : IDisposable
         _shader.SetFloat("uSky", light.Sky);
         _shader.SetVec3("uBlockLight", light.Block);
 
-        var t = swinging ? swingProgress : 0f;
-
-        // Same shape as the third-person arc — up fast, through slowly — so the two views read as
-        // the same motion seen from different places.
-        var arc = MathF.Sin(MathF.Sqrt(t) * MathF.PI);
-        var through = MathF.Sin(t * MathF.PI);
-
-        var model = Matrix4x4.CreateRotationZ(RestRoll - arc * 0.50f)
-                  * Matrix4x4.CreateRotationX(RestPitch + arc * 0.62f)
-                  * Matrix4x4.CreateRotationY(-arc * 0.34f)
-                  * Matrix4x4.CreateTranslation(
-                        RestOffset + new Vector3(-arc * 0.12f, arc * 0.10f, -through * 0.10f));
+        var model = ArmTransform(swinging ? swingProgress : 0f);
 
         foreach (var draw in _draws)
         {
@@ -261,6 +275,77 @@ public sealed class PlayerRenderer : IDisposable
         }
 
         _gl.BindVertexArray(0);
+    }
+
+    /// <summary>
+    /// Where the first-person arm is, this far through a swing. In the camera's own space.
+    /// </summary>
+    /// <remarks>
+    /// Public and static because the thing in the hand has to travel with the hand. Anything drawn
+    /// separately and animated with its own copy of these numbers drifts out of the fist the first
+    /// time one of them is dialled — which is exactly the sort of thing that is only ever noticed
+    /// mid-swing, from inside the game.
+    /// </remarks>
+    public static Matrix4x4 ArmTransform(float t)
+    {
+        var swing = SwingCurve(t);
+
+        // Raised at −1, driven down past rest at +1. Increasing pitch lifts the hand, because the
+        // arm hangs down its own −Y, so cocking back is a bigger angle and the strike is a smaller
+        // one — which is the opposite of what it reads as on the page and the reason it is written
+        // out here rather than inlined.
+        var pitch = RestPitch - swing * (swing < 0f ? SwingCock : SwingFollow);
+
+        return Matrix4x4.CreateRotationZ(RestRoll + swing * SwingTwist)
+             * Matrix4x4.CreateRotationX(pitch)
+             * Matrix4x4.CreateRotationY(RestYaw + swing * SwingCross)
+             * Matrix4x4.CreateTranslation(RestOffset + SwingShift * swing);
+    }
+
+    /// <summary>
+    /// Where the held thing is: at the end of the arm, turned to sit in the fist.
+    /// </summary>
+    /// <remarks>
+    /// The tilt is what makes a tool read as gripped rather than as balanced on a wrist. A pickaxe
+    /// held square to the arm shows the viewer its edge, which at this size is a line.
+    /// </remarks>
+    public static Matrix4x4 HeldTransform(float t, float size, bool flat)
+    {
+        // Down the arm to the fist, in the arm's own space. The arm is twelve model units long and
+        // the grip is near its end rather than at it.
+        var inHand = Matrix4x4.CreateTranslation(0f, -10.4f * PlayerModel.Unit, 0f);
+
+        var sit = flat
+            ? Matrix4x4.CreateRotationZ(-0.62f) * Matrix4x4.CreateRotationY(0.42f)
+            : Matrix4x4.CreateRotationY(0.55f) * Matrix4x4.CreateRotationX(0.28f);
+
+        return Matrix4x4.CreateScale(size) * sit * inHand * ArmTransform(t);
+    }
+
+    /// <summary>
+    /// The swing, as one number: −1 fully cocked, 0 at rest, +1 fully followed through.
+    /// </summary>
+    /// <remarks>
+    /// Three phases rather than a sine, because a sine is symmetric and a blow is not. It goes back
+    /// slowly, comes down fast, and recovers over what is left — and it starts and ends at exactly
+    /// rest, so a held button that swings again immediately does not snap.
+    /// </remarks>
+    private static float SwingCurve(float t)
+    {
+        if (t <= 0f || t >= 1f) return 0f;
+
+        if (t < WindUpShare) return -Smooth(t / WindUpShare);
+
+        if (t < WindUpShare + DriveShare)
+            return -1f + 2f * Smooth((t - WindUpShare) / DriveShare);
+
+        return 1f - Smooth((t - WindUpShare - DriveShare) / (1f - WindUpShare - DriveShare));
+    }
+
+    private static float Smooth(float x)
+    {
+        x = Math.Clamp(x, 0f, 1f);
+        return x * x * (3f - 2f * x);
     }
 
     private unsafe void Draw(in BoxDraw draw, Matrix4x4 model)

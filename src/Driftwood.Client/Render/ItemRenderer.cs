@@ -169,21 +169,7 @@ public sealed class ItemRenderer : IDisposable
                       * Matrix4x4.CreateTranslation(item.Position + new Vector3(0f, scale + bob, 0f));
 
             _shader.SetMatrix4("uModel", model);
-
-            // A block wears its own three faces; anything else wears its icon on all six, which is
-            // what makes the card read the same whichever way round the spin has it.
-            if (type.DrawsAsCube)
-            {
-                var shape = registry[type.PlainBlock].Model;
-                _shader.SetVec3("uLayers", new Vector3(
-                    shape.PassLayer(0, Faces.PosY) is var top and not BlockModel.NoLayer ? top : shape.ParticleLayer,
-                    shape.ParticleLayer,
-                    shape.PassLayer(0, Faces.NegY) is var bottom and not BlockModel.NoLayer ? bottom : shape.ParticleLayer));
-            }
-            else
-            {
-                _shader.SetVec3("uLayers", new Vector3(type.IconLayer));
-            }
+            SetLayers(type, registry);
 
             _shader.SetVec3("uLight", lightAt(item.Position));
             _gl.DrawElements(PrimitiveType.Triangles, 36, DrawElementsType.UnsignedInt, (void*)0);
@@ -191,6 +177,50 @@ public sealed class ItemRenderer : IDisposable
         }
 
         _gl.BindVertexArray(0);
+    }
+
+    /// <summary>
+    /// Draws what the player is holding, in the camera's own space, in the fist of the view model.
+    /// </summary>
+    /// <remarks>
+    /// <para>The same cube as everything on the floor, at the transform the arm hands over. That
+    /// sharing is the point: a pickaxe animated from its own copy of the arm's numbers leaves the
+    /// fist the first time either is dialled, and it only ever shows mid-swing.</para>
+    /// <para>Depth is on but the view-model pass has already cleared the buffer, so this sits over
+    /// the world with the arm and tests only against the arm.</para>
+    /// </remarks>
+    public unsafe void DrawInHand(
+        Matrix4x4 projection, Matrix4x4 model, ItemType type, BlockRegistry registry, Vector3 light)
+    {
+        _shader.Use();
+        _shader.SetMatrix4("uViewProj", projection);
+        _shader.SetMatrix4("uModel", model);
+        _shader.SetInt("uBlocks", 0);
+        _shader.SetVec3("uLight", light);
+        SetLayers(type, registry);
+
+        _gl.BindVertexArray(_vao);
+        _gl.DrawElements(PrimitiveType.Triangles, 36, DrawElementsType.UnsignedInt, (void*)0);
+        _gl.BindVertexArray(0);
+    }
+
+    /// <summary>
+    /// A block wears its own three faces; anything else wears its icon on all six, which is what
+    /// makes a card read the same whichever way round the spin has it.
+    /// </summary>
+    private void SetLayers(ItemType type, BlockRegistry registry)
+    {
+        if (!type.DrawsAsCube)
+        {
+            _shader.SetVec3("uLayers", new Vector3(type.IconLayer));
+            return;
+        }
+
+        var shape = registry[type.PlainBlock].Model;
+        _shader.SetVec3("uLayers", new Vector3(
+            shape.PassLayer(0, Faces.PosY) is var top and not BlockModel.NoLayer ? top : shape.ParticleLayer,
+            shape.ParticleLayer,
+            shape.PassLayer(0, Faces.NegY) is var bottom and not BlockModel.NoLayer ? bottom : shape.ParticleLayer));
     }
 
     public void Dispose()

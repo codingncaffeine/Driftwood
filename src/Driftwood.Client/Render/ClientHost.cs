@@ -1483,11 +1483,45 @@ public sealed class ClientHost : IDisposable
         // against a real depth buffer it would be buried in the first block walked up to.
         _gl.Clear(ClearBufferMask.DepthBufferBit);
 
+        // Holding something means seeing the thing, not the limb carrying it. The arm is drawn only
+        // when the hands are empty, where it is the only thing on screen that can show a swing
+        // happening at all.
+        if (_inventory.HeldType is { } held)
+        {
+            DrawHeldItem(projection, light, held);
+            return;
+        }
+
         // The sun has to arrive in the same space the geometry is in, or the arm lights from a
         // fixed corner of the screen and swings through its own shading as the player turns.
         _playerRenderer.DrawViewModel(
             projection, Vector3.TransformNormal(_skyState.SunDirection, view), sky, light,
             _animator.Swinging, _animator.SwingProgress);
+    }
+
+    /// <summary>
+    /// Puts whatever is in hand on screen, where the fist of the view model would be.
+    /// </summary>
+    /// <remarks>
+    /// The transform comes from the arm rather than from a second set of numbers here, even though
+    /// the arm itself is not drawn: the arm is what defines where a hand is and how it travels
+    /// through a swing, and a tool animated from its own copy of those numbers drifts out of the
+    /// grip the first time either is dialled. A block is held small and square; a tool is held
+    /// bigger, because it is a flat card and reads as nothing edge-on.
+    /// </remarks>
+    private void DrawHeldItem(Matrix4x4 projection, EntityLight light, ItemType held)
+    {
+        var flat = !held.DrawsAsCube;
+        var size = flat ? 0.62f : 0.40f;
+
+        _blockTextures.Bind();
+        _itemRenderer.DrawInHand(
+            projection,
+            PlayerRenderer.HeldTransform(
+                _animator.Swinging ? _animator.SwingProgress : 0f, size, flat),
+            held,
+            _registry,
+            light.Block + new Vector3(light.Sky * _skyState.SunColor.X + _skyState.SkyAmbient.X));
     }
 
     private void OnResize(Vector2D<int> size) => _gl.Viewport(size);
