@@ -392,6 +392,10 @@ public static class WorldAudit
         Check("everything is reachable from bare hands", reach.Count == 0,
             reach.Count == 0 ? reachDetail : $"{reach.Count} faults: {reach[0]}");
 
+        var joinFaults = ConnectionSelfTest(registry, out var joinDetail);
+        Check("things that join up find their neighbours", joinFaults.Count == 0,
+            joinFaults.Count == 0 ? joinDetail : $"{joinFaults.Count} faults: {joinFaults[0]}");
+
         var furnaceFaults = FurnaceSelfTest(items, book, out var furnaceDetail);
         Check("a furnace burns only when it has work", furnaceFaults.Count == 0,
             furnaceFaults.Count == 0 ? furnaceDetail : $"{furnaceFaults.Count} faults: {furnaceFaults[0]}");
@@ -1683,6 +1687,163 @@ public static class WorldAudit
                + "idle burns nothing, unfuelled makes no progress, a full one stops, and the flame is reported both ways";
 
         return faults;
+    }
+
+    /// <summary>
+    /// Builds a run of fence in a headless world and checks every piece settles on the right shape.
+    /// </summary>
+    /// <remarks>
+    /// <para>The load-bearing check is the last one: that <em>one ring is enough</em>. The whole
+    /// pass rests on the claim that a variant swap can never make a seventh cell want to move, and
+    /// that claim is an argument about the block set rather than about the code — the day somebody
+    /// adds a family whose variants differ in what they connect to, the argument stops holding and
+    /// the pass starts silently leaving pieces on the wrong shape. So it is measured: the whole
+    /// world is swept after every edit, and anything outside the ring that still wants to change is
+    /// a fault.</para>
+    /// <para>The shapes are read back off the model rather than compared against a table of names.
+    /// A mask that is registered against the wrong geometry passes every check written in terms of
+    /// ids and shows up as a fence with an arm reaching into open air.</para>
+    /// </remarks>
+    private static List<string> ConnectionSelfTest(BlockRegistry registry, out string detail)
+    {
+        var faults = new List<string>();
+        var table = StarterBlocks.Connections(registry);
+        var world = new VoxelWorld(registry);
+
+        var fence = StarterBlocks.Connected(registry, "driftoak_fence");
+        var pane = StarterBlocks.Connected(registry, "glass_pane");
+        var stone = registry.ByName("stone").Id;
+        var glass = registry.ByName("glass").Id;
+
+        // Every variant's geometry has to match the mask it is filed under. An arm is a box that
+        // reaches the edge of the cell, so counting how far the model spans on each side says what
+        // it is actually joined to without trusting the name it was registered with.
+        for (var mask = 0; mask < ConnectionFamily.Masks; mask++)
+        {
+            var model = registry[fence[mask]].Model;
+            var drawn = 0;
+
+            for (var i = 0; i < Placeable.Facings.Length; i++)
+            {
+                if (!ReachesEdge(model, Placeable.Facings[i])) continue;
+                drawn |= 1 << i;
+            }
+
+            if (drawn != mask)
+                faults.Add($"fence variant {mask} draws arms {drawn}, so its shape and its id disagree");
+        }
+
+        // A lone post joins nothing.
+        Rewire(world, table, Place(world, fence[0], 0, 64, 0));
+        if (world.GetBlock(0, 64, 0) != fence[0])
+            faults.Add("a fence on its own picked up an arm from nowhere");
+
+        // Put one beside it and both must reach for the other. Checking only the new one passes a
+        // pass that never looks backwards, which is the whole point of doing this on an edit.
+        Rewire(world, table, Place(world, fence[0], 1, 64, 0));
+
+        var west = table.MaskOf(world.GetBlock(0, 64, 0));
+        var east = table.MaskOf(world.GetBlock(1, 64, 0));
+        var toPosX = 1 << Array.IndexOf(Placeable.Facings, Faces.PosX);
+        var toNegX = 1 << Array.IndexOf(Placeable.Facings, Faces.NegX);
+
+        if (west != toPosX) faults.Add($"the first fence wears {west}, not the {toPosX} that reaches its neighbour");
+        if (east != toNegX) faults.Add($"the second fence wears {east}, not the {toNegX} that reaches back");
+
+        // A solid block is something to join on to as well.
+        Rewire(world, table, Place(world, stone, 2, 64, 0));
+        if (table.MaskOf(world.GetBlock(1, 64, 0)) != (toPosX | toNegX))
+            faults.Add("a fence between another fence and a wall of stone did not reach both");
+
+        // And taking it away lets go again. A pass that only ever adds arms leaves a fence pointing
+        // at a hole, which is the failure that looks most like a rendering bug.
+        Rewire(world, table, Place(world, BlockId.Air, 2, 64, 0));
+        if (table.MaskOf(world.GetBlock(1, 64, 0)) != toNegX)
+            faults.Add("a fence kept its arm after what it was joined to was broken");
+
+        // Families do not join each other. A pane reaching for a fence is two features sharing one
+        // mask table, and it looks correct until they are next to each other.
+        Rewire(world, table, Place(world, pane[0], 2, 64, 0));
+        if (table.MaskOf(world.GetBlock(2, 64, 0)) != 0)
+            faults.Add("a pane joined on to a fence");
+
+        // But a pane does join glass, which is not opaque — testing opacity rather than fullness is
+        // what would leave every window with a gap in it.
+        Rewire(world, table, Place(world, glass, 3, 64, 0));
+        if (table.MaskOf(world.GetBlock(2, 64, 0)) == 0)
+            faults.Add("a pane did not join the glass beside it");
+
+        // One ring is enough. Sweep the whole world after each edit of a fresh cross and fail if
+        // anything anywhere still wants to move.
+        var wide = new VoxelWorld(registry);
+        var settled = 0;
+        var stray = 0;
+
+        foreach (var (x, z) in (( int X, int Z)[])[(0, 0), (1, 0), (-1, 0), (0, 1), (0, -1), (2, 0), (0, 2)])
+        {
+            Rewire(wide, table, Place(wide, fence[0], x, 64, z));
+
+            for (var sz = -4; sz <= 4; sz++)
+            for (var sx = -4; sx <= 4; sx++)
+            {
+                if (!table.TryRewire(wide, sx, 64, sz, out _)) { settled++; continue; }
+                stray++;
+                faults.Add($"after an edit at {x},{z} the fence at {sx},{sz} still wanted to change");
+            }
+        }
+
+        detail = $"{table.FamilyCount} families of {ConnectionFamily.Masks}, shapes matching their masks, "
+               + $"joining both ways and letting go, and {settled} cells settled with {stray} left over "
+               + "one ring from an edit";
+
+        return faults;
+
+        static (int X, int Y, int Z) Place(VoxelWorld into, BlockId id, int x, int y, int z)
+        {
+            into.SetBlock(x, y, z, id);
+            return (x, y, z);
+        }
+
+        // The streamer's own ring, run against a bare world so the rule is checked rather than the
+        // streaming around it.
+        static void Rewire(VoxelWorld into, ConnectionTable table, (int X, int Y, int Z) at)
+        {
+            Fix(at.X, at.Y, at.Z);
+            for (var face = 0; face < Faces.Count; face++)
+            {
+                var (dx, dy, dz) = Faces.Normals[face];
+                Fix(at.X + dx, at.Y + dy, at.Z + dz);
+            }
+
+            void Fix(int x, int y, int z)
+            {
+                if (table.TryRewire(into, x, y, z, out var become)) into.SetBlock(x, y, z, become);
+            }
+        }
+    }
+
+    /// <summary>Whether any part of a model reaches the cell wall on one side.</summary>
+    private static bool ReachesEdge(BlockModel model, int face)
+    {
+        const float Edge = 0.999f;
+
+        foreach (var element in model.Elements)
+        {
+            var from = element.From / 16f;
+            var to = element.To / 16f;
+
+            var reaches = face switch
+            {
+                Faces.PosX => to.X >= Edge,
+                Faces.NegX => from.X <= 1f - Edge,
+                Faces.PosZ => to.Z >= Edge,
+                _ => from.Z <= 1f - Edge,
+            };
+
+            if (reaches) return true;
+        }
+
+        return false;
     }
 
     /// <summary>How many distinct things a player can put down.</summary>

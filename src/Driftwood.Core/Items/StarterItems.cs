@@ -117,6 +117,27 @@ public static class StarterItems
             });
         }
 
+        // Things that join up with what is beside them. All sixteen forms are listed as variants
+        // even though only the first is ever placed: that is what maps every one of them back to
+        // this item, so a fence broken out of the middle of a run still comes up as a fence.
+        foreach (var material in StarterBlocks.ConnectedNames)
+        {
+            var bare = blocks.ByName($"{material}_0");
+
+            items.Register(new ItemType
+            {
+                Name = material,
+                Label = material.Replace('_', ' '),
+                IconLayer = bare.Model.ParticleLayer,
+                Places = new Placeable
+                {
+                    Label = material.Replace('_', ' '),
+                    Kind = PlacementKind.Plain,
+                    Variants = StarterBlocks.Connected(blocks, material),
+                },
+            });
+        }
+
         // A torch is flat art on crossed planes, so a cube of it is a cube of black. Declared
         // rather than derived from "does it place a block", because it places one and is not one.
         items.Register(new ItemType

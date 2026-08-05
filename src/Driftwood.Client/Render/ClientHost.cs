@@ -498,7 +498,12 @@ public sealed class ClientHost : IDisposable
         var tinter = new BlockTinter(
             new ClimateField(_options.Seed), _textures.GrassMap, _textures.FoliageMap);
 
-        _streamer = new WorldStreamer(registry, generator, viewRadius, tinter: tinter);
+        _streamer = new WorldStreamer(registry, generator, viewRadius, tinter: tinter)
+        {
+            // What lets a fence know it has a neighbour. Handed over rather than built inside the
+            // streamer, so a world with nothing that connects pays nothing for the pass.
+            Connections = StarterBlocks.Connections(registry),
+        };
 
         var reach = viewRadius * Chunk.Size;
         _fogEnd = MathF.Min(reach * 0.90f, 700f);

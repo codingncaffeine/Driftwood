@@ -151,6 +151,50 @@ public sealed class WorldStreamer : IDisposable
         _world.SetBlock(wx, wy, wz, id);
         _editQueue.Enqueue((wx, wy, wz));
         _lightWork.Release();
+
+        Rewire(wx, wy, wz);
+    }
+
+    /// <summary>
+    /// Lets anything that joins up with its neighbours re-pick its shape after an edit.
+    /// </summary>
+    /// <remarks>
+    /// Null until somebody hands over a table, so the whole pass costs nothing on a world with no
+    /// connecting blocks in it — which is every world the generator makes.
+    /// </remarks>
+    public ConnectionTable? Connections { get; set; }
+
+    /// <summary>
+    /// Re-picks the shape of the cell that was edited and of the six around it.
+    /// </summary>
+    /// <remarks>
+    /// One ring, and no queue. Every member of a family connects the same way, so a variant swap
+    /// changes a shape and never changes whether a neighbour would join on to it — which means a
+    /// change here can never make a seventh cell want to move. The audit checks that property
+    /// directly rather than trusting the argument, because the day a family breaks it this pass
+    /// starts silently under-updating rather than failing.
+    /// </remarks>
+    private void Rewire(int wx, int wy, int wz)
+    {
+        if (Connections is not { } table) return;
+
+        Fix(wx, wy, wz);
+        for (var face = 0; face < Faces.Count; face++)
+        {
+            var (dx, dy, dz) = Faces.Normals[face];
+            Fix(wx + dx, wy + dy, wz + dz);
+        }
+
+        void Fix(int x, int y, int z)
+        {
+            if (y < 0 || y >= TerrainGenerator.WorldHeight) return;
+            if (!_world.TryGetChunk(ChunkPos.FromWorld(x, y, z), out _)) return;
+            if (!table.TryRewire(_world, x, y, z, out var become)) return;
+
+            _world.SetBlock(x, y, z, become);
+            _editQueue.Enqueue((x, y, z));
+            _lightWork.Release();
+        }
     }
 
     /// <summary>

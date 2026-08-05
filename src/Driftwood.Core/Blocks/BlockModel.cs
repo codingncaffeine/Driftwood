@@ -340,6 +340,65 @@ public sealed class BlockModel
         return new BlockModel(elements);
     }
 
+    /// <summary>
+    /// A post with arms reaching toward whichever sides it is connected to — a fence, a wall, a pane.
+    /// </summary>
+    /// <param name="postHalf">Half the post's width, in sixteenths.</param>
+    /// <param name="armHalf">Half an arm's width.</param>
+    /// <param name="bars">The heights the arms run at. Two for a fence's rails, one for a wall.</param>
+    /// <param name="mask">
+    /// Which sides are connected, one bit per entry of <see cref="Placeable.Facings"/>.
+    /// </param>
+    /// <remarks>
+    /// <para>Sixteen shapes rather than one shape turned: which sides a thing joins is not an
+    /// orientation, it is a set, and a set of four has sixteen members. Every one of them is its own
+    /// registered block, the way every stair facing is — a cell holds an id and nothing beside it.
+    /// </para>
+    /// <para>The arms start at the post's face rather than at the middle of the cell. Overlapping
+    /// boxes are legal and invisible from outside, but they double the quads through the post and
+    /// every fence in a line pays for it.</para>
+    /// </remarks>
+    public static BlockModel Connected(
+        ushort top, ushort side, ushort bottom,
+        float postHalf, float armHalf, (float Low, float High)[] bars, int mask, float height = 16f)
+    {
+        var elements = new List<ModelElement>(1 + 4 * bars.Length)
+        {
+            Box(
+                new Vector3(8f - postHalf, 0f, 8f - postHalf),
+                new Vector3(8f + postHalf, height, 8f + postHalf),
+                top, side, bottom),
+        };
+
+        for (var i = 0; i < Blocks.Placeable.Facings.Length; i++)
+        {
+            if ((mask & (1 << i)) == 0) continue;
+
+            foreach (var (low, high) in bars)
+            {
+                var (from, to) = Blocks.Placeable.Facings[i] switch
+                {
+                    Blocks.Faces.PosX => (
+                        new Vector3(8f + postHalf, low, 8f - armHalf),
+                        new Vector3(16f, high, 8f + armHalf)),
+                    Blocks.Faces.NegX => (
+                        new Vector3(0f, low, 8f - armHalf),
+                        new Vector3(8f - postHalf, high, 8f + armHalf)),
+                    Blocks.Faces.PosZ => (
+                        new Vector3(8f - armHalf, low, 8f + postHalf),
+                        new Vector3(8f + armHalf, high, 16f)),
+                    _ => (
+                        new Vector3(8f - armHalf, low, 0f),
+                        new Vector3(8f + armHalf, high, 8f - postHalf)),
+                };
+
+                elements.Add(Box(from, to, top, side, bottom));
+            }
+        }
+
+        return new BlockModel(elements);
+    }
+
     /// <summary>A thin sheet lying on the floor: a carpet, or the first fall of snow.</summary>
     public static BlockModel Layer(ushort top, ushort side, ushort bottom, float height) =>
         new([Box(Vector3.Zero, new Vector3(16f, height, 16f), top, side, bottom)]);

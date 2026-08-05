@@ -145,6 +145,13 @@ public static class StarterRecipes
             Shaped($"{material} stairs", $"{material}_stairs", 4, ["M  ", "MM ", "MMM"], from);
         }
 
+        // Things that join up with what is beside them. A run of six across two rows is the genre's
+        // own grammar for anything wall-shaped, and the count is what says how far it goes: six
+        // rubble is six wall, six glass is sixteen panes because a pane is a sixteenth of a wall.
+        Shaped("fence", "driftoak_fence", 3, ["MSM", "MSM"], "#planks");
+        Shaped("wall", "rubble_wall", 6, ["MMM", "MMM"], "rubble");
+        Shaped("pane", "glass_pane", 16, ["MMM", "MMM"], "glass");
+
         // Packing four of something loose back into a block, which is how the genre's own storage
         // of a powder or a lump works and is what gives brick and clay somewhere to go.
         Shaped("brick block", "bricks", 1, ["BB", "BB"]);

@@ -422,6 +422,8 @@ public static class StarterBlocks
             TopLayer = LayerBricks, SideLayer = LayerBricks, BottomLayer = LayerBricks,
         });
 
+        RegisterConnected(registry);
+
         // The built shapes. Every orientation is its own block, because there is nowhere else to
         // keep one — a cell holds an id and nothing beside it. That is also how the genre stores it
         // underneath, and it means the mesher never asks which way a stair faces: the id says.
@@ -509,6 +511,81 @@ public static class StarterBlocks
 
     /// <summary>Facing names in <see cref="Placeable.Facings"/> order: +x, -x, +z, -z.</summary>
     private static readonly string[] FacingNames = ["east", "west", "south", "north"];
+
+    /// <summary>
+    /// The things that join up with what is beside them: what they are cut from and how they build.
+    /// </summary>
+    /// <param name="PostHalf">Half the centre post's width, in sixteenths.</param>
+    /// <param name="Bars">The heights the arms run at — two for a fence's rails, one for a wall.</param>
+    public readonly record struct ConnectedMaterial(
+        string Name, ushort Layer, SoundMaterial Sound, ToolClass Harvest, int Tier,
+        float PostHalf, float ArmHalf, (float Low, float High)[] Bars);
+
+    private static readonly ConnectedMaterial[] ConnectedMaterials =
+    [
+        new("driftoak_fence", LayerPlanks, SoundMaterial.Wood, ToolClass.Axe, 0,
+            2f, 1f, [(6f, 9f), (12f, 15f)]),
+        new("rubble_wall", LayerRubble, SoundMaterial.Stone, ToolClass.Pickaxe, 1,
+            4f, 3f, [(0f, 14f)]),
+        new("glass_pane", LayerGlass, SoundMaterial.Glass, ToolClass.None, 0,
+            1f, 1f, [(0f, 16f)]),
+    ];
+
+    /// <summary>The names of the things that join up with their neighbours.</summary>
+    public static IEnumerable<string> ConnectedNames
+    {
+        get { foreach (var m in ConnectedMaterials) yield return m.Name; }
+    }
+
+    /// <summary>
+    /// Sixteen forms of each, one per set of sides it could be joined on.
+    /// </summary>
+    /// <remarks>
+    /// Which sides a fence joins is a set rather than an orientation, and a set of four has sixteen
+    /// members. Every one is its own id for the same reason every stair facing is: a cell holds an
+    /// id and nothing beside it. <see cref="ConnectionTable"/> is what keeps them right.
+    /// </remarks>
+    private static void RegisterConnected(BlockRegistry registry)
+    {
+        foreach (var m in ConnectedMaterials)
+        for (var mask = 0; mask < ConnectionFamily.Masks; mask++)
+        {
+            registry.Register(new BlockType
+            {
+                Name = $"{m.Name}_{mask}",
+                Hardness = 2f, Opaque = false, Crafted = true, Sounds = m.Sound,
+                HarvestClass = m.Harvest, HarvestTier = m.Tier,
+                Model = BlockModel.Connected(
+                    m.Layer, m.Layer, m.Layer, m.PostHalf, m.ArmHalf, m.Bars, mask),
+            });
+        }
+    }
+
+    /// <summary>All sixteen forms of one connecting material, in mask order.</summary>
+    public static BlockId[] Connected(BlockRegistry registry, string material)
+    {
+        var ids = new BlockId[ConnectionFamily.Masks];
+        for (var mask = 0; mask < ids.Length; mask++)
+            ids[mask] = registry.ByName($"{material}_{mask}").Id;
+        return ids;
+    }
+
+    /// <summary>Every family that joins up with its neighbours, built out of the registry.</summary>
+    public static ConnectionTable Connections(BlockRegistry registry)
+    {
+        var families = new ConnectionFamily[ConnectedMaterials.Length];
+
+        for (var f = 0; f < families.Length; f++)
+        {
+            var byMask = new BlockId[ConnectionFamily.Masks];
+            for (var mask = 0; mask < byMask.Length; mask++)
+                byMask[mask] = registry.ByName($"{ConnectedMaterials[f].Name}_{mask}").Id;
+
+            families[f] = new ConnectionFamily { Name = ConnectedMaterials[f].Name, ByMask = byMask };
+        }
+
+        return new ConnectionTable(registry, families);
+    }
 
     private static void RegisterShapes(BlockRegistry registry)
     {
