@@ -26,6 +26,18 @@ public struct Particle
     public byte CropX;
     public byte CropY;
 
+    /// <summary>
+    /// Share of gravity this feels. One for anything thrown, a fraction for anything that drifts.
+    /// </summary>
+    /// <remarks>
+    /// Per particle rather than per kind, because the same pool has to hold a chip of stone falling
+    /// like a chip of stone and a leaf taking its time about it — and rain and snow after that.
+    /// </remarks>
+    public float Fall;
+
+    /// <summary>How far it wanders sideways as it falls, in blocks a second.</summary>
+    public float Sway;
+
     /// <summary>True on the frames it is resting on something.</summary>
     public bool Grounded;
 }
@@ -113,7 +125,7 @@ public sealed class ParticleSystem
                 continue;
             }
 
-            p.Velocity.Y -= Gravity * dt;
+            p.Velocity.Y -= Gravity * p.Fall * dt;
             p.Velocity -= p.Velocity * MathF.Min(Drag * dt, 1f);
 
             Move(world, ref p, dt);
@@ -163,7 +175,29 @@ public sealed class ParticleSystem
         }
     }
 
-    private void Spawn(BlockType type, Vector3 position, Vector3 velocity, float size, float life)
+    /// <summary>
+    /// A leaf letting go: falls slowly, wanders as it comes, and lasts long enough to arrive.
+    /// </summary>
+    /// <remarks>
+    /// The first emitter here that is not a reaction to something the player did. It is also the
+    /// shape rain and snow want — a slow fall with a sideways wander — so the two fields it needed
+    /// are on the particle rather than in this method.
+    /// </remarks>
+    public void Leaf(BlockType type, Vector3 at)
+    {
+        Spawn(
+            type,
+            at + new Vector3(Signed() * 0.42f, -0.05f, Signed() * 0.42f),
+            new Vector3(Signed() * 0.25f, -0.25f, Signed() * 0.25f),
+            0.055f + Unit() * 0.03f,
+            5f + Unit() * 4f,
+            fall: 0.045f,
+            sway: 0.55f + Unit() * 0.5f);
+    }
+
+    private void Spawn(
+        BlockType type, Vector3 position, Vector3 velocity, float size, float life,
+        float fall = 1f, float sway = 0f)
     {
         if (Count >= Capacity)
         {
@@ -181,6 +215,8 @@ public sealed class ParticleSystem
             Layer = type.Model.ParticleLayer,
             CropX = (byte)(NextBits() % CropsPerAxis),
             CropY = (byte)(NextBits() % CropsPerAxis),
+            Fall = fall,
+            Sway = sway,
         };
     }
 
@@ -197,6 +233,16 @@ public sealed class ParticleSystem
     {
         var step = p.Velocity * dt;
         p.Grounded = false;
+
+        // The wander, for anything that has one. Phase comes off the spawn position rather than
+        // from a stored angle, so a hundred leaves coming off one canopy are not all leaning the
+        // same way at the same moment — and it costs no field to say so.
+        if (p.Sway > 0f)
+        {
+            var phase = (p.Age + p.Position.X * 1.7f + p.Position.Z * 2.3f) * 2.2f;
+            step.X += MathF.Sin(phase) * p.Sway * dt;
+            step.Z += MathF.Cos(phase * 0.8f) * p.Sway * dt;
+        }
 
         var next = p.Position with { X = p.Position.X + step.X };
         if (Blocked(world, next)) p.Velocity.X = 0f;

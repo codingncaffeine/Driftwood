@@ -209,6 +209,12 @@ public sealed class ClientHost : IDisposable
     /// <summary>Distance walked since the last scuff of dust.</summary>
     private float _stepDistance;
 
+    /// <summary>Seconds until the next look for a canopy to shed a leaf from.</summary>
+    private float _untilLeaf;
+
+    /// <summary>The block a falling leaf comes off. One species today.</summary>
+    private BlockId _leafBlock;
+
     /// <summary>
     /// Walking rather than flying. The fly camera stays available behind F3 — it is how terrain
     /// gets inspected, and a bug you can only reach by walking to it is a bug you look at twice.
@@ -479,6 +485,7 @@ public sealed class ClientHost : IDisposable
         _vitals = new PlayerVitals(registry);
         _particles = new ParticleSystem(registry);
         _hand = StarterBlocks.Hand(registry);
+        _leafBlock = ids.Leaves;
         _inventory = new Inventory();
         _drops = new DroppedItems(registry);
         _solid = registry.BuildSolidTable();
@@ -808,6 +815,7 @@ public sealed class ClientHost : IDisposable
         StepAnimation((float)dt);
         StepFootfall((float)dt);
         StepVitals((float)dt);
+        StepLeaffall((float)dt);
         _particles.Update(_streamer.World, (float)dt);
 
         // Collected from the middle of the body rather than the feet, so a stack lying against a
@@ -1019,6 +1027,47 @@ public sealed class ClientHost : IDisposable
             LightValue.Sky(packed) / (float)LightValue.Max,
             new Vector3(LightValue.Red(packed), LightValue.Green(packed), LightValue.Blue(packed))
                 / LightValue.Max);
+    }
+
+    /// <summary>
+    /// Lets the odd leaf go from a canopy near the player.
+    /// </summary>
+    /// <remarks>
+    /// <para>Sampled rather than scanned. Finding every leaf block with air under it inside the
+    /// view would be a search over millions of cells for an effect that wants one particle every
+    /// second or two; throwing a handful of darts at the neighbourhood and using whichever land on
+    /// a canopy edge costs nothing and looks the same.</para>
+    /// <para>Only leaves with nothing under them, so the leaf falls out of the underside of a crown
+    /// rather than out of the middle of one and straight into the leaf below it.</para>
+    /// </remarks>
+    private void StepLeaffall(float dt)
+    {
+        if (_bench is not null || !_spawned) return;
+
+        _untilLeaf -= dt;
+        if (_untilLeaf > 0f) return;
+
+        // A leaf every second or so when there is a wood to shed one, and nothing at all when
+        // there is not — the darts simply miss over open ground.
+        _untilLeaf = 0.6f + (float)_soundPick.NextDouble() * 1.1f;
+
+        const int Darts = 24;
+        const int Reach = 22;
+
+        var eye = _viewPosition;
+        for (var i = 0; i < Darts; i++)
+        {
+            var x = (int)MathF.Floor(eye.X) + _soundPick.Next(-Reach, Reach + 1);
+            var y = (int)MathF.Floor(eye.Y) + _soundPick.Next(-4, 13);
+            var z = (int)MathF.Floor(eye.Z) + _soundPick.Next(-Reach, Reach + 1);
+
+            var here = _streamer.World.GetBlock(x, y, z);
+            if (here.Value != _leafBlock.Value) continue;
+            if (!_streamer.World.GetBlock(x, y - 1, z).IsAir) continue;
+
+            _particles.Leaf(_registry[here], new Vector3(x + 0.5f, y, z + 0.5f));
+            return;
+        }
     }
 
     /// <summary>

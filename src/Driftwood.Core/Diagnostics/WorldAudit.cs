@@ -1395,6 +1395,42 @@ public static class WorldAudit
             if (p.Velocity.Y <= 0f) faults.Add($"a chip off the top face is heading down at {p.Velocity.Y:F2}");
         }
 
+        // A leaf takes its time and does not fall straight. Both are the point of it: one that
+        // drops like a chip of stone reads as a chip of stone, and one that falls in a line reads
+        // as a dropped item. Measured against a chip released from the same height, because that
+        // is the comparison that says "slower" rather than merely "slow".
+        var open = new VoxelWorld(registry);
+        var leaves = registry[ids.Leaves];
+
+        var drifting = new ParticleSystem(registry, 0x1EAF);
+        drifting.Leaf(leaves, new Vector3(0.5f, 60f, 0.5f));
+        var leafFrom = drifting.Live.Length > 0 ? drifting.Live[0].Position : Vector3.Zero;
+        for (var s = 0; s < 120; s++) drifting.Update(open, 1f / 60f);
+
+        var tumbling = new ParticleSystem(registry, 0x1EAF);
+        tumbling.Burst(leaves, 0, 60, 0, 1);
+        var chipFrom = tumbling.Live.Length > 0 ? tumbling.Live[0].Position : Vector3.Zero;
+        for (var s = 0; s < 120; s++) tumbling.Update(open, 1f / 60f);
+
+        if (drifting.Count != 1)
+        {
+            faults.Add("a leaf did not survive two seconds of falling");
+        }
+        else
+        {
+            var leaf = drifting.Live[0];
+            var fell = leafFrom.Y - leaf.Position.Y;
+            var wandered = MathF.Sqrt(
+                (leaf.Position.X - leafFrom.X) * (leaf.Position.X - leafFrom.X)
+                + (leaf.Position.Z - leafFrom.Z) * (leaf.Position.Z - leafFrom.Z));
+
+            if (fell is < 0.2f or > 4f) faults.Add($"a leaf fell {fell:F2} blocks in two seconds, wanted 0.2 to 4");
+            if (wandered < 0.15f) faults.Add($"a leaf wandered {wandered:F2} blocks sideways, which is a straight line");
+
+            if (tumbling.Count == 1 && fell >= chipFrom.Y - tumbling.Live[0].Position.Y)
+                faults.Add($"a leaf fell {fell:F2} blocks, no slower than a chip did");
+        }
+
         // The pool refuses rather than grows.
         var flooded = new ParticleSystem(registry, 0x1234567);
         for (var i = 0; i < ParticleSystem.Capacity; i++) flooded.Burst(stone, 0, 12, 0, 4);
