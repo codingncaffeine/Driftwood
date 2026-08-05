@@ -1110,6 +1110,102 @@ public static class TileGen
         return t;
     }
 
+    /// <summary>Two rails and the rungs between them, everything else empty — a ladder.</summary>
+    /// <remarks>
+    /// Almost all cut-out, which is what makes a ladder read as something you can see the wall
+    /// through rather than as a plank with lines drawn on it.
+    /// </remarks>
+    public static byte[] Ladder(int seed, byte r, byte g, byte b)
+    {
+        var t = new byte[BytesPerTile];
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var rail = x is 1 or 2 or 13 or 14;
+            var rung = y % 4 is 1 or 2 && x >= 1 && x <= 14;
+            if (!rail && !rung) continue;
+
+            // Rails a little darker than the rungs, so the two read as separate pieces of wood
+            // rather than as one grid.
+            var d = (int)((Noise(x, y, seed) * 2f - 1f) * 12f) + (rail ? -14 : 6);
+            Put(t, x, y, Clamp(r + d), Clamp(g + d), Clamp(b + d), 255);
+        }
+
+        return t;
+    }
+
+    /// <summary>A panelled board with a handle, in two halves — the two tiles of a door.</summary>
+    /// <param name="upper">True for the half with the window and the handle in it.</param>
+    /// <remarks>
+    /// Two tiles rather than one used twice, because a door is two blocks tall and one tile read
+    /// at both heights puts two handles on it, one at knee height. Every pack paints them the same
+    /// way for the same reason.
+    /// </remarks>
+    public static byte[] Door(int seed, byte r, byte g, byte b, bool upper)
+    {
+        var t = Planks(seed, r, g, b);
+
+        // The hinge stile down the left and a frame around the board.
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var stile = x <= 2;
+            var edge = x == Size - 1 || (upper ? y == 0 : y == Size - 1);
+            if (!stile && !edge) continue;
+
+            var i = y * Stride + x * 4;
+            var d = stile ? 20 : 26;
+            t[i] = Clamp(t[i] - d);
+            t[i + 1] = Clamp(t[i + 1] - d);
+            t[i + 2] = Clamp(t[i + 2] - d);
+        }
+
+        if (!upper) return t;
+
+        // A window in the top half and a handle beside it, which is what says which way up a door
+        // goes and which side it opens from at a glance. The pane is a hole rather than painted
+        // glass, which is what every pack does and what makes it read as something to see through.
+        for (var y = 3; y < 9; y++)
+        for (var x = 5; x < 12; x++)
+        {
+            var frame = y == 3 || y == 8 || x == 5 || x == 11;
+            if (frame) Put(t, x, y, Clamp(r - 40), Clamp(g - 40), Clamp(b - 40), 255);
+            else Put(t, x, y, 0, 0, 0, 0);
+        }
+
+        for (var y = 11; y < 14; y++)
+            Put(t, 13, y, 208, 190, 132, 255);
+
+        return t;
+    }
+
+    /// <summary>A slatted board with a frame — a trapdoor, seen from above or edge on.</summary>
+    public static byte[] Trapdoor(int seed, byte r, byte g, byte b)
+    {
+        var t = Planks(seed, r, g, b);
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            // A batten across each end, and a real gap between the two middle boards — a hole,
+            // not a dark line, because a trapdoor is boards nailed together and you can see the
+            // room below between them. That is also what the format's own tile does.
+            var batten = x is 1 or 2 or 13 or 14;
+            var gap = y is 7 or 8;
+
+            if (gap && !batten) { Put(t, x, y, 0, 0, 0, 0); continue; }
+            if (!batten) continue;
+
+            var i = y * Stride + x * 4;
+            t[i] = Clamp(t[i] + 12);
+            t[i + 1] = Clamp(t[i + 1] + 12);
+            t[i + 2] = Clamp(t[i + 2] + 12);
+        }
+
+        return t;
+    }
+
     /// <summary>A tile with a darker inset panel on it — the side and front of built furniture.</summary>
     public static byte[] Panel(byte[] baseTile, int inset, int darken)
     {

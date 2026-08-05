@@ -91,6 +91,14 @@ public static class StarterBlocks
     public const ushort LayerSmokeglass = 53;
     public const ushort LayerStormglassLamp = 54;
 
+    // Things with a shut state and an open one, which is the piece the shape vocabulary was
+    // missing. All three want a block that answers a right click by becoming a different block,
+    // and a door wants two cells to be one thing — the field a double chest will want sideways.
+    public const ushort LayerLadder = 55;
+    public const ushort LayerDoorLower = 56;
+    public const ushort LayerDoorUpper = 57;
+    public const ushort LayerTrapdoor = 58;
+
     /// <summary>The first layer that is an item icon rather than a block face.</summary>
     /// <remarks>
     /// Items share the block texture array rather than taking one of their own. They are the same
@@ -98,24 +106,24 @@ public static class StarterBlocks
     /// spinning on the floor — and a second array would be a second bind, a second upload and a
     /// second pack-import path for no difference anybody could see.
     /// </remarks>
-    public const ushort LayerFirstIcon = 55;
+    public const ushort LayerFirstIcon = 59;
 
-    public const ushort LayerStick = 55;
-    public const ushort LayerCoal = 56;
-    public const ushort LayerCharcoal = 57;
-    public const ushort LayerRawCopper = 58;
-    public const ushort LayerRawIron = 59;
-    public const ushort LayerRawGold = 60;
-    public const ushort LayerCopperIngot = 61;
-    public const ushort LayerIronIngot = 62;
-    public const ushort LayerGoldIngot = 63;
-    public const ushort LayerStormglass = 64;
-    public const ushort LayerAzurite = 65;
-    public const ushort LayerClayLump = 66;
-    public const ushort LayerBrick = 67;
+    public const ushort LayerStick = 59;
+    public const ushort LayerCoal = 60;
+    public const ushort LayerCharcoal = 61;
+    public const ushort LayerRawCopper = 62;
+    public const ushort LayerRawIron = 63;
+    public const ushort LayerRawGold = 64;
+    public const ushort LayerCopperIngot = 65;
+    public const ushort LayerIronIngot = 66;
+    public const ushort LayerGoldIngot = 67;
+    public const ushort LayerStormglass = 68;
+    public const ushort LayerAzurite = 69;
+    public const ushort LayerClayLump = 70;
+    public const ushort LayerBrick = 71;
 
     /// <summary>The tool icons: one palette per tier, four heads each, tier-major.</summary>
-    public const ushort LayerFirstTool = 68;
+    public const ushort LayerFirstTool = 72;
 
     /// <summary>Head shapes a tier comes in — pickaxe, axe, shovel, sword.</summary>
     public const int ToolShapeCount = 4;
@@ -477,6 +485,7 @@ public static class StarterBlocks
         });
 
         RegisterLights(registry);
+        RegisterOpenings(registry);
 
         // The two blocks a player uses rather than builds with. Both answer a right click, which is
         // what makes one open instead of having another stacked on top of it — the first time the
@@ -602,6 +611,164 @@ public static class StarterBlocks
         });
     }
 
+    /// <summary>
+    /// The things that open: ladders, trapdoors and doors.
+    /// </summary>
+    /// <remarks>
+    /// <para>What kept these waiting was never the geometry — the mesher has drawn boxes since
+    /// models landed. It was two rules. A block has to be able to <em>become</em> a different block
+    /// when it is used, which the campfire brought; and a block has to be able to be two cells,
+    /// which a door needs and which nothing before it did.</para>
+    /// <para>A door is deliberately not "a tall block". Each half names the other, both ways, and
+    /// each is held up by the other being there. That means breaking either end takes the whole
+    /// thing without a single line anywhere asking which end was struck, and it is the same field a
+    /// double chest will use pointing sideways instead of up.</para>
+    /// <para>⚠ <b>An open door and an open trapdoor are not solid, and a shut one is.</b> Collision
+    /// is per cell rather than per box, so a solid open door would be a doorway nobody can walk
+    /// through — which is the whole point of opening it. The cost is that the panel itself can be
+    /// walked through while it is swung aside, and that is the right way round.</para>
+    /// </remarks>
+    private static void RegisterOpenings(BlockRegistry registry)
+    {
+        // A ladder is a sheet on a wall and the first thing in the world that can be climbed.
+        for (var i = 0; i < Placeable.Facings.Length; i++)
+            registry.Register(new BlockType
+            {
+                Name = $"ladder_{FacingNames[i]}",
+                Hardness = 0.4f, Solid = false, Opaque = false, Crafted = true, Climbable = true,
+                Sounds = SoundMaterial.Wood, HarvestClass = ToolClass.Axe,
+                SupportFace = Placeable.Opposite(Placeable.Facings[i]),
+                Model = BlockModel.Sheet(LayerLadder, Placeable.Facings[i]),
+            });
+
+        // Four facings, either half of the cell, shut or swung up. Nothing holds a trapdoor: it is
+        // fixed to the frame around it, which is a thing the world has no way to express and which
+        // it would be worse to guess at than to leave alone.
+        for (var i = 0; i < Placeable.Facings.Length; i++)
+        foreach (var upper in (bool[])[false, true])
+        foreach (var open in (bool[])[false, true])
+            registry.Register(new BlockType
+            {
+                Name = TrapdoorName(i, upper, open),
+                Hardness = 2f, Solid = !open, Opaque = false, Crafted = true,
+                Sounds = SoundMaterial.Wood, Use = BlockUse.Toggle,
+                HarvestClass = ToolClass.Axe,
+                Model = BlockModel.Trapdoor(LayerTrapdoor, Placeable.Facings[i], upper, open),
+            });
+
+        // Four facings, two hinges, two halves, shut or open. The upper half wears its own texture
+        // because every pack paints a door as two tiles — the panel and the part with the window in
+        // it — and reading one tile twice would put the handle at knee height.
+        for (var i = 0; i < Placeable.Facings.Length; i++)
+        foreach (var hinge in Placeable.Hinges(Placeable.Facings[i]))
+        foreach (var upper in (bool[])[false, true])
+        foreach (var open in (bool[])[false, true])
+            registry.Register(new BlockType
+            {
+                Name = DoorName(i, hinge, upper, open),
+                Hardness = 3f, Solid = !open, Opaque = false, Crafted = true,
+                Sounds = SoundMaterial.Wood, Use = BlockUse.Toggle,
+                HarvestClass = ToolClass.Axe,
+
+                // Only the lower half stands on anything; the upper is held by the lower being
+                // there, which the partner rule already says and which is the same statement.
+                SupportFace = upper ? -1 : Faces.NegY,
+                PartnerFace = upper ? Faces.NegY : Faces.PosY,
+                Model = BlockModel.Door(
+                    upper ? LayerDoorUpper : LayerDoorLower, Placeable.Facings[i], hinge, open),
+            });
+    }
+
+    private static string TrapdoorName(int facing, bool upper, bool open) =>
+        $"trapdoor_{FacingNames[facing]}_{(upper ? "upper" : "lower")}{(open ? "_open" : "")}";
+
+    private static string DoorName(int facing, int hinge, bool upper, bool open) =>
+        $"door_{FacingNames[facing]}_{FacingNames[Array.IndexOf(Placeable.Facings, hinge)]}"
+        + $"_{(upper ? "upper" : "lower")}{(open ? "_open" : "")}";
+
+    /// <summary>The four ladders, one per wall, in <see cref="Placeable.Facings"/> order.</summary>
+    public static BlockId[] Ladders(BlockRegistry registry)
+    {
+        var ids = new BlockId[Placeable.Facings.Length];
+        for (var i = 0; i < ids.Length; i++) ids[i] = registry.ByName($"ladder_{FacingNames[i]}").Id;
+        return ids;
+    }
+
+    /// <summary>The eight shut trapdoors, in the order a stair-shaped placeable wants them.</summary>
+    public static BlockId[] Trapdoors(BlockRegistry registry)
+    {
+        var ids = new BlockId[Placeable.Facings.Length * 2];
+        for (var i = 0; i < Placeable.Facings.Length; i++)
+        {
+            ids[i * 2] = registry.ByName(TrapdoorName(i, upper: false, open: false)).Id;
+            ids[i * 2 + 1] = registry.ByName(TrapdoorName(i, upper: true, open: false)).Id;
+        }
+        return ids;
+    }
+
+    /// <summary>
+    /// The sixteen shut doors: four facings, each with two hinges, each a lower half and an upper.
+    /// </summary>
+    public static BlockId[] Doors(BlockRegistry registry)
+    {
+        var ids = new BlockId[Placeable.Facings.Length * 4];
+        for (var i = 0; i < Placeable.Facings.Length; i++)
+        {
+            var hinges = Placeable.Hinges(Placeable.Facings[i]);
+            for (var h = 0; h < hinges.Length; h++)
+            {
+                ids[i * 4 + h * 2] = registry.ByName(DoorName(i, hinges[h], false, false)).Id;
+                ids[i * 4 + h * 2 + 1] = registry.ByName(DoorName(i, hinges[h], true, false)).Id;
+            }
+        }
+        return ids;
+    }
+
+    /// <summary>Each lower half and the upper half that goes above it, shut and open alike.</summary>
+    public static IEnumerable<(BlockId Lower, BlockId Upper)> TallPairs(BlockRegistry registry)
+    {
+        for (var i = 0; i < Placeable.Facings.Length; i++)
+        foreach (var hinge in Placeable.Hinges(Placeable.Facings[i]))
+        foreach (var open in (bool[])[false, true])
+            yield return (
+                registry.ByName(DoorName(i, hinge, false, open)).Id,
+                registry.ByName(DoorName(i, hinge, true, open)).Id);
+    }
+
+    /// <summary>Every upper half, which is the part of a two-cell block that leaves nothing.</summary>
+    public static IEnumerable<string> UpperHalves
+    {
+        get
+        {
+            for (var i = 0; i < Placeable.Facings.Length; i++)
+            foreach (var hinge in Placeable.Hinges(Placeable.Facings[i]))
+            foreach (var open in (bool[])[false, true])
+                yield return DoorName(i, hinge, true, open);
+        }
+    }
+
+    /// <summary>Every swung-open lower half — a form nothing places, so nothing maps it back.</summary>
+    public static IEnumerable<string> OpenLowerHalves
+    {
+        get
+        {
+            for (var i = 0; i < Placeable.Facings.Length; i++)
+            foreach (var hinge in Placeable.Hinges(Placeable.Facings[i]))
+                yield return DoorName(i, hinge, false, open: true);
+        }
+    }
+
+    /// <summary>Every swung-open trapdoor, for the same reason.</summary>
+    public static IEnumerable<string> OpenTrapdoors
+    {
+        get
+        {
+            for (var i = 0; i < Placeable.Facings.Length; i++)
+            foreach (var upper in (bool[])[false, true])
+                yield return TrapdoorName(i, upper, open: true);
+        }
+    }
+
     /// <summary>Each block with another state, and the state a right click swaps it to.</summary>
     /// <remarks>
     /// Named in one place because the pairing is content, not geometry. A lit campfire is not
@@ -617,6 +784,26 @@ public static class StarterBlocks
             var lit = registry.ByName($"campfire_{axis}_lit").Id;
             yield return (outFire, lit);
             yield return (lit, outFire);
+        }
+
+        for (var i = 0; i < Placeable.Facings.Length; i++)
+        {
+            foreach (var upper in (bool[])[false, true])
+            {
+                var shut = registry.ByName(TrapdoorName(i, upper, open: false)).Id;
+                var open = registry.ByName(TrapdoorName(i, upper, open: true)).Id;
+                yield return (shut, open);
+                yield return (open, shut);
+            }
+
+            foreach (var hinge in Placeable.Hinges(Placeable.Facings[i]))
+            foreach (var upper in (bool[])[false, true])
+            {
+                var shut = registry.ByName(DoorName(i, hinge, upper, open: false)).Id;
+                var open = registry.ByName(DoorName(i, hinge, upper, open: true)).Id;
+                yield return (shut, open);
+                yield return (open, shut);
+            }
         }
     }
 

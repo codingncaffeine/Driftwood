@@ -60,7 +60,21 @@ public sealed class PlayerBody
     /// <summary>Movement per substep. Shorter than the thinnest thing that can be collided with.</summary>
     private const float MaxSubstep = 0.3f;
 
+    /// <summary>Blocks a second up a ladder, and the speed a slide down one settles at.</summary>
+    /// <remarks>
+    /// Deliberately slower than walking. A ladder is a way up rather than a shortcut, and one that
+    /// is quicker than the ground makes every staircase in the game pointless.
+    /// </remarks>
+    public const float ClimbSpeed = 2.8f;
+    public const float SlideSpeed = 3.4f;
+
     private readonly bool[] _solid;
+
+    /// <summary>Which way the wall is behind each climbable block, or -1. Indexed by raw block id.</summary>
+    private readonly int[] _climbTo;
+
+    /// <summary>True while the body is in something it can climb, for the caller and the checks.</summary>
+    public bool OnLadder { get; private set; }
 
     /// <summary>Centre of the feet.</summary>
     public Vector3 Position;
@@ -72,7 +86,21 @@ public sealed class PlayerBody
     /// <summary>Fall distance since last touching the ground, for fall damage at P3-7.</summary>
     public float FallDistance { get; private set; }
 
-    public PlayerBody(BlockRegistry registry) => _solid = registry.BuildSolidTable();
+    public PlayerBody(BlockRegistry registry)
+    {
+        _solid = registry.BuildSolidTable();
+
+        _climbTo = new int[registry.Count];
+        Array.Fill(_climbTo, -1);
+        for (var id = 1; id < registry.Count; id++)
+        {
+            var type = registry[(ushort)id];
+
+            // A ladder's support face is the wall it is fixed to, which is also the direction a
+            // player has to press to hold on to it. One statement, read twice.
+            if (type.Climbable) _climbTo[id] = type.SupportFace;
+        }
+    }
 
     public float CurrentHeight => Sneaking ? SneakHeight : Height;
     public float CurrentEyeHeight => Sneaking ? SneakEyeHeight : EyeHeight;
@@ -126,7 +154,63 @@ public sealed class PlayerBody
 
         Velocity.Y = MathF.Max(Velocity.Y - Gravity * dt, -TerminalSpeed);
 
+        // A ladder replaces gravity rather than fighting it, which is why this comes after the fall
+        // and not before: pressing into one holds you against it and a fall becomes a slide.
+        Climb(world, wish, sneak);
+
         MoveWithCollisions(world, Velocity * dt);
+    }
+
+    /// <summary>
+    /// Holds the body on a ladder it is pressing into, and turns falling past one into sliding.
+    /// </summary>
+    /// <remarks>
+    /// <para>Pressing into the wall is what holds you, rather than merely standing in the cell. A
+    /// ladder you stick to by walking past it is a ladder that catches anybody who builds a
+    /// corridor beside one, and the direction to press is a thing the block already knows: it is
+    /// the wall the ladder is fixed to.</para>
+    /// <para>Fall distance is cleared while climbing, so stepping off at the top of a shaft is not
+    /// a fall from the bottom of it. ⚠ <see cref="FallDistance"/> is cleared the instant the body
+    /// lands, so anything wanting to know how far it fell has to keep the number itself — that is
+    /// why this clears it here rather than trusting the landing to.</para>
+    /// </remarks>
+    private void Climb(VoxelWorld world, Vector3 wish, bool sneak)
+    {
+        OnLadder = false;
+
+        var half = Width * 0.5f;
+        var minX = (int)MathF.Floor(Position.X - half);
+        var maxX = (int)MathF.Ceiling(Position.X + half) - 1;
+        var minY = (int)MathF.Floor(Position.Y);
+        var maxY = (int)MathF.Ceiling(Position.Y + CurrentHeight) - 1;
+        var minZ = (int)MathF.Floor(Position.Z - half);
+        var maxZ = (int)MathF.Ceiling(Position.Z + half) - 1;
+
+        var pressing = false;
+
+        for (var y = minY; y <= maxY; y++)
+        for (var z = minZ; z <= maxZ; z++)
+        for (var x = minX; x <= maxX; x++)
+        {
+            var toWall = _climbTo[world.GetBlock(x, y, z).Value];
+            if (toWall < 0) continue;
+
+            OnLadder = true;
+
+            var (nx, ny, nz) = Faces.Normals[toWall];
+            if (wish.X * nx + wish.Y * ny + wish.Z * nz > 0.1f) pressing = true;
+        }
+
+        if (!OnLadder) return;
+
+        // Pressing into it goes up; standing in it comes down slowly; crouching holds. Three
+        // states rather than two, because a ladder you can only ever climb is a ladder you have to
+        // jump off the top of to get back down.
+        if (sneak) Velocity.Y = 0f;
+        else if (pressing) Velocity.Y = ClimbSpeed;
+        else Velocity.Y = MathF.Max(Velocity.Y, -SlideSpeed);
+
+        FallDistance = 0f;
     }
 
     /// <summary>Places the body somewhere without any collision resolution.</summary>

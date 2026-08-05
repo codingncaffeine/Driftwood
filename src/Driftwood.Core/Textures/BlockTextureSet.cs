@@ -141,6 +141,14 @@ public static class BlockTextureSet
         new("smokeglass",  "textures/block/tinted_glass.png",     false),
         new("stormglass_lamp", "textures/block/sea_lantern.png",  false),
 
+        // Things that open. All four map a whole tile onto a whole face, which is what every pack
+        // draws them as — a door is painted as two tiles because it is two blocks tall, and a
+        // ladder is a cut-out with the wall showing through it.
+        new("ladder",      "textures/block/ladder.png",           true),
+        new("door_lower",  "textures/block/oak_door_bottom.png",  false),
+        new("door_upper",  "textures/block/oak_door_top.png",     true),
+        new("trapdoor",    "textures/block/oak_trapdoor.png",     true),
+
         // Items, from here to the end. They live in the same array as the block faces because they
         // are the same sixteen-pixel tiles drawn by the same two places — a slot on the bar and a
         // thing spinning on the floor — and a pack that reskins the world should reskin the pockets
@@ -485,6 +493,13 @@ public static class BlockTextureSet
             StarterBlocks.LayerCampfireFire => TileGen.Fire(1057),
             StarterBlocks.LayerSmokeglass => TileGen.Smokeglass(1058),
             StarterBlocks.LayerStormglassLamp => TileGen.Lamp(1059, 132, 210, 214),
+
+            // Things that open, all cut from the same timber the planks are, so a door in a plank
+            // wall reads as part of it rather than as something bolted on.
+            StarterBlocks.LayerLadder => TileGen.Ladder(1060, 152, 118, 70),
+            StarterBlocks.LayerDoorLower => TileGen.Door(1061, 168, 132, 80, upper: false),
+            StarterBlocks.LayerDoorUpper => TileGen.Door(1061, 168, 132, 80, upper: true),
+            StarterBlocks.LayerTrapdoor => TileGen.Trapdoor(1062, 164, 128, 76),
 
             // The bench is planks that have been worked on: grooves where a straight edge was laid
             // and nicks where it was not.

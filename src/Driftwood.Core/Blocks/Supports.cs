@@ -28,6 +28,9 @@ public sealed class SupportTable
     /// <summary>A whole block face to fix something to. Indexed by raw block id.</summary>
     private readonly bool[] _firm;
 
+    /// <summary>Which way the rest of each block is, or -1. Indexed by raw block id.</summary>
+    private readonly int[] _partner;
+
     /// <summary>Reused between calls so a pass costs no allocation.</summary>
     private readonly Queue<(int X, int Y, int Z)> _pending = [];
 
@@ -47,6 +50,7 @@ public sealed class SupportTable
         _needs = new int[registry.Count];
         _solid = new bool[registry.Count];
         _firm = new bool[registry.Count];
+        _partner = new int[registry.Count];
 
         for (var id = 0; id < registry.Count; id++)
         {
@@ -54,6 +58,7 @@ public sealed class SupportTable
             _needs[id] = type.SupportFace;
             _solid[id] = type.Solid;
             _firm[id] = type.Solid && type.Model.IsFullCube;
+            _partner[id] = type.PartnerFace;
         }
     }
 
@@ -73,13 +78,29 @@ public sealed class SupportTable
 
     /// <summary>True when whatever is at this cell still has something to hold on to.</summary>
     /// <remarks>
-    /// True for everything that needs nothing, so a caller can ask about any cell without first
-    /// asking whether the question applies.
+    /// <para>True for everything that needs nothing, so a caller can ask about any cell without
+    /// first asking whether the question applies.</para>
+    /// <para>Half of a block whose other half is gone is not held either, and that is the rule that
+    /// makes a door one object rather than two that happen to be stacked. It is symmetric on
+    /// purpose: each half asks after the other and neither is the real one, so breaking either end
+    /// takes the whole thing and no code anywhere has to know which end was struck.</para>
     /// </remarks>
     public bool Holds(VoxelWorld world, int x, int y, int z)
     {
         var here = world.GetBlock(x, y, z).Value;
         if (here >= _needs.Length) return true;
+
+        var half = _partner[here];
+        if (half >= 0)
+        {
+            var (px, py, pz) = Faces.Normals[half];
+            var other = world.GetBlock(x + px, y + py, z + pz).Value;
+
+            // The other half has to be one, and has to be pointing back at this one. A door beside
+            // a door is two doors, and neither of them holds the other up.
+            if (other >= _partner.Length) return false;
+            if (_partner[other] != Placeable.Opposite(half)) return false;
+        }
 
         var face = _needs[here];
         if (face < 0) return true;

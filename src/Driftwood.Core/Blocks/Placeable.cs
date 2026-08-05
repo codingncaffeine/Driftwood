@@ -14,6 +14,19 @@ public enum PlacementKind
     /// <summary>Eight forms: four facings, each in either half.</summary>
     Stairs,
 
+    /// <summary>
+    /// Eight forms, picked exactly as <see cref="Stairs"/> picks its own, on a shape that is not
+    /// a stair.
+    /// </summary>
+    /// <remarks>
+    /// A separate kind for the same rule, and worth the extra name. The resolution is shared — the
+    /// two sit under one case label so they cannot drift — but a trapdoor is a flat panel where a
+    /// stair has a step, and every check that reads a facing back off the geometry has to know
+    /// which of those it is looking at. Sharing the kind cost exactly one such check, which read
+    /// "no step here" as "no facing here" and could then say nothing at all about a trapdoor.
+    /// </remarks>
+    Trapdoor,
+
     /// <summary>Four forms: one per cardinal, turned so its face meets the player.</summary>
     Facing,
 
@@ -46,6 +59,23 @@ public enum PlacementKind
     /// kind existed. A log laid sideways and a rail want the same two.
     /// </remarks>
     Axis,
+
+    /// <summary>Four forms, one per wall, and nowhere but a wall.</summary>
+    /// <remarks>
+    /// <see cref="Attached"/> without the floor form, for the things that genuinely have nowhere
+    /// else to be. A ladder lying on the ground is not a shorter ladder, it is a mistake.
+    /// </remarks>
+    Wall,
+
+    /// <summary>
+    /// Sixteen forms and two cells: four facings, two hinges, a lower half and an upper.
+    /// </summary>
+    /// <remarks>
+    /// The only kind that puts down more than one block. <see cref="TryResolve"/> answers with the
+    /// lower half; what goes above it is a table the caller reads, because it is a block id and this
+    /// class knows only about the ones it was handed.
+    /// </remarks>
+    Door,
 }
 
 /// <summary>
@@ -113,8 +143,10 @@ public sealed class Placeable
                 return true;
 
             case PlacementKind.Stairs:
+            case PlacementKind.Trapdoor:
                 // The raised half goes on the far side from the player, so you meet the low step
-                // first and climb away from yourself.
+                // first and climb away from yourself — and a trapdoor hinges on the far edge for
+                // the same reason, which is why the two share this and not merely resemble it.
                 id = Variants[Array.IndexOf(Facings, Cardinal(forward)) * 2 + (upper ? 1 : 0)];
                 return true;
 
@@ -150,11 +182,51 @@ public sealed class Placeable
                 id = Variants[Cardinal(forward) is Faces.PosX or Faces.NegX ? 0 : 1];
                 return true;
 
+            case PlacementKind.Wall:
+            {
+                var wall = Array.IndexOf(Facings, hitFace);
+                id = Variants[wall < 0 ? 0 : wall];
+                return wall >= 0;
+            }
+
+            case PlacementKind.Door:
+            {
+                // Facing the player, like anything with a front. The hinge goes on the side they
+                // are drifting toward, which is what makes a second door placed from the other
+                // approach hang the other way and the pair open outward together.
+                var facing = Cardinal(-forward);
+                var side = facing is Faces.PosX or Faces.NegX
+                    ? forward.Z >= 0f ? 0 : 1
+                    : forward.X >= 0f ? 0 : 1;
+
+                id = Variants[Array.IndexOf(Facings, facing) * 4 + side * 2];
+
+                // Nothing hangs a door off a ceiling: it grows upward from where it is put, and the
+                // cell above is the caller's to check because it is a question about the world.
+                return hitFace != Faces.NegY;
+            }
+
             default:
                 id = Variants[0];
                 return true;
         }
     }
+
+    /// <summary>True when this puts a second block in the cell above the first.</summary>
+    public bool IsTall => Kind == PlacementKind.Door;
+
+    /// <summary>
+    /// The two sides a thing facing one way can be hinged on, in the order its variants are stored.
+    /// </summary>
+    /// <remarks>
+    /// A door swings about a vertical edge, so its hinge is always one of the two cardinals across
+    /// its facing — never the facing itself and never behind it. Written once here so the table that
+    /// registers the blocks and the rule that picks between them cannot disagree about which of the
+    /// two came first.
+    /// </remarks>
+    public static int[] Hinges(int facing) => facing is Faces.PosX or Faces.NegX
+        ? [Faces.PosZ, Faces.NegZ]
+        : [Faces.PosX, Faces.NegX];
 
     /// <summary>The face opposite another, which is what a pair of them differ by.</summary>
     /// <remarks>

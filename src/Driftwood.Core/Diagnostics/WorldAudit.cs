@@ -715,6 +715,10 @@ public static class WorldAudit
                 ? "falls, lands, walks, jumps, is stopped by walls, does not sneak off ledges"
                 : $"{physicsFaults.Count} faults: {string.Join("; ", physicsFaults)}");
 
+        var climbFaults = ClimbSelfTest(registry, out var climbDetail);
+        Check("a ladder is climbed, not walked past", climbFaults.Count == 0,
+            climbFaults.Count == 0 ? climbDetail : $"{climbFaults.Count} faults: {climbFaults[0]}");
+
         // The model is drawn from a table of measurements and a UV net worked out on paper. None of
         // it throws when it is wrong: a reversed winding is an invisible limb, a transposed patch is
         // an elbow wearing a kneecap, and both draw perfectly happily.
@@ -2372,6 +2376,120 @@ public static class WorldAudit
     }
 
     /// <summary>
+    /// Builds a shaft with a ladder up one wall and checks what it takes to go up it.
+    /// </summary>
+    /// <remarks>
+    /// <para>Four claims, and the third is the one worth having. That pressing into a ladder takes
+    /// you up it. That letting go turns a fall into a slide rather than a drop. ⚠ <b>That walking
+    /// past one, pressing away from it, does not stick you to it</b> — a ladder you cling to by
+    /// being near it catches everybody who builds a corridor beside one, and every other test here
+    /// would pass a build that did exactly that. And that a climb is not a shortcut: it has to be
+    /// slower than walking, or every staircase in the game is a waste of stone.</para>
+    /// <para>Heights are measured over a fixed number of steps rather than compared against the
+    /// constant, so a climb that is somehow instantaneous fails rather than agreeing with itself.
+    /// </para>
+    /// </remarks>
+    private static List<string> ClimbSelfTest(BlockRegistry registry, out string detail)
+    {
+        var faults = new List<string>();
+        const float Step = 1f / 60f;
+        const int Steps = 60;
+
+        var world = new VoxelWorld(registry);
+        var stone = registry.ByName("stone").Id;
+        var ladder = registry.ByName("ladder_east").Id;
+
+        // ⚠ A shaft, not an open wall, and that is what makes the control below mean anything. A
+        // body pressing away from a ladder in the open simply walks out of the cell within a frame
+        // or two and then falls for honest reasons — so "it did not end up higher" passes whether
+        // the rule is there or not. Walled in, it stays on the ladder and the only thing that can
+        // lift it is the rule being wrong.
+        for (var y = 59; y < 76; y++)
+        {
+            world.SetBlock(0, y, 0, stone);      // the wall the ladder is fixed to
+            world.SetBlock(2, y, 0, stone);
+            world.SetBlock(1, y, -1, stone);
+            world.SetBlock(1, y, 1, stone);
+            if (y >= 60) world.SetBlock(1, y, 0, ladder);
+        }
+
+        for (var z = -2; z <= 2; z++)
+        for (var x = -2; x <= 4; x++)
+            world.SetBlock(x, 59, z, stone);
+
+        // The ladder faces +x, so the wall it is fixed to is on its -x side and that is the way a
+        // player has to press to hold on. Taken from the block rather than written down twice.
+        var (wx, wy, wz) = Faces.Normals[registry[ladder].SupportFace];
+        var into = new Vector3(wx, wy, wz);
+
+        // Up.
+        var body = new PlayerBody(registry);
+        body.Teleport(new Vector3(1.5f, 60f, 0.5f));
+        for (var i = 0; i < Steps; i++) body.Step(world, Step, into, false, false, false);
+
+        var climbed = body.Position.Y - 60f;
+        if (!body.OnLadder) faults.Add("pressing into a ladder did not put the body on it");
+        if (climbed < 1f) faults.Add($"a second of climbing went up {climbed:F2} blocks");
+
+        // ⚠ Slower than walking, or a ladder is a shortcut and every staircase is a waste of stone.
+        // Both sides are walked rather than compared: the two speeds are compile-time constants and
+        // asking whether one is less than the other is a sentence the compiler can answer without
+        // running anything, which is the definition of a check that restates its own inputs.
+        var flat = new VoxelWorld(registry);
+        for (var z = -2; z <= 2; z++)
+        for (var x = -2; x <= 40; x++)
+            flat.SetBlock(x, 59, z, stone);
+
+        var walker = new PlayerBody(registry);
+        walker.Teleport(new Vector3(0.5f, 60f, 0.5f));
+        for (var i = 0; i < Steps; i++)
+            walker.Step(flat, Step, new Vector3(1f, 0f, 0f), false, false, false);
+
+        var walked = walker.Position.X - 0.5f;
+        if (walked <= 0.5f) faults.Add($"a second of walking went {walked:F2} blocks, so there is nothing to compare");
+        if (climbed >= walked)
+            faults.Add($"a second of climbing went up {climbed:F2} where a second of walking went {walked:F2} — "
+                     + "a ladder is quicker than the ground, so nobody will ever build stairs");
+
+        // Letting go: still on it, coming down at the slide rate rather than falling.
+        var high = body.Position.Y;
+        for (var i = 0; i < Steps; i++) body.Step(world, Step, Vector3.Zero, false, false, false);
+
+        var slid = high - body.Position.Y;
+        if (slid <= 0.2f) faults.Add($"letting go of a ladder moved the body {slid:F2} blocks");
+        if (slid > PlayerBody.SlideSpeed + 0.5f)
+            faults.Add($"letting go of a ladder dropped {slid:F2} blocks in a second, which is a fall");
+
+        // Crouching holds. Measured from a height it could fall from, so a body already on the
+        // floor cannot pass this by having nowhere to go.
+        body.Teleport(new Vector3(1.5f, 68f, 0.5f));
+        body.Step(world, Step, into, false, false, false);
+        var held = body.Position.Y;
+        for (var i = 0; i < Steps; i++) body.Step(world, Step, Vector3.Zero, false, true, false);
+
+        if (MathF.Abs(body.Position.Y - held) > 0.2f)
+            faults.Add($"crouching on a ladder moved {MathF.Abs(body.Position.Y - held):F2} blocks");
+
+        // ⚠ The control, and the assertion the other three would all pass without. Pressing across
+        // a ladder — neither into it nor away from it — must not climb. A ladder that holds anybody
+        // standing in its cell catches every corridor built alongside one, and every test above
+        // this line is satisfied by exactly that build.
+        var across = new PlayerBody(registry);
+        across.Teleport(new Vector3(1.5f, 68f, 0.5f));
+        for (var i = 0; i < Steps; i++)
+            across.Step(world, Step, new Vector3(0f, 0f, 1f), false, false, false);
+
+        if (across.Position.Y >= 68f)
+            faults.Add($"pressing across a ladder still climbed it, from 68.00 to {across.Position.Y:F2}");
+
+        detail = $"pressing in climbs {climbed:F2} blocks in the second a walk covers {walked:F2}, "
+               + $"letting go slides {slid:F2}, crouching holds, and pressing across a shaft it "
+               + $"cannot leave falls to {across.Position.Y:F2}";
+
+        return faults;
+    }
+
+    /// <summary>
     /// Checks that the light a player can build gets brighter, and that smokeglass stops it.
     /// </summary>
     /// <remarks>
@@ -2465,9 +2583,17 @@ public static class WorldAudit
             if (!pairs.TryGetValue(to.Value, out var back) || back.Value != from)
                 faults.Add($"{registry[from].Name} toggles to {registry[to].Name} and not back again");
 
-            if (registry[from].LightEmission == registry[to].LightEmission)
-                faults.Add($"{registry[from].Name} and {registry[to].Name} give off the same light, "
-                         + "so using it changes nothing anybody can see");
+            // Using something has to change something. A fire changes what it gives off; a door
+            // changes where it is and whether it stops anybody. Asking only about the model would
+            // be vacuous — the two states are always two objects — so the three real differences
+            // are named, and a pair that shares all of them is a switch with nothing on the end.
+            var one = registry[from];
+            var other = registry[to];
+            var moved = one.Model.Outline != other.Model.Outline;
+
+            if (one.LightEmission == other.LightEmission && one.Solid == other.Solid && !moved)
+                faults.Add($"{one.Name} and {other.Name} burn the same, stop the same and stand in the "
+                         + "same place, so using it changes nothing anybody can see");
         }
 
         if (toggles == 0) faults.Add("no block has a second state, so nothing here was checked");
@@ -2593,9 +2719,38 @@ public static class WorldAudit
             faults.Add($"a stack four deep lost {cascaded} of its four when the block under it went — "
                      + "the pass is not following what was leaning on what");
 
+        // A door is two cells and one door, and it has to come apart that way from either end.
+        // Three edits, because the three are three different paths through the pass: the top, the
+        // bottom, and the floor under both.
+        var doors = StarterBlocks.Doors(registry);
+        var lower = doors[0];
+        var upper = doors[1];
+
+        if (registry[lower].PartnerFace != Faces.PosY || registry[upper].PartnerFace != Faces.NegY)
+            faults.Add("a door's two halves do not name each other, so nothing below tests anything");
+
+        foreach (var (struck, what) in ((int Y, string What)[])[(66, "its top"), (65, "its bottom"), (64, "the floor")])
+        {
+            var frame = new VoxelWorld(registry);
+            frame.SetBlock(0, 64, 0, stone);
+            frame.SetBlock(0, 65, 0, lower);
+            frame.SetBlock(0, 66, 0, upper);
+
+            if (!table.Holds(frame, 0, 65, 0) || !table.Holds(frame, 0, 66, 0))
+                faults.Add("a whole door standing on stone was not being held up");
+
+            fell.Clear();
+            frame.SetBlock(0, struck, 0, BlockId.Air);
+            table.Shed(frame, 0, struck, 0, fell);
+
+            if (!frame.GetBlock(0, 65, 0).IsAir || !frame.GetBlock(0, 66, 0).IsAir)
+                faults.Add($"breaking {what} left half a door standing");
+        }
+
         detail = $"{table.Supported} of {registry.Count} blocks say what holds them, on walls, floors "
                + $"and ceilings; a pane holds a foot and not a fixing, {cascaded} of a stack of 4 "
-               + "cascade off one edit, and an edit two cells away moves nothing";
+               + "cascade off one edit, a door comes apart whole from either end, and an edit two "
+               + "cells away moves nothing";
 
         return faults;
     }
@@ -3004,7 +3159,29 @@ public static class WorldAudit
             {
                 var back = drops.Of(variant);
                 if (!back.IsEmpty) continue;
-                faults.Add($"'{item.Name}' puts down '{registry[variant].Name}', which leaves nothing");
+
+                // Half of a two-cell block is allowed to leave nothing, and has to: one door out
+                // of the pockets must not come back as two. The exemption is not a free pass —
+                // the other half is asked, so a door where BOTH halves leave nothing still fails,
+                // which is the failure that would actually cost a player their door.
+                var block = registry[variant];
+                if (block.PartnerFace >= 0)
+                {
+                    var whole = false;
+                    foreach (var other in places.Variants)
+                    {
+                        if (registry[other].PartnerFace != Placeable.Opposite(block.PartnerFace)) continue;
+                        if (drops.Of(other).IsEmpty) continue;
+                        whole = true;
+                        break;
+                    }
+
+                    if (whole) continue;
+                    faults.Add($"'{item.Name}' puts down '{block.Name}' and no half of it leaves anything");
+                    continue;
+                }
+
+                faults.Add($"'{item.Name}' puts down '{block.Name}', which leaves nothing");
             }
         }
 
@@ -3611,6 +3788,10 @@ public static class WorldAudit
         float[] heights = [0f, 0.25f, 0.5f, 0.501f, 0.75f, 1f];
         int[] hitFaces = [Faces.PosY, Faces.NegY, Faces.PosX, Faces.NegZ];
 
+        // What each two-state block swings to, so a shut door can be asked where it would open.
+        var swung = new Dictionary<ushort, BlockId>();
+        foreach (var (from, to) in StarterBlocks.Toggles(registry)) swung[from.Value] = to;
+
         foreach (var item in items.All)
         {
             if (item.Places is not { } entry) continue;
@@ -3634,6 +3815,28 @@ public static class WorldAudit
                 if (entry.Kind == PlacementKind.Attached && face == Faces.NegY)
                 {
                     if (placed) faults.Add($"{where}: fixed itself to a ceiling");
+                    continue;
+                }
+
+                // A wall and nowhere else. Both halves of that are checked: a ladder that took the
+                // floor and one that refused a wall are the same bug from opposite sides.
+                if (entry.Kind == PlacementKind.Wall)
+                {
+                    var onWall = Array.IndexOf(Placeable.Facings, face) >= 0;
+                    if (placed != onWall)
+                        faults.Add($"{where}: {(placed ? "fixed itself to a floor or a ceiling" : "refused a wall")}");
+                    if (!placed) continue;
+
+                    var says = registry[id].SupportFace;
+                    if (says != Placeable.Opposite(face))
+                        faults.Add($"{where}: says it is held on face {says}, wanted {Placeable.Opposite(face)}");
+
+                    continue;
+                }
+
+                if (entry.Kind == PlacementKind.Door && face == Faces.NegY)
+                {
+                    if (placed) faults.Add($"{where}: hung a door from a ceiling");
                     continue;
                 }
 
@@ -3675,6 +3878,33 @@ public static class WorldAudit
                     continue;
                 }
 
+                // ⚠ A door's hinge cannot be read off the door. Shut, both hinges are the same box
+                // on the same edge — so a variant table that hands out the wrong one is invisible
+                // until somebody opens it, which is exactly when it matters. The check opens it:
+                // it follows the toggle to the swung form and asks which way that leans, which is
+                // the only place the hinge is a fact about the geometry rather than about a name.
+                if (entry.Kind == PlacementKind.Door)
+                {
+                    var wantFace = Opposite(wantFacing);
+                    var wantHinge = Placeable.Hinges(wantFace)[
+                        wantFace is Faces.PosX or Faces.NegX
+                            ? look.Z >= 0f ? 0 : 1
+                            : look.X >= 0f ? 0 : 1];
+
+                    if (registry[id].PartnerFace != Faces.PosY)
+                        faults.Add($"{where}: put down a half that does not grow upward");
+
+                    if (LeanOf(model, wantFace) < 0.05f)
+                        faults.Add($"{where}: shut, its panel is not on the {wantFace} side of the cell");
+
+                    if (!swung.TryGetValue(id.Value, out var open))
+                        faults.Add($"{where}: has no open form to swing to");
+                    else if (LeanOf(registry[open].Model, wantHinge) < 0.05f)
+                        faults.Add($"{where}: opens away from the {wantHinge} side it is hinged on");
+
+                    continue;
+                }
+
                 // Something lying along an axis has no halves and no front either. What has to be
                 // true is that its long boxes run the way the player was looking — read off the
                 // model, because "it picked variant 0" only says the table was indexed.
@@ -3705,6 +3935,19 @@ public static class WorldAudit
 
                 if (gotUpper != wantUpper)
                     faults.Add($"{where}: landed in the {(gotUpper ? "upper" : "lower")} half, wanted the other");
+
+                // ⚠ A shut trapdoor is a flat panel and its facing is nowhere in that shape — both
+                // facings of a half are the same box. It is only visible once it swings, standing
+                // on the hinge edge opposite the way it faces, so that is where the check looks.
+                if (entry.Kind == PlacementKind.Trapdoor)
+                {
+                    if (!swung.TryGetValue(id.Value, out var flap))
+                        faults.Add($"{where}: has no open form to swing to");
+                    else if (LeanOf(registry[flap].Model, Opposite(wantFacing)) < 0.05f)
+                        faults.Add($"{where}: swings up on the wrong edge for a facing of {wantFacing}");
+
+                    continue;
+                }
 
                 if (entry.Kind != PlacementKind.Stairs) continue;
 

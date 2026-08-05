@@ -258,6 +258,9 @@ public sealed class ClientHost : IDisposable
     /// <summary>Each block with two states, and the one a right click swaps it to.</summary>
     private readonly Dictionary<ushort, BlockId> _toggle = [];
 
+    /// <summary>Each lower half of a two-cell block, and what goes above it.</summary>
+    private readonly Dictionary<ushort, BlockId> _tallUpper = [];
+
     /// <summary>What holds each block up, and what comes down when that is taken away.</summary>
     private SupportTable _supports = null!;
 
@@ -631,6 +634,7 @@ public sealed class ClientHost : IDisposable
         _furnaceHot = StarterBlocks.Furnaces(registry, lit: true);
         foreach (var (slab, whole) in StarterBlocks.SlabMerges(registry)) _slabMerge[slab.Value] = whole;
         foreach (var (from, to) in StarterBlocks.Toggles(registry)) _toggle[from.Value] = to;
+        foreach (var (lower, upper) in StarterBlocks.TallPairs(registry)) _tallUpper[lower.Value] = upper;
         _supports = new SupportTable(registry);
 
         var generator = new TerrainGenerator(_options.Seed, ids, _options.OceanCoverage);
@@ -2731,6 +2735,20 @@ public sealed class ClientHost : IDisposable
 
             case BlockUse.Toggle when _toggle.TryGetValue(struck.Id.Value, out var other):
                 _streamer.EditBlock(hit.X, hit.Y, hit.Z, other);
+
+                // Both halves or neither. A door whose top stays shut is not a half-open door, and
+                // whichever half was struck has to open the whole thing — which is why the block
+                // names its other half rather than the caller working out which end this was.
+                if (struck.PartnerFace >= 0)
+                {
+                    var (px, py, pz) = Faces.Normals[struck.PartnerFace];
+                    var half = _registry[_streamer.World.GetBlock(hit.X + px, hit.Y + py, hit.Z + pz)];
+
+                    if (half.PartnerFace == Placeable.Opposite(struck.PartnerFace)
+                        && _toggle.TryGetValue(half.Id.Value, out var otherHalf))
+                        _streamer.EditBlock(hit.X + px, hit.Y + py, hit.Z + pz, otherHalf);
+                }
+
                 PlaySound(
                     _registry[other], SoundEvent.Place,
                     new Vector3(hit.X + 0.5f, hit.Y + 0.5f, hit.Z + 0.5f), 0.7f);
@@ -2786,6 +2804,16 @@ public sealed class ClientHost : IDisposable
             if (!enough) return;
         }
 
+        // A door is two cells and one thing, so the cell above has to be free before either is
+        // written. Checked here rather than in the placement rule because it is a question about
+        // the world, and Core's rules are deliberately answerable without one.
+        var tall = held.IsTall && _tallUpper.TryGetValue(block.Value, out var upper);
+        if (held.IsTall)
+        {
+            if (!tall) return;
+            if (!_streamer.World.GetBlock(x, y + 1, z).IsAir) return;
+        }
+
         if (_walking)
         {
             var probe = _streamer.World;
@@ -2797,6 +2825,8 @@ public sealed class ClientHost : IDisposable
         }
 
         _streamer.EditBlock(x, y, z, block);
+        if (tall) _streamer.EditBlock(x, y + 1, z, _tallUpper[block.Value]);
+
         _inventory.SpendHeld();
         PlaySound(_registry[block], SoundEvent.Place, new Vector3(x + 0.5f, y + 0.5f, z + 0.5f), 0.85f);
     }

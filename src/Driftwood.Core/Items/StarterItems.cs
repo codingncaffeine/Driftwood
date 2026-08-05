@@ -185,6 +185,46 @@ public static class StarterItems
         Block(items, blocks, "smokeglass", "smokeglass", StarterBlocks.LayerSmokeglass);
         Block(items, blocks, "stormglass_lamp", "stormglass lamp", StarterBlocks.LayerStormglassLamp);
 
+        // Things that open. A ladder goes on a wall and nowhere else; a trapdoor takes a facing and
+        // a half exactly as a stair does; a door is the one thing in the game that puts down two
+        // blocks, and its upper halves are deliberately not listed as forms this places — nothing
+        // maps them back to an item, which is what stops one door coming apart into two.
+        items.Register(new ItemType
+        {
+            Name = "ladder", Label = "ladder", IconLayer = StarterBlocks.LayerLadder,
+            BurnSeconds = Timber,
+            Places = new Placeable
+            {
+                Label = "ladder",
+                Kind = PlacementKind.Wall,
+                Variants = StarterBlocks.Ladders(blocks),
+            },
+        });
+
+        items.Register(new ItemType
+        {
+            Name = "trapdoor", Label = "trapdoor", IconLayer = StarterBlocks.LayerTrapdoor,
+            BurnSeconds = Timber,
+            Places = new Placeable
+            {
+                Label = "trapdoor",
+                Kind = PlacementKind.Trapdoor,
+                Variants = StarterBlocks.Trapdoors(blocks),
+            },
+        });
+
+        items.Register(new ItemType
+        {
+            Name = "door", Label = "door", IconLayer = StarterBlocks.LayerDoorUpper,
+            BurnSeconds = Timber,
+            Places = new Placeable
+            {
+                Label = "door",
+                Kind = PlacementKind.Door,
+                Variants = StarterBlocks.Doors(blocks),
+            },
+        });
+
         items.Register(new ItemType
         {
             Name = "furnace", Label = "furnace", IconLayer = StarterBlocks.LayerFurnaceFront,
@@ -251,8 +291,23 @@ public static class StarterItems
     /// that leaves nothing, which is every kind of foliage, the grass that grows on top of the dirt,
     /// and the burning form of a furnace, which is the same furnace and must not be two of them.
     /// </remarks>
-    public static BlockDrops Drops(BlockRegistry blocks, ItemRegistry items) => new(
-        blocks, items,
+    public static BlockDrops Drops(BlockRegistry blocks, ItemRegistry items)
+    {
+        var rules = new List<BlockDrops.Rule>(Written(blocks, items));
+
+        // ⚠ Half a door leaves nothing, and a door in either state leaves one door. Generated
+        // rather than written out thirty-two times, because a table with thirty-two near-identical
+        // rows in it is a table with one row wrong in it — and the two failures are a door that
+        // comes apart into two doors, and one that opens and can then never be picked up.
+        foreach (var name in StarterBlocks.UpperHalves) rules.Add(new BlockDrops.Rule(name, null));
+        foreach (var name in StarterBlocks.OpenLowerHalves) rules.Add(new BlockDrops.Rule(name, "door"));
+        foreach (var name in StarterBlocks.OpenTrapdoors) rules.Add(new BlockDrops.Rule(name, "trapdoor"));
+
+        return new BlockDrops(blocks, items, [.. rules]);
+    }
+
+    private static BlockDrops.Rule[] Written(BlockRegistry blocks, ItemRegistry items) =>
+    [
         new BlockDrops.Rule("stone", "rubble"),
         new BlockDrops.Rule("grass", "dirt"),
         new BlockDrops.Rule("clay", "clay_lump", 4),
@@ -283,7 +338,8 @@ public static class StarterItems
         // And a fire that has gone out is still a campfire. The item places the lit pair, so it is
         // the other two that need saying — the same shape of rule, from the other side.
         new BlockDrops.Rule("campfire_x", "campfire"),
-        new BlockDrops.Rule("campfire_z", "campfire"));
+        new BlockDrops.Rule("campfire_z", "campfire"),
+    ];
 
     private static void Block(
         ItemRegistry items, BlockRegistry blocks, string name, string label, ushort icon,

@@ -190,6 +190,14 @@ public static class StarterRecipes
         Shaped("smokeglass", "smokeglass", 2, [" C ", "CGC", " C "]);
         Shaped("smokeglass pane", "smokeglass_pane", 16, ["MMM", "MMM"], "smokeglass");
 
+        // Things that open. A ladder is rungs between two rails and comes out of a bench three at a
+        // time; a door is six planks two wide, which is the shape of a door; a trapdoor is the same
+        // arrangement lying down. All three are the genre's own grammar and none of them is a
+        // transcription — the counts are ours and a door here is one door rather than three.
+        Shaped("ladder", "ladder", 3, ["S S", "SSS", "S S"]);
+        Shaped("door", "door", 1, ["PP", "PP", "PP"], mirrored: false);
+        Shaped("trapdoor", "trapdoor", 2, ["PPP", "PPP"], mirrored: false);
+
         // ⚠ The first thing azurite has ever been for. Six ores come up out of the ground and this
         // was the one with no recipe anywhere in the tree — a mineral a player mines four of and
         // can do nothing whatever with, which is a hole rather than a decision. Set round a

@@ -136,6 +136,20 @@ public sealed class BlockType
     /// </remarks>
     public int SupportFace { get; init; } = -1;
 
+    /// <summary>
+    /// The direction to the cell holding the rest of this block, or -1 for a block that is one cell.
+    /// </summary>
+    /// <remarks>
+    /// A door is two cells and one door: opening the bottom half and leaving the top shut is not a
+    /// half-open door, it is a bug. Naming the other half here means the rules that care — using it,
+    /// breaking it — are written once against "this block and its other half" rather than once per
+    /// thing that happens to be tall. A double chest will want the same field pointing sideways.
+    /// </remarks>
+    public int PartnerFace { get; init; } = -1;
+
+    /// <summary>True when a player standing in this cell can go up and down it.</summary>
+    public bool Climbable { get; init; }
+
     /// <summary>Nothing takes this block. Bedrock, and the floor of the world.</summary>
     public bool Unbreakable => Hardness < 0f;
 

@@ -698,6 +698,105 @@ public sealed class BlockModel
     }
 
     /// <summary>
+    /// A flat sheet fixed to a wall, drawn on both sides — a ladder.
+    /// </summary>
+    /// <param name="facing">The way it faces, which is out of the wall it is fixed to.</param>
+    /// <remarks>
+    /// A plane rather than a thin box, because the whole texture is a cut-out and a box would draw
+    /// four edge strips of rung and gap. Standing two units off the wall is what stops it fighting
+    /// with the wall's own face for the same depth.
+    /// </remarks>
+    public static BlockModel Sheet(ushort layer, int facing)
+    {
+        const float Off = 2f;
+
+        var faces = new ModelFace?[Faces.Count];
+
+        // Both uv rects together are what makes u run the same way along the cell from either side,
+        // which is the same cancellation the torch's planes rely on: the mirrored projection and the
+        // mirrored rect undo each other.
+        var (from, to, near, far) = facing switch
+        {
+            Faces.PosX => (new Vector3(Off, 0f, 0f), new Vector3(Off, 16f, 16f), Faces.PosX, Faces.NegX),
+            Faces.NegX => (new Vector3(16f - Off, 0f, 0f), new Vector3(16f - Off, 16f, 16f), Faces.NegX, Faces.PosX),
+            Faces.PosZ => (new Vector3(0f, 0f, Off), new Vector3(16f, 16f, Off), Faces.PosZ, Faces.NegZ),
+            _ => (new Vector3(0f, 0f, 16f - Off), new Vector3(16f, 16f, 16f - Off), Faces.NegZ, Faces.PosZ),
+        };
+
+        faces[near] = new ModelFace { Layer = layer, Uv = new Vector4(0f, 0f, 16f, 16f) };
+        faces[far] = new ModelFace { Layer = layer, Uv = new Vector4(16f, 0f, 0f, 16f) };
+
+        var model = new BlockModel(
+        [
+            new ModelElement { From = from, To = to, Faces = faces, AmbientOcclusion = false },
+        ]);
+
+        // A sheet with no thickness has nothing to aim at, so the outline is given a little.
+        var (dx, dy, dz) = Faces.Normals[facing];
+        var lift = new Vector3(dx, dy, dz) * (Off / 16f);
+        model.Outline = (Vector3.Min(from / 16f, from / 16f + lift), Vector3.Max(to / 16f, to / 16f + lift));
+        return model;
+    }
+
+    /// <summary>
+    /// A panel three units thick, lying flat in one half of the cell or stood up on one edge.
+    /// </summary>
+    /// <param name="facing">Which way it faces when it is open, hinged on the opposite side.</param>
+    /// <param name="upper">True for one fitted to the ceiling rather than the floor.</param>
+    /// <param name="open">True for the form stood up against its hinge.</param>
+    public static BlockModel Trapdoor(ushort layer, int facing, bool upper, bool open)
+    {
+        const float Thick = 3f;
+
+        if (!open)
+            return new BlockModel([upper
+                ? Box(new Vector3(0f, 16f - Thick, 0f), new Vector3(16f, 16f, 16f), layer, layer, layer)
+                : Box(Vector3.Zero, new Vector3(16f, Thick, 16f), layer, layer, layer)]);
+
+        // Swung up about its hinge, which is the edge opposite the way it faces.
+        var (from, to) = facing switch
+        {
+            Faces.PosX => (Vector3.Zero, new Vector3(Thick, 16f, 16f)),
+            Faces.NegX => (new Vector3(16f - Thick, 0f, 0f), new Vector3(16f, 16f, 16f)),
+            Faces.PosZ => (Vector3.Zero, new Vector3(16f, 16f, Thick)),
+            _ => (new Vector3(0f, 0f, 16f - Thick), new Vector3(16f, 16f, 16f)),
+        };
+
+        return new BlockModel([Box(from, to, layer, layer, layer)]);
+    }
+
+    /// <summary>
+    /// Half a door: a panel on one edge of the cell, or swung a quarter turn onto the next edge.
+    /// </summary>
+    /// <param name="facing">The way the shut door faces — out of the wall it was hung against.</param>
+    /// <param name="hinge">The side the hinge is on, as a face; the panel swings toward it.</param>
+    /// <param name="open">True for the swung form.</param>
+    /// <remarks>
+    /// <para>Both forms are boxes on cell edges rather than one box turned, which is what
+    /// <see cref="Stairs"/> does and for the same reason: a quarter turn about a vertical edge takes
+    /// one edge of the cell exactly onto another, so the turned form can be written down instead of
+    /// computed, and no texture ends up rotated by a rounding error.</para>
+    /// <para>Which edge is not free to choose. Shut, the panel is on the side the door faces; open,
+    /// it has swung onto the hinge's side — so a door hung on its left opens to the left, and the
+    /// pair of them hung on facing sides of a doorway open outward together.</para>
+    /// </remarks>
+    public static BlockModel Door(ushort layer, int facing, int hinge, bool open)
+    {
+        const float Thick = 3f;
+
+        var edge = open ? hinge : facing;
+        var (from, to) = edge switch
+        {
+            Faces.PosX => (new Vector3(16f - Thick, 0f, 0f), new Vector3(16f, 16f, 16f)),
+            Faces.NegX => (Vector3.Zero, new Vector3(Thick, 16f, 16f)),
+            Faces.PosZ => (new Vector3(0f, 0f, 16f - Thick), new Vector3(16f, 16f, 16f)),
+            _ => (Vector3.Zero, new Vector3(16f, 16f, Thick)),
+        };
+
+        return new BlockModel([Box(from, to, layer, layer, layer)]);
+    }
+
+    /// <summary>
     /// One box with a texture on every face, culled by the sides of the cell it actually touches.
     /// </summary>
     /// <remarks>
