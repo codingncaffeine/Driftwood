@@ -169,6 +169,17 @@ public sealed class BlockModel
     /// </remarks>
     public (Vector3 Min, Vector3 Max) Outline { get; private set; }
 
+    /// <summary>
+    /// The tile debris off this block wears.
+    /// </summary>
+    /// <remarks>
+    /// The format declares this outright as <c>particle</c> in a model's texture list, because a
+    /// block with six different faces has no obvious answer. Ours takes the first quad's, which for
+    /// a cube is a side and for a shape is whatever it draws first — right for everything we have,
+    /// and the place the declaration goes when a pack's own models start arriving.
+    /// </remarks>
+    public ushort ParticleLayer { get; }
+
     private BlockModel(IReadOnlyList<ModelElement> elements)
     {
         Elements = elements;
@@ -189,6 +200,8 @@ public sealed class BlockModel
         Outline = Quads.Length > 0
             ? (min, max)
             : (Vector3.Zero, Vector3.One);
+
+        ParticleLayer = Quads.Length > 0 ? Quads[0].Layer : (ushort)0;
 
         var whole = elements.Count is > 0 and <= MaxPasses;
         foreach (var element in elements) whole &= IsWholeBlock(element);

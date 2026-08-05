@@ -6,6 +6,7 @@ using Driftwood.Core.Entities;
 using Driftwood.Core.Gen;
 using Driftwood.Core.Lighting;
 using Driftwood.Core.Meshing;
+using Driftwood.Core.Particles;
 using Driftwood.Core.Physics;
 using Driftwood.Core.Sky;
 using Driftwood.Core.Spatial;
@@ -355,6 +356,12 @@ public static class WorldAudit
                 ? "slab half a cell, stairs three quarters, a dusting three sixteenths, a slender torch, "
                   + "and six outlines wrapping the shape rather than the cell"
                 : $"{volumeFaults.Count} faults: {volumeFaults[0]}");
+
+        var particleFaults = ParticleSelfTest(registry, ids);
+        Check("debris falls and settles", particleFaults.Count == 0,
+            particleFaults.Count == 0
+                ? "a burst lands on the floor, empties the pool, uses every crop, and allocates nothing"
+                : $"{particleFaults.Count} faults: {particleFaults[0]}");
 
         var skyFaults = SkySelfTest();
         Check("the sun crosses the sky", skyFaults.Count == 0,
@@ -1008,6 +1015,95 @@ public static class WorldAudit
 
         if (ChunkVertex.Quantise(Chunk.Size + 1) > 0xFFF)
             faults.Add("the position field cannot address a model reaching past the chunk");
+
+        return faults;
+    }
+
+    /// <summary>
+    /// Bursts a block over a headless floor and watches where the debris goes.
+    /// </summary>
+    /// <remarks>
+    /// <para>What a particle system gets wrong is never visible in one screenshot. A burst that
+    /// falls through the floor looks like a burst for the first two frames; a pool that leaks looks
+    /// perfect until an hour into play; a spawn that allocates never looks like anything at all and
+    /// turns up as a stutter somebody blames on the streamer. All three are numbers.</para>
+    /// <para>The allocation measurement is taken after a warm-up on purpose. The first call through
+    /// any path pulls in whatever the runtime needed to get there, and counting that would make the
+    /// check a test of the just-in-time compiler rather than of the loop.</para>
+    /// </remarks>
+    private static List<string> ParticleSelfTest(BlockRegistry registry, StarterBlocks.Ids ids)
+    {
+        var faults = new List<string>();
+
+        // Solid ground up to y=10, so the surface a chip can rest on is y=11.
+        const float Floor = 11f;
+        var world = new VoxelWorld(registry);
+        for (var z = -4; z <= 4; z++)
+        for (var x = -4; x <= 4; x++)
+        for (var y = 0; y <= 10; y++)
+            world.SetBlock(x, y, z, ids.Stone);
+
+        var stone = registry[ids.Stone];
+        var particles = new ParticleSystem(registry, 0x51ED2701);
+
+        particles.Burst(stone, 0, 12, 0);
+        var spawned = particles.Count;
+        if (spawned is < 16 or > 48) faults.Add($"a burst spawned {spawned} particles, wanted 16 to 48");
+
+        // Four seconds is comfortably past the longest life a burst hands out.
+        var lowest = float.MaxValue;
+        var crops = new HashSet<int>();
+        for (var step = 0; step < 240; step++)
+        {
+            particles.Update(world, 1f / 60f);
+            foreach (var p in particles.Live)
+            {
+                lowest = MathF.Min(lowest, p.Position.Y);
+                crops.Add(p.CropX * ParticleSystem.CropsPerAxis + p.CropY);
+                if (p.Layer != stone.Model.ParticleLayer)
+                    faults.Add($"a chip of stone is wearing layer {p.Layer}, not {stone.Model.ParticleLayer}");
+            }
+        }
+
+        if (particles.Count != 0) faults.Add($"{particles.Count} particles outlived their life");
+        if (lowest < Floor - 0.001f) faults.Add($"a particle reached y {lowest:F2}, under the floor at {Floor:F0}");
+
+        // Sixteen crops of the tile, and a burst big enough to want most of them. All one crop
+        // means every chip of every block in the world is the same four pixels.
+        var wide = new ParticleSystem(registry, 0x2F6E13A9);
+        for (var i = 0; i < 30; i++) wide.Burst(stone, 0, 12, 0);
+        var seen = new HashSet<int>();
+        foreach (var p in wide.Live) seen.Add(p.CropX * ParticleSystem.CropsPerAxis + p.CropY);
+        if (seen.Count < ParticleSystem.CropsPerAxis * ParticleSystem.CropsPerAxis)
+            faults.Add($"{seen.Count} of {ParticleSystem.CropsPerAxis * ParticleSystem.CropsPerAxis} tile crops ever used");
+
+        // Chips come off the face that was struck, moving away from it.
+        var chips = new ParticleSystem(registry, 0x7A31C5D3);
+        chips.Chip(stone, 0, 10, 0, Faces.PosY, 12);
+        foreach (var p in chips.Live)
+        {
+            if (p.Position.Y < 11f) faults.Add($"a chip off the top face started at y {p.Position.Y:F2}, inside the block");
+            if (p.Velocity.Y <= 0f) faults.Add($"a chip off the top face is heading down at {p.Velocity.Y:F2}");
+        }
+
+        // The pool refuses rather than grows.
+        var flooded = new ParticleSystem(registry, 0x1234567);
+        for (var i = 0; i < ParticleSystem.Capacity; i++) flooded.Burst(stone, 0, 12, 0, 4);
+        if (flooded.Count != ParticleSystem.Capacity)
+            faults.Add($"the pool holds {flooded.Count}, not the {ParticleSystem.Capacity} it claims");
+        if (flooded.Refused == 0) faults.Add("the pool never refused a spawn, so it grew instead");
+
+        // And the steady state allocates nothing.
+        var steady = new ParticleSystem(registry, 0xABCDEF);
+        steady.Burst(stone, 0, 12, 0);
+        for (var step = 0; step < 60; step++) steady.Update(world, 1f / 60f);
+
+        steady.Burst(stone, 0, 12, 0);
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var step = 0; step < 30; step++) steady.Update(world, 1f / 60f);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        if (allocated > 0) faults.Add($"updating allocated {allocated} bytes over 30 frames");
 
         return faults;
     }

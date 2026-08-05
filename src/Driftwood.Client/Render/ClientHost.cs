@@ -8,6 +8,7 @@ using Driftwood.Core.Entities;
 using Driftwood.Core.Gen;
 using Driftwood.Core.Lighting;
 using Driftwood.Core.Meshing;
+using Driftwood.Core.Particles;
 using Driftwood.Core.Physics;
 using Driftwood.Core.Sky;
 using Driftwood.Core.Spatial;
@@ -162,6 +163,17 @@ public sealed class ClientHost : IDisposable
 
     /// <summary>Each block's own box, so the selection and cracking overlays wrap the shape.</summary>
     private (Vector3 Min, Vector3 Max)[] _outlines = null!;
+
+    /// <summary>Chips, bursts and dust.</summary>
+    private ParticleSystem _particles = null!;
+    private ParticleRenderer _particleRenderer = null!;
+
+    /// <summary>Ground contact last frame, and the fall it had accumulated, for landing dust.</summary>
+    private bool _wasOnGround = true;
+    private float _fallInAir;
+
+    /// <summary>Distance walked since the last scuff of dust.</summary>
+    private float _stepDistance;
 
     /// <summary>
     /// Walking rather than flying. The fly camera stays available behind F3 — it is how terrain
@@ -366,6 +378,8 @@ public sealed class ClientHost : IDisposable
         _chunkShader = new Shader(_gl, ChunkShaders.Vertex, ChunkShaders.Fragment);
         _outline = new BlockOutline(_gl);
 
+        _particleRenderer = new ParticleRenderer(_gl);
+
         _clock = new SkyClock(_options.StartTime, _options.DayLength);
         _skyState = _clock.Now;
         _sky = new SkyRenderer(_gl);
@@ -418,6 +432,7 @@ public sealed class ClientHost : IDisposable
         _camera.FarPlane = _fogEnd + 200f;
 
         _player = new PlayerBody(registry);
+        _particles = new ParticleSystem(registry);
         _hand = StarterBlocks.Hand(registry);
         _solid = registry.BuildSolidTable();
 
@@ -733,6 +748,8 @@ public sealed class ClientHost : IDisposable
 
         UpdateTarget();
         StepAnimation((float)dt);
+        StepFootfall((float)dt);
+        _particles.Update(_streamer.World, (float)dt);
         PlaceCamera();
         PumpStreaming();
 
@@ -805,10 +822,68 @@ public sealed class ClientHost : IDisposable
         var target = _target is { } hit ? _registry[_streamer.World.GetBlock(hit.X, hit.Y, hit.Z)] : null;
         var cell = _target is { } at ? (at.X, at.Y, at.Z) : ((int, int, int)?)null;
 
+        // Chips fly off the face the blow lands on, not off the block as a whole. Once per swing
+        // rather than every frame, so the spray keeps the arm's rhythm instead of being a hose.
+        if (strikes > 0 && !placing && target is not null && _target is { } struck)
+            _particles.Chip(target, struck.X, struck.Y, struck.Z, struck.Face);
+
         if (!_mining.Update(dt, target, cell, _holdingBreak)) return;
+
+        // The burst goes before the block does. Reading the type after BreakTarget gets air.
+        if (target is not null && cell is { } broken)
+            _particles.Burst(target, broken.Item1, broken.Item2, broken.Item3);
 
         BreakTarget();
         UpdateTarget();
+    }
+
+    /// <summary>
+    /// Kicks dust out of the ground under a walking or landing player.
+    /// </summary>
+    /// <remarks>
+    /// Taken from what is under the feet rather than from a fixed colour, so crossing from grass
+    /// onto sand changes the colour of the dust without anything here knowing either exists. A
+    /// landing is the same effect with more of it, keyed off the fall the body already measured.
+    /// </remarks>
+    private void StepFootfall(float dt)
+    {
+        if (_bench is not null || !_walking) return;
+
+        // The body clears its fall the instant it lands, so the distance has to be kept here while
+        // it is still in the air or there is nothing left to read on the frame it touches down.
+        var onGround = _player.OnGround;
+        if (!onGround) _fallInAir = MathF.Max(_fallInAir, _player.FallDistance);
+
+        var landed = onGround && !_wasOnGround ? _fallInAir : 0f;
+        if (onGround) _fallInAir = 0f;
+        _wasOnGround = onGround;
+
+        var under = _streamer.World.GetBlock(
+            (int)MathF.Floor(_player.Position.X),
+            (int)MathF.Floor(_player.Position.Y - 0.1f),
+            (int)MathF.Floor(_player.Position.Z));
+
+        if (under.IsAir) { _stepDistance = 0f; return; }
+        var type = _registry[under];
+
+        // A landing worth noticing, sized by how far it fell.
+        if (landed > 1.2f)
+        {
+            _particles.Puff(type, _player.Position, Math.Min(4 + (int)landed * 2, 20), MathF.Min(landed / 3f, 2.4f));
+            _stepDistance = 0f;
+            return;
+        }
+
+        // Otherwise a scuff every stride, measured in distance rather than in time so it keeps
+        // pace with the legs whatever the frame rate is.
+        if (!_player.OnGround) return;
+
+        var speed = new Vector2(_player.Velocity.X, _player.Velocity.Z).Length();
+        _stepDistance += speed * dt;
+        if (_stepDistance < 2.1f) return;
+
+        _stepDistance = 0f;
+        if (speed > 0.5f) _particles.Puff(type, _player.Position, 2, 0.4f);
     }
 
     /// <summary>
@@ -857,6 +932,22 @@ public sealed class ClientHost : IDisposable
             LightValue.Sky(packed) / (float)LightValue.Max,
             new Vector3(LightValue.Red(packed), LightValue.Green(packed), LightValue.Blue(packed))
                 / LightValue.Max);
+    }
+
+    /// <summary>
+    /// What a chip of debris standing at a point is multiplied by.
+    /// </summary>
+    /// <remarks>
+    /// The same rule the chunk shader uses, minus the directional term: a spinning fleck of stone
+    /// has no face to catch the sun with, so it takes the sky's ambient and half its direct light
+    /// and leaves it there. What matters is that it is gated on the same baked sky value everything
+    /// else is, so a burst in a cave is dark and a burst on a hillside is not.
+    /// </remarks>
+    private Vector3 ParticleLight(Vector3 at)
+    {
+        var light = SampleLight(at);
+        var daylight = (_skyState.SkyAmbient + _skyState.SunColor * 0.5f) * light.Sky;
+        return Vector3.Max(Vector3.Max(daylight, light.Block), NightFloor);
     }
 
     /// <summary>The box the shape in one cell occupies, for the overlays that wrap it.</summary>
@@ -1127,6 +1218,13 @@ public sealed class ClientHost : IDisposable
             _cracks.Draw(viewProj, new Vector3(cell.X, cell.Y, cell.Z), min, max, _mining.Stage);
         }
 
+        // Debris while depth still describes the world, so a chip is hidden by the hill it flew
+        // behind. The texture array is re-bound because the cracking pass owns unit zero by now.
+        _blockTextures.Bind();
+        _particleRenderer.Draw(
+            _particles, viewProj, _viewPosition, _viewForward,
+            at => ParticleLight(at), _skyState.Horizon, _fogStart, _fogEnd);
+
         // Blended, and after the world has written its depth so terrain occludes them. Before the
         // player, not after: drawing the held arm clears the depth buffer so it can sit in front of
         // everything, and anything depth-tested after that clear is testing against an empty buffer
@@ -1197,6 +1295,7 @@ public sealed class ClientHost : IDisposable
         _outline?.Dispose();
         _sky?.Dispose();
         _clouds?.Dispose();
+        _particleRenderer?.Dispose();
         _blockTextures?.Dispose();
         _playerRenderer?.Dispose();
         _cracks?.Dispose();
