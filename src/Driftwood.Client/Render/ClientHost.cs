@@ -228,6 +228,27 @@ public sealed class ClientHost : IDisposable
     /// <summary>Where the sun was when the world was last put down.</summary>
     private float _savedDayTime;
 
+    /// <summary>
+    /// True until somebody has chosen to play. The world flies past under the menu.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>The user's own idea, and it is what makes this a screen and a camera rather than an
+    /// architecture change.</b> A menu before the world exists would mean a state in which there is
+    /// no world, and the host builds a registry, a generator and a streamer in one go. A menu over
+    /// a world that is loading anyway needs none of that: the world is the one about to be played,
+    /// so the flight is a preview of it rather than a stand-in for one.
+    /// </remarks>
+    private bool _atStartScreen;
+
+    /// <summary>The circle the camera flies while the menu is up. The benchmark's own path.</summary>
+    private BenchPath? _menuPath;
+
+    /// <summary>Seconds into that flight.</summary>
+    private double _menuTime;
+
+    /// <summary>True while the menu is showing the list of worlds rather than its four choices.</summary>
+    private bool _startListing;
+
     /// <summary>What went wrong the last time the world was written, if anything.</summary>
     private string? _saveFault;
 
@@ -897,6 +918,11 @@ public sealed class ClientHost : IDisposable
         {
             _camera.Position = _player.EyePosition;
             _camera.Pitch = -8f;
+
+            // ⛳ The menu, over the world it is about to hand over. Not for the UI check, which opens
+            // its own screens in turn and would find this one already up, and not for a timed play,
+            // which is meant to be somebody playing.
+            if (!_options.UiCheck && _options.PlaySeconds <= 0) OpenStartScreen(generator, viewRadius);
         }
 
         _animator.Reset(_camera.Yaw);
@@ -1133,7 +1159,9 @@ public sealed class ClientHost : IDisposable
     /// </remarks>
     private void StepAutosave(double dt)
     {
-        if (_worldName.Length == 0 || _bench is not null) return;
+        // Nobody is playing yet, so there is nothing to keep and the flight would otherwise write
+        // the world out every two minutes for as long as the menu was left up.
+        if (_worldName.Length == 0 || _bench is not null || _atStartScreen) return;
 
         _sinceSave += dt;
         if (_sinceSave < AutosaveSeconds) return;
@@ -1141,6 +1169,128 @@ public sealed class ClientHost : IDisposable
 
         _autosaves++;
         SaveWorld("automatically");
+    }
+
+    /// <summary>
+    /// Puts the menu up over the world, and sets the camera flying round it.
+    /// </summary>
+    /// <remarks>
+    /// The body is not stepped and the mouse is not taken for looking, so nothing the player does
+    /// here moves anybody. The flight is <see cref="BenchPath"/>, which already flies a circle that
+    /// follows the ground for the benchmark — a slower one, because the benchmark is sized to turn
+    /// the whole loaded set over and this is meant to be looked at.
+    /// </remarks>
+    private void OpenStartScreen(TerrainGenerator generator, int viewRadius)
+    {
+        _atStartScreen = true;
+        _walking = false;
+        _menuTime = 0;
+
+        // Close in, because the point is the world rather than the horizon — and low, so the
+        // terrain has a silhouette against the sky rather than being a map seen from above.
+        _menuPath = new BenchPath(viewRadius * Chunk.Size * 0.55f, TerrainGenerator.SeaLevel, generator.SurfaceHeight);
+
+        var (position, yaw, pitch) = _menuPath.At(0);
+        _camera.Position = position;
+        _camera.Yaw = yaw;
+        _camera.Pitch = pitch;
+
+        ShowStartMenu();
+    }
+
+    /// <summary>
+    /// Puts the menu itself up, without touching the camera.
+    /// </summary>
+    /// <remarks>
+    /// Split from <see cref="OpenStartScreen"/> so the UI check can open the menu on a world it is
+    /// already standing in, the way it opens every other screen. A check that had to fly a camera to
+    /// look at a panel would be measuring the flight.
+    /// </remarks>
+    private void ShowStartMenu()
+    {
+        _hudScreen.Kind = HudScreenKind.Start;
+        _hudScreen.TabNames = [];
+        _hudScreen.Tab = 0;
+        _hudScreen.Selected = 0;
+        _hudScreen.Scroll = 0;
+        _startListing = false;
+
+        TakeThePointer();
+        RefreshScreen();
+        ShowSelectedRow();
+    }
+
+    /// <summary>Hands the world over: the menu goes, the body wakes up, the mouse looks again.</summary>
+    private void StartPlaying()
+    {
+        _atStartScreen = false;
+        _menuPath = null;
+        _walking = true;
+
+        _hudScreen.Kind = HudScreenKind.None;
+        _hudScreen.TabNames = [];
+        _hudScreen.Rows.Clear();
+
+        // Back where the save left them, or the spawn on a new world — either way not where the
+        // camera has been flying, which is somewhere over the hills.
+        _player.Teleport(_spawnPoint);
+        _camera.Position = _player.EyePosition;
+        _spawned = false;
+
+        SetMouseCaptured(true);
+    }
+
+    /// <summary>
+    /// Saves what is open and starts again pointed at another world.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ <b>A relaunch rather than a rebuild, and it is the honest trade.</b> Swapping worlds
+    /// in place means tearing down a <see cref="WorldStreamer"/> that owns a pool of workers and a
+    /// lighting thread, releasing every uploaded mesh, and rebuilding half of
+    /// <see cref="BuildWorld"/> — under a live session, for something that happens once. Starting
+    /// again does the same thing with nothing to get wrong, and the world is written on the way out
+    /// either way.</para>
+    /// <para>⚠ <b>The rest of the command line is carried over.</b> A <c>--pack</c> or a
+    /// <c>--skin</c> is a choice about the installation rather than about the world, and losing it
+    /// on the way through the menu would read as the pack having been forgotten. <c>--seed</c> is
+    /// dropped on purpose: the world being opened has its own.</para>
+    /// </remarks>
+    private void OpenAnotherWorld(string name)
+    {
+        var exe = Environment.ProcessPath;
+        if (exe is null)
+        {
+            Console.Error.WriteLine("driftwood: cannot find this program on disk, so another world cannot be opened");
+            return;
+        }
+
+        SaveWorld("before opening another world");
+
+        var carried = new List<string>();
+        var was = Environment.GetCommandLineArgs();
+
+        for (var i = 1; i < was.Length; i++)
+        {
+            // These three say which world, and this is the one place that decides that now.
+            if (was[i] is "--world" or "--seed" or "--play") { i++; continue; }
+            carried.Add(was[i]);
+        }
+
+        carried.Add("--world");
+        carried.Add(name);
+
+        var start = new ProcessStartInfo(exe) { UseShellExecute = false };
+        foreach (var argument in carried) start.ArgumentList.Add(argument);
+
+        try
+        {
+            Process.Start(start);
+            _stopRequested = true;
+        }
+        catch (Exception fault)
+        {
+            Console.Error.WriteLine($"driftwood: could not open '{name}': {fault.Message}");
+        }
     }
 
     /// <summary>A span of seconds as a person would say it.</summary>
@@ -1321,7 +1471,9 @@ public sealed class ClientHost : IDisposable
     private bool ScreenKey(Key key)
     {
         var many = _keyboard.IsKeyPressed(Key.ShiftLeft) || _keyboard.IsKeyPressed(Key.ShiftRight);
-        var tabbed = _hudScreen.Kind is HudScreenKind.Player or HudScreenKind.Game;
+        // The menu is a list of rows exactly as a settings tab is, so it wants the same keys —
+        // up and down to pick, enter to act. It simply has no tabs to walk.
+        var tabbed = _hudScreen.Kind is HudScreenKind.Player or HudScreenKind.Game or HudScreenKind.Start;
 
         // On a panel of squares the arrows drive the pointer itself rather than a separate
         // selection, so there is one cursor and not two things arguing about what is picked out.
@@ -2168,6 +2320,29 @@ public sealed class ClientHost : IDisposable
     /// </remarks>
     private void CloseScreen()
     {
+        // ⛳ The menu is not a screen over a game; it is what there is instead of one. Escape on it
+        // does nothing, and escape on the options opened from it comes back to it rather than
+        // dropping somebody into a world they have not said they want to play — which would be a
+        // player standing in the world with no idea how they got there.
+        if (_hudScreen.Kind == HudScreenKind.Start) return;
+
+        if (_atStartScreen && _hudScreen.Kind == HudScreenKind.Game)
+        {
+            _tabRow[_hudScreen.Tab] = _hudScreen.Selected;
+            _rebinding = null;
+            if (_settingsDirty) { _settings.Save(); _settingsDirty = false; }
+
+            _hudScreen.Kind = HudScreenKind.Start;
+            _hudScreen.TabNames = [];
+            _hudScreen.Tab = 0;
+            _hudScreen.Selected = 1;
+            _hudScreen.Scroll = 0;
+            _startListing = false;
+            RefreshScreen();
+            ShowSelectedRow();
+            return;
+        }
+
         if (_hudScreen.Kind == HudScreenKind.Game) _tabRow[_hudScreen.Tab] = _hudScreen.Selected;
 
         // Nothing is left nowhere. A stack on the cursor is in neither the pockets nor the grid nor
@@ -2296,6 +2471,8 @@ public sealed class ClientHost : IDisposable
 
         return _hudScreen.Kind switch
         {
+            // No "closes" — there is nothing behind it to go back to yet.
+            HudScreenKind.Start => $"up and down pick, enter chooses{wheel}",
             HudScreenKind.Player =>
                 $"arrows pick, enter makes one, shift and enter makes as many as it can, {close} closes",
             _ when OnTab(GameTab.Controls) =>
@@ -2304,10 +2481,62 @@ public sealed class ClientHost : IDisposable
         };
     }
 
+    /// <summary>
+    /// The four things a start screen offers, or the list of worlds it folds out into.
+    /// </summary>
+    /// <remarks>
+    /// <b>The first row says what it will actually do.</b> A world that was loaded is carried on
+    /// with, and one that was just made is started — the same button either way, because it is the
+    /// same act, but calling a resumed world "new game" is how somebody loses one.
+    /// </remarks>
+    private void BuildStartRows()
+    {
+        if (_startListing)
+        {
+            _hudScreen.Rows.Add(new MenuRow(
+                _saved.Count == 1 ? "1 world" : $"{_saved.Count} worlds", Heading: true));
+
+            if (_saved.Count == 0)
+                _hudScreen.Rows.Add(new MenuRow("none yet", "", Note: SavesFolderNote));
+
+            foreach (var world in _saved)
+            {
+                var when = world.Saved.ToLocalTime();
+                _hudScreen.Rows.Add(new MenuRow(
+                    world.Name == _worldName ? $"{world.Name}  (open)" : world.Name,
+                    $"{world.PlayedFor} · {when:d MMM HH:mm}",
+                    Note: world.Name == _worldName
+                        ? "this is the one that is open — enter plays it"
+                        : $"{world.Edits} changes, seed {world.Seed}. Enter opens it"));
+            }
+
+            _hudScreen.Rows.Add(new MenuRow("back", "", Note: "enter returns to the menu"));
+            return;
+        }
+
+        _hudScreen.Rows.Add(new MenuRow("Driftwood", Heading: true));
+
+        _hudScreen.Rows.Add(_loadedWorld
+            ? new MenuRow("carry on", _worldName, Note: $"played {Spoken(_playedBefore)}")
+            : new MenuRow("start a world", _worldName.Length > 0 ? _worldName : "not being kept",
+                Note: $"a new one, seed {_seed}"));
+
+        _hudScreen.Rows.Add(new MenuRow(
+            "open a world", _saved.Count == 0 ? "none saved yet" : $"{_saved.Count} saved"));
+        _hudScreen.Rows.Add(new MenuRow("options", "", Note: "keys, picture, sound"));
+        _hudScreen.Rows.Add(new MenuRow("quit", ""));
+    }
+
     /// <summary>What the open settings tab is showing, rebuilt from what is actually set.</summary>
     private void BuildRows()
     {
         _hudScreen.Rows.Clear();
+
+        if (_hudScreen.Kind == HudScreenKind.Start)
+        {
+            BuildStartRows();
+            return;
+        }
 
         switch ((GameTab)_hudScreen.Tab)
         {
@@ -2533,6 +2762,12 @@ public sealed class ClientHost : IDisposable
     /// <summary>Enter, on a settings row. Toggles what toggles and listens for a key on a binding.</summary>
     private void ActivateRow()
     {
+        if (_hudScreen.Kind == HudScreenKind.Start)
+        {
+            ChooseOnStartScreen();
+            return;
+        }
+
         if (OnTab(GameTab.Controls))
         {
             if (ActionAtRow() is { } action) _rebinding = action;
@@ -2541,6 +2776,68 @@ public sealed class ClientHost : IDisposable
         }
 
         AdjustRow(1, activated: true);
+    }
+
+    /// <summary>
+    /// What enter does on the menu.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ <b>Read off the row's own label, not off its position.</b> The list of worlds is as long as
+    /// the saves folder is, so an index would mean counting past a heading whose presence depends on
+    /// how many worlds there are — and the row that "quit" is on would move the first time somebody
+    /// saved a second world.
+    /// </remarks>
+    private void ChooseOnStartScreen()
+    {
+        if (_hudScreen.Selected < 0 || _hudScreen.Selected >= _hudScreen.Rows.Count) return;
+        var row = _hudScreen.Rows[_hudScreen.Selected];
+        if (row.Heading) return;
+
+        if (_startListing)
+        {
+            if (row.Label == "back" || row.Label == "none yet")
+            {
+                _startListing = false;
+                _hudScreen.Selected = 1;
+                _hudScreen.Scroll = 0;
+                RefreshScreen();
+                ShowSelectedRow();
+                return;
+            }
+
+            // The mark the open world's row carries is not part of its name.
+            var chosen = row.Label.Replace("  (open)", "");
+            if (chosen == _worldName) StartPlaying();
+            else OpenAnotherWorld(chosen);
+            return;
+        }
+
+        switch (row.Label)
+        {
+            case "carry on":
+            case "start a world":
+                StartPlaying();
+                return;
+
+            case "open a world":
+                _saved = WorldSave.List();
+                _startListing = true;
+                _hudScreen.Selected = 0;
+                _hudScreen.Scroll = 0;
+                RefreshScreen();
+                ShowSelectedRow();
+                return;
+
+            case "options":
+                // The world keeps flying underneath. Escape comes back here rather than to a world
+                // nobody has asked to play yet — see CloseScreen.
+                OpenGame(GameTab.Controls);
+                return;
+
+            case "quit":
+                _stopRequested = true;
+                return;
+        }
     }
 
     /// <summary>Which action the selected controls row is for, counting past the headings.</summary>
@@ -2963,6 +3260,17 @@ public sealed class ClientHost : IDisposable
             // The path clock is the measured time itself, so the camera is exactly where the
             // report says it was. It holds at the start until the world has finished arriving.
             var (position, yaw, pitch) = _benchPath.At(_benchWarmingUp ? 0 : _bench?.ElapsedSeconds ?? 0);
+            _camera.Position = position;
+            _camera.Yaw = yaw;
+            _camera.Pitch = pitch;
+        }
+        else if (_atStartScreen && _menuPath is not null)
+        {
+            // A quarter of the benchmark's speed. That path is sized to turn the whole loaded set
+            // over inside fifteen seconds, which is a great deal faster than anything worth looking
+            // at while deciding whether to press start.
+            _menuTime += dt * 0.25;
+            var (position, yaw, pitch) = _menuPath.At(_menuTime);
             _camera.Position = position;
             _camera.Yaw = yaw;
             _camera.Pitch = pitch;
@@ -3901,7 +4209,16 @@ public sealed class ClientHost : IDisposable
 
             case 280: SampleUi(size, "saves"); ProbeRows("saves"); break;
 
-            case 281: JudgeUi(); _window.Close(); break;
+            // The menu, opened on a world the check is already standing in rather than by flying a
+            // camera at one — the flight is not what is being looked at. Two worlds are still in the
+            // list from the tab above, so folding it out has something to fold out to.
+            case 281: CloseScreen(); ShowStartMenu(); break;
+            case 300: SampleUi(size, "start"); ProbeRows("start"); break;
+
+            case 301: _startListing = true; RefreshScreen(); break;
+            case 310: ProbeRows("start list"); break;
+
+            case 311: JudgeUi(); _window.Close(); break;
         }
     }
 
@@ -4414,6 +4731,45 @@ public sealed class ClientHost : IDisposable
             faults.Add("the saves tab was never measured");
         }
 
+        // The menu. Four choices and a heading, and folding the list out has to replace them with
+        // the worlds rather than adding to them — a menu that grew instead of swapping would keep
+        // "quit" on screen under a list of worlds, and enter on it would still quit.
+        var start = Read("start");
+        if (start == bare) faults.Add("the start menu changed nothing on screen");
+
+        if (_uiRows.TryGetValue("start", out var menu))
+        {
+            const int Choices = 5;      // the name, then carry on / open a world / options / quit
+            const int Selectable = 4;
+
+            if (menu.Total != Choices)
+                faults.Add($"the start menu built {menu.Total} rows where it offers {Choices}");
+            if (menu.Seen != Selectable)
+                faults.Add($"{menu.Seen} of the menu's rows can be landed on where {Selectable} should be");
+        }
+        else
+        {
+            faults.Add("the start menu was never measured");
+        }
+
+        if (_uiRows.TryGetValue("start list", out var folded))
+        {
+            // A heading, the two worlds planted above, and the way back.
+            const int Listed = 4;
+
+            if (folded.Total != Listed)
+                faults.Add(
+                    $"the menu's list of worlds built {folded.Total} rows where a heading, two "
+                    + $"worlds and a way back is {Listed}");
+
+            if (folded.Total == menu.Total)
+                faults.Add("folding the list out left the same number of rows, so it added rather than replaced");
+        }
+        else
+        {
+            faults.Add("the menu's list of worlds was never measured");
+        }
+
         // And that the running game's own layout answers for its own squares. Every one of them.
         foreach (var (screen, probe) in _uiProbes)
         {
@@ -4444,7 +4800,7 @@ public sealed class ClientHost : IDisposable
         if (faults.Count == 0)
         {
             Console.WriteLine(
-                "OK  the overlay reaches the screen: crosshair, seven screens, panels in grey, "
+                "OK  the overlay reaches the screen: crosshair, eight screens, panels in grey, "
                 + $"{_uiProbes.Sum(p => p.Value.Hits)} squares answering for their own middles");
         }
         else
@@ -4484,7 +4840,10 @@ public sealed class ClientHost : IDisposable
     /// </summary>
     private void DrawPlayer(Matrix4x4 viewProj, Matrix4x4 projection, Matrix4x4 view)
     {
-        if (_bench is not null) return;
+        // Neither the benchmark nor the menu has anybody in the world. ⚠ The menu matters for a
+        // second reason: the held arm clears the depth buffer (see §8), so drawing it under a
+        // camera that is nowhere near a body would leave the panel over a cleared frame.
+        if (_bench is not null || _atStartScreen) return;
 
         var sky = new SkyParams(
             _skyState.SunDirection, _skyState.SunColor, _skyState.SkyAmbient, _skyState.GroundAmbient,
@@ -4562,7 +4921,10 @@ public sealed class ClientHost : IDisposable
         // ⛳ First, and before the streamer is torn down — it owns the world being written. Closing
         // the window is the one save every player makes and the only one they never think about,
         // so it comes before anything that could throw on the way out.
-        SaveWorld("on quit");
+        //
+        // ⚠ Not from the menu. Quitting without ever pressing start must leave the world exactly as
+        // it was found, and a new world nobody played must not appear in the list as one they did.
+        if (!_atStartScreen) SaveWorld("on quit");
 
         // Stop the workers before tearing down GL state, or a mesh can land in the queue after
         // the context it was destined for is gone.

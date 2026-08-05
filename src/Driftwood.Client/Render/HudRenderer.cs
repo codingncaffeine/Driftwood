@@ -19,6 +19,17 @@ public enum HudScreenKind
     /// <summary>This installation: keys, picture, sound, and the testing dials.</summary>
     Game,
 
+    /// <summary>
+    /// Before anybody is playing: the world flies past underneath and a short menu sits on it.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>Drawn by exactly the same code as <see cref="Game"/>, and that is why it was cheap.</b>
+    /// A menu is a list of rows where up and down pick and enter acts — which is what a settings tab
+    /// already is, down to the mouse hit-testing and the scrollbar. It has no tabs, so the tab strip
+    /// draws nothing, and the title was already being drawn over that panel waiting for this.
+    /// </remarks>
+    Start,
+
     /// <summary>A station rather than a menu, so it has no tabs.</summary>
     Furnace,
 
@@ -463,7 +474,10 @@ public sealed class HudRenderer : IDisposable
 
         // A container panel carries the player's own pockets in its bottom half, so the bar along
         // the bottom of the world would be the same nine slots drawn twice, in two different sizes.
-        if (!screen.IsContainer) Hotbar(catalogue, inventory, w, h);
+        // ⚠ And nobody is carrying anything before they have started: an empty bar under the menu
+        // reads as a game somebody is already losing at.
+        if (!screen.IsContainer && screen.Kind != HudScreenKind.Start)
+            Hotbar(catalogue, inventory, w, h);
 
         if (!screen.IsOpen)
         {
