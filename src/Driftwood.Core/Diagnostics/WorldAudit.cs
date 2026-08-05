@@ -14,6 +14,7 @@ using Driftwood.Core.Settings;
 using Driftwood.Core.Sky;
 using Driftwood.Core.Spatial;
 using Driftwood.Core.Textures;
+using Driftwood.Core.Ui;
 using Driftwood.Core.World;
 
 namespace Driftwood.Core.Diagnostics;
@@ -412,6 +413,14 @@ public static class WorldAudit
         var furnaceFaults = FurnaceSelfTest(items, book, out var furnaceDetail);
         Check("a furnace burns only when it has work", furnaceFaults.Count == 0,
             furnaceFaults.Count == 0 ? furnaceDetail : $"{furnaceFaults.Count} faults: {furnaceFaults[0]}");
+
+        var layoutFaults = ScreenLayoutSelfTest(out var layoutDetail);
+        Check("a click lands on the square it is over", layoutFaults.Count == 0,
+            layoutFaults.Count == 0 ? layoutDetail : $"{layoutFaults.Count} faults: {layoutFaults[0]}");
+
+        var pocketFaults = PocketsSelfTest(items, book, out var pocketDetail);
+        Check("moving things about never loses one", pocketFaults.Count == 0,
+            pocketFaults.Count == 0 ? pocketDetail : $"{pocketFaults.Count} faults: {pocketFaults[0]}");
 
         var vitalsFaults = VitalsSelfTest(registry, ids);
         Check("falls and water cost health", vitalsFaults.Count == 0,
@@ -1638,6 +1647,259 @@ public static class WorldAudit
     /// both are here: a build that never lights at all would pass "it does not burn when idle" on
     /// its own.</para>
     /// </remarks>
+    /// <summary>
+    /// That the panel's squares are where the pack's grid puts them, and that a click on one lands
+    /// back on the same one.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>The round trip is the point.</b> A screen laid out from one set of numbers and hit
+    /// tested from another drifts the first time either is edited, and the symptom is a click
+    /// landing on the square next to the picture it was aimed at — which a player finds in seconds
+    /// and which nothing in a build log ever mentions. Here every square's own middle is fed back
+    /// through the same <see cref="ScreenLayout.At"/> the pointer uses, and it has to come back with
+    /// the same role and the same index.</para>
+    /// <para>Run at three zooms and three window shapes, because the arithmetic that could be wrong
+    /// is the scaling: a layout correct at one unit per panel pixel and wrong at two is a layout
+    /// that works on the machine it was written on.</para>
+    /// <para>The absolute positions are checked as well as the round trip, against the numbers
+    /// measured out of a real pack. A grid that is self-consistent and in the wrong place passes
+    /// every round trip there is.</para>
+    /// </remarks>
+    private static List<string> ScreenLayoutSelfTest(out string detail)
+    {
+        var faults = new List<string>();
+        var layout = new ScreenLayout();
+        var tested = 0;
+        var zooms = new List<float>();
+
+        // Three window shapes: a short one that can only afford the smallest panel, the default,
+        // and a tall one. The zoom each lands on is reported, because a check that silently ran
+        // three times at the same zoom is a check that ran once.
+        foreach (var (w, h) in new[] { (640f, 360f), (800f, 450f), (960f, 540f) })
+        foreach (var (kind, cells) in new[]
+                 {
+                     (PanelKind.Player, 2), (PanelKind.Bench, 3), (PanelKind.Furnace, 0),
+                 })
+        {
+            layout.BuildPanel(kind, cells, w, h);
+            if (!zooms.Contains(layout.Zoom)) zooms.Add(layout.Zoom);
+
+            if (layout.Zoom != MathF.Round(layout.Zoom) || layout.Zoom < 1f)
+                faults.Add($"{kind} at {w}x{h} came out at zoom {layout.Zoom}, which is not a whole number");
+
+            // On screen, and not off the bottom of it. A panel laid out past the edge draws
+            // perfectly and is invisible, which is the one failure this file exists to catch.
+            if (layout.OriginX < 0f || layout.OriginY < 0f
+                || layout.X(ScreenLayout.PanelWidth) > w || layout.Y(ScreenLayout.PanelHeight) > h)
+                faults.Add(
+                    $"{kind} at {w}x{h} spans {layout.OriginX:F0},{layout.OriginY:F0} to "
+                    + $"{layout.X(ScreenLayout.PanelWidth):F0},{layout.Y(ScreenLayout.PanelHeight):F0}");
+
+            var seen = new HashSet<(SlotRole, int)>();
+
+            foreach (var zone in layout.Zones)
+            {
+                if (zone.Kind != ZoneKind.Slot) continue;
+                tested++;
+
+                if (!seen.Add((zone.Role, zone.Index)))
+                    faults.Add($"{kind} has two {zone.Role} squares numbered {zone.Index}");
+
+                // Sixteen written out, NOT compared against the constant the layout used. Comparing
+                // a value against the constant it was computed from is a sentence that restates
+                // itself, and this check passed a build with the squares grown to the full pitch
+                // until the control run said so.
+                if (MathF.Abs(zone.W / layout.Zoom - 16f) > 0.01f)
+                    faults.Add(
+                        $"{kind} {zone.Role} {zone.Index} is {zone.W / layout.Zoom:F1} panel pixels across, not 16");
+
+                // The middle of the square, back through the pointer's own lookup.
+                var hit = layout.At(zone.CentreX, zone.CentreY);
+                if (hit is not { } landed)
+                {
+                    faults.Add($"{kind} {zone.Role} {zone.Index}: its own middle hit nothing");
+                    continue;
+                }
+
+                if (landed.Role != zone.Role || landed.Index != zone.Index)
+                    faults.Add(
+                        $"{kind} {zone.Role} {zone.Index}: its own middle hit {landed.Role} {landed.Index}");
+
+                // The gap beside it must answer NOTHING — not "not this square", nothing at all.
+                // Sixteen on an eighteen pitch leaves two panel pixels between neighbours, and that
+                // gap is load-bearing: it is what a click on the panel between two squares lands on.
+                // Probed at its exact middle, one panel pixel out from the edge. Written as "hit
+                // nothing" rather than "did not hit me" because the weaker form is satisfied by
+                // the neighbour swallowing it, which is precisely the fault.
+                var gap = layout.At(zone.X - layout.Zoom, zone.CentreY);
+                if (gap is { } spill)
+                    faults.Add(
+                        $"{kind} {zone.Role} {zone.Index}: the gap beside it answers "
+                        + $"{spill.Role} {spill.Index}, so there is no gap");
+            }
+
+            // Every panel carries the player's own pockets, all thirty six of them.
+            for (var slot = 0; slot < Inventory.Slots; slot++)
+                if (layout.Find(SlotRole.Pocket, slot) is null)
+                    faults.Add($"{kind} has no square for pocket {slot}");
+
+            var wanted = kind switch
+            {
+                PanelKind.Player => Inventory.Slots + 4 + 1 + 5,       // pockets, worn, offhand, 2x2 and result
+                PanelKind.Bench => Inventory.Slots + 9 + 1,
+                _ => Inventory.Slots + 3,
+            };
+
+            var squares = 0;
+            foreach (var zone in layout.Zones) if (zone.Kind == ZoneKind.Slot) squares++;
+            if (squares != wanted) faults.Add($"{kind} laid out {squares} squares, not {wanted}");
+        }
+
+        // The absolute grid, against the three sheets it was measured from. Self-consistency is not
+        // enough: a panel that agrees with itself and sits four pixels left of where every pack
+        // paints it would skin wrong the day one is loaded, and nothing else here would notice.
+        layout.BuildPanel(PanelKind.Player, 2, 800f, 450f);
+        var z = layout.Zoom;
+
+        Where(SlotRole.Pocket, 0, 8, 142, "the bar");
+        Where(SlotRole.Pocket, Inventory.HotbarSlots, 8, 84, "the backpack");
+        Where(SlotRole.Equip, 0, 8, 8, "the helmet slot");
+        Where(SlotRole.Equip, (int)EquipSlot.Offhand, 77, 62, "the other hand");
+        Where(SlotRole.Craft, 0, 98, 18, "the two-by-two");
+        Where(SlotRole.Result, 0, 154, 28, "what the hands make");
+
+        layout.BuildPanel(PanelKind.Bench, 3, 800f, 450f);
+        Where(SlotRole.Craft, 0, 30, 17, "the three-by-three");
+        Where(SlotRole.Result, 0, 124, 35, "what a bench makes");
+
+        layout.BuildPanel(PanelKind.Furnace, 0, 800f, 450f);
+        Where(SlotRole.Smelting, 0, 56, 17, "what a furnace works on");
+        Where(SlotRole.Fuel, 0, 56, 53, "what a furnace burns");
+        Where(SlotRole.Smelted, 0, 116, 35, "what a furnace has finished");
+
+        void Where(SlotRole role, int index, int panelX, int panelY, string what)
+        {
+            if (layout.Find(role, index) is not { } zone)
+            {
+                faults.Add($"{what} has no square at all");
+                return;
+            }
+
+            var wantX = layout.X(panelX);
+            var wantY = layout.Y(panelY);
+            if (MathF.Abs(zone.X - wantX) > 0.01f || MathF.Abs(zone.Y - wantY) > 0.01f)
+                faults.Add(
+                    $"{what} is at panel pixel "
+                    + $"{(zone.X - layout.OriginX) / layout.Zoom:F1},{(zone.Y - layout.OriginY) / layout.Zoom:F1}, "
+                    + $"the pack's sheet puts it at {panelX},{panelY}");
+        }
+
+        _ = z;
+        detail = $"{tested} squares over 3 panels x 3 window shapes at zooms {string.Join("/", zooms)}, "
+            + "each hit-tested from its own middle and placed against the pack's own grid";
+
+        return faults;
+    }
+
+    /// <summary>
+    /// That picking things up and putting them down never creates or destroys anything.
+    /// </summary>
+    /// <remarks>
+    /// <para>Everything a pointer does to an inventory is a move, and the only thing worth insisting
+    /// on is that the total is the same afterwards. Counted over the pockets, the grid and the
+    /// cursor together, because the whole class of bug here is a stack that ends up in none of the
+    /// three — and a cursor is genuinely nowhere, which is what makes it the easy place to lose one.
+    /// </para>
+    /// <para>Walked rather than reasoned about: a fixed sequence of the six gestures, then a craft,
+    /// then the close, with the total taken before and after each one.</para>
+    /// </remarks>
+    private static List<string> PocketsSelfTest(ItemRegistry items, RecipeBook book, out string detail)
+    {
+        var faults = new List<string>();
+        var pockets = new Inventory(items);
+        var grid = new CraftingGrid(book, items, 2, 2);
+        var carried = ItemStack.Empty;
+
+        var log = items.ByName("driftoak_log").Id;
+        var planks = items.ByName("driftoak_planks").Id;
+
+        pockets.Add(new ItemStack(log, 17));
+        pockets.Add(new ItemStack(planks, 5));
+
+        var start = Total();
+        var steps = 0;
+
+        Step("lift a whole slot", () => carried = pockets.TakeAll(0));
+        Step("drop it in the grid", () => carried = grid.Put(0, carried));
+        Step("take half of it back", () => carried = grid.TakeHalf(0));
+        Step("lay one down", () => carried = pockets.PutOne(20, carried));
+        Step("put the rest away", () => carried = pockets.Add(carried));
+        Step("send a slot across", () => pockets.Sweep(0));
+
+        // A log in the grid makes planks. Taking the result spends the log and hands over four
+        // planks, so the raw count goes UP — which is the one step where a plain conservation check
+        // would be wrong, and the reason this section counts each thing separately.
+        foreach (var i in Enumerable.Range(0, grid.Cells)) _ = grid.TakeAll(i);
+        carried = grid.Put(0, new ItemStack(log, 3));
+        if (!carried.IsEmpty) faults.Add("a square would not take three logs");
+
+        var made = grid.TakeResult();
+        if (made.IsEmpty) faults.Add("a log in the two-by-two made nothing");
+        else if (made.Item.Value != planks.Value)
+            faults.Add($"a log in the two-by-two made {items[made.Item].Name}, not planks");
+
+        if (grid[0].Count != 2) faults.Add($"one craft left {grid[0].Count} of 3 logs, not 2");
+
+        // Then the case a one-square recipe cannot test: four squares, and one off EACH of them.
+        // A grid that spent only the first square would pass everything above and quietly make
+        // benches out of a single plank.
+        foreach (var i in Enumerable.Range(0, grid.Cells)) _ = grid.TakeAll(i);
+        for (var i = 0; i < 4; i++) _ = grid.Put(i, new ItemStack(planks, 2));
+
+        var bench = grid.TakeResult();
+        if (bench.IsEmpty) faults.Add("four planks in the two-by-two made nothing");
+
+        for (var i = 0; i < 4; i++)
+            if (grid[i].Count != 1)
+                faults.Add($"a four-square craft left {grid[i].Count} of 2 planks in square {i}, not 1");
+
+        // And the close: whatever is on the cursor and whatever is in the grid comes back.
+        carried = made;
+        var beforeClose = Total();
+        var spilled = grid.Empty(pockets);
+        var left = pockets.Add(carried);
+        carried = ItemStack.Empty;
+
+        var afterClose = Total() + spilled.Sum(s => s.Count) + left.Count;
+        if (afterClose != beforeClose)
+            faults.Add($"closing turned {beforeClose} things into {afterClose}");
+
+        if (!grid.IsEmpty) faults.Add("the grid still had something in it after being emptied");
+
+        detail = $"{steps} gestures over {start} things, none created or lost; "
+            + "one craft spends one of each square and the close hands everything back";
+
+        return faults;
+
+        int Total()
+        {
+            var total = carried.Count;
+            foreach (var slot in pockets.All) total += slot.Count;
+            for (var i = 0; i < grid.Cells; i++) total += grid[i].Count;
+            return total;
+        }
+
+        void Step(string what, Action gesture)
+        {
+            var before = Total();
+            gesture();
+            steps++;
+
+            var after = Total();
+            if (after != before) faults.Add($"'{what}' turned {before} things into {after}");
+        }
+    }
+
     private static List<string> FurnaceSelfTest(ItemRegistry items, RecipeBook book, out string detail)
     {
         var faults = new List<string>();

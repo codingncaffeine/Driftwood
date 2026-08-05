@@ -83,6 +83,16 @@ public sealed class ItemType
     /// <summary>Seconds of furnace burn this is worth. Zero means it is not fuel.</summary>
     public float BurnSeconds { get; init; }
 
+    /// <summary>
+    /// Where on the body this is worn, or null for anything that is not armour.
+    /// </summary>
+    /// <remarks>
+    /// Nothing sets this yet — there is no armour — and the four worn slots on the player screen
+    /// refuse everything as a result. That is deliberate: the slots are the prerequisite the worn
+    /// armour work is blocked on, and a field on the item is where the answer belongs.
+    /// </remarks>
+    public EquipSlot? Wears { get; init; }
+
     /// <summary>Assigned by <see cref="ItemRegistry.Register"/>.</summary>
     public ItemId Id { get; internal set; }
 

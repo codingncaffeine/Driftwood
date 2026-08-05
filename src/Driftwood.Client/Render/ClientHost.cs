@@ -17,6 +17,7 @@ using Driftwood.Core.Physics;
 using Driftwood.Core.Sky;
 using Driftwood.Core.Spatial;
 using Driftwood.Core.Textures;
+using Driftwood.Core.Ui;
 using Driftwood.Core.World;
 using Silk.NET.Input;
 using Silk.NET.Maths;
@@ -201,6 +202,23 @@ public sealed class ClientHost : IDisposable
     private readonly HudScreen _hudScreen = new();
     private bool _atBench;
     private (int X, int Y, int Z) _station;
+
+    /// <summary>
+    /// Where every clickable thing on the open screen is. Built by the overlay, read by the pointer.
+    /// </summary>
+    /// <remarks>
+    /// One object, filled once a frame as the screen is laid out. That is what makes a click land on
+    /// the picture under it rather than near it, and it is why the layout lives in Core with checks
+    /// on it rather than in a pile of constants shared by eye between two files.
+    /// </remarks>
+    private readonly ScreenLayout _layout = new();
+
+    /// <summary>The two-by-two a player always has, and the three-by-three a bench lends them.</summary>
+    private CraftingGrid _handGrid = null!;
+    private CraftingGrid _benchGrid = null!;
+
+    /// <summary>What is worn, and what is in the other hand.</summary>
+    private Equipment _equipment = null!;
 
     /// <summary>What the crafting tab can make, kept across frames so the selection holds still.</summary>
     private readonly List<Recipe> _shown = [];
@@ -636,8 +654,15 @@ public sealed class ClientHost : IDisposable
         _particles = new ParticleSystem(registry);
         _leafBlock = ids.Leaves;
         _inventory = new Inventory(_items);
+        _equipment = new Equipment(_items);
         _drops = new DroppedItems(registry, _items);
         _solid = registry.BuildSolidTable();
+
+        // Two grids, both alive for the whole session rather than made when a screen opens. What is
+        // laid out in the hands stays laid out while a player goes and fetches the missing plank,
+        // which is what every game in this space does and what anybody would expect.
+        _handGrid = new CraftingGrid(_book, _items, 2, 2);
+        _benchGrid = new CraftingGrid(_book, _items, 3, 3);
 
         // Nothing in the pockets. That is the design — punch wood, make planks, make a pickaxe —
         // and the starting kit that used to be here was scaffolding for the days when a slab could
@@ -799,7 +824,7 @@ public sealed class ClientHost : IDisposable
             // simply not listing it.
             case GameAction.OpenInventory:
                 if (_bench is not null) break;
-                OpenPlayer(PlayerTab.Craft, atBench: false, default);
+                OpenPlayer(PlayerTab.Items, atBench: false, default);
                 break;
 
             // What this installation is set to. Opening it gives the mouse back, which is one
@@ -885,6 +910,34 @@ public sealed class ClientHost : IDisposable
         var tabbed = _hudScreen.Kind is HudScreenKind.Player or HudScreenKind.Game;
         var craft = _hudScreen.Kind == HudScreenKind.Player && _hudScreen.Tab == (int)PlayerTab.Craft;
 
+        // On a panel of squares the arrows drive the pointer itself rather than a separate
+        // selection, so there is one cursor and not two things arguing about what is picked out.
+        // Enter is then simply a left click where it is, which is also what a gamepad will want.
+        var squares = _hudScreen.IsContainer && _hudScreen.Tab == (int)PlayerTab.Items;
+
+        if (squares)
+        {
+            switch (key)
+            {
+                case Key.Up: MovePointer(0, -1); return true;
+                case Key.Down: MovePointer(0, 1); return true;
+                case Key.Left: MovePointer(-1, 0); return true;
+                case Key.Right: MovePointer(1, 0); return true;
+
+                case Key.Enter or Key.KeypadEnter or Key.Space:
+                    ScreenClick(MouseButton.Left);
+                    RefreshScreen();
+                    return true;
+
+                // The other gesture: half a stack, then one at a time. The same thing the right
+                // button does, because there is no second button on a keyboard.
+                case Key.Backspace:
+                    ScreenClick(MouseButton.Right);
+                    RefreshScreen();
+                    return true;
+            }
+        }
+
         switch (key)
         {
             // Whichever key opened it closes it, and escape always does — a screen you cannot back
@@ -910,7 +963,6 @@ public sealed class ClientHost : IDisposable
             case Key.Enter or Key.KeypadEnter or Key.Space:
                 if (craft) CraftSelected(many);
                 else if (tabbed) ActivateRow();
-                else MoveFurnaceSlot();
                 return true;
 
             case Key.Left or Key.A:
@@ -940,12 +992,6 @@ public sealed class ClientHost : IDisposable
 
         void Step(int by, bool horizontal)
         {
-            if (_hudScreen.Kind == HudScreenKind.Furnace)
-            {
-                _hudScreen.Slot = Math.Clamp(_hudScreen.Slot + Math.Sign(by), 0, 2);
-                return;
-            }
-
             if (craft)
             {
                 if (_shown.Count == 0) return;
@@ -963,6 +1009,334 @@ public sealed class ClientHost : IDisposable
 
             AdjustRow(Math.Sign(by));
         }
+    }
+
+    /// <summary>
+    /// A click on the open screen, wherever the pointer is.
+    /// </summary>
+    /// <remarks>
+    /// <para>Every gesture in this method is one a player in this genre already has in their hands:
+    /// left picks a stack up and puts it down, right takes half and then lays it out one at a time,
+    /// and shift sends a slot to the other half of the inventory. None of it is invented, and that
+    /// is the point — a screen whose rules have to be learned is a screen that gets closed.</para>
+    /// <para>The keyboard is not replaced by any of it. Arrows and enter still walk the same
+    /// screens, because that is how this project's player already navigates and a screen that only
+    /// works with a mouse would be a step backwards from what shipped.</para>
+    /// </remarks>
+    private void ScreenClick(MouseButton button)
+    {
+        var many = _keyboard.IsKeyPressed(Key.ShiftLeft) || _keyboard.IsKeyPressed(Key.ShiftRight);
+        var at = _layout.At(_hudScreen.Pointer.X, _hudScreen.Pointer.Y);
+
+        // The layout is a frame behind, so on the one frame after a tab changes it still describes
+        // the screen that was there. Squares from a panel nobody is looking at are ignored rather
+        // than acted on, which is a single frame of nothing happening instead of a stack moving on
+        // a screen that is not showing it.
+        if (at is { Kind: ZoneKind.Slot } && !(_hudScreen.IsContainer && _hudScreen.Tab == (int)PlayerTab.Items))
+            return;
+
+        // Clicked away from everything while holding something: put it down in the world. The one
+        // way to get rid of a stack on purpose, and the answer to "how do I close this".
+        if (at is null)
+        {
+            if (button != MouseButton.Left || _hudScreen.Carried.IsEmpty) return;
+
+            _drops.Drop(_hudScreen.Carried, _player.Position + new Vector3(0f, 1f, 0f), 0.4f);
+            _hudScreen.Carried = ItemStack.Empty;
+            PlaySound(SoundMaterial.Wood, SoundEvent.Place, _viewPosition, 0.4f);
+            return;
+        }
+
+        switch (at.Value.Kind)
+        {
+            case ZoneKind.Tab:
+                if (_hudScreen.Kind == HudScreenKind.Game) _tabRow[_hudScreen.Tab] = _hudScreen.Selected;
+                _hudScreen.Tab = at.Value.Index;
+                if (_hudScreen.Kind == HudScreenKind.Game) _hudScreen.Selected = _tabRow[_hudScreen.Tab];
+                _shown.Clear();
+                RefreshScreen();
+                return;
+
+            case ZoneKind.Row:
+                _hudScreen.Selected = at.Value.Index;
+
+                // Left acts on the row the way enter does; right walks a setting the other way,
+                // which is what the left and right arrows already do to it.
+                if (button == MouseButton.Left) ActivateRow();
+                else if (button == MouseButton.Right) AdjustRow(-1);
+                RefreshScreen();
+                return;
+
+            case ZoneKind.Recipe:
+                // The first click picks a recipe out, and a click on the one already picked makes
+                // it. Selecting and acting on one press would make a mis-click cost ingredients.
+                if (_hudScreen.Selected == at.Value.Index) CraftSelected(many);
+                else _hudScreen.Selected = at.Value.Index;
+                RefreshScreen();
+                return;
+
+            case ZoneKind.Slot:
+                ClickSlot(at.Value, button, many);
+                RefreshScreen();
+                return;
+        }
+    }
+
+    /// <summary>One click on one square, whatever that square is a square of.</summary>
+    private void ClickSlot(Zone zone, MouseButton button, bool many)
+    {
+        var carried = _hudScreen.Carried;
+        var giving = zone.Role is SlotRole.Result or SlotRole.Smelted;
+
+        // A square that only gives is a different gesture entirely. There is nothing to put into
+        // it, taking from it spends the arrangement rather than a slot, and shift-clicking it is
+        // the "make as many as I can afford" every player in this genre reaches for.
+        if (giving)
+        {
+            TakeFromResult(zone, many);
+            return;
+        }
+
+        var half = button == MouseButton.Right;
+
+        // Shift sends a whole slot somewhere sensible without the cursor being involved at all.
+        if (many && button == MouseButton.Left && carried.IsEmpty)
+        {
+            SweepSlot(zone);
+            return;
+        }
+
+        if (carried.IsEmpty)
+        {
+            var lifted = half ? TakeHalfFrom(zone) : TakeAllFrom(zone);
+            if (lifted.IsEmpty) return;
+
+            _hudScreen.Carried = lifted;
+            PlaySound(MaterialOf(lifted), SoundEvent.Place, _viewPosition, 0.35f);
+            return;
+        }
+
+        var over = half ? PutOneInto(zone, carried) : PutInto(zone, carried);
+        if (over == carried) return;
+
+        _hudScreen.Carried = over;
+        PlaySound(MaterialOf(carried), SoundEvent.Place, _viewPosition, 0.35f);
+    }
+
+    private ItemStack TakeAllFrom(Zone zone) => zone.Role switch
+    {
+        SlotRole.Pocket => _inventory.TakeAll(zone.Index),
+        SlotRole.Craft => _hudScreen.Grid?.TakeAll(zone.Index) ?? ItemStack.Empty,
+        SlotRole.Equip => _equipment.TakeAll((EquipSlot)zone.Index),
+        SlotRole.Smelting or SlotRole.Fuel => EmptyFurnaceSlot(zone.Role),
+        _ => ItemStack.Empty,
+    };
+
+    private ItemStack TakeHalfFrom(Zone zone) => zone.Role switch
+    {
+        SlotRole.Pocket => _inventory.TakeHalf(zone.Index),
+        SlotRole.Craft => _hudScreen.Grid?.TakeHalf(zone.Index) ?? ItemStack.Empty,
+        _ => TakeAllFrom(zone),
+    };
+
+    private ItemStack PutInto(Zone zone, ItemStack carried) => zone.Role switch
+    {
+        SlotRole.Pocket => _inventory.PutInto(zone.Index, carried),
+        SlotRole.Craft => _hudScreen.Grid?.Put(zone.Index, carried) ?? carried,
+        SlotRole.Equip => _equipment.Put((EquipSlot)zone.Index, carried),
+        SlotRole.Smelting or SlotRole.Fuel => FeedFurnace(zone.Role, carried),
+        _ => carried,
+    };
+
+    private ItemStack PutOneInto(Zone zone, ItemStack carried) => zone.Role switch
+    {
+        SlotRole.Pocket => _inventory.PutOne(zone.Index, carried),
+        SlotRole.Craft => _hudScreen.Grid?.PutOne(zone.Index, carried) ?? carried,
+        _ => PutInto(zone, carried),
+    };
+
+    /// <summary>Shift-click: the bar and the backpack trade, and a grid empties into the pockets.</summary>
+    private void SweepSlot(Zone zone)
+    {
+        switch (zone.Role)
+        {
+            case SlotRole.Pocket:
+                if (_inventory.Sweep(zone.Index)) PlaySound(SoundMaterial.Wood, SoundEvent.Place, _viewPosition, 0.3f);
+                return;
+
+            case SlotRole.Craft when _hudScreen.Grid is { } grid:
+                Spill(grid.TakeAll(zone.Index));
+                return;
+
+            case SlotRole.Equip:
+                Spill(_equipment.TakeAll((EquipSlot)zone.Index));
+                return;
+
+            case SlotRole.Smelting or SlotRole.Fuel:
+                Spill(TakeAllFrom(zone));
+                return;
+        }
+    }
+
+    /// <summary>
+    /// Taking what the arrangement made: once on a click, or until it runs out on a shift-click.
+    /// </summary>
+    /// <remarks>
+    /// What comes out goes onto the cursor when it can, because that is where a click puts things
+    /// and because it lets a player drop it straight into a bar slot. A shift-click makes as many as
+    /// the squares will pay for and sends them to the pockets, which is the one case where wanting
+    /// it on the cursor makes no sense at all.
+    /// </remarks>
+    private void TakeFromResult(Zone zone, bool many)
+    {
+        if (zone.Role == SlotRole.Smelted)
+        {
+            var taken = EmptyFurnaceSlot(SlotRole.Smelted);
+            if (taken.IsEmpty) return;
+
+            if (many || !_hudScreen.Carried.IsEmpty) Spill(taken);
+            else _hudScreen.Carried = taken;
+
+            PlaySound(SoundMaterial.Metal, SoundEvent.Place, _viewPosition, 0.5f);
+            return;
+        }
+
+        if (_hudScreen.Grid is not { } grid || grid.Result.IsEmpty) return;
+
+        var made = 0;
+        var material = MaterialOf(grid.Result);
+
+        // Bounded even when asked for as many as possible. Sixty four logs against a one-log recipe
+        // is sixty four crafts, and any of them that will not fit ends up on the floor.
+        for (var i = 0; i < (many ? 64 : 1); i++)
+        {
+            var result = grid.TakeResult();
+            if (result.IsEmpty) break;
+
+            made++;
+
+            // A plain click with a free hand puts it on the cursor, which is where a click puts
+            // things and is what lets it be dropped straight into a bar slot. Everything else goes
+            // to the pockets — including a shift-click, where wanting sixty of them on the cursor
+            // makes no sense at all.
+            if (!many && _hudScreen.Carried.IsEmpty)
+            {
+                _hudScreen.Carried = result;
+                continue;
+            }
+
+            if (_hudScreen.Carried.Matches(result))
+                _hudScreen.Carried = _hudScreen.Carried.Merge(result, _items[result.Item].MaxStack, out result);
+
+            Spill(result);
+        }
+
+        if (made > 0) PlaySound(material, SoundEvent.Place, _viewPosition, 0.7f);
+    }
+
+    /// <summary>Lifts one of the furnace's three slots out, leaving it empty.</summary>
+    private ItemStack EmptyFurnaceSlot(SlotRole role)
+    {
+        if (!_furnaces.TryGet(_station.X, _station.Y, _station.Z, out var furnace)) return ItemStack.Empty;
+
+        switch (role)
+        {
+            case SlotRole.Smelting:
+                var input = furnace.Input;
+                furnace.Input = ItemStack.Empty;
+                return input;
+
+            case SlotRole.Fuel:
+                var fuel = furnace.Fuel;
+                furnace.Fuel = ItemStack.Empty;
+                return fuel;
+
+            default:
+                var output = furnace.Output;
+                furnace.Output = ItemStack.Empty;
+                return output;
+        }
+    }
+
+    /// <summary>
+    /// Puts something into a furnace, or refuses it.
+    /// </summary>
+    /// <remarks>
+    /// Fuel that will not burn and ore that will not smelt are refused rather than accepted and sat
+    /// on, so a slot that takes something is a slot that is going to use it.
+    /// </remarks>
+    private ItemStack FeedFurnace(SlotRole role, ItemStack carried)
+    {
+        if (carried.IsEmpty) return carried;
+        if (!_furnaces.TryGet(_station.X, _station.Y, _station.Z, out var furnace)) return carried;
+        if (role == SlotRole.Smelting && _book.SmeltFor(carried.Item) is null) return carried;
+        if (role == SlotRole.Fuel && _items[carried.Item].BurnSeconds <= 0f) return carried;
+
+        var there = role == SlotRole.Smelting ? furnace.Input : furnace.Fuel;
+        ItemStack put, back;
+
+        if (there.IsEmpty || there.Matches(carried))
+        {
+            put = there.Merge(carried, _items[carried.Item].MaxStack, out back);
+        }
+        else
+        {
+            put = carried;
+            back = there;
+        }
+
+        if (role == SlotRole.Smelting) furnace.Input = put; else furnace.Fuel = put;
+        return back;
+    }
+
+    /// <summary>
+    /// Walks the pointer to the nearest square in a direction.
+    /// </summary>
+    /// <remarks>
+    /// Nearest by geometry rather than by a hand-written table of which square is above which. The
+    /// panel is not a rectangle — a column of worn slots down one side, a two-by-two up in the
+    /// corner, three rows of nine underneath — and an adjacency table for that shape is a table
+    /// somebody has to redo every time a square moves. Scoring how far a candidate is along the
+    /// wanted direction against how far it strays across it gets the obvious answer everywhere, and
+    /// costs one pass over a list of forty.
+    /// </remarks>
+    private void MovePointer(int dx, int dy)
+    {
+        var from = _hudScreen.Pointer;
+        var best = -1;
+        var bestScore = float.MaxValue;
+
+        for (var i = 0; i < _layout.Zones.Count; i++)
+        {
+            var zone = _layout.Zones[i];
+            if (zone.Kind != ZoneKind.Slot) continue;
+
+            var toX = zone.CentreX - from.X;
+            var toY = zone.CentreY - from.Y;
+
+            var along = toX * dx + toY * dy;
+            var across = MathF.Abs(toX * dy - toY * dx);
+
+            // Two units of a square's pitch, so a step never crosses the whole panel to find
+            // something marginally more aligned.
+            if (along < 1f) continue;
+
+            var score = along + across * 3f;
+            if (score >= bestScore) continue;
+
+            bestScore = score;
+            best = i;
+        }
+
+        if (best < 0) return;
+
+        _hudScreen.Pointer = new Vector2(_layout.Zones[best].CentreX, _layout.Zones[best].CentreY);
+        _hudScreen.Hovered = _layout.Zones[best];
+
+        // The window's own pointer goes with it, so picking a square with the arrows and then
+        // reaching for the mouse does not teleport the cursor back to where it was left.
+        var scale = HudRenderer.ScaleFor(_window.Size.Y);
+        _mouse.Position = _hudScreen.Pointer * scale;
     }
 
     /// <summary>How many recipes a row of the book holds. The same number the overlay lays out.</summary>
@@ -1001,11 +1375,47 @@ public sealed class ClientHost : IDisposable
         _hudScreen.TabNames = PlayerTabNames;
         _hudScreen.Tab = (int)tab;
         _hudScreen.Selected = 0;
+        _hudScreen.Grid = _handGrid;
         _atBench = atBench;
         _station = at;
         _shown.Clear();
         StopHands();
+        TakeThePointer();
         RefreshScreen();
+    }
+
+    /// <summary>A bench: three by three, and the player's own pockets under it.</summary>
+    private void OpenBench(int x, int y, int z)
+    {
+        _hudScreen.Kind = HudScreenKind.Bench;
+        _hudScreen.TabNames = [];
+        _hudScreen.Tab = 0;
+        _hudScreen.Grid = _benchGrid;
+        _atBench = true;
+        _station = (x, y, z);
+        _shown.Clear();
+        StopHands();
+        TakeThePointer();
+        RefreshScreen();
+    }
+
+    /// <summary>
+    /// Lets go of the look and puts the pointer in the middle of the screen.
+    /// </summary>
+    /// <remarks>
+    /// Every screen wants a pointer, not just the settings — that was the thing missing. The
+    /// system's own cursor is hidden rather than shown, because the one that gets drawn is ours: it
+    /// scales with the interface, lands on the same pixel grid and is the same arrow on every
+    /// machine. The window's own cursor is still moved to the middle so the two agree about where
+    /// the pointer is the moment the screen closes again.
+    /// </remarks>
+    private void TakeThePointer()
+    {
+        var middle = new Vector2(_window.Size.X * 0.5f, _window.Size.Y * 0.5f);
+        _mouse.Position = middle;
+        _hudScreen.Pointer = middle / HudRenderer.ScaleFor(_window.Size.Y);
+        _hudScreen.Hovered = null;
+        ApplyCursorMode();
     }
 
     /// <summary>
@@ -1022,10 +1432,11 @@ public sealed class ClientHost : IDisposable
         _hudScreen.TabNames = GameTabNames;
         _hudScreen.Tab = (int)tab;
         _hudScreen.Selected = _tabRow[(int)tab];
+        _hudScreen.Grid = null;
         _hudScreen.Recipes.Clear();
         _hudScreen.Payable.Clear();
         StopHands();
-        SetMouseCaptured(false);
+        TakeThePointer();
         RefreshScreen();
     }
 
@@ -1041,12 +1452,14 @@ public sealed class ClientHost : IDisposable
     {
         _hudScreen.Kind = HudScreenKind.Furnace;
         _hudScreen.TabNames = [];
-        _hudScreen.Slot = 0;
+        _hudScreen.Tab = 0;
+        _hudScreen.Grid = null;
         _station = (x, y, z);
         _holdingBreak = false;
         _holdingPlace = false;
         _mining.Cancel();
         _furnaces.Open(x, y, z);
+        TakeThePointer();
         RefreshScreen();
     }
 
@@ -1064,26 +1477,46 @@ public sealed class ClientHost : IDisposable
     /// </remarks>
     private void CloseScreen()
     {
-        // The pointer goes back where it was. A player who opened the options and shut them again
-        // is looking exactly where they were looking, which is the whole reason the two travel
-        // together — and it is why closing takes the mouse back rather than leaving it loose.
-        if (_hudScreen.Kind == HudScreenKind.Game)
-        {
-            _tabRow[_hudScreen.Tab] = _hudScreen.Selected;
-            if (_bench is null) SetMouseCaptured(true);
-        }
+        if (_hudScreen.Kind == HudScreenKind.Game) _tabRow[_hudScreen.Tab] = _hudScreen.Selected;
+
+        // Nothing is left nowhere. A stack on the cursor is in neither the pockets nor the grid nor
+        // the world, so a screen that shut while one was held would simply delete it — and what is
+        // laid out in a bench's three by three belongs to the player, not to the bench. Both go back
+        // into the pockets, and whatever will not fit lands on the floor rather than being swallowed,
+        // which is the one rule this inventory has never broken.
+        Spill(_hudScreen.Carried);
+        _hudScreen.Carried = ItemStack.Empty;
+
+        if (_hudScreen.Kind == HudScreenKind.Bench)
+            foreach (var left in _benchGrid.Empty(_inventory)) Spill(left);
 
         _rebinding = null;
         _hudScreen.Kind = HudScreenKind.None;
+        _hudScreen.Grid = null;
+        _hudScreen.Hovered = null;
         _shown.Clear();
         _hudScreen.Recipes.Clear();
         _hudScreen.Payable.Clear();
         _hudScreen.Rows.Clear();
+        _layout.Clear();
+
+        // The look goes back where it was, so a player who opened a screen and shut it again is
+        // looking exactly where they were.
+        ApplyCursorMode();
 
         if (!_settingsDirty) return;
         _settingsDirty = false;
 
         if (!_settings.Save()) Console.Error.WriteLine("driftwood: could not write the settings file");
+    }
+
+    /// <summary>Puts a stack back in the pockets, and on the floor in front of the player if it will not fit.</summary>
+    private void Spill(ItemStack stack)
+    {
+        if (stack.IsEmpty) return;
+
+        var left = _inventory.Add(stack);
+        if (!left.IsEmpty) _drops.Drop(left, _player.Position + new Vector3(0f, 1f, 0f), 0.4f);
     }
 
     /// <summary>
@@ -1101,7 +1534,14 @@ public sealed class ClientHost : IDisposable
 
         _hudScreen.Footer = FooterHint();
 
-        if (_hudScreen.Kind == HudScreenKind.Furnace) return;
+        // A panel of squares reads itself. Nothing to rebuild — what is in a slot is asked of the
+        // inventory as it is drawn, so there is no list here that could fall out of step with it.
+        if (_hudScreen.IsContainer && _hudScreen.Tab == (int)PlayerTab.Items)
+        {
+            _hudScreen.Recipes.Clear();
+            _hudScreen.Payable.Clear();
+            return;
+        }
 
         if (_hudScreen.Kind == HudScreenKind.Player)
         {
@@ -1134,9 +1574,12 @@ public sealed class ClientHost : IDisposable
         var close = _settings.Keys.Primary(
             _hudScreen.Kind == HudScreenKind.Game ? GameAction.OpenOptions : GameAction.OpenInventory);
 
+        if (_hudScreen.IsContainer && _hudScreen.Tab == (int)PlayerTab.Items)
+            return "click takes and puts, right click halves, shift moves it across, "
+                + $"click away to drop, {close} closes";
+
         return _hudScreen.Kind switch
         {
-            HudScreenKind.Furnace => "left and right pick a slot, enter moves it, 1-9 picks from the bar",
             HudScreenKind.Player =>
                 $"arrows pick, enter makes one, shift and enter makes as many as it can, {close} closes",
             _ when OnTab(GameTab.Controls) =>
@@ -1406,47 +1849,6 @@ public sealed class ClientHost : IDisposable
     }
 
     /// <summary>
-    /// Moves the held stack into the selected furnace slot, or takes that slot back into the hand.
-    /// </summary>
-    /// <remarks>
-    /// The output slot only ever gives. Putting an ingot into the tray a furnace is about to fill
-    /// would either be swallowed or block the smelt, and neither is what the player meant.
-    /// </remarks>
-    private void MoveFurnaceSlot()
-    {
-        if (!_furnaces.TryGet(_station.X, _station.Y, _station.Z, out var furnace)) return;
-
-        var taking = _hudScreen.Slot == 2 || _inventory.Held.IsEmpty;
-
-        if (taking)
-        {
-            ref var slot = ref _hudScreen.Slot == 0 ? ref furnace.Input
-                : ref _hudScreen.Slot == 1 ? ref furnace.Fuel
-                : ref furnace.Output;
-
-            if (slot.IsEmpty) return;
-            slot = _inventory.Add(slot);
-            PlaySound(SoundMaterial.Wood, SoundEvent.Place, _viewPosition, 0.5f);
-            return;
-        }
-
-        var held = _inventory.Held;
-        var target = _hudScreen.Slot == 0 ? furnace.Input : furnace.Fuel;
-
-        // Fuel that will not burn and ore that will not smelt are refused rather than accepted and
-        // sat on, so a slot that takes something is a slot that is going to use it.
-        if (_hudScreen.Slot == 0 && _book.SmeltFor(held.Item) is null) return;
-        if (_hudScreen.Slot == 1 && _items[held.Item].BurnSeconds <= 0f) return;
-
-        var merged = target.Merge(held, _items[held.Item].MaxStack, out var over);
-        if (merged.Count == target.Count) return;
-
-        if (_hudScreen.Slot == 0) furnace.Input = merged; else furnace.Fuel = merged;
-        _inventory.SpendHeld(held.Count - over.Count);
-        PlaySound(SoundMaterial.Wood, SoundEvent.Place, _viewPosition, 0.5f);
-    }
-
-    /// <summary>
     /// Ages the notices, and puts up a new one when something has become makeable.
     /// </summary>
     /// <remarks>
@@ -1537,8 +1939,14 @@ public sealed class ClientHost : IDisposable
     {
         if (_bench is not null) return;
 
-        // A screen swallows the buttons rather than digging through itself.
-        if (_hudScreen.IsOpen) return;
+        // A screen takes the buttons. It used to swallow them, which is the whole of the fault
+        // behind "the menu opens and I cannot do anything with it": the pointer was let go of, the
+        // system's arrow appeared over a screen full of squares, and every click landed on nothing.
+        if (_hudScreen.IsOpen)
+        {
+            ScreenClick(button);
+            return;
+        }
 
         // A click into a released cursor takes the mouse back rather than editing the world —
         // otherwise clicking the window to focus it digs a hole in whatever was under the crosshair.
@@ -1576,19 +1984,54 @@ public sealed class ClientHost : IDisposable
     private void SetMouseCaptured(bool captured)
     {
         _mouseCaptured = captured;
-        _mouse.Cursor.CursorMode = captured ? CursorMode.Raw : CursorMode.Normal;
-        _haveMouseAnchor = false;
+        ApplyCursorMode();
 
         // Letting the cursor go stops the mining. A button-up outside the window never arrives, so
         // without this, releasing the mouse mid-swing leaves the player digging forever.
         if (!captured) _holdingBreak = _holdingPlace = false;
     }
 
+    /// <summary>
+    /// What the window does with the pointer: swallow it, hide it, or leave it alone.
+    /// </summary>
+    /// <remarks>
+    /// <para>Three states rather than two, and the third is the one that was missing. Playing takes
+    /// the pointer outright — <c>Raw</c>, no acceleration, no edge to hit. A screen <em>hides</em>
+    /// it: the position is still real window coordinates, which is what makes hit testing a
+    /// division rather than a running total of deltas, and the arrow that gets drawn is ours.</para>
+    /// <para>Ours because a desktop cursor over an interface like this is the one thing on screen
+    /// that is not pixel art — it is anti-aliased, it is whatever theme the machine is wearing, and
+    /// it is drawn at a size that has nothing to do with anything under it.</para>
+    /// </remarks>
+    private void ApplyCursorMode()
+    {
+        _mouse.Cursor.CursorMode =
+            _hudScreen.IsOpen ? CursorMode.Hidden
+            : _mouseCaptured ? CursorMode.Raw
+            : CursorMode.Normal;
+
+        _haveMouseAnchor = false;
+    }
+
     private void OnMouseMove(IMouse mouse, Vector2 position)
     {
-        // Track deltas from the previous report rather than trusting absolute coordinates:
-        // raw and normal cursor modes disagree about what Position means, and re-anchoring on
-        // every mode change stops the view from snapping when capture is toggled.
+        // Under a screen the position is real window coordinates, so the pointer is simply where
+        // the mouse is, divided down into layout units. No accumulation, nothing to drift, and
+        // nothing to re-anchor when the window is resized under it.
+        if (_hudScreen.IsOpen)
+        {
+            var scale = HudRenderer.ScaleFor(_window.Size.Y);
+            _hudScreen.Pointer = new Vector2(
+                Math.Clamp(position.X / scale, 0f, _window.Size.X / scale),
+                Math.Clamp(position.Y / scale, 0f, _window.Size.Y / scale));
+
+            _haveMouseAnchor = false;
+            return;
+        }
+
+        // Playing, the report is a raw delta stream and absolute coordinates mean nothing. Track
+        // the difference from the previous report and re-anchor whenever the mode changes, so
+        // switching between the two never snaps the view.
         if (!_haveMouseAnchor)
         {
             _lastMousePos = position;
@@ -1599,9 +2042,7 @@ public sealed class ClientHost : IDisposable
         var delta = position - _lastMousePos;
         _lastMousePos = position;
 
-        // The view holds still under a screen. It is still tracked above, so closing the screen
-        // does not snap the camera to wherever the cursor drifted while it was up.
-        if (_mouseCaptured && !_hudScreen.IsOpen) _camera.ApplyMouseDelta(delta.X, delta.Y);
+        if (_mouseCaptured) _camera.ApplyMouseDelta(delta.X, delta.Y);
     }
 
     private void OnUpdate(double dt)
@@ -1651,6 +2092,13 @@ public sealed class ClientHost : IDisposable
         // rather than only rebuilt on a keypress: a stack flying into the bar while the book is
         // open should light up what it just made possible.
         if (_hudScreen.Kind == HudScreenKind.Player) RefreshScreen();
+
+        // What the pointer is over, from the layout the overlay built last frame. A frame behind on
+        // purpose — the alternative is laying the whole screen out twice — and at sixty a second
+        // nothing about a highlight is visible one frame late.
+        _hudScreen.Hovered = _hudScreen.IsOpen
+            ? _layout.At(_hudScreen.Pointer.X, _hudScreen.Pointer.Y)
+            : null;
 
         // Collected from the middle of the body rather than the feet, so a stack lying against a
         // wall is still reachable from the other side of it.
@@ -2044,7 +2492,7 @@ public sealed class ClientHost : IDisposable
         var struck = _registry[_streamer.World.GetBlock(hit.X, hit.Y, hit.Z)];
         if (struck.Interactive)
         {
-            if (struck.Name == "bench") OpenPlayer(PlayerTab.Craft, atBench: true, (hit.X, hit.Y, hit.Z));
+            if (struck.Name == "bench") OpenBench(hit.X, hit.Y, hit.Z);
             else OpenFurnace(hit.X, hit.Y, hit.Z);
             return;
         }
@@ -2336,7 +2784,9 @@ public sealed class ClientHost : IDisposable
         {
             _furnaces.TryGet(_station.X, _station.Y, _station.Z, out var open);
             _hudScreen.Burning = _hudScreen.Kind == HudScreenKind.Furnace ? open : null;
-            _hud.Draw(_blockTextures, _items, _inventory, _vitals, _hudScreen, _toasts, size.X, size.Y);
+            _hud.Draw(
+                _blockTextures, _items, _inventory, _equipment, _vitals,
+                _hudScreen, _layout, _toasts, size.X, size.Y);
         }
 
         if (_options.UiCheck) RunUiCheck(size);
@@ -2364,17 +2814,61 @@ public sealed class ClientHost : IDisposable
     {
         _uiCheckFrame++;
 
-        // A few frames to let the world stream in, then one screen, then the other.
+        // A few frames to let the world stream in, then each screen in turn.
         switch (_uiCheckFrame)
         {
             case 60: SampleUi(size, "no screen"); break;
-            case 61: OpenPlayer(PlayerTab.Craft, atBench: false, default); break;
-            case 90: SampleUi(size, "player"); break;
-            case 91: CloseScreen(); OpenGame(GameTab.Controls); break;
-            case 120: SampleUi(size, "game"); break;
-            case 121: JudgeUi(); _window.Close(); break;
+            case 61: OpenPlayer(PlayerTab.Items, atBench: false, default); break;
+            case 90: SampleUi(size, "items"); ProbeSquares(); break;
+
+            case 91: _hudScreen.Tab = (int)PlayerTab.Craft; RefreshScreen(); break;
+            case 120: SampleUi(size, "player"); break;
+
+            case 121: CloseScreen(); OpenBench(0, 0, 0); break;
+            case 150: SampleUi(size, "bench"); ProbeSquares(); break;
+
+            case 151: CloseScreen(); OpenGame(GameTab.Controls); break;
+            case 180: SampleUi(size, "game"); break;
+            case 181: JudgeUi(); _window.Close(); break;
         }
     }
+
+    /// <summary>
+    /// Puts the pointer on a square and asks the layout what it is over.
+    /// </summary>
+    /// <remarks>
+    /// The other half of the round trip the audit walks. That one proves the arithmetic; this one
+    /// proves the arithmetic is what the running game is actually using — the layout built by the
+    /// renderer this frame, on this window, at this zoom, hit-tested through the same call a click
+    /// goes through. A layout that is correct in Core and never reached by the host would pass every
+    /// check in the audit and still be a screen nothing can be clicked on.
+    /// </remarks>
+    private void ProbeSquares()
+    {
+        var hits = 0;
+        var misses = new List<string>();
+
+        foreach (var zone in _layout.Zones)
+        {
+            if (zone.Kind != ZoneKind.Slot) continue;
+
+            _hudScreen.Pointer = new Vector2(zone.CentreX, zone.CentreY);
+            var over = _layout.At(_hudScreen.Pointer.X, _hudScreen.Pointer.Y);
+
+            if (over is { } landed && landed.Role == zone.Role && landed.Index == zone.Index) hits++;
+            else misses.Add($"{zone.Role} {zone.Index}");
+        }
+
+        _uiProbes[_hudScreen.Kind.ToString()] = (hits, misses.Count);
+
+        Console.WriteLine(
+            $"ui-check    {_hudScreen.Kind,-10} {hits} squares answered for their own middle"
+            + (misses.Count == 0 ? "" : $", {misses.Count} did not: {string.Join(", ", misses.Take(3))}"));
+        Console.Out.Flush();
+    }
+
+    /// <summary>What the running game's own layout answered, per screen.</summary>
+    private readonly Dictionary<string, (int Hits, int Misses)> _uiProbes = [];
 
     /// <summary>What each sample read, so the run can judge itself rather than only report.</summary>
     private readonly Dictionary<string, (byte R, byte G, byte B)> _uiSamples = [];
@@ -2393,7 +2887,9 @@ public sealed class ClientHost : IDisposable
             _uiSamples.TryGetValue(key, out var v) ? v : default;
 
         var bare = Read("no screen");
+        var items = Read("items");
         var player = Read("player");
+        var bench = Read("bench");
         var game = Read("game");
         var world = Read("no screen corner");
 
@@ -2405,8 +2901,28 @@ public sealed class ClientHost : IDisposable
             faults.Add($"no crosshair at the centre of a plain frame — read {bare.R} {bare.G} {bare.B}");
 
         // A screen darkens what is behind it, so the middle must not still be whatever it was.
-        if (player == bare) faults.Add("opening the player screen changed nothing on screen");
+        if (items == bare) faults.Add("opening the items screen changed nothing on screen");
+        if (player == bare) faults.Add("opening the craft tab changed nothing on screen");
+        if (bench == bare) faults.Add("opening a bench changed nothing on screen");
         if (game == bare) faults.Add("opening the game screen changed nothing on screen");
+
+        // The container panel is centred, so the middle of the window is inside it — and it is drawn
+        // in the same neutral grey the options are. A middle that still reads dark is the backdrop
+        // with no panel on it, which is what a panel laid out off the edge looks like from here.
+        foreach (var (name, read) in new[] { ("items", items), ("bench", bench) })
+        {
+            if (read.R < 40) faults.Add($"the {name} panel's middle reads {read.R} {read.G} {read.B}, too dark for a panel");
+
+            var cast = Math.Max(read.R, Math.Max(read.G, read.B)) - Math.Min(read.R, Math.Min(read.G, read.B));
+            if (cast > 12) faults.Add($"the {name} panel reads {read.R} {read.G} {read.B}, which is not grey");
+        }
+
+        // And that the running game's own layout answers for its own squares. Every one of them.
+        foreach (var (screen, probe) in _uiProbes)
+        {
+            if (probe.Misses > 0) faults.Add($"{probe.Misses} squares on the {screen} screen did not answer for themselves");
+            if (probe.Hits < 40) faults.Add($"the {screen} screen only laid out {probe.Hits} squares");
+        }
 
         // And the options panel is neutral grey by design, so its middle has no colour cast.
         var spread = Math.Max(game.R, Math.Max(game.G, game.B)) - Math.Min(game.R, Math.Min(game.G, game.B));
@@ -2423,7 +2939,9 @@ public sealed class ClientHost : IDisposable
         Console.WriteLine();
         if (faults.Count == 0)
         {
-            Console.WriteLine("OK  the overlay reaches the screen: crosshair, both screens, panel in grey");
+            Console.WriteLine(
+                "OK  the overlay reaches the screen: crosshair, four screens, panels in grey, "
+                + $"{_uiProbes.Sum(p => p.Value.Hits)} squares answering for their own middles");
         }
         else
         {

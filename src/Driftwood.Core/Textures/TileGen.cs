@@ -513,6 +513,170 @@ public static class TileGen
         return t;
     }
 
+    /// <summary>
+    /// The pointer, drawn as pixels rather than handed to the window manager.
+    /// </summary>
+    /// <remarks>
+    /// <para>The system cursor is the one thing on a screen like this that is not ours: it is
+    /// anti-aliased, it is whatever theme the desktop is wearing, and it is drawn at a size that has
+    /// nothing to do with the interface under it. Drawing our own means it scales with the rest of
+    /// the overlay and lands on the same pixel grid — and it costs one quad, because the batcher
+    /// already draws a rectangle with a layer number.</para>
+    /// <para>The hotspot is the top left corner, which is where every pointer in this shape has had
+    /// it since the first one. The hit test uses that corner and not the middle of the tile.</para>
+    /// </remarks>
+    public static byte[] Cursor() => FromArt(
+    [
+        "#...............",
+        "##..............",
+        "#@#.............",
+        "#@@#............",
+        "#@@@#...........",
+        "#@@@@#..........",
+        "#@@@@@#.........",
+        "#@@@@@@#........",
+        "#@@@@@@@#.......",
+        "#@@@@@@@@#......",
+        "#@@@@@@@@@#.....",
+        "#@@@@@######....",
+        "#@@#@@#.........",
+        "#@#.#@@#........",
+        "##..#@@#........",
+        "....####........",
+    ]);
+
+    /// <summary>
+    /// The four worn slots and the other hand, as silhouettes of what belongs in them.
+    /// </summary>
+    /// <remarks>
+    /// Drawn faintly behind an empty slot, in the order of <c>EquipSlot</c>. Four grey squares in a
+    /// column say nothing at all; four squares with a helmet, a chestplate, leggings and boots
+    /// ghosted into them say what the column is for without a word of text.
+    /// </remarks>
+    public static byte[][] EquipGhosts() =>
+    [
+        FromArt(
+        [
+            "................",
+            "................",
+            "...@@@@@@@@@@...",
+            "..@@@@@@@@@@@@..",
+            ".@@@@@@@@@@@@@@.",
+            ".@@@@@@@@@@@@@@.",
+            ".@@@@@....@@@@@.",
+            ".@@@@......@@@@.",
+            ".@@@@......@@@@.",
+            ".@@@@......@@@@.",
+            ".@@@@@@@@@@@@@@.",
+            ".@@@@@@@@@@@@@@.",
+            ".@@@@@@@@@@@@@@.",
+            "..@@@@@@@@@@@@..",
+            "................",
+            "................",
+        ]),
+        FromArt(
+        [
+            "................",
+            "................",
+            ".@@@........@@@.",
+            ".@@@@@@@@@@@@@@.",
+            ".@@@@@@@@@@@@@@.",
+            "..@@@@@@@@@@@@..",
+            "..@@@@@@@@@@@@..",
+            "..@@@@@@@@@@@@..",
+            "..@@@@@@@@@@@@..",
+            "..@@@@@@@@@@@@..",
+            "..@@@@....@@@@..",
+            "..@@@@....@@@@..",
+            "..@@@@....@@@@..",
+            "................",
+            "................",
+            "................",
+        ]),
+        FromArt(
+        [
+            "................",
+            "................",
+            "................",
+            "..@@@@@@@@@@@@..",
+            "..@@@@@@@@@@@@..",
+            "..@@@@@@@@@@@@..",
+            "..@@@@@@@@@@@@..",
+            "..@@@@@..@@@@@..",
+            "..@@@@....@@@@..",
+            "..@@@@....@@@@..",
+            "..@@@@....@@@@..",
+            "..@@@@....@@@@..",
+            "..@@@@....@@@@..",
+            "................",
+            "................",
+            "................",
+        ]),
+        FromArt(
+        [
+            "................",
+            "................",
+            "................",
+            "................",
+            "................",
+            "..@@@@....@@@@..",
+            "..@@@@....@@@@..",
+            "..@@@@....@@@@..",
+            "..@@@@....@@@@..",
+            "..@@@@@..@@@@@..",
+            "..@@@@@@@@@@@@..",
+            ".@@@@@@@@@@@@@@.",
+            ".@@@@@@@@@@@@@@.",
+            "................",
+            "................",
+            "................",
+        ]),
+        FromArt(
+        [
+            "................",
+            "................",
+            "...@@@@@@@@@@...",
+            "...@@@@@@@@@@...",
+            "...@@@@@@@@@@...",
+            "...@@@@@@@@@@...",
+            "...@@@@@@@@@@...",
+            "...@@@@@@@@@@...",
+            "....@@@@@@@@....",
+            "....@@@@@@@@....",
+            ".....@@@@@@.....",
+            ".....@@@@@@.....",
+            "......@@@@......",
+            ".......@@.......",
+            "................",
+            "................",
+        ]),
+    ];
+
+    /// <summary>
+    /// A tile from rows of characters: <c>#</c> is black, <c>@</c> is white, anything else is air.
+    /// </summary>
+    /// <remarks>
+    /// The same idea the font is drawn with, and for the same reason: noise makes a material, not a
+    /// shape, and a pointer or a silhouette is a shape somebody has to have decided on. Authored at
+    /// the tile's own size, so what is written here is what lands.
+    /// </remarks>
+    private static byte[] FromArt(string[] rows)
+    {
+        var tile = new byte[BytesPerTile];
+
+        for (var y = 0; y < Size && y < rows.Length; y++)
+        for (var x = 0; x < Size && x < rows[y].Length; x++)
+        {
+            switch (rows[y][x])
+            {
+                case '#': Put(tile, x, y, 0, 0, 0, 255); break;
+                case '@': Put(tile, x, y, 255, 255, 255, 255); break;
+            }
+        }
+
+        return tile;
+    }
+
     /// <summary>Glowing veins through dark rock.</summary>
     public static byte[] Ember(int seed, byte[] baseTile, byte r, byte g, byte b)
     {

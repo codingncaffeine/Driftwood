@@ -3,6 +3,7 @@ using Driftwood.Core.Blocks;
 using Driftwood.Core.Entities;
 using Driftwood.Core.Items;
 using Driftwood.Core.Textures;
+using Driftwood.Core.Ui;
 using Silk.NET.OpenGL;
 
 namespace Driftwood.Client.Render;
@@ -12,7 +13,7 @@ public enum HudScreenKind
 {
     None,
 
-    /// <summary>This character in this world: what is carried, and what can be made.</summary>
+    /// <summary>This character in this world: what is carried, worn, and what can be made.</summary>
     Player,
 
     /// <summary>This installation: keys, picture, sound, and the testing dials.</summary>
@@ -20,6 +21,9 @@ public enum HudScreenKind
 
     /// <summary>A station rather than a menu, so it has no tabs.</summary>
     Furnace,
+
+    /// <summary>The other station: three by three, and the pockets under it.</summary>
+    Bench,
 }
 
 /// <summary>
@@ -43,9 +47,12 @@ public sealed class Toast(string title, string line, int icon, float life)
 }
 
 /// <summary>The tabs of the player screen, in the order they are shown.</summary>
-/// <remarks>Items, progress, handbook and map join this; the renderer is told names, not values.</remarks>
+/// <remarks>Progress, handbook and map join this; the renderer is told names, not values.</remarks>
 public enum PlayerTab
 {
+    /// <summary>What is carried, what is worn, and the two-by-two a player always has.</summary>
+    Items,
+
     Craft,
 }
 
@@ -111,9 +118,37 @@ public sealed class HudScreen
     public string Footer = "";
 
     public Furnace? Burning;
-    public int Slot;
+
+    /// <summary>The squares in front of the player, when the open screen has any.</summary>
+    public CraftingGrid? Grid;
+
+    /// <summary>
+    /// What is on the cursor, between being picked up and being put down.
+    /// </summary>
+    /// <remarks>
+    /// Its own state rather than a slot, because it is genuinely nowhere: not in the pockets, not in
+    /// the grid, not on the floor. Which is also why closing a screen has to put it somewhere — see
+    /// the note on the host's own close.
+    /// </remarks>
+    public ItemStack Carried;
+
+    /// <summary>Where the pointer is, in layout units. The hotspot is the top left of the tile.</summary>
+    public Vector2 Pointer;
+
+    /// <summary>What the pointer is over, refreshed each frame from the layout.</summary>
+    public Zone? Hovered;
 
     public bool IsOpen => Kind != HudScreenKind.None;
+
+    /// <summary>
+    /// True for the screens drawn on the pack's own container panel.
+    /// </summary>
+    /// <remarks>
+    /// Those three carry the player's own pockets in their bottom half, which is why the bar along
+    /// the bottom of the world is not drawn under them — it would be the same nine slots twice.
+    /// </remarks>
+    public bool IsContainer =>
+        Kind is HudScreenKind.Player or HudScreenKind.Bench or HudScreenKind.Furnace;
 }
 
 /// <summary>
@@ -197,10 +232,13 @@ public sealed class HudRenderer : IDisposable
     /// bevel on one and a half pixels, which the sampler resolves by blurring. One is allowed only
     /// on a display too short for two, where a blurry interface beats one that does not fit.</para>
     /// </remarks>
-    private static float ScaleFor(int screenHeight) =>
+    public static float ScaleFor(int screenHeight) =>
         MathF.Max(1f, MathF.Round(screenHeight / DesignHeight));
 
     private const int Floats = 9;
+
+    /// <summary>How many quads one batch can hold. The index buffer is built for exactly this many.</summary>
+    private const int MaxQuads = 8192;
 
     private readonly GL _gl;
     private readonly Shader _shader;
@@ -222,6 +260,10 @@ public sealed class HudRenderer : IDisposable
     private const int IconHeart = 0;
     private const int IconBubble = 1;
     private const int IconDigit = 2;
+    private const int IconCursor = IconDigit + 10;
+
+    /// <summary>The five worn-slot silhouettes, in <see cref="EquipSlot"/> order.</summary>
+    private const int IconEquip = IconCursor + 1;
 
     public unsafe HudRenderer(GL gl)
     {
@@ -230,6 +272,8 @@ public sealed class HudRenderer : IDisposable
 
         var icons = new List<byte[]> { TileGen.Heart(), TileGen.Bubble() };
         icons.AddRange(TileGen.Digits());
+        icons.Add(TileGen.Cursor());
+        icons.AddRange(TileGen.EquipGhosts());
         _icons = new BlockTextureArray(gl, [.. icons], TileGen.Size);
 
         _font = new BlockTextureArray(gl, TileGen.Font(), TileGen.Size);
@@ -243,7 +287,12 @@ public sealed class HudRenderer : IDisposable
         _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(_upload.Length * sizeof(float)), null, BufferUsageARB.StreamDraw);
 
         // One quad is four corners and six indices, and the pattern never varies.
-        const int MaxQuads = 2048;
+        //
+        // Eight thousand rather than two, and the old number was already close enough to be a bug
+        // waiting for a long screen: the controls tab draws about thirty rows of a label and a value
+        // and each glyph is TWO quads because of its shadow, which came to roughly two thousand on
+        // its own. A batch past the end of this buffer draws indices that were never written.
+        // Flush guards it as well, so the failure is a message rather than a wall of nothing.
         var indices = new uint[MaxQuads * 6];
         for (var q = 0; q < MaxQuads; q++)
         {
@@ -272,13 +321,23 @@ public sealed class HudRenderer : IDisposable
         _gl.BindVertexArray(0);
     }
 
-    /// <summary>Lays the whole overlay out and draws it.</summary>
+    /// <summary>
+    /// Lays the whole overlay out and draws it.
+    /// </summary>
+    /// <param name="layout">
+    /// Filled in as the screen is laid out, and read afterwards by whoever is tracking the pointer.
+    /// <b>One layout, built once, drawn and hit-tested from.</b> Writing the hit test from the same
+    /// constants as the renderer is how a screen ends up with clicks landing half a square from its
+    /// own pictures the first time either side is edited.
+    /// </param>
     public void Draw(
         BlockTextureArray blocks,
         ItemRegistry catalogue,
         Inventory inventory,
+        Equipment equipment,
         PlayerVitals vitals,
         HudScreen screen,
+        ScreenLayout layout,
         IReadOnlyList<Toast> toasts,
         int screenWidth,
         int screenHeight)
@@ -287,6 +346,7 @@ public sealed class HudRenderer : IDisposable
         _blocks.Clear();
         _iconQuads.Clear();
         _text.Clear();
+        layout.Clear();
 
         // A whole number of screen pixels per layout unit, never a half. Everything here is pixel
         // art — a font drawn at twice its authored size, two-pixel bevels, hard edges — and all of
@@ -321,7 +381,7 @@ public sealed class HudRenderer : IDisposable
         {
             try
             {
-                Screen(catalogue, screen, w, h);
+                Screen(catalogue, inventory, equipment, screen, layout, w, h);
             }
             catch (Exception ex) when (_screenFault != ex.GetType().Name + screen.Kind)
             {
@@ -336,7 +396,9 @@ public sealed class HudRenderer : IDisposable
             Crosshair(w, h);
         }
 
-        Hotbar(catalogue, inventory, w, h);
+        // A container panel carries the player's own pockets in its bottom half, so the bar along
+        // the bottom of the world would be the same nine slots drawn twice, in two different sizes.
+        if (!screen.IsContainer) Hotbar(catalogue, inventory, w, h);
 
         if (!screen.IsOpen)
         {
@@ -345,6 +407,10 @@ public sealed class HudRenderer : IDisposable
         }
 
         Toasts(toasts, w);
+
+        // Last, over everything, because a pointer that goes behind a panel is a pointer somebody
+        // is about to lose. What is on the cursor rides under it, offset so the hotspot still reads.
+        if (screen.IsOpen) Pointer(catalogue, screen, layout);
 
         // Said once per screen, on the frame it opens. "It is not appearing" and "it is appearing
         // somewhere I am not looking" are different faults with the same symptom, and the only
@@ -407,9 +473,28 @@ public sealed class HudRenderer : IDisposable
 
     private GLEnum _reportedError = GLEnum.NoError;
 
+    /// <summary>Whether a batch has ever wanted more quads than the index buffer holds.</summary>
+    private bool _overflowed;
+
     private unsafe void Flush(List<float> batch, bool textured, BlockTextureArray? atlas)
     {
         if (batch.Count == 0) return;
+
+        // Held to what the index buffer was built for. Drawing past it reads indices nobody wrote,
+        // which on some drivers is a black screen and on others is a crash — and either way the
+        // counts on our side all read correct. Said once, with the number, so it is findable.
+        if (batch.Count > MaxQuads * Floats * 4)
+        {
+            if (!_overflowed)
+            {
+                _overflowed = true;
+                Console.Error.WriteLine(
+                    $"driftwood: the overlay wanted {batch.Count / (Floats * 4)} quads in one batch "
+                    + $"and can draw {MaxQuads}; the rest of it is not on screen");
+            }
+
+            batch.RemoveRange(MaxQuads * Floats * 4, batch.Count - MaxQuads * Floats * 4);
+        }
 
         if (_upload.Length < batch.Count) _upload = new float[batch.Count * 2];
         batch.CopyTo(_upload);
@@ -507,35 +592,44 @@ public sealed class HudRenderer : IDisposable
     /// <para>Uncraftable recipes are drawn dark rather than left out. Half the value of the screen
     /// is seeing that a stormglass pickaxe exists long before there is any stormglass.</para>
     /// </remarks>
-    private void Screen(ItemRegistry catalogue, HudScreen screen, float w, float h)
+    private void Screen(
+        ItemRegistry catalogue,
+        Inventory inventory,
+        Equipment equipment,
+        HudScreen screen,
+        ScreenLayout layout,
+        float w,
+        float h)
     {
         Rect(_plain, 0f, 0f, w, h, new Vector4(0.04f, 0.04f, 0.04f, 0.72f));
+
+        // The three container screens are drawn on the pack's own panel and share every square
+        // below the halfway line. Everything else is the tabbed settings layout.
+        if (screen.IsContainer && screen.Tab == (int)PlayerTab.Items)
+        {
+            Container(catalogue, inventory, equipment, screen, layout, w, h);
+            Footer(screen, w, h);
+            return;
+        }
 
         const float Panel = 232f;
         var left = MathF.Round((w - Panel) / 2f);
         var top = MathF.Round(h * 0.12f);
 
-        if (screen.Kind == HudScreenKind.Furnace)
-        {
-            Hearth(catalogue, screen, left, top, Panel);
-            Footer(screen, w, h);
-            return;
-        }
-
-        Tabs(screen, left, top, Panel);
+        Tabs(screen, layout, left, top, Panel);
         var body = top + 22f;
 
         // A tab either lists recipes or lists rows. Which one is decided by whoever filled the
         // screen in, not here — Recipes being non-empty is the signal, so a tab that wants to draw
         // something else entirely adds a list rather than a case in this method.
-        if (screen.Recipes.Count > 0) Book(catalogue, screen, left, body, Panel);
-        else Rows(screen, left, body, Panel);
+        if (screen.Recipes.Count > 0) Book(catalogue, screen, layout, left, body, Panel);
+        else Rows(screen, layout, left, body, Panel);
 
         Footer(screen, w, h);
     }
 
     /// <summary>The tabs, with the open one lit and underlined.</summary>
-    private void Tabs(HudScreen screen, float left, float top, float panel)
+    private void Tabs(HudScreen screen, ScreenLayout layout, float left, float top, float panel)
     {
         var names = screen.TabNames;
         var pen = left;
@@ -553,6 +647,7 @@ public sealed class HudRenderer : IDisposable
             Text(name, pen + 5f, top + 4f, 8f,
                 open ? Highlight : InkFaint);
 
+            layout.Add(ZoneKind.Tab, i, pen, top, width, 16f);
             pen += width + 2f;
         }
 
@@ -562,7 +657,7 @@ public sealed class HudRenderer : IDisposable
     }
 
     /// <summary>A settings tab: a label on the left and what it is set to on the right.</summary>
-    private void Rows(HudScreen screen, float left, float top, float panel)
+    private void Rows(HudScreen screen, ScreenLayout layout, float left, float top, float panel)
     {
         const float Line = 13f;
 
@@ -579,10 +674,14 @@ public sealed class HudRenderer : IDisposable
                 continue;
             }
 
-            if (i == screen.Selected)
-                Bevel(left - 2f, y - 2f, panel + 4f, Line, raised: false, new Vector4(0.50f, 0.50f, 0.50f, 0.97f));
-
             var lit = i == screen.Selected;
+            var hot = screen.Hovered is { Kind: ZoneKind.Row } over && over.Index == i;
+
+            if (lit)
+                Bevel(left - 2f, y - 2f, panel + 4f, Line, raised: false, new Vector4(0.50f, 0.50f, 0.50f, 0.97f));
+            else if (hot)
+                Rect(_plain, left - 2f, y - 2f, panel + 4f, Line, new Vector4(1f, 1f, 1f, 0.10f));
+
             Text(row.Label, left + 6f, y, 8f, lit ? Vector4.One : InkDim);
 
             if (row.Value.Length > 0)
@@ -594,6 +693,10 @@ public sealed class HudRenderer : IDisposable
 
             if (row.Note.Length > 0 && lit)
                 Text(row.Note, left + 6f, y + 9f, 7f, InkFaint);
+
+            // A heading has no zone at all, so the pointer cannot land on something the keyboard
+            // deliberately skips over. The row's whole width is clickable, not just its words.
+            layout.Add(ZoneKind.Row, i, left - 2f, y - 2f, panel + 4f, Line);
         }
     }
 
@@ -648,7 +751,8 @@ public sealed class HudRenderer : IDisposable
     }
 
     /// <summary>The recipe list, and the selected recipe laid out as it would be in the grid.</summary>
-    private void Book(ItemRegistry catalogue, HudScreen screen, float left, float top, float panel)
+    private void Book(
+        ItemRegistry catalogue, HudScreen screen, ScreenLayout layout, float left, float top, float panel)
     {
         const float Cell = 22f;
         const int Columns = 10;
@@ -671,7 +775,12 @@ public sealed class HudRenderer : IDisposable
             var shade = payable ? Vector4.One : new Vector4(0.45f, 0.45f, 0.45f, 0.85f);
             Rect(_blocks, x + 3f, y + 3f, Cell - 8f, Cell - 8f, shade, catalogue[result.Item].IconLayer);
 
+            if (screen.Hovered is { Kind: ZoneKind.Recipe } hot && hot.Index == i)
+                Rect(_plain, x, y, Cell - 2f, Cell - 2f, new Vector4(1f, 1f, 1f, 0.18f));
+
             if (i == screen.Selected) Select(x, y, Cell - 2f, Cell - 2f);
+
+            layout.Add(ZoneKind.Recipe, i, x, y, Cell - 2f, Cell - 2f);
         }
 
         // The selected recipe, drawn as its own picture: the grid on the left, the result on the
@@ -739,46 +848,273 @@ public sealed class HudRenderer : IDisposable
         return null;
     }
 
-    /// <summary>A furnace: what is in it, what is burning, and how far through it is.</summary>
-    private void Hearth(ItemRegistry catalogue, HudScreen screen, float left, float top, float panel)
+    /// <summary>
+    /// A container screen, drawn on the panel every resource pack is painted for.
+    /// </summary>
+    /// <remarks>
+    /// <para>A hundred and seventy six by a hundred and sixty six, squares on an eighteen pitch,
+    /// sixteen inside each — every number here was measured out of a real pack's
+    /// <c>inventory.png</c>, <c>crafting_table.png</c> and <c>furnace.png</c> rather than
+    /// remembered, which is how the player panel's arrow turned out to be a different size from the
+    /// bench's. Drawing our own greyscale chrome on that grid is what makes a skinned interface a
+    /// blit rather than a second layout.</para>
+    /// <para>Three panels and one method, because two thirds of all three is the same thing: the
+    /// player's own pockets. That is not a saving, it is the point — a container you cannot reach
+    /// your own pockets from is a container you cannot put anything into.</para>
+    /// </remarks>
+    private void Container(
+        ItemRegistry catalogue,
+        Inventory inventory,
+        Equipment equipment,
+        HudScreen screen,
+        ScreenLayout layout,
+        float w,
+        float h)
     {
-        const float Slot = 30f;
-
-        Frame(left - 4f, top - 4f, panel + 8f, 92f);
-        if (screen.Burning is not { } furnace) return;
-
-        var inputY = top + 6f;
-        var fuelY = top + 52f;
-        var outX = left + 132f;
-        var chosen = screen.Slot;
-
-        Cell(left + 8f, inputY, furnace.Input, 0);
-        Cell(left + 8f, fuelY, furnace.Fuel, 1);
-        Cell(outX, top + 29f, furnace.Output, 2);
-
-        // The flame between the two, burning down. Drawn as a bar rather than a picture because
-        // what it has to say is how much is left, and a flickering icon says nothing about that.
-        // Quantised to whole pixels so it steps rather than slides, which is the whole aesthetic.
-        var flameH = MathF.Round(26f * furnace.FuelLeft);
-        Bevel(left + 52f, inputY + 34f, 10f, 30f, raised: false, new Vector4(0.17f, 0.17f, 0.17f, 0.95f));
-        Rect(_plain, left + 54f, inputY + 36f + (26f - flameH), 6f, flameH,
-            new Vector4(1f, 0.55f + furnace.FuelLeft * 0.3f, 0.18f, 1f));
-
-        // And the work, filling toward the output.
-        Bevel(left + 70f, top + 38f, 58f, 10f, raised: false, new Vector4(0.17f, 0.17f, 0.17f, 0.95f));
-        Rect(_plain, left + 72f, top + 40f, MathF.Round(54f * furnace.Fraction), 6f,
-            PanelLight);
-
-        void Cell(float x, float y, ItemStack stack, int index)
+        var kind = screen.Kind switch
         {
-            Bevel(x, y, Slot, Slot, raised: false, SlotFill);
-            if (index == chosen) Select(x, y, Slot, Slot);
+            HudScreenKind.Bench => PanelKind.Bench,
+            HudScreenKind.Furnace => PanelKind.Furnace,
+            _ => PanelKind.Player,
+        };
 
-            if (stack.IsEmpty) return;
-            Rect(_blocks, x + 4f, y + 4f, Slot - 8f, Slot - 8f, Vector4.One,
-                catalogue[stack.Item].IconLayer);
-            if (stack.Count > 1) Number(stack.Count, x + Slot - 2f, y + Slot - 9f);
+        layout.BuildPanel(kind, screen.Grid?.Width ?? 0, w, h);
+        var z = layout.Zoom;
+
+        // The panel. Its border is two of the pack's own pixels, so it thickens with the panel
+        // rather than staying two layout units while everything around it grows.
+        PanelBevel(layout, 0f, 0f, ScreenLayout.PanelWidth, ScreenLayout.PanelHeight, raised: true, PanelFill);
+
+        // The player screen's tabs sit on top of the panel. A station has none — a furnace is not a
+        // place you look up what you have unlocked.
+        if (screen.TabNames.Length > 1)
+            Tabs(screen, layout, layout.X(0f), layout.Y(0f) - 18f, layout.Size(ScreenLayout.PanelWidth));
+
+        // A rule where the player's own pockets begin, which is where the pack's sheet puts one too.
+        Rect(_plain, layout.X(7f), layout.Y(78f), layout.Size(162f), z, PanelDark);
+        Rect(_plain, layout.X(7f), layout.Y(79f), layout.Size(162f), z, PanelLight);
+
+        switch (kind)
+        {
+            case PanelKind.Player:
+                Figure(layout, screen);
+                Arrow(layout, ScreenLayout.PlayerArrow, 1f);
+                break;
+
+            case PanelKind.Bench:
+                Arrow(layout, ScreenLayout.BenchArrow, 1f);
+                break;
+
+            case PanelKind.Furnace:
+                Hearth(layout, screen);
+                break;
         }
+
+        // At a bench and at a furnace the square that gives wears a wider frame, which is how the
+        // pack's own sheets draw it — twenty six across rather than eighteen. The two-by-two in a
+        // player's hands does not: its result is a plain square, and that difference was measured
+        // rather than assumed.
+        var giving = kind == PanelKind.Bench
+            ? layout.Find(SlotRole.Result, 0)
+            : kind == PanelKind.Furnace ? layout.Find(SlotRole.Smelted, 0) : null;
+
+        if (giving is { } wide)
+            PanelBevel(
+                layout,
+                (wide.X - layout.OriginX) / z - 5f, (wide.Y - layout.OriginY) / z - 5f,
+                ScreenLayout.ResultFrame, ScreenLayout.ResultFrame,
+                raised: false, SlotFill);
+
+        var digits = MathF.Max(5f, MathF.Round(z * 4f));
+
+        foreach (var zone in layout.Zones)
+        {
+            if (zone.Kind != ZoneKind.Slot) continue;
+
+            var stack = Contents(inventory, equipment, screen, zone);
+
+            // Whatever already has the wider frame keeps it; every other square is a well pressed in.
+            if (giving != zone) Well(layout, zone);
+
+            // A worn slot nobody can fill yet says what it is for rather than sitting blank.
+            if (stack.IsEmpty && zone.Role == SlotRole.Equip)
+                Rect(_iconQuads, zone.X, zone.Y, zone.W, zone.H,
+                    new Vector4(1f, 1f, 1f, 0.16f), IconEquip + zone.Index);
+
+            // Under the pointer, and the one being carried, both get a lift. They are different
+            // states — one is "this is what you would click", the other is "this is in your hand" —
+            // so the hand keeps the hard lit edge and the pointer gets a wash.
+            if (screen.Hovered is { Kind: ZoneKind.Slot } hot && hot == zone)
+                Rect(_plain, zone.X, zone.Y, zone.W, zone.H, new Vector4(1f, 1f, 1f, 0.22f));
+
+            if (zone.Role == SlotRole.Pocket && zone.Index == inventory.Selected)
+                Select(zone.X, zone.Y, zone.W, zone.H);
+
+            if (stack.IsEmpty) continue;
+
+            var type = catalogue[stack.Item];
+            var inset = MathF.Round(z);
+            Rect(_blocks, zone.X + inset, zone.Y + inset, zone.W - inset * 2f, zone.H - inset * 2f,
+                Vector4.One, type.IconLayer);
+
+            if (type.Durability > 0 && stack.Damage > 0)
+            {
+                var life = 1f - stack.Damage / (float)type.Durability;
+                var bar = MathF.Max(1f, MathF.Round(z));
+                Rect(_plain, zone.X + inset, zone.Y + zone.H - bar * 2f, zone.W - inset * 2f, bar,
+                    new Vector4(0f, 0f, 0f, 0.8f));
+                Rect(_plain, zone.X + inset, zone.Y + zone.H - bar * 2f, (zone.W - inset * 2f) * life, bar,
+                    new Vector4(1f - life, 0.25f + life * 0.65f, 0.2f, 1f));
+            }
+
+            if (stack.Count > 1) Number(stack.Count, zone.X + zone.W, zone.Y + zone.H - digits - 1f, digits);
+        }
+
+        // What the arrangement makes, named, under the panel. The picture says what it costs and
+        // only a name says what it is for.
+        if (screen.Grid?.Match is { } made)
+            TextCentred(made.Name, w / 2f, layout.Y(ScreenLayout.PanelHeight) + 6f, 9f, Ink);
+    }
+
+    /// <summary>What is actually in one of the panel's squares.</summary>
+    private static ItemStack Contents(
+        Inventory inventory, Equipment equipment, HudScreen screen, Zone zone) => zone.Role switch
+    {
+        SlotRole.Pocket => inventory[zone.Index],
+        SlotRole.Equip => equipment.At(zone.Index),
+        SlotRole.Craft => screen.Grid?[zone.Index] ?? ItemStack.Empty,
+        SlotRole.Result => screen.Grid?.Result ?? ItemStack.Empty,
+        SlotRole.Smelting => screen.Burning?.Input ?? ItemStack.Empty,
+        SlotRole.Fuel => screen.Burning?.Fuel ?? ItemStack.Empty,
+        SlotRole.Smelted => screen.Burning?.Output ?? ItemStack.Empty,
+        _ => ItemStack.Empty,
+    };
+
+    /// <summary>A square pressed into the panel: eighteen across with sixteen inside it.</summary>
+    private void Well(ScreenLayout layout, Zone zone)
+    {
+        var z = layout.Zoom;
+        Rect(_plain, zone.X - z, zone.Y - z, zone.W + z * 2f, zone.H + z * 2f, SlotFill);
+        Rect(_plain, zone.X - z, zone.Y - z, zone.W + z * 2f, z, PanelDark);
+        Rect(_plain, zone.X - z, zone.Y - z, z, zone.H + z * 2f, PanelDark);
+        Rect(_plain, zone.X - z, zone.Y + zone.H, zone.W + z * 2f, z, PanelLight);
+        Rect(_plain, zone.X + zone.W, zone.Y - z, z, zone.H + z * 2f, PanelLight);
+    }
+
+    /// <summary>A bevel measured in the pack's pixels rather than in layout units.</summary>
+    private void PanelBevel(
+        ScreenLayout layout, float px, float py, float pw, float ph, bool raised, Vector4 fill)
+    {
+        var z = layout.Zoom;
+        var edge = MathF.Max(1f, MathF.Round(z));
+        var x = layout.X(px);
+        var y = layout.Y(py);
+        var w = layout.Size(pw);
+        var h = layout.Size(ph);
+
+        var top = raised ? PanelLight : PanelDark;
+        var bottom = raised ? PanelDark : PanelLight;
+
+        Rect(_plain, x, y, w, h, fill);
+        Rect(_plain, x, y, w, edge, top);
+        Rect(_plain, x, y, edge, h, top);
+        Rect(_plain, x, y + h - edge, w, edge, bottom);
+        Rect(_plain, x + w - edge, y, edge, h, bottom);
+        Rect(_plain, x, y + h - edge, edge, edge, fill);
+        Rect(_plain, x + w - edge, y, edge, edge, fill);
+    }
+
+    /// <summary>The arrow from the grid to what it makes, drawn in the pack's own pixels.</summary>
+    private void Arrow(ScreenLayout layout, (int X, int Y, int W, int H) box, float alpha)
+    {
+        var z = layout.Zoom;
+        var colour = new Vector4(0.78f, 0.78f, 0.78f, alpha);
+
+        // A shaft along the middle and a head made of a stack of bars — a triangle in a batcher
+        // that only draws rectangles is a triangle drawn a row at a time, and at this size that is
+        // exactly what a pixel arrow is anyway.
+        var midY = box.Y + box.H / 2f;
+        var head = MathF.Round(box.H * 0.55f);
+        var shaft = box.W - head;
+
+        Rect(_plain, layout.X(box.X), layout.Y(midY - box.H * 0.16f),
+            layout.Size(shaft), layout.Size(box.H * 0.32f), colour);
+
+        var rows = (int)MathF.Max(1f, MathF.Round(box.H / 2f));
+        for (var i = 0; i < rows; i++)
+        {
+            var reach = head * (1f - i / (float)rows);
+            Rect(_plain,
+                layout.X(box.X + shaft), layout.Y(midY - i - 1f),
+                layout.Size(reach), z, colour);
+            Rect(_plain,
+                layout.X(box.X + shaft), layout.Y(midY + i),
+                layout.Size(reach), z, colour);
+        }
+    }
+
+    /// <summary>The window the player's own figure stands in.</summary>
+    private void Figure(ScreenLayout layout, HudScreen screen)
+    {
+        _ = screen;
+        PanelBevel(
+            layout, ScreenLayout.Figure.X, ScreenLayout.Figure.Y,
+            ScreenLayout.Figure.W, ScreenLayout.Figure.H,
+            raised: false, new Vector4(0.13f, 0.14f, 0.16f, 0.98f));
+    }
+
+    /// <summary>A furnace's flame burning down, and the work filling toward the output.</summary>
+    private void Hearth(ScreenLayout layout, HudScreen screen)
+    {
+        var z = layout.Zoom;
+        var fuel = screen.Burning?.FuelLeft ?? 0f;
+        var work = screen.Burning?.Fraction ?? 0f;
+
+        var flame = ScreenLayout.FurnaceFlame;
+        PanelBevel(layout, flame.X, flame.Y, flame.W, flame.H, raised: false,
+            new Vector4(0.15f, 0.15f, 0.15f, 0.95f));
+
+        // Quantised to whole panel pixels so it steps rather than slides, which is the aesthetic.
+        var lit = MathF.Round((flame.H - 2f) * fuel);
+        if (lit > 0f)
+            Rect(_plain,
+                layout.X(flame.X + 1f), layout.Y(flame.Y + 1f + (flame.H - 2f - lit)),
+                layout.Size(flame.W - 2f), layout.Size(lit),
+                new Vector4(1f, 0.55f + fuel * 0.3f, 0.18f, 1f));
+
+        // The work arrow: a dim one all the way across, and a bright one as far as it has got.
+        Arrow(layout, ScreenLayout.FurnaceArrow, 0.35f);
+        if (work <= 0f) return;
+
+        var full = ScreenLayout.FurnaceArrow;
+        var done = MathF.Round(full.W * work);
+        _ = z;
+        Arrow(layout, (full.X, full.Y, (int)MathF.Max(1f, done), full.H), 1f);
+    }
+
+    /// <summary>The pointer, and whatever is riding on it.</summary>
+    /// <remarks>
+    /// Ours rather than the desktop's, so it scales with the interface, lands on the same pixel grid
+    /// and is the same pointer on every machine. Drawn last, over everything.
+    /// </remarks>
+    private void Pointer(ItemRegistry catalogue, HudScreen screen, ScreenLayout layout)
+    {
+        var size = MathF.Max(12f, MathF.Round(layout.Zoom * 8f));
+        var at = screen.Pointer;
+
+        if (!screen.Carried.IsEmpty)
+        {
+            // Under and behind the point, so the arrow still reads against whatever is being held.
+            var held = MathF.Max(14f, MathF.Round(layout.Zoom * 14f));
+            var hx = at.X - held * 0.30f;
+            var hy = at.Y - held * 0.30f;
+
+            Rect(_blocks, hx, hy, held, held, Vector4.One, catalogue[screen.Carried.Item].IconLayer);
+            if (screen.Carried.Count > 1)
+                Number(screen.Carried.Count, hx + held, hy + held - 6f, MathF.Max(5f, held * 0.42f));
+        }
+
+        Rect(_iconQuads, at.X, at.Y, size, size, Vector4.One, IconCursor);
     }
 
     // The interface's own palette. Named rather than written out at each use, so the whole thing
@@ -915,21 +1251,25 @@ public sealed class HudRenderer : IDisposable
         Text(line, MathF.Round(centreX - TextWidth(line, height) / 2f), y, height, colour);
 
     /// <summary>Draws a number right-aligned at a point, digit by digit.</summary>
-    private void Number(int value, float right, float top)
+    /// <param name="glyph">
+    /// How big one digit is. Takes a size because a count in a hotbar slot and a count in a panel
+    /// zoomed to twice the pack's grid are the same number at two different scales.
+    /// </param>
+    private void Number(int value, float right, float top, float glyph = 6f)
     {
-        const float Glyph = 6f;
         var shadow = new Vector4(0f, 0f, 0f, 0.75f);
         var bright = Vector4.One;
+        var lift = MathF.Max(0.75f, MathF.Round(glyph / 8f));
 
         var at = right;
         do
         {
             var digit = value % 10;
             value /= 10;
-            at -= Glyph;
+            at -= glyph;
 
-            Rect(_iconQuads, at + 0.75f, top + 0.75f, Glyph, Glyph, shadow, IconDigit + digit);
-            Rect(_iconQuads, at, top, Glyph, Glyph, bright, IconDigit + digit);
+            Rect(_iconQuads, at + lift, top + lift, glyph, glyph, shadow, IconDigit + digit);
+            Rect(_iconQuads, at, top, glyph, glyph, bright, IconDigit + digit);
         }
         while (value > 0);
     }
