@@ -679,8 +679,8 @@ public sealed class ClientHost : IDisposable
         // Two grids, both alive for the whole session rather than made when a screen opens. What is
         // laid out in the hands stays laid out while a player goes and fetches the missing plank,
         // which is what every game in this space does and what anybody would expect.
-        _handGrid = new CraftingGrid(_book, _items, 2, 2);
-        _benchGrid = new CraftingGrid(_book, _items, 3, 3);
+        _handGrid = new CraftingGrid(_book, _items, 2, 2, CraftStation.Hand);
+        _benchGrid = new CraftingGrid(_book, _items, 3, 3, CraftStation.Bench);
 
         // Nothing in the pockets. That is the design — punch wood, make planks, make a pickaxe —
         // and the starting kit that used to be here was scaffolding for the days when a slab could
@@ -1112,6 +1112,13 @@ public sealed class ClientHost : IDisposable
                 RefreshScreen();
                 return;
 
+            case ZoneKind.Recipe when _hudScreen.Kind == HudScreenKind.Stonecutter:
+                // A cut is only ever picked. Nothing is spent until the result is taken, so one
+                // click is safe here where it would not be in the book.
+                if (at.Value.Index < _hudScreen.Cuts.Count) _hudScreen.Cut = at.Value.Index;
+                RefreshScreen();
+                return;
+
             case ZoneKind.Recipe:
                 // The first click picks a recipe out; a click on the one already picked lays it
                 // into the grid. Selecting and acting on one press would make a mis-click move
@@ -1152,7 +1159,7 @@ public sealed class ClientHost : IDisposable
     private void ClickSlot(Zone zone, MouseButton button, bool many)
     {
         var carried = _hudScreen.Carried;
-        var giving = zone.Role is SlotRole.Result or SlotRole.Smelted;
+        var giving = zone.Role is SlotRole.Result or SlotRole.Smelted or SlotRole.Cut;
 
         // A square that only gives is a different gesture entirely. There is nothing to put into
         // it, taking from it spends the arrangement rather than a slot, and shift-clicking it is
@@ -1196,8 +1203,20 @@ public sealed class ClientHost : IDisposable
         SlotRole.Equip => _equipment.TakeAll((EquipSlot)zone.Index),
         SlotRole.Smelting or SlotRole.Fuel => EmptyFurnaceSlot(zone.Role),
         SlotRole.Stored => TakeStored(zone.Index, half: false),
+        SlotRole.Cutting => TakeCutting(),
         _ => ItemStack.Empty,
     };
+
+    /// <summary>Lifts the rock off a stonecutter's bed, and forgets what it was going to become.</summary>
+    private ItemStack TakeCutting()
+    {
+        var lifted = _hudScreen.Cutting;
+        if (lifted.IsEmpty) return ItemStack.Empty;
+
+        _hudScreen.Cutting = ItemStack.Empty;
+        RefreshCuts();
+        return lifted;
+    }
 
     private ItemStack TakeHalfFrom(Zone zone) => zone.Role switch
     {
@@ -1214,8 +1233,36 @@ public sealed class ClientHost : IDisposable
         SlotRole.Equip => _equipment.Put((EquipSlot)zone.Index, carried),
         SlotRole.Smelting or SlotRole.Fuel => FeedFurnace(zone.Role, carried),
         SlotRole.Stored => PutStored(zone.Index, carried, one: false),
+        SlotRole.Cutting => PutCutting(carried),
         _ => carried,
     };
+
+    /// <summary>
+    /// Lays a rock on the bed, and refuses anything the saw has nothing to do with.
+    /// </summary>
+    /// <remarks>
+    /// Refusing rather than accepting-and-offering-nothing, so a slot that takes a stack is a slot
+    /// that will do something with it. A stonecutter holding a log with an empty list beside it
+    /// reads as broken.
+    /// </remarks>
+    private ItemStack PutCutting(ItemStack carried)
+    {
+        if (carried.IsEmpty) return carried;
+        if (!_book.Offers(CraftStation.Stonecutter, carried.Item).Any()) return carried;
+
+        var there = _hudScreen.Cutting;
+
+        if (there.IsEmpty || there.Matches(carried))
+        {
+            _hudScreen.Cutting = there.Merge(carried, _items[carried.Item].MaxStack, out var over);
+            RefreshCuts();
+            return over;
+        }
+
+        _hudScreen.Cutting = carried;
+        RefreshCuts();
+        return there;
+    }
 
     private ItemStack PutOneInto(Zone zone, ItemStack carried) => zone.Role switch
     {
@@ -1339,6 +1386,32 @@ public sealed class ClientHost : IDisposable
     /// </remarks>
     private void TakeFromResult(Zone zone, bool many)
     {
+        // The saw. One rock off the bed for one of whatever was picked, and a shift-click keeps
+        // cutting until the bed is empty — which is the whole reason to carry a stack to one.
+        if (zone.Role == SlotRole.Cut)
+        {
+            if (_hudScreen.Cut < 0 || _hudScreen.Cut >= _hudScreen.Cuts.Count) return;
+
+            var cut = _hudScreen.Cuts[_hudScreen.Cut];
+            var sawn = 0;
+
+            do
+            {
+                if (_hudScreen.Cutting.IsEmpty) break;
+
+                _hudScreen.Cutting = _hudScreen.Cutting.MinusOne();
+                Spill(cut.Result);
+                sawn++;
+            }
+            while (many);
+
+            if (sawn == 0) return;
+
+            RefreshCuts();
+            PlaySound(SoundMaterial.Stone, SoundEvent.Break, _viewPosition, 0.5f);
+            return;
+        }
+
         if (zone.Role == SlotRole.Smelted)
         {
             var taken = EmptyFurnaceSlot(SlotRole.Smelted);
@@ -1619,6 +1692,47 @@ public sealed class ClientHost : IDisposable
         RefreshScreen();
     }
 
+    /// <summary>A stonecutter: a rock on the bed, and everything that rock can be cut into.</summary>
+    private void OpenStonecutter(int x, int y, int z)
+    {
+        _hudScreen.Kind = HudScreenKind.Stonecutter;
+        _hudScreen.TabNames = [];
+        _hudScreen.Tab = 0;
+        _hudScreen.Grid = null;
+        _hudScreen.Cutting = ItemStack.Empty;
+        _hudScreen.Cuts.Clear();
+        _hudScreen.Cut = -1;
+        _station = (x, y, z);
+        StopHands();
+        TakeThePointer();
+        RefreshScreen();
+    }
+
+    /// <summary>
+    /// Works out what the rock on the bed could become, keeping the choice where it can be kept.
+    /// </summary>
+    /// <remarks>
+    /// The picked cut survives a change of rock only if the same cut is still on offer. Swapping
+    /// stone for deepstone and finding the selection silently moved to something else is how a
+    /// player ends up with a stack of the wrong slab.
+    /// </remarks>
+    private void RefreshCuts()
+    {
+        var was = _hudScreen.Cut >= 0 && _hudScreen.Cut < _hudScreen.Cuts.Count
+            ? _hudScreen.Cuts[_hudScreen.Cut]
+            : null;
+
+        _hudScreen.Cuts.Clear();
+        foreach (var offer in _book.Offers(CraftStation.Stonecutter, _hudScreen.Cutting.Item))
+        {
+            if (_hudScreen.Cuts.Count >= ScreenLayout.CutOffers) break;
+            _hudScreen.Cuts.Add(offer);
+        }
+
+        _hudScreen.Cut = was is null ? -1 : _hudScreen.Cuts.IndexOf(was);
+        if (_hudScreen.Cut < 0 && _hudScreen.Cuts.Count > 0) _hudScreen.Cut = 0;
+    }
+
     /// <summary>A chest: twenty seven slots, and the player's own pockets under them.</summary>
     private void OpenChest(int x, int y, int z)
     {
@@ -1659,6 +1773,13 @@ public sealed class ClientHost : IDisposable
 
         if (_hudScreen.Kind == HudScreenKind.Bench)
             foreach (var left in _benchGrid.Empty(_inventory)) Spill(left);
+
+        // A stonecutter keeps nothing either. What is on its bed is the player's rock, not the
+        // station's, so it goes back with everything else rather than being left on a table.
+        Spill(_hudScreen.Cutting);
+        _hudScreen.Cutting = ItemStack.Empty;
+        _hudScreen.Cuts.Clear();
+        _hudScreen.Cut = -1;
 
         _rebinding = null;
         _hudScreen.Kind = HudScreenKind.None;
@@ -1713,7 +1834,9 @@ public sealed class ClientHost : IDisposable
         // need a list, and what is on it depends on how wide the grid is: a bench lends three.
         if (_hudScreen.IsContainer)
         {
-            if (_hudScreen.Kind == HudScreenKind.Furnace || _hudScreen.Grid is null)
+            // A station with no grid has no book beside it: a furnace and a chest have nothing to
+            // arrange, and a stonecutter's list is its own and is built from what is on its bed.
+            if (_hudScreen.Grid is null)
             {
                 _hudScreen.Recipes.Clear();
                 _hudScreen.Payable.Clear();
@@ -1723,7 +1846,7 @@ public sealed class ClientHost : IDisposable
             if (_shown.Count == 0)
             {
                 foreach (var recipe in _book.Recipes)
-                    if (!recipe.NeedsBench || _hudScreen.Grid.Width >= 3) _shown.Add(recipe);
+                    if (recipe.WorkedAt(_hudScreen.Grid.Station, _hudScreen.Grid.Width)) _shown.Add(recipe);
             }
 
             // Built once per opening and only its affordability recomputed. A list that changed
@@ -2048,7 +2171,7 @@ public sealed class ClientHost : IDisposable
         if (index < 0 || index >= _shown.Count) return;
 
         var recipe = _shown[index];
-        if (recipe.NeedsBench && grid.Width < 3) return;
+        if (!recipe.WorkedAt(grid.Station, grid.Width)) return;
         if (!_book.CanPay(_inventory, recipe)) return;
 
         foreach (var left in grid.Empty(_inventory)) Spill(left);
@@ -2842,6 +2965,10 @@ public sealed class ClientHost : IDisposable
                 OpenChest(hit.X, hit.Y, hit.Z);
                 return;
 
+            case BlockUse.Stonecutter:
+                OpenStonecutter(hit.X, hit.Y, hit.Z);
+                return;
+
             case BlockUse.Toggle when _toggle.TryGetValue(struck.Id.Value, out var other):
                 _streamer.EditBlock(hit.X, hit.Y, hit.Z, other);
 
@@ -3245,13 +3372,25 @@ public sealed class ClientHost : IDisposable
 
             case 180: SampleUi(size, "chest"); ProbeSquares(); SampleStored(size); break;
 
-            case 181: CloseScreen(); OpenGame(GameTab.Controls); break;
-            case 210: SampleUi(size, "game"); ProbeRows("top"); break;
+            // A stonecutter with a rock on its bed, so the list has something in it. An empty one
+            // draws the same two wells whether or not a single cut was ever found.
+            case 181:
+                CloseScreen();
+                OpenStonecutter(0, 0, 0);
+                _hudScreen.Cutting = new ItemStack(_items.ByName("stone").Id, 4);
+                RefreshCuts();
+                RefreshScreen();
+                break;
 
-            case 211: ScrollRows(int.MaxValue); break;
-            case 220: ProbeRows("bottom"); break;
+            case 210: SampleUi(size, "cutter"); ProbeSquares(); ProbeCuts(); break;
 
-            case 221: JudgeUi(); _window.Close(); break;
+            case 211: CloseScreen(); OpenGame(GameTab.Controls); break;
+            case 240: SampleUi(size, "game"); ProbeRows("top"); break;
+
+            case 241: ScrollRows(int.MaxValue); break;
+            case 250: ProbeRows("bottom"); break;
+
+            case 251: JudgeUi(); _window.Close(); break;
         }
     }
 
@@ -3502,6 +3641,35 @@ public sealed class ClientHost : IDisposable
         Console.Out.Flush();
     }
 
+    /// <summary>What the stonecutter offered, and whether the pick reads differently from the rest.</summary>
+    private (int Offers, bool Picked, bool Makes) _uiCuts;
+
+    /// <summary>
+    /// Asks the stonecutter what a rock is offering, and that picking one changes what it makes.
+    /// </summary>
+    /// <remarks>
+    /// The list is the station. A stonecutter that draws two wells and no offers is a stonecutter
+    /// nothing can ever be taken out of, and the panel looks identical either way — so the count is
+    /// asserted, and so is the result slot actually holding the thing the pick names.
+    /// </remarks>
+    private void ProbeCuts()
+    {
+        var offers = 0;
+        foreach (var zone in _layout.Zones)
+            if (zone.Kind == ZoneKind.Recipe && zone.Index < _hudScreen.Cuts.Count) offers++;
+
+        var picked = _hudScreen.Cut >= 0 && _hudScreen.Cut < _hudScreen.Cuts.Count;
+        var makes = picked && !_hudScreen.Cuts[_hudScreen.Cut].Result.IsEmpty;
+
+        _uiCuts = (offers, picked, makes);
+
+        Console.WriteLine(
+            $"ui-check    cutter     stone offers {offers} cuts, picked "
+            + (picked ? $"'{_hudScreen.Cuts[_hudScreen.Cut].Name}'" : "nothing")
+            + $", which makes {(makes ? _items[_hudScreen.Cuts[_hudScreen.Cut].Result.Item].Name : "nothing")}");
+        Console.Out.Flush();
+    }
+
     /// <summary>What each sample read, so the run can judge itself rather than only report.</summary>
     private readonly Dictionary<string, (byte R, byte G, byte B)> _uiSamples = [];
 
@@ -3523,6 +3691,7 @@ public sealed class ClientHost : IDisposable
         var book = Read("book");
         var bench = Read("bench");
         var chestPanel = Read("chest");
+        var cutter = Read("cutter");
         var game = Read("game");
         var world = Read("no screen corner");
 
@@ -3548,6 +3717,14 @@ public sealed class ClientHost : IDisposable
             faults.Add($"a chest slot holding seven planks reads the same as an empty one, "
                      + $"{storedFull.R} {storedFull.G} {storedFull.B}");
 
+        if (cutter == bare) faults.Add("opening a stonecutter changed nothing on screen");
+
+        // The station IS the list. Two wells and no offers is a stonecutter nothing comes out of,
+        // and it draws exactly the same as one that works.
+        if (_uiCuts.Offers == 0) faults.Add("a stonecutter offered nothing at all for a block of stone");
+        if (!_uiCuts.Picked) faults.Add("a stonecutter with offers on it had none of them picked");
+        if (!_uiCuts.Makes) faults.Add("the cut a stonecutter had picked makes nothing");
+
         _ = book;
 
         // The book: read where the book's own well is, before and after folding it out. The middle
@@ -3572,7 +3749,8 @@ public sealed class ClientHost : IDisposable
         // The container panel is centred, so the middle of the window is inside it — and it is drawn
         // in the same neutral grey the options are. A middle that still reads dark is the backdrop
         // with no panel on it, which is what a panel laid out off the edge looks like from here.
-        foreach (var (name, read) in new[] { ("items", items), ("bench", bench), ("chest", chestPanel) })
+        foreach (var (name, read) in
+                 new[] { ("items", items), ("bench", bench), ("chest", chestPanel), ("cutter", cutter) })
         {
             if (read.R < 40) faults.Add($"the {name} panel's middle reads {read.R} {read.G} {read.B}, too dark for a panel");
 
@@ -3623,7 +3801,14 @@ public sealed class ClientHost : IDisposable
         foreach (var (screen, probe) in _uiProbes)
         {
             if (probe.Misses > 0) faults.Add($"{probe.Misses} squares on the {screen} screen did not answer for themselves");
-            if (probe.Hits < 40) faults.Add($"the {screen} screen only laid out {probe.Hits} squares");
+
+            // ⚠ Every container panel carries the player's own pockets and then adds its own
+            // squares, so that is the claim: all the pockets, and at least one thing of its own.
+            // It was a flat forty, which is a number no panel is actually made of — a stonecutter
+            // has thirty-eight and was failing for being small rather than for being wrong.
+            if (probe.Hits < Inventory.Slots + 1)
+                faults.Add($"the {screen} screen laid out {probe.Hits} squares, fewer than the "
+                         + $"{Inventory.Slots} pockets and one of its own");
         }
 
         // And the options panel is neutral grey by design, so its middle has no colour cast.
@@ -3642,7 +3827,7 @@ public sealed class ClientHost : IDisposable
         if (faults.Count == 0)
         {
             Console.WriteLine(
-                "OK  the overlay reaches the screen: crosshair, five screens, panels in grey, "
+                "OK  the overlay reaches the screen: crosshair, six screens, panels in grey, "
                 + $"{_uiProbes.Sum(p => p.Value.Hits)} squares answering for their own middles");
         }
         else

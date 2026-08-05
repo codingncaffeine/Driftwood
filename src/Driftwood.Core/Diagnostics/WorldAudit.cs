@@ -1376,11 +1376,43 @@ public static class WorldAudit
             if (recipe.SlotsUsed == 0) faults.Add($"'{recipe.Name}' costs nothing");
             if (recipe.Result.IsEmpty) faults.Add($"'{recipe.Name}' makes nothing");
 
-            var signature = recipe.Signature();
-            if (seen.TryGetValue(signature, out var other))
-                faults.Add($"'{recipe.Name}' is laid out exactly like '{other}'");
-            else
-                seen[signature] = recipe.Name;
+            // ⚠ Two recipes matching one arrangement is a fault at a GRID station and the whole
+            // design at a choosing one — a stonecutter offering a rock's slab, its stair and its
+            // worked form is three recipes with one signature on purpose. So the check is scoped
+            // per station rather than over the book, which is also what stops a stonecutter recipe
+            // colliding with the bench recipe it was moved off.
+            var signature = $"{recipe.Station}:{recipe.Signature()}";
+            if (CraftStations.IsGrid(recipe.Station))
+            {
+                if (seen.TryGetValue(signature, out var other))
+                    faults.Add($"'{recipe.Name}' is laid out exactly like '{other}'");
+                else
+                    seen[signature] = recipe.Name;
+            }
+
+            // A choosing station has no arrangement to round-trip. What has to be true instead is
+            // that it takes exactly one thing and that asking the station for that thing offers it.
+            if (CraftStations.Chooses(recipe.Station))
+            {
+                if (recipe.SlotsUsed != 1)
+                {
+                    faults.Add($"'{recipe.Name}' is worked at a {recipe.Station} and takes {recipe.SlotsUsed} things");
+                    continue;
+                }
+
+                var only = recipe.Ingredients.First().Members[0];
+                if (!book.Offers(recipe.Station, only).Contains(recipe))
+                    faults.Add($"a {recipe.Station} was not offered '{recipe.Name}' for the thing it is made of");
+
+                // ⛔ And that it is refused everywhere else. Without this the gate is a field
+                // nobody reads and every recipe still matches wherever it was laid.
+                Array.Clear(grid);
+                grid[0] = new ItemStack(only, 1);
+                if (book.TryMatch(grid, 3, 3, CraftStation.Bench, out var leaked))
+                    faults.Add($"'{recipe.Name}' is worked at a {recipe.Station} and a bench made '{leaked!.Name}'");
+
+                continue;
+            }
 
             // Laid into the corner of a full bench, so the trim has something to do. A recipe that
             // only matches when it fills the grid exactly is a recipe a player has to guess at.
@@ -1392,7 +1424,7 @@ public static class WorldAudit
                 grid[y * 3 + x] = new ItemStack(want.Members[0], 1);
             }
 
-            if (!book.TryMatch(grid, 3, 3, out var made))
+            if (!book.TryMatch(grid, 3, 3, CraftStation.Bench, out var made))
             {
                 faults.Add($"'{recipe.Name}' laid out in a bench matched nothing");
                 continue;
@@ -1402,8 +1434,8 @@ public static class WorldAudit
                 faults.Add($"'{recipe.Name}' laid out in a bench came back as '{made!.Name}'");
 
             // And the same arrangement in the two slots a player carries, which must work for the
-            // small ones and must not for the big ones.
-            if (recipe.Width > 2 || recipe.Height > 2) continue;
+            // small ones worked in the hand and must not for anything else.
+            if (recipe.TooBigForHands || recipe.Station != CraftStation.Hand) continue;
 
             Array.Clear(grid);
             for (var y = 0; y < recipe.Height; y++)
@@ -1413,18 +1445,37 @@ public static class WorldAudit
                 grid[y * 2 + x] = new ItemStack(want.Members[0], 1);
             }
 
-            if (!book.TryMatch(grid.AsSpan(0, 4), 2, 2, out _))
+            if (!book.TryMatch(grid.AsSpan(0, 4), 2, 2, CraftStation.Hand, out _))
                 faults.Add($"'{recipe.Name}' fits in two by two and did not match there");
         }
 
-        // Nothing bigger than a player's hands claims to fit in them, and nothing that fits claims
-        // it needs a bench — the rule is the shape, and this is what says the shape is read.
+        // A bench is wanted for one of two reasons and both have to be readable off the recipe: it
+        // does not fit in two hands, or it is worked at one whatever its size.
         foreach (var recipe in book.Recipes)
         {
             var big = recipe.Width > 2 || recipe.Height > 2;
-            if (recipe.NeedsBench == big) continue;
-            faults.Add($"'{recipe.Name}' is {recipe.Width}x{recipe.Height} and {(recipe.NeedsBench ? "wants" : "does not want")} a bench");
+            var wants = big || recipe.Station == CraftStation.Bench;
+            if (recipe.NeedsBench == wants) continue;
+            faults.Add($"'{recipe.Name}' is {recipe.Width}x{recipe.Height} at a {recipe.Station} and "
+                     + $"{(recipe.NeedsBench ? "wants" : "does not want")} a bench");
         }
+
+        // ⚠ And that the gate is doing something at all. Every recipe worked in the hand would pass
+        // every check above on a build where Station was never read, so the counts are named: how
+        // many are made in bare hands, and how many stations have anything to work.
+        var byStation = new Dictionary<CraftStation, int>();
+        foreach (var recipe in book.Recipes)
+            byStation[recipe.Station] = byStation.GetValueOrDefault(recipe.Station) + 1;
+
+        var inHand = 0;
+        foreach (var recipe in book.Recipes)
+            if (recipe.WorkedAt(CraftStation.Hand, 2)) inHand++;
+
+        if (byStation.Count < 2)
+            faults.Add("every recipe in the book is worked at the same place, so the station gate is not used");
+        if (inHand == 0) faults.Add("nothing at all can be made in bare hands, so a new world cannot start");
+        if (inHand > 12)
+            faults.Add($"{inHand} recipes are made in bare hands, which is most of a game before anything is built");
 
         // A grid holding something no recipe mentions has to make nothing. Without this the whole
         // round trip above would pass a matcher that says yes to everything.
@@ -1445,14 +1496,14 @@ public static class WorldAudit
         {
             Array.Clear(grid);
             grid[4] = new ItemStack(unused, 1);
-            if (book.TryMatch(grid, 3, 3, out var spurious))
+            if (book.TryMatch(grid, 3, 3, CraftStation.Bench, out var spurious))
                 faults.Add($"one {items[unused].Name} in a bench made '{spurious!.Name}'");
 
             // And a scattering of the right things in the wrong arrangement makes nothing either.
             Array.Clear(grid);
             grid[0] = items.Stack("stick");
             grid[8] = items.Stack("driftoak_planks");
-            if (book.TryMatch(grid, 3, 3, out var crooked))
+            if (book.TryMatch(grid, 3, 3, CraftStation.Bench, out var crooked))
                 faults.Add($"a stick and a plank in opposite corners made '{crooked!.Name}'");
         }
 
@@ -1524,6 +1575,28 @@ public static class WorldAudit
     /// first pickaxe is crafted from dug wood and unlocks the rock the second is made of — so it
     /// runs to exhaustion rather than in passes.</para>
     /// </remarks>
+    /// <summary>What has to be standing before a station's recipes can be worked, or none.</summary>
+    /// <remarks>
+    /// Named here rather than on <see cref="CraftStation"/> because it is a fact about this game's
+    /// item set, not about the idea of a station — and it is the one place the walk and the world
+    /// have to agree. A station whose block does not exist yet returns null and its recipes are
+    /// treated as reachable, which is honest: nothing is gated behind something unbuildable.
+    /// </remarks>
+    private static ItemId? StationItem(ItemRegistry items, CraftStation station)
+    {
+        var name = station switch
+        {
+            CraftStation.Bench => "bench",
+            CraftStation.Stonecutter => "stonecutter",
+            CraftStation.Smithing => "smithing_table",
+            CraftStation.Loom => "loom",
+            _ => null,
+        };
+
+        if (name is null) return null;
+        return items.TryByName(name, out var type) ? type.Id : null;
+    }
+
     private static List<string> ReachabilitySelfTest(
         BlockRegistry registry,
         ItemRegistry items,
@@ -1571,9 +1644,14 @@ public static class WorldAudit
                 if (!left.IsEmpty) changed |= Gain(left.Item);
             }
 
-            // Craft.
+            // Craft. ⚠ A recipe worked at a station cannot be made until the station itself has been
+            // reached — which is the whole reason the gate exists, and without this line the walk
+            // would report every worked stone in the game as obtainable by a player who has never
+            // built a stonecutter. The station is an item like any other, so it is simply asked for.
             foreach (var recipe in book.Recipes)
             {
+                if (StationItem(items, recipe.Station) is { } needed && !Held(needed)) continue;
+
                 var payable = true;
                 foreach (var slot in recipe.Ingredients)
                 {
@@ -2026,7 +2104,7 @@ public static class WorldAudit
     {
         var faults = new List<string>();
         var pockets = new Inventory(items);
-        var grid = new CraftingGrid(book, items, 2, 2);
+        var grid = new CraftingGrid(book, items, 2, 2, CraftStation.Hand);
         var carried = ItemStack.Empty;
 
         var log = items.ByName("driftoak_log").Id;

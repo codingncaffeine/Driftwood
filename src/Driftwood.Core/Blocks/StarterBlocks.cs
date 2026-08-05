@@ -104,6 +104,12 @@ public static class StarterBlocks
     public const ushort LayerChestSide = 60;
     public const ushort LayerChestFront = 61;
 
+    // Stations. A bench had no front until now — every pack paints one and we mapped the same tile
+    // to all four sides, so it read as a crate rather than as a thing with a working face.
+    public const ushort LayerBenchFront = 62;
+    public const ushort LayerStonecutterTop = 63;
+    public const ushort LayerStonecutterSide = 64;
+
     /// <summary>The first layer that is an item icon rather than a block face.</summary>
     /// <remarks>
     /// Items share the block texture array rather than taking one of their own. They are the same
@@ -111,24 +117,24 @@ public static class StarterBlocks
     /// spinning on the floor — and a second array would be a second bind, a second upload and a
     /// second pack-import path for no difference anybody could see.
     /// </remarks>
-    public const ushort LayerFirstIcon = 62;
+    public const ushort LayerFirstIcon = 65;
 
-    public const ushort LayerStick = 62;
-    public const ushort LayerCoal = 63;
-    public const ushort LayerCharcoal = 64;
-    public const ushort LayerRawCopper = 65;
-    public const ushort LayerRawIron = 66;
-    public const ushort LayerRawGold = 67;
-    public const ushort LayerCopperIngot = 68;
-    public const ushort LayerIronIngot = 69;
-    public const ushort LayerGoldIngot = 70;
-    public const ushort LayerStormglass = 71;
-    public const ushort LayerAzurite = 72;
-    public const ushort LayerClayLump = 73;
-    public const ushort LayerBrick = 74;
+    public const ushort LayerStick = 65;
+    public const ushort LayerCoal = 66;
+    public const ushort LayerCharcoal = 67;
+    public const ushort LayerRawCopper = 68;
+    public const ushort LayerRawIron = 69;
+    public const ushort LayerRawGold = 70;
+    public const ushort LayerCopperIngot = 71;
+    public const ushort LayerIronIngot = 72;
+    public const ushort LayerGoldIngot = 73;
+    public const ushort LayerStormglass = 74;
+    public const ushort LayerAzurite = 75;
+    public const ushort LayerClayLump = 76;
+    public const ushort LayerBrick = 77;
 
     /// <summary>The tool icons: one palette per tier, four heads each, tier-major.</summary>
-    public const ushort LayerFirstTool = 75;
+    public const ushort LayerFirstTool = 78;
 
     /// <summary>Head shapes a tier comes in — pickaxe, axe, shovel, sword.</summary>
     public const int ToolShapeCount = 4;
@@ -513,7 +519,19 @@ public static class StarterBlocks
         {
             Name = "bench", Hardness = 2.5f, Crafted = true, Use = BlockUse.Bench,
             HarvestClass = ToolClass.Axe, Sounds = SoundMaterial.Wood,
-            TopLayer = LayerBenchTop, SideLayer = LayerBenchSide, BottomLayer = LayerPlanks,
+            Model = BlockModel.CubeTwoSided(
+                LayerBenchTop, LayerBenchFront, LayerBenchSide, LayerPlanks),
+        });
+
+        // A saw on a stone table. One rock in, and everything that rock can be cut into offered
+        // together — which is the whole reason it exists rather than being a second bench.
+        registry.Register(new BlockType
+        {
+            Name = "stonecutter", Hardness = 3.5f, Opaque = false, Crafted = true,
+            Use = BlockUse.Stonecutter,
+            HarvestClass = ToolClass.Pickaxe, HarvestTier = 1, Sounds = SoundMaterial.Stone,
+            SupportFace = Faces.NegY,
+            Model = BlockModel.Layer(LayerStonecutterTop, LayerStonecutterSide, LayerStonecutterSide, 9f),
         });
 
         // Four facings each, lit and unlit. Eight ids for one machine, which is the price of a cell

@@ -21,6 +21,9 @@ public enum BlockUse
     /// <summary>Opens the chest at this cell.</summary>
     Chest,
 
+    /// <summary>Opens the stonecutter: one rock in, and everything it cuts into offered.</summary>
+    Stonecutter,
+
     /// <summary>Swaps to this block's other state — lit or out, open or shut.</summary>
     Toggle,
 }

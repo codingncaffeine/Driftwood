@@ -21,7 +21,7 @@ public sealed class CraftingGrid
     private readonly RecipeBook _book;
     private readonly ItemRegistry _items;
 
-    public CraftingGrid(RecipeBook book, ItemRegistry items, int width, int height)
+    public CraftingGrid(RecipeBook book, ItemRegistry items, int width, int height, CraftStation station)
     {
         if (width <= 0 || height <= 0)
             throw new ArgumentOutOfRangeException(nameof(width), $"a {width}x{height} grid is not a grid");
@@ -30,8 +30,16 @@ public sealed class CraftingGrid
         _items = items;
         Width = width;
         Height = height;
+        Station = station;
         _cells = new ItemStack[width * height];
     }
+
+    /// <summary>Where this grid is. A bench works bench recipes; two hands do not.</summary>
+    /// <remarks>
+    /// Carried by the grid rather than passed in at each match, because it is a property of the
+    /// thing a player is standing at and never changes while they are standing at it.
+    /// </remarks>
+    public CraftStation Station { get; }
 
     public int Width { get; }
 
@@ -176,7 +184,7 @@ public sealed class CraftingGrid
 
     private void Rematch()
     {
-        Match = _book.TryMatch(_cells, Width, Height, out var made) ? made : null;
+        Match = _book.TryMatch(_cells, Width, Height, Station, out var made) ? made : null;
         Result = Match?.Result ?? ItemStack.Empty;
     }
 }

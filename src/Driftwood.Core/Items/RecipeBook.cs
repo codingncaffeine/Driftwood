@@ -57,9 +57,14 @@ public sealed class RecipeBook
     /// a two-by-two recipe be laid anywhere in a three-by-three. Without it a player has to guess
     /// which corner the game wanted, and every wrong guess looks like the recipe not existing.
     /// </remarks>
-    public bool TryMatch(ReadOnlySpan<ItemStack> grid, int width, int height, out Recipe? made)
+    public bool TryMatch(
+        ReadOnlySpan<ItemStack> grid, int width, int height, CraftStation station, out Recipe? made)
     {
         made = null;
+
+        // A station that offers a list has no single answer to "what does this make" — one rock at
+        // a stonecutter is three different things — so it is asked with Offers instead.
+        if (CraftStations.Chooses(station)) return false;
 
         int minX = width, minY = height, maxX = -1, maxY = -1, filled = 0;
         for (var y = 0; y < height; y++)
@@ -80,6 +85,11 @@ public sealed class RecipeBook
 
         foreach (var recipe in _recipes)
         {
+            // ⚠ Where it is worked comes first, before any shape is compared. A stonecutter recipe
+            // is one slot wide, so a single stone laid in a bench would match one without this —
+            // and the gate would be no gate at all for exactly the recipes it was built to hold.
+            if (!recipe.WorkedAt(station, Math.Max(width, height))) continue;
+
             if (recipe.Shapeless)
             {
                 if (recipe.SlotsUsed != filled) continue;
@@ -132,12 +142,41 @@ public sealed class RecipeBook
     }
 
     /// <summary>Everything that could be made right now, in the order the book lists them.</summary>
-    public IEnumerable<Recipe> CraftableFrom(Inventory carrying, bool atBench)
+    public IEnumerable<Recipe> CraftableFrom(Inventory carrying, CraftStation station, int grid)
     {
         foreach (var recipe in _recipes)
         {
-            if (recipe.NeedsBench && !atBench) continue;
+            if (!recipe.WorkedAt(station, grid)) continue;
             if (CanPay(carrying, recipe)) yield return recipe;
+        }
+    }
+
+    /// <summary>Every recipe this station works, whatever is being carried.</summary>
+    public IEnumerable<Recipe> WorkedAt(CraftStation station, int grid)
+    {
+        foreach (var recipe in _recipes)
+            if (recipe.WorkedAt(station, grid)) yield return recipe;
+    }
+
+    /// <summary>
+    /// Everything a choosing station would make out of one thing, in the order the book lists them.
+    /// </summary>
+    /// <remarks>
+    /// The other half of <see cref="TryMatch"/>, for the stations that answer with several things
+    /// rather than one. Every recipe here is a single slot by construction — a station you feed one
+    /// thing to has nothing to arrange — and the check insists on that rather than assuming it.
+    /// </remarks>
+    public IEnumerable<Recipe> Offers(CraftStation station, ItemId input)
+    {
+        if (input.IsNone || CraftStations.IsGrid(station)) yield break;
+
+        foreach (var recipe in _recipes)
+        {
+            if (recipe.Station != station) continue;
+            if (recipe.SlotsUsed != 1) continue;
+
+            foreach (var slot in recipe.Ingredients)
+                if (slot.Matches(input)) { yield return recipe; break; }
         }
     }
 

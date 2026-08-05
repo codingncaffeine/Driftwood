@@ -27,6 +27,9 @@ public enum HudScreenKind
 
     /// <summary>A chest: twenty seven slots over the pockets, and nothing else.</summary>
     Chest,
+
+    /// <summary>A stonecutter: a rock, everything it cuts into, and one of them taken out.</summary>
+    Stonecutter,
 }
 
 /// <summary>
@@ -171,7 +174,20 @@ public sealed class HudScreen
     /// the bottom of the world is not drawn under them — it would be the same nine slots twice.
     /// </remarks>
     public bool IsContainer =>
-        Kind is HudScreenKind.Player or HudScreenKind.Bench or HudScreenKind.Furnace or HudScreenKind.Chest;
+        Kind is HudScreenKind.Player or HudScreenKind.Bench or HudScreenKind.Furnace
+             or HudScreenKind.Chest or HudScreenKind.Stonecutter;
+
+    /// <summary>The rock on a stonecutter's bed, what it could become, and which was picked.</summary>
+    /// <remarks>
+    /// Held on the screen rather than beside the world, unlike a furnace or a chest — a stonecutter
+    /// keeps nothing. What is on its bed goes back into the pockets when the screen shuts, exactly
+    /// as a bench's grid does, because it belongs to the player rather than to the station.
+    /// </remarks>
+    public ItemStack Cutting;
+
+    public readonly List<Recipe> Cuts = [];
+
+    public int Cut;
 
     /// <summary>What is in the chest this screen is a screen of, or null when it is not one.</summary>
     /// <remarks>
@@ -1067,6 +1083,7 @@ public sealed class HudRenderer : IDisposable
             HudScreenKind.Bench => PanelKind.Bench,
             HudScreenKind.Furnace => PanelKind.Furnace,
             HudScreenKind.Chest => PanelKind.Chest,
+            HudScreenKind.Stonecutter => PanelKind.Stonecutter,
             _ => PanelKind.Player,
         };
 
@@ -1187,10 +1204,41 @@ public sealed class HudRenderer : IDisposable
             if (stack.Count > 1) Number(stack.Count, zone.X + zone.W, zone.Y + zone.H - digits - 1f, digits);
         }
 
+        // A stonecutter's list. Every offer is drawn as the thing it would make, which is the only
+        // label a picture of a slab needs — and the one that is picked is lit, because a list with
+        // no selection showing is a list where taking the result looks like it came from nowhere.
+        if (kind == PanelKind.Stonecutter)
+        {
+            foreach (var zone in layout.Zones)
+            {
+                if (zone.Kind != ZoneKind.Recipe) continue;
+                if (zone.Index >= screen.Cuts.Count) continue;
+
+                Well(layout, zone);
+
+                if (zone.Index == screen.Cut)
+                    Rect(_plain, zone.X, zone.Y, zone.W, zone.H, new Vector4(1f, 0.92f, 0.55f, 0.30f));
+                else if (screen.Hovered is { Kind: ZoneKind.Recipe } over && over.Index == zone.Index)
+                    Rect(_plain, zone.X, zone.Y, zone.W, zone.H, new Vector4(1f, 1f, 1f, 0.22f));
+
+                var offer = screen.Cuts[zone.Index].Result;
+                var inset = MathF.Round(z);
+                Rect(_blocks, zone.X + inset, zone.Y + inset, zone.W - inset * 2f, zone.H - inset * 2f,
+                    Vector4.One, catalogue[offer.Item].IconLayer);
+
+                if (offer.Count > 1)
+                    Number(offer.Count, zone.X + zone.W, zone.Y + zone.H - digits - 1f, digits);
+            }
+        }
+
         // What the arrangement makes, named, under the panel. The picture says what it costs and
         // only a name says what it is for.
-        if (screen.Grid?.Match is { } made)
-            TextCentred(made.Name, w / 2f, layout.Y(ScreenLayout.PanelHeight) + 6f, 9f, Ink);
+        var named = kind == PanelKind.Stonecutter
+            ? screen.Cut >= 0 && screen.Cut < screen.Cuts.Count ? screen.Cuts[screen.Cut].Name : null
+            : screen.Grid?.Match?.Name;
+
+        if (named is not null)
+            TextCentred(named, w / 2f, layout.Y(ScreenLayout.PanelHeight) + 6f, 9f, Ink);
     }
 
     /// <summary>What is actually in one of the panel's squares.</summary>
@@ -1205,6 +1253,10 @@ public sealed class HudRenderer : IDisposable
         SlotRole.Fuel => screen.Burning?.Fuel ?? ItemStack.Empty,
         SlotRole.Smelted => screen.Burning?.Output ?? ItemStack.Empty,
         SlotRole.Stored => screen.Stored?.Contents[zone.Index] ?? ItemStack.Empty,
+        SlotRole.Cutting => screen.Cutting,
+        SlotRole.Cut => screen.Cut >= 0 && screen.Cut < screen.Cuts.Count
+            ? screen.Cuts[screen.Cut].Result
+            : ItemStack.Empty,
         _ => ItemStack.Empty,
     };
 

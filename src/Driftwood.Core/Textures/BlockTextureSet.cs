@@ -159,6 +159,12 @@ public static class BlockTextureSet
         new("chest_side",  "",                                    false),
         new("chest_front", "",                                    false),
 
+        // Stations. Every one of these is a plain cube face with a whole tile on it, so a pack's
+        // own art lands correctly — which is why the bench finally has a front to point at.
+        new("bench_front", "textures/block/crafting_table_front.png", false),
+        new("stonecutter_top", "textures/block/stonecutter_top.png", false),
+        new("stonecutter_side", "textures/block/stonecutter_side.png", false),
+
         // Items, from here to the end. They live in the same array as the block faces because they
         // are the same sixteen-pixel tiles drawn by the same two places — a slot on the bar and a
         // thing spinning on the floor — and a pack that reskins the world should reskin the pockets
@@ -514,6 +520,12 @@ public static class BlockTextureSet
             StarterBlocks.LayerChestTop => TileGen.ChestFace(1063, 158, 118, 68, front: false, lid: true),
             StarterBlocks.LayerChestSide => TileGen.ChestFace(1063, 158, 118, 68, front: false, lid: false),
             StarterBlocks.LayerChestFront => TileGen.ChestFace(1063, 158, 118, 68, front: true, lid: false),
+
+            // Stations. The bench's front takes the same planks its side does, so the two read as
+            // one piece of furniture seen from two angles rather than as two blocks.
+            StarterBlocks.LayerBenchFront => TileGen.BenchFront(1038, 168, 132, 80),
+            StarterBlocks.LayerStonecutterTop => TileGen.StonecutterTop(1064, 122, 122, 128),
+            StarterBlocks.LayerStonecutterSide => TileGen.StonecutterSide(1064, 122, 122, 128),
 
             // The bench is planks that have been worked on: grooves where a straight edge was laid
             // and nicks where it was not.

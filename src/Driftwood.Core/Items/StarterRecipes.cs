@@ -102,7 +102,8 @@ public static class StarterRecipes
         // written once here rather than remembered at every call site.
         void Shaped(
             string name, string result, int count, string[] rows,
-            string? material = null, bool mirrored = true)
+            string? material = null, bool mirrored = true,
+            CraftStation station = CraftStation.Hand)
         {
             var wide = rows[0].Length;
             foreach (var row in rows)
@@ -141,8 +142,13 @@ public static class StarterRecipes
                 Height = height,
                 Cells = cells,
                 Mirrored = mirrored,
+                Station = station,
             });
         }
+
+        /// <summary>One block in, one worked form out. What a stonecutter does.</summary>
+        void Cut(string name, string from, string result, int count = 1) =>
+            Shaped(name, result, count, ["M"], from, station: CraftStation.Stonecutter);
 
         void Loose(string name, string result, int count, params string[] parts)
         {
@@ -181,6 +187,10 @@ public static class StarterRecipes
         // without being told: eight of something round a hole is a box made of that something.
         Shaped("chest", "chest", 1, ["PPP", "P P", "PPP"]);
 
+        // A blade over a stone bed. Iron is the gate on every worked stone in the game, which is
+        // the whole point: a decorative vocabulary should cost a trip underground, not nothing.
+        Shaped("stonecutter", "stonecutter", 1, [" I ", "RRR"]);
+
         // Light. Either coal will do — the one that comes out of the ground and the one that comes
         // out of a furnace are the same thing on the end of a stick.
         Shaped("torch", "torch", 4, ["C", "S"]);
@@ -215,16 +225,29 @@ public static class StarterRecipes
             Shaped($"{material} stairs", $"{material}_stairs", 4, ["M  ", "MM ", "MMM"], from);
         }
 
-        // Working a rock: four in a square, four out. In the hands, without a bench, because the
-        // whole building vocabulary opening out of stone somebody is already carrying is the point
-        // — and four for four means the choice is what a wall should look like, never whether it
-        // can be afforded.
+        // ⛳ WORKING A ROCK IS DONE AT A STONECUTTER, and that is a deliberate change. These were
+        // four-in-a-square in bare hands, which put seven of the fourteen hand recipes in the game
+        // into the pockets of somebody who had not built a single thing — a whole decorative
+        // vocabulary before the first bench. A rock worked into another rock is what a stonecutter
+        // is for, and gating it there is what makes building one worth doing.
+        //
+        // One in, one out, because a saw does not multiply stone. The bench's four-for-four is gone
+        // with the hand recipe it belonged to.
         foreach (var (from, into) in CutFrom)
-            Shaped($"{into.Replace('_', ' ')}", into, 4, ["MM", "MM"], from);
+            Cut($"{into.Replace('_', ' ')}", from, into);
 
-        // The one that is not four for four, because it is not a cut but a carving: two worked
-        // slabs stacked, which is the genre's own gesture for putting a face on something.
-        Shaped("chiseled sandstone", "chiseled_sandstone", 1, ["M", "M"], "sandstone_slab");
+        Cut("chiseled sandstone", "cut_sandstone", "chiseled_sandstone");
+
+        // And every stone shape, straight off the block rather than three-across at a bench. This is
+        // what gives the station a list to choose from: one rock in and the slab, the stair and the
+        // worked form are all offered together, which is the whole gesture of a stonecutter.
+        foreach (var (material, from) in ShapedFrom)
+        {
+            if (material == "driftoak") continue;      // timber is sawn at a bench, not on stone
+
+            Cut($"cut {material} slab", from, $"{material}_slab", 2);
+            Cut($"cut {material} stairs", from, $"{material}_stairs", 1);
+        }
 
         // Things that join up with what is beside them. A run of six across two rows is the genre's
         // own grammar for anything wall-shaped, and the count is what says how far it goes: six

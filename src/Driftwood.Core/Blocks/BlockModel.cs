@@ -251,6 +251,35 @@ public sealed class BlockModel
         return new BlockModel([WholeBlock(faces)]);
     }
 
+    /// <summary>
+    /// A cube whose two pairs of sides differ — a working face and a plain one.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ What a bench actually is, and what ours was missing. Every pack in the genre paints a
+    /// <c>crafting_table_front</c> as well as a <c>crafting_table_side</c>, and mapping one tile to
+    /// all four sides made it read as a crate: no saw, no working edge, nothing to say which way you
+    /// stand at it. Two-and-two rather than a single facing because a bench has no back — you work
+    /// at it from either side, and the pack's own art says so by only being two textures.
+    /// </remarks>
+    public static BlockModel CubeTwoSided(ushort top, ushort front, ushort side, ushort bottom)
+    {
+        var faces = new ModelFace?[Blocks.Faces.Count];
+        for (var face = 0; face < Blocks.Faces.Count; face++)
+        {
+            var layer = face switch
+            {
+                Blocks.Faces.PosY => top,
+                Blocks.Faces.NegY => bottom,
+                Blocks.Faces.PosZ or Blocks.Faces.NegZ => front,
+                _ => side,
+            };
+
+            faces[face] = new ModelFace { Layer = layer, CullFace = face };
+        }
+
+        return new BlockModel([WholeBlock(faces)]);
+    }
+
     /// <summary>A cube with one side different from the other three — a machine with a face.</summary>
     /// <remarks>
     /// Still a full cube, so it still merges: the greedy pass keys on the block id and every facing

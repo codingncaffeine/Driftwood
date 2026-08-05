@@ -16,6 +16,9 @@ public enum PanelKind
 
     /// <summary>A chest: three rows of nine over the pockets, and nothing else at all.</summary>
     Chest,
+
+    /// <summary>A stonecutter: one rock in, everything it cuts into offered, one taken out.</summary>
+    Stonecutter,
 }
 
 /// <summary>What a square is for. The index means something different for each.</summary>
@@ -46,6 +49,12 @@ public enum SlotRole
 
     /// <summary>A slot of whatever container is open. The index is a slot of a <see cref="Chest"/>.</summary>
     Stored,
+
+    /// <summary>The rock a stonecutter is working on.</summary>
+    Cutting,
+
+    /// <summary>What the chosen cut would make. Gives only.</summary>
+    Cut,
 }
 
 /// <summary>What kind of thing the pointer is over.</summary>
@@ -143,6 +152,21 @@ public sealed class ScreenLayout
     /// 176 by 222 — measured off <c>generic_54.png</c> at the same time, for when it lands.)
     /// </remarks>
     private const int StoredTop = 18;
+
+    /// <summary>Where a stonecutter lists what it would make, on the same 18 pitch as everything.</summary>
+    /// <remarks>
+    /// Between the rock and the result, which is where the sheet a pack ships puts its own list.
+    /// Four across and three down is twelve, comfortably more than any one rock offers — the most
+    /// today is three, and a well with room to spare reads as a list rather than as a full grid.
+    /// </remarks>
+    public static readonly (int X, int Y) CutList = (52, 15);
+
+    public const int CutColumns = 4;
+
+    public const int CutRows = 3;
+
+    /// <summary>How many cuts are shown at once.</summary>
+    public const int CutOffers = CutColumns * CutRows;
 
     private readonly List<Zone> _zones = [];
 
@@ -263,7 +287,12 @@ public sealed class ScreenLayout
     {
         _zones.Clear();
         Kind = kind;
-        BookOut = bookOut && kind != PanelKind.Furnace;
+
+        // ⚠ The book only folds out beside a GRID. It was written as "anything but a furnace", which
+        // was true when a furnace was the only other panel — and the day a stonecutter arrived with
+        // a list of its own on the same zone kind, the book drew straight over it out of a recipe
+        // list that was empty, and threw. Name what it belongs to rather than what it does not.
+        BookOut = bookOut && kind is PanelKind.Player or PanelKind.Bench;
 
         Zoom = ZoomFor(screenWidth, screenHeight, BookOut);
 
@@ -303,6 +332,21 @@ public sealed class ScreenLayout
                 Square16(SlotRole.Smelting, 0, 56, 17);
                 Square16(SlotRole.Fuel, 0, 56, 53);
                 Square16(SlotRole.Smelted, 0, 116, 35);
+                break;
+
+            // ⚠ Not a grid. A stonecutter takes one thing and offers several, so what sits between
+            // the input and the output is a LIST rather than an arrangement — the same zone kind the
+            // recipe book uses, because it is the same gesture: look at what is on offer, pick one.
+            case PanelKind.Stonecutter:
+                Square16(SlotRole.Cutting, 0, 20, 33);
+                Square16(SlotRole.Cut, 0, 143, 33);
+
+                for (var i = 0; i < CutOffers; i++)
+                    _zones.Add(new Zone(
+                        ZoneKind.Recipe, SlotRole.None, i,
+                        X(CutList.X + i % CutColumns * Pitch),
+                        Y(CutList.Y + i / CutColumns * Pitch),
+                        Size(Square), Size(Square)));
                 break;
 
             case PanelKind.Chest:

@@ -1257,6 +1257,71 @@ public static class TileGen
         return t;
     }
 
+    /// <summary>Planks with tools hung on them — the working face of a bench.</summary>
+    /// <remarks>
+    /// The one face that says which way you stand at it. A bench with the same tile on all four
+    /// sides is a crate, which is what ours was until this existed.
+    /// </remarks>
+    public static byte[] BenchFront(int seed, byte r, byte g, byte b)
+    {
+        var t = Panel(Planks(seed, r, g, b), 3, 26);
+
+        // A saw hung on the left and a mallet on the right, both dark against the wood.
+        for (var y = 5; y < 12; y++) Put(t, 5, y, 92, 92, 98, 255);
+        for (var x = 4; x < 8; x++) Put(t, x, 11, 92, 92, 98, 255);
+
+        for (var y = 5; y < 9; y++) Put(t, 11, y, 74, 58, 38, 255);
+        for (var x = 10; x < 13; x++) { Put(t, x, 9, 118, 92, 58, 255); Put(t, x, 10, 118, 92, 58, 255); }
+
+        return t;
+    }
+
+    /// <summary>A stone bed with a blade standing in it — the top of a stonecutter.</summary>
+    public static byte[] StonecutterTop(int seed, byte r, byte g, byte b)
+    {
+        var t = Speckle(seed, r, g, b, 16, 0.5f);
+
+        // The slot the blade runs in, across the middle, and the blade itself standing proud of it.
+        for (var x = 2; x < 14; x++)
+        {
+            Put(t, x, 7, 54, 54, 58, 255);
+            Put(t, x, 8, 54, 54, 58, 255);
+        }
+
+        for (var x = 4; x < 12; x++)
+        {
+            var tooth = x % 2 == 0;
+            Put(t, x, 6, 196, 198, 206, 255);
+            Put(t, x, 9, tooth ? (byte)212 : (byte)168, tooth ? (byte)214 : (byte)170, 220, 255);
+        }
+
+        return t;
+    }
+
+    /// <summary>A stone base with a band round it — the side of a stonecutter.</summary>
+    public static byte[] StonecutterSide(int seed, byte r, byte g, byte b)
+    {
+        var t = Speckle(seed + 5, r, g, b, 14, 0.5f);
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            // A dark plinth at the bottom and a lighter lip at the top, so it reads as a table
+            // rather than as a block of stone that happens to be short.
+            var lip = y <= 1;
+            var plinth = y >= Size - 3;
+            if (!lip && !plinth) continue;
+
+            var i = y * Stride + x * 4;
+            var d = lip ? 24 : -22;
+            t[i] = Clamp(t[i] + d);
+            t[i + 1] = Clamp(t[i + 1] + d);
+            t[i + 2] = Clamp(t[i + 2] + d);
+        }
+
+        return t;
+    }
+
     /// <summary>A tile with a darker inset panel on it — the side and front of built furniture.</summary>
     public static byte[] Panel(byte[] baseTile, int inset, int darken)
     {

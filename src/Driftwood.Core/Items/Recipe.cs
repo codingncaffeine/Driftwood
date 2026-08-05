@@ -28,6 +28,60 @@ public sealed class Ingredient
 }
 
 /// <summary>
+/// Where a thing is worked.
+/// </summary>
+/// <remarks>
+/// <para>⛔ <b>The gate the recipe set was missing.</b> Until this existed the only thing standing
+/// between a player and a recipe was its <em>shape</em> — anything fitting a two-by-two could be
+/// made in bare hands — which put fourteen recipes, seven of them worked stone, in the pockets of
+/// somebody who had not built anything at all. A bench was a grid size rather than a place.</para>
+/// <para>Shape is still a constraint and still checked: a recipe worked in the hands that does not
+/// fit in them is a contradiction the audit refuses. This says <em>where</em>, the grid says
+/// <em>whether it fits</em>, and the two are different questions.</para>
+/// <para>Smelting is not here. It has its own type, because one-in-one-out over time with a fuel
+/// cost is a different shape of thing — the furnaces name their own station on
+/// <see cref="SmeltRecipe"/>.</para>
+/// </remarks>
+public enum CraftStation
+{
+    /// <summary>Anywhere it fits: the two-by-two in a player's hands, or any grid at least as big.</summary>
+    Hand,
+
+    /// <summary>A bench. Three by three, and the only place most things are made.</summary>
+    Bench,
+
+    /// <summary>A stonecutter: one block of rock in, one worked form out, chosen from a list.</summary>
+    Stonecutter,
+
+    /// <summary>A smithing table: a tool and a material in, the same tool a tier up.</summary>
+    Smithing,
+
+    /// <summary>A loom: cloth and a dye.</summary>
+    Loom,
+}
+
+/// <summary>What kind of station each one is.</summary>
+public static class CraftStations
+{
+    /// <summary>
+    /// True when a station is worked by <em>arranging</em> things, false when it offers a list.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ <b>The distinction the stonecutter forces, and it goes deeper than the screen.</b> A grid
+    /// station has one answer for any arrangement, so <see cref="RecipeBook.TryMatch"/> can return
+    /// it and two recipes matching the same grid are a fault. A choosing station has <em>many</em>
+    /// answers for one input — that is the entire point of it, one rock offering its slab, its stair
+    /// and its worked form — so a matcher would have to pick arbitrarily between them and the
+    /// duplicate-signature check would call the whole station a mistake.
+    /// </remarks>
+    public static bool IsGrid(CraftStation station) =>
+        station is CraftStation.Hand or CraftStation.Bench;
+
+    /// <summary>True when this station is worked by picking one of the things it offers.</summary>
+    public static bool Chooses(CraftStation station) => !IsGrid(station);
+}
+
+/// <summary>
 /// One thing that can be made from others, and the arrangement it wants them in.
 /// </summary>
 /// <remarks>
@@ -63,8 +117,34 @@ public sealed class Recipe
     /// </remarks>
     public bool Mirrored { get; init; } = true;
 
-    /// <summary>True when this will not fit in the two-by-two a player carries in their hands.</summary>
-    public bool NeedsBench => Width > 2 || Height > 2;
+    /// <summary>Where this is worked. <see cref="CraftStation.Hand"/> means wherever it fits.</summary>
+    public CraftStation Station { get; init; } = CraftStation.Hand;
+
+    /// <summary>True when this does not fit in the two-by-two a player carries in their hands.</summary>
+    public bool TooBigForHands => Width > 2 || Height > 2;
+
+    /// <summary>
+    /// True when a bench, or something at least as big, is needed.
+    /// </summary>
+    /// <remarks>
+    /// Two reasons, and they are genuinely different: it does not fit in two hands, or it is worked
+    /// at a bench whatever its size. A recipe can be small and still want somewhere to be made.
+    /// </remarks>
+    public bool NeedsBench => TooBigForHands || Station == CraftStation.Bench;
+
+    /// <summary>True when this can be laid out in a square grid of this size at this station.</summary>
+    /// <remarks>
+    /// ⚠ Both halves matter. A recipe worked at one named station is made <em>only</em> there — but
+    /// a hand recipe is not made everywhere either: a stonecutter has one slot and no arrangement,
+    /// so laying a two-by-two out at one is not a thing that can happen. Without the second test a
+    /// single stone in a stonecutter would match every one-slot recipe in the book.
+    /// </remarks>
+    public bool WorkedAt(CraftStation station, int grid)
+    {
+        if (Station != CraftStation.Hand) return Station == station && grid >= Width && grid >= Height;
+        if (station is not (CraftStation.Hand or CraftStation.Bench)) return false;
+        return grid >= Width && grid >= Height;
+    }
 
     /// <summary>What it costs, as a flat list with repeats.</summary>
     public IEnumerable<Ingredient> Ingredients
