@@ -12,6 +12,7 @@ using Driftwood.Core.Items;
 using Driftwood.Core.Lighting;
 using Driftwood.Core.Meshing;
 using Driftwood.Core.Particles;
+using Driftwood.Core.Saves;
 using Driftwood.Core.Settings;
 using Driftwood.Core.Physics;
 using Driftwood.Core.Sky;
@@ -30,6 +31,43 @@ public sealed record ClientOptions
 {
     public WorldSeed Seed { get; init; } = WorldSeed.Random();
     public int ChunksAcross { get; init; } = 16;
+
+    /// <summary>
+    /// Which world to open, and the name its save file has.
+    /// </summary>
+    /// <remarks>
+    /// <para>Null means the seed names it: <c>--seed tidefall</c> opens the world that seed makes
+    /// and keeps opening the same one, and no seed at all opens plain "world". <b>So quitting and
+    /// starting again comes back to where you were</b>, which is the behaviour anybody would expect
+    /// and the reason the default is not a fresh name every launch.</para>
+    /// <para>⚠ <b>A world that already exists brings its own seed</b>, and it beats
+    /// <see cref="Seed"/> — the terrain under somebody's house cannot be regenerated from a
+    /// different number and still be their world. Saying so out loud at startup, because a
+    /// <c>--seed</c> that appears to do nothing is otherwise a mystery.</para>
+    /// </remarks>
+    public string? WorldName { get; init; }
+
+    /// <summary>
+    /// True when <c>--seed</c> was actually given, so it can name the world.
+    /// </summary>
+    /// <remarks>
+    /// The same distinction <see cref="ChunksGiven"/> exists for, and for the same reason: a
+    /// default is indistinguishable from a choice once it is in the field. Without it, the random
+    /// seed a bare launch draws would name a different world every time and nobody would ever open
+    /// the same one twice.
+    /// </remarks>
+    public bool SeedGiven { get; init; }
+
+    /// <summary>
+    /// The seed exactly as it was typed, for naming the world after it.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="WorldSeed"/> hashes anything that is not a number, so <c>--seed stonebreak</c>
+    /// becomes 6993295270277999969 and there is no way back. A world called
+    /// "world-6993295270277999969" is one nobody recognises in a list, and the list is the whole
+    /// point of saving.
+    /// </remarks>
+    public string? SeedText { get; init; }
 
     /// <summary>
     /// True when <c>--chunks</c> was actually given, so it beats the saved view distance.
@@ -83,6 +121,21 @@ public sealed record ClientOptions
 
     /// <summary>Seconds of flight to measure; 0 runs the game normally.</summary>
     public double BenchSeconds { get; init; }
+
+    /// <summary>
+    /// Seconds to play for and then close the window the way a player would; 0 runs until told.
+    /// </summary>
+    /// <remarks>
+    /// <para>The instrument save-on-quit needed, and there was no other way to get it. Killing the
+    /// process proves nothing — a killed process never reaches <c>Shutdown</c>, which is precisely
+    /// where the save happens — so "does closing the window keep the world" could not be asked at
+    /// all without a way to close the window on purpose.</para>
+    /// <para>It is the real game loop and the real exit, not a special path: the world loads, the
+    /// clock runs, the streamer streams, and the same <c>Shutdown</c> a player triggers writes the
+    /// same file. Only the cursor is left alone, because taking somebody's mouse for four seconds to
+    /// run a check is rude and has nothing to do with what is being measured.</para>
+    /// </remarks>
+    public double PlaySeconds { get; init; }
 
     /// <summary>
     /// Milliseconds to burn on every 200th measured frame. This is the benchmark's control: a
@@ -151,6 +204,32 @@ public sealed class ClientHost : IDisposable
 
     /// <summary>Seconds since the world opened, which is what makes the clouds drift.</summary>
     private double _elapsed;
+
+    /// <summary>The world being played, and the name its save file has. Empty means keep nothing.</summary>
+    private string _worldName = "";
+
+    /// <summary>
+    /// The seed actually in use, which is a loaded world's own rather than the command line's.
+    /// </summary>
+    /// <remarks>
+    /// Held here rather than read off the options every time, because the options are what was
+    /// asked for and this is what is true. Terrain, clouds and the climate field all draw from it,
+    /// and every one of them has to draw from the same one or a loaded world comes back with its
+    /// hills somewhere else.
+    /// </remarks>
+    private WorldSeed _seed;
+
+    /// <summary>Seconds anybody had already played this world before this session opened it.</summary>
+    private double _playedBefore;
+
+    /// <summary>True when this session opened a world that already existed.</summary>
+    private bool _loadedWorld;
+
+    /// <summary>Where the sun was when the world was last put down.</summary>
+    private float _savedDayTime;
+
+    /// <summary>What went wrong the last time the world was written, if anything.</summary>
+    private string? _saveFault;
     private readonly Dictionary<ChunkPos, ChunkMeshGpu> _meshes = [];
     private readonly FlyCamera _camera = new();
     private WorldStreamer _streamer = null!;
@@ -334,6 +413,16 @@ public sealed class ClientHost : IDisposable
     /// moving fast enough to have caused it. See <see cref="ClientOptions.MaxUploadsPerFrame"/>.
     /// </summary>
     private readonly int _maxUploadsPerFrame;
+
+    /// <summary>
+    /// The longest step any one update is allowed to advance the world by, in seconds.
+    /// </summary>
+    /// <remarks>
+    /// Past any frame this game has taken and well short of anything anybody would call playing, so
+    /// a load or a stall is discarded rather than simulated. See the note at the top of
+    /// <see cref="OnUpdate"/> for what happened without it.
+    /// </remarks>
+    private const double MaxStep = 0.25;
 
     private static readonly double TicksToMs = 1000.0 / Stopwatch.Frequency;
 
@@ -535,8 +624,9 @@ public sealed class ClientHost : IDisposable
         if (_options.VSync) _settings.VSync = true;
         if (_options.Mute) _settings.Mute = true;
 
-        // What earlier sessions already announced. Achievements fire once ever, not once a launch.
-        _unlocks.Restore();
+        // Which world this is and what seed it is made of, before anything is built out of one.
+        // Nothing else in here may read _options.Seed after this point.
+        OpenWorld();
 
         Console.WriteLine($"settings    {GameSettings.Path}");
 
@@ -551,8 +641,8 @@ public sealed class ClientHost : IDisposable
         _mouse.Scroll += OnScroll;
 
         // The benchmark flies itself, so it leaves the cursor alone; stealing the mouse for a
-        // measurement run is rude and changes nothing about what is measured.
-        SetMouseCaptured(_options.BenchSeconds <= 0);
+        // measurement run is rude and changes nothing about what is measured. Same for a timed play.
+        SetMouseCaptured(_options.BenchSeconds <= 0 && _options.PlaySeconds <= 0);
 
         _gl.Enable(EnableCap.DepthTest);
 
@@ -583,11 +673,12 @@ public sealed class ClientHost : IDisposable
             Console.WriteLine($"sound       {_audio.Summary}");
         }
 
-        _clock = new SkyClock(_options.StartTime, _options.DayLength);
+        // A loaded world opens where it was put down, and --time only says where a new one starts.
+        _clock = new SkyClock(_loadedWorld ? _savedDayTime : _options.StartTime, _options.DayLength);
         _skyState = _clock.Now;
         _sky = new SkyRenderer(_gl);
 
-        var cloudField = new CloudField(_options.Seed, _options.PackPath);
+        var cloudField = new CloudField(_seed, _options.PackPath);
         _clouds = new CloudRenderer(_gl, cloudField.Build());
         Console.WriteLine(
             $"clouds      {cloudField.Summary}, {cloudField.Coverage * 100:F0}% cover, "
@@ -639,7 +730,7 @@ public sealed class ClientHost : IDisposable
         foreach (var (lower, upper) in StarterBlocks.TallPairs(registry)) _tallUpper[lower.Value] = upper;
         _supports = new SupportTable(registry);
 
-        var generator = new TerrainGenerator(_options.Seed, ids, _options.OceanCoverage);
+        var generator = new TerrainGenerator(_seed, ids, _options.OceanCoverage);
 
         // --chunks used to size a fixed box; it now sets how far the world is kept loaded around
         // the viewer, which is the same dial pointed at a world that no longer has edges. The
@@ -653,7 +744,7 @@ public sealed class ClientHost : IDisposable
         // The pack's colormaps if it ships them, ours otherwise — so an imported pack's grass is
         // the colour its author chose, not the colour we would have chosen for it.
         var tinter = new BlockTinter(
-            new ClimateField(_options.Seed), _textures.GrassMap, _textures.FoliageMap);
+            new ClimateField(_seed), _textures.GrassMap, _textures.FoliageMap);
 
         _streamer = new WorldStreamer(registry, generator, viewRadius, tinter: tinter)
         {
@@ -721,11 +812,17 @@ public sealed class ClientHost : IDisposable
         _viewPosition = _camera.Position;
         _viewForward = _camera.Forward;
 
+        // ⛳ Before the streamer is told where the viewer is, and the ordering is a requirement
+        // rather than a preference. A saved edit is held for the chunk it belongs to and generation
+        // is what takes delivery of it, so an edit read after its chunk has already been generated
+        // has missed its moment. See VoxelWorld.Restore.
+        LoadWorld();
+
         // Prime the pipeline before the first frame so the viewer does not open inside an empty
         // world, then let the render loop take delivery of the rest as it arrives.
         _streamer.Update(_camera.Position);
 
-        Console.WriteLine($"seed        {_options.Seed}");
+        Console.WriteLine($"seed        {_seed}");
         Console.WriteLine($"view        {viewRadius} chunks ({reach} blocks), streaming");
         Console.WriteLine($"ocean       {generator.OceanCoverage * 100:F0}% of surface at or below sea level {TerrainGenerator.SeaLevel}");
         Console.WriteLine();
@@ -754,6 +851,175 @@ public sealed class ClientHost : IDisposable
             + $"{keys.Describe(GameAction.ToggleCulling)} culling, "
             + $"{keys.Describe(GameAction.ToggleFly)} walk/fly, "
             + $"{keys.Describe(GameAction.ToggleView)} view");
+    }
+
+    /// <summary>
+    /// Works out which world this is, and reads enough of it to build the right one.
+    /// </summary>
+    /// <remarks>
+    /// <para>Only the header, which is the first section and costs one file open. It carries the
+    /// seed, and the seed has to be known before the generator, the climate field and the cloud
+    /// sheet are made out of it — so this runs before all three rather than the world being built
+    /// and then corrected.</para>
+    /// <para><b>The seed names the world unless somebody names it themselves.</b> That is what makes
+    /// closing the window and opening it again come back to the same place, which is the whole point
+    /// of saving on quit and would not happen if every launch invented a name.</para>
+    /// <para>⚠ <b>A benchmark and a UI check keep nothing and load nothing.</b> A measured flight
+    /// over somebody's world is not the fixed path it reports itself as, and a check that writes a
+    /// save file has reached out of its own process and changed something.</para>
+    /// </remarks>
+    private void OpenWorld()
+    {
+        _seed = _options.Seed;
+
+        if (_options.BenchSeconds > 0 || _options.UiCheck) return;
+
+        _worldName = WorldSave.Sanitised(
+            !string.IsNullOrWhiteSpace(_options.WorldName) ? _options.WorldName!
+            : _options.SeedGiven ? $"world-{_options.SeedText ?? _options.Seed.ToString()}"
+            : "world");
+
+        var path = WorldSave.PathFor(_worldName);
+
+        if (!File.Exists(path))
+        {
+            Console.WriteLine($"world       '{_worldName}' is new, and is written when you close the window");
+            return;
+        }
+
+        if (!WorldSave.TryReadHeader(path, out var header))
+        {
+            // Named rather than refused. A file that will not open is still somebody's world as far
+            // as they are concerned, and starting a fresh one silently over the top of it is worse
+            // than anything that can be said about it.
+            Console.Error.WriteLine(
+                $"driftwood: '{_worldName}' would not open, so nothing has been loaded from it — "
+                + "move the file aside before playing under that name or it will be written over");
+            return;
+        }
+
+        _seed = WorldSeed.Parse(header.Seed);
+        _playedBefore = header.Played;
+        _savedDayTime = header.DayTime;
+        _loadedWorld = true;
+
+        // ⚠ Said out loud, because a --seed that appears to do nothing is otherwise a mystery.
+        if (_options.SeedGiven && _seed.Value != _options.Seed.Value)
+            Console.WriteLine(
+                $"world       '{_worldName}' already exists and is made of seed {_seed}, "
+                + $"so --seed {_options.Seed} is not being used");
+    }
+
+    /// <summary>
+    /// Reads the world into the session that has just been built for it.
+    /// </summary>
+    /// <remarks>
+    /// Everything it fills already exists: the streamer's world, the furnace and chest banks, the
+    /// pockets, what is worn, health and breath, and which recipes have already been announced.
+    /// Nothing here makes anything, which is what keeps a loaded world and a new one the same
+    /// session in every other respect.
+    /// </remarks>
+    private void LoadWorld()
+    {
+        if (!_loadedWorld) return;
+
+        var state = CaptureState();
+        var missing = new List<string>();
+
+        if (WorldSave.Read(WorldSave.PathFor(_worldName), _registry, _items, state, missing) is { } fault)
+        {
+            // The header opened and the body did not. Refusing to carry on loses the session;
+            // carrying on and then saving over it loses the world. So: play, and keep nothing.
+            Console.Error.WriteLine(
+                $"driftwood: '{_worldName}' would not load: {fault}. "
+                + "Nothing will be written over it this session.");
+            _loadedWorld = false;
+            _worldName = "";
+            return;
+        }
+
+        _player.Teleport(state.Position);
+        _spawnPoint = state.Position;
+        _camera.Yaw = state.Yaw;
+        _camera.Pitch = state.Pitch;
+        _camera.Position = _player.EyePosition;
+        _clock.SetTime(state.DayTime);
+
+        // ⚠ Brought up to date rather than left to work itself out. Poll announces everything the
+        // pockets can pay for that has not been announced, so a world loaded with a full inventory
+        // fires a notice for every one of them in the first frame unless it is primed first.
+        _unlocks.Poll(_book, _inventory, _justUnlocked);
+        _justUnlocked.Clear();
+
+        Console.WriteLine(
+            $"world       '{_worldName}' loaded — {_streamer.World.Edits.Count} changes, "
+            + $"{_furnaces.Count} furnaces, {_chests.Count} chests, "
+            + $"{_unlocks.Announced} recipes already announced, played {Spoken(_playedBefore)}");
+
+        // Not a failure. A block this build no longer has leaves its cell as the generator made it,
+        // which is the least surprising thing that can happen — and saying which ones is the
+        // difference between that and a hole somebody finds a week later.
+        if (missing.Count > 0)
+            Console.Error.WriteLine(
+                $"driftwood: {missing.Count} things this build no longer has were left out: "
+                + string.Join(", ", missing.Take(6)));
+    }
+
+    /// <summary>Everything worth keeping, as it stands right now.</summary>
+    /// <remarks>
+    /// A record of references rather than a copy, so it costs nothing to take and is only ever read
+    /// on the thread that owns all of it.
+    /// </remarks>
+    private WorldState CaptureState() => new(
+        _seed.ToString(), _items, _streamer.World, _furnaces, _chests,
+        _inventory, _equipment, _vitals, _unlocks)
+    {
+        // Where the body is, not where the camera is. The camera is over the shoulder in two of the
+        // three views, and loading into it would put the player a few blocks behind themselves —
+        // and, over enough saves, through the wall behind them.
+        Position = _player.Position,
+        Yaw = _camera.Yaw,
+        Pitch = _camera.Pitch,
+        Played = _playedBefore + _elapsed,
+        DayTime = _clock.TimeOfDay,
+    };
+
+    /// <summary>
+    /// Writes the world down.
+    /// </summary>
+    /// <remarks>
+    /// The write is atomic inside <see cref="WorldSave"/>, so an interruption leaves the previous
+    /// save whole rather than a truncated file where a world used to be. A failure is reported and
+    /// is never a reason to refuse to close the window.
+    /// </remarks>
+    /// <returns>True when something was written.</returns>
+    private bool SaveWorld(string why)
+    {
+        if (_worldName.Length == 0 || _streamer is null || _items is null) return false;
+
+        var state = CaptureState();
+        _saveFault = WorldSave.Write(_worldName, state);
+
+        if (_saveFault is not null)
+        {
+            Console.Error.WriteLine($"driftwood: saving '{_worldName}' {why} failed: {_saveFault}");
+            return false;
+        }
+
+        Console.WriteLine(
+            $"world       '{_worldName}' saved {why} — {state.World.Edits.Count} changes, "
+            + $"played {Spoken(state.Played)}");
+
+        return true;
+    }
+
+    /// <summary>A span of seconds as a person would say it.</summary>
+    private static string Spoken(double seconds)
+    {
+        var span = TimeSpan.FromSeconds(seconds);
+        return span.TotalHours >= 1
+            ? $"{(int)span.TotalHours}h {span.Minutes}m"
+            : $"{span.Minutes}m {span.Seconds}s";
     }
 
     /// <summary>
@@ -1964,7 +2230,14 @@ public sealed class ClientHost : IDisposable
                 var p = _walking ? _player.Position : _camera.Position;
 
                 _hudScreen.Rows.Add(new MenuRow("this world", Heading: true));
-                _hudScreen.Rows.Add(new MenuRow("seed", _options.Seed.ToString()));
+                _hudScreen.Rows.Add(new MenuRow(
+                    "name", _worldName.Length > 0 ? _worldName : "not being kept"));
+                _hudScreen.Rows.Add(new MenuRow("seed", _seed.ToString()));
+                _hudScreen.Rows.Add(new MenuRow("played", Spoken(_playedBefore + _elapsed)));
+                _hudScreen.Rows.Add(new MenuRow(
+                    "save now",
+                    _saveFault is null ? $"{_streamer.World.Edits.Count} changes" : "last one failed",
+                    Note: _saveFault ?? "enter writes it; closing the window writes it anyway"));
                 _hudScreen.Rows.Add(new MenuRow("where you are", $"{p.X:F0} {p.Y:F0} {p.Z:F0}"));
                 _hudScreen.Rows.Add(new MenuRow(
                     "loaded", $"{_meshes.Count} chunks, {_drawnChunks} drawn"));
@@ -2030,7 +2303,6 @@ public sealed class ClientHost : IDisposable
                     case "forget what has been said":
                         if (!activated) return;
                         _unlocks.Forget();
-                        _unlocks.Persist();
                         return;
                     case "wireframe":
                         _wireframe = !_wireframe;
@@ -2053,6 +2325,12 @@ public sealed class ClientHost : IDisposable
                 {
                     // The world tab is mostly read-outs; these three are the dials that make it
                     // possible to look at something at a particular hour without waiting for it.
+                    // Enter only, and for the same reason the destructive row above is: left and
+                    // right are how every other row on this screen is browsed, and a save fired by
+                    // walking past it would write over the world on the way to the next setting.
+                    case "save now":
+                        if (activated) SaveWorld("by hand");
+                        return;
                     case "hour":
                         _clock.SetTime(_clock.TimeOfDay + by / 24f);
                         _skyState = _clock.Now;
@@ -2253,11 +2531,9 @@ public sealed class ClientHost : IDisposable
         if (_bench is not null || !_settings.RecipeNotices) return;
         if (!_unlocks.Poll(_book, _inventory, _justUnlocked) || _justUnlocked.Count == 0) return;
 
-        // Written out as it happens rather than on the way out, because an achievement nobody
-        // recorded is one the game will cheerfully award again next time, and a crash is exactly
-        // the session somebody would rather not repeat the whole tutorial after.
-        _unlocks.Persist();
-
+        // ⚠ Not written out here any more. What has been announced belongs to the world rather than
+        // to the installation, so it travels in the save and goes down with the next one — which is
+        // also why an unlock is one of the things worth autosaving on.
         var first = _justUnlocked[0];
         var line = _justUnlocked.Count == 1
             ? first.Name
@@ -2476,6 +2752,18 @@ public sealed class ClientHost : IDisposable
 
     private void OnUpdate(double dt)
     {
+        // ⛔ CAPPED, AND THE FIRST UPDATE IS WHY. The window's clock starts when the window does, so
+        // the first dt handed over covers everything before it — the textures, the shaders, the
+        // first chunks — and measured, that is about ten seconds. Uncapped it went into played time
+        // (a five-second session recorded ten), wound the sun on, drifted the clouds, and would have
+        // stepped the body through a swept collision ten seconds wide the moment the spawn chunk
+        // arrived a frame later.
+        //
+        // A quarter of a second is well past any frame this game has ever taken and well short of
+        // anything that could be called playing. The benchmark is unaffected: it measures with
+        // Stopwatch timestamps and its own clock, never with this.
+        dt = Math.Min(dt, MaxStep);
+
         // ⚠ Held still for the check, which reads a moving title off the framebuffer and would
         // otherwise sample a different frame of it every run.
         if (_options.UiCheck) _hudScreen.Drift = 0.8f;
@@ -2509,6 +2797,10 @@ public sealed class ClientHost : IDisposable
         }
 
         _elapsed += dt;
+
+        // Closed the way a player closes it, so the exit path under test is the one that ships.
+        if (_options.PlaySeconds > 0 && _elapsed >= _options.PlaySeconds) _stopRequested = true;
+
         _clock.Advance((float)dt);
         _skyState = _clock.Now;
         _audio?.SetListener(_viewPosition, _viewForward);
@@ -2571,7 +2863,7 @@ public sealed class ClientHost : IDisposable
                     ? $"Driftwood bench — settling ({_streamer.PendingGenerate + _streamer.PendingLight + _streamer.PendingMesh} queued) | {_fps:F0} fps"
                     : $"Driftwood bench — {_bench.ElapsedSeconds:F1}/{_bench.DurationSeconds:F0} s | {_fps:F0} fps | "
                       + $"{_drawnChunks}/{_meshes.Count} drawn")
-                : $"Driftwood — {_fps:F0} fps | seed {_options.Seed} | "
+                : $"Driftwood — {_fps:F0} fps | seed {_seed} | "
                   + $"xyz {p.X:F0} {p.Y:F0} {p.Z:F0} | "
                   + $"{ClockFace(_clock.TimeOfDay)}{(_clock.Running ? "" : " held")} | "
                   + $"holding {_inventory.Selected + 1}. "
@@ -3164,7 +3456,7 @@ public sealed class ClientHost : IDisposable
         if (!_bench.Complete) return;
 
         var context = new FrameBench.Context(
-            Seed: _options.Seed.Value,
+            Seed: _seed.Value,
             ViewRadius: _viewRadius,
             Path: _benchPath!,
             UploadCap: _maxUploadsPerFrame,
@@ -4021,6 +4313,11 @@ public sealed class ClientHost : IDisposable
     {
         if (_shutdown) return;
         _shutdown = true;
+
+        // ⛳ First, and before the streamer is torn down — it owns the world being written. Closing
+        // the window is the one save every player makes and the only one they never think about,
+        // so it comes before anything that could throw on the way out.
+        SaveWorld("on quit");
 
         // Stop the workers before tearing down GL state, or a mesh can land in the queue after
         // the context it was destined for is gone.

@@ -171,8 +171,17 @@ public static class Program
             switch (args[i])
             {
                 case "--seed":
-                    options = options with { Seed = WorldSeed.Parse(Next(args, ref i, "--seed")) };
+                    var typed = Next(args, ref i, "--seed");
+                    options = options with
+                    {
+                        Seed = WorldSeed.Parse(typed),
+                        SeedText = typed,
+                        SeedGiven = true,
+                    };
                     seedGiven = true;
+                    break;
+                case "--world":
+                    options = options with { WorldName = Next(args, ref i, "--world") };
                     break;
                 case "--chunks":
                     options = options with
@@ -213,6 +222,12 @@ public static class Program
                     options = options with
                     {
                         BenchSeconds = TryTakeInt(args, ref i, out var seconds) ? Math.Clamp(seconds, 1, 600) : DefaultBenchSeconds,
+                    };
+                    break;
+                case "--play":
+                    options = options with
+                    {
+                        PlaySeconds = Math.Clamp(ParseInt(Next(args, ref i, "--play"), 1, 3600), 1, 3600),
                     };
                     break;
                 case "--time":
@@ -296,6 +311,10 @@ public static class Program
         Console.WriteLine("""
             Driftwood
 
+              --world <name>    which world to open, and the name its save takes. Omit it and the
+                                seed names the world, so the same --seed always comes back to the
+                                same world and no seed at all comes back to "world". A world that
+                                already exists brings its own seed, which beats --seed.
               --seed <text>     world seed; digits are literal, words are hashed, omit for random
               --chunks <n>      how far the world stays loaded, in chunks across; overrides the
                                 view distance saved on the video tab for this run only
@@ -321,6 +340,10 @@ public static class Program
               --pack-coverage   with --pack, report what the pack has art for that we do not
               --pack-report     with --pack, report which of OUR layers the pack supplied and
                                 which kept our art — the answer to "is the pack even being used"
+              --play <secs>     play normally for this long and then close the window the way a
+                                player would, so the world is saved on the way out. The only way to
+                                ask whether closing the window keeps the world: a killed process
+                                never reaches the code that writes it.
               --bench [secs]    fly a fixed path once the world has settled, report frame-time
                                 percentiles, then exit (default 15 s, seed defaults to 'driftwood')
               --uploads <n>     chunk uploads allowed per frame (default 4)

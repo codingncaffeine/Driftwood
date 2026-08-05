@@ -227,7 +227,19 @@ public static class WorldSave
             {
                 switch (tag)
                 {
-                    case "HEAD": break;
+                    // Read rather than skipped. The loader wants the played time and where the sun
+                    // was, and making it open the file a second time for two numbers it has already
+                    // walked past is how the two copies end up disagreeing.
+                    case "HEAD":
+                    {
+                        using var head = new BinaryReader(new MemoryStream(payload));
+                        head.ReadString();      // name — the caller chose which file to open
+                        head.ReadString();      // seed — likewise, and it built the world already
+                        head.ReadInt64();       // when it was written, which List() is the reader of
+                        into.Played = head.ReadDouble();
+                        into.DayTime = head.ReadSingle();
+                        break;
+                    }
                     case "PALB": blocks = Palette.Read(Reader(payload)); break;
                     case "PALI": items = Palette.Read(Reader(payload)); break;
                     case "EDIT": edits = payload; break;

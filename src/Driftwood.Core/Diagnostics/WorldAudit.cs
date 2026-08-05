@@ -395,7 +395,7 @@ public static class WorldAudit
         Check("everything is reachable from bare hands", reach.Count == 0,
             reach.Count == 0 ? reachDetail : $"{reach.Count} faults: {reach[0]}");
 
-        var unlockFaults = UnlockSelfTest(items, book, out var unlockDetail);
+        var unlockFaults = UnlockSelfTest(registry, items, book, out var unlockDetail);
         Check("a new recipe announces itself once", unlockFaults.Count == 0,
             unlockFaults.Count == 0 ? unlockDetail : $"{unlockFaults.Count} faults: {unlockFaults[0]}");
 
@@ -3528,7 +3528,8 @@ public static class WorldAudit
     /// <para>Priming is checked too. A world that started with a full inventory would otherwise
     /// announce forty recipes at once, which is every one of them and therefore none.</para>
     /// </remarks>
-    private static List<string> UnlockSelfTest(ItemRegistry items, RecipeBook book, out string detail)
+    private static List<string> UnlockSelfTest(
+        BlockRegistry registry, ItemRegistry items, RecipeBook book, out string detail)
     {
         var faults = new List<string>();
         var found = new List<Recipe>();
@@ -3586,11 +3587,19 @@ public static class WorldAudit
         quiet.Poll(book, rich, found);
         if (found.Count == 0) faults.Add("a primed watcher went quiet for good and missed the stone tools");
 
-        // And an achievement outlives the process. A watcher that starts fresh every launch would
-        // pass every check above and still tell a returning player about planks for the tenth time,
-        // which is exactly how somebody learns to stop reading the corner.
-        var remembered = System.IO.Path.Combine(
-            System.IO.Path.GetTempPath(), "driftwood-unlocks-check.txt");
+        // ⛳ AND THE TWO HALVES OF "ONCE PER WORLD", WHICH ARE DIFFERENT CLAIMS AND BOTH MATTER.
+        //
+        // The first is that an achievement outlives the process: a watcher that starts fresh every
+        // launch passes every check above and still tells a returning player about planks for the
+        // tenth time, which is how somebody learns to stop reading the corner.
+        //
+        // The second is that it does NOT outlive the world. This was a file beside the settings
+        // while there was one world and no saves, which made "ever" and "this world" the same
+        // sentence. They are not the same sentence any more, and a returning player and a brand new
+        // world must get opposite answers out of the same code — so both are asked here, from the
+        // same starting point, and a build that got either one right by doing nothing fails the
+        // other.
+        var name = $"driftwood-audit-unlocks-{Environment.ProcessId}";
 
         try
         {
@@ -3599,37 +3608,63 @@ public static class WorldAudit
             pocket.Add(items.Stack("driftoak_log", 1));
             first.Poll(book, pocket, found);
 
-            if (found.Count == 0) faults.Add("nothing to persist: a log announced nothing");
-            if (!first.Dirty) faults.Add("something was announced and the record did not need writing");
-            if (!first.Persist(remembered)) faults.Add("the record of what has been said would not write");
-            if (first.Dirty) faults.Add("the record still wanted writing after it was written");
+            if (found.Count == 0) faults.Add("nothing to keep: a log announced nothing");
+            if (!first.Dirty) faults.Add("something was announced and the record did not think it had changed");
 
-            var next = new RecipeUnlocks();
-            next.Restore(remembered);
-            if (next.Announced != first.Announced)
-                faults.Add($"{first.Announced} things were said and {next.Announced} came back");
+            var kept = new WorldState(
+                "unlocks", items, new VoxelWorld(registry),
+                new FurnaceBank(items, book), new ChestBank(items),
+                new Inventory(items), new Equipment(items), new PlayerVitals(registry), first);
 
-            var again = new Inventory(items);
-            again.Add(items.Stack("driftoak_log", 1));
-            next.Poll(book, again, found);
+            if (WorldSave.Write(name, kept) is { } wrote)
+                faults.Add($"a world carrying what has been said would not write: {wrote}");
+
+            // The same world again.
+            var sameWorld = new RecipeUnlocks();
+            var back = new WorldState(
+                "", items, new VoxelWorld(registry),
+                new FurnaceBank(items, book), new ChestBank(items),
+                new Inventory(items), new Equipment(items), new PlayerVitals(registry), sameWorld);
+
+            if (WorldSave.Read(WorldSave.PathFor(name), registry, items, back, []) is { } read)
+                faults.Add($"a world carrying what has been said would not read: {read}");
+
+            if (sameWorld.Announced != first.Announced)
+                faults.Add($"{first.Announced} things were said and {sameWorld.Announced} came back with the world");
+
+            var returning = new Inventory(items);
+            returning.Add(items.Stack("driftoak_log", 1));
+            sameWorld.Poll(book, returning, found);
             if (found.Count != 0)
-                faults.Add($"a returning player was told about {found.Count} recipes all over again");
+                faults.Add($"reloading a world told the player about {found.Count} recipes all over again");
 
-            // And forgetting puts it back to a new player.
-            next.Forget();
+            // ⚠ A DIFFERENT world, from the same log, and it has to say them all again. Nothing was
+            // loaded into this one, which is exactly what starting a new game does.
+            var newWorld = new RecipeUnlocks();
+            var elsewhere = new Inventory(items);
+            elsewhere.Add(items.Stack("driftoak_log", 1));
+            newWorld.Poll(book, elsewhere, found);
+
+            if (found.Count == 0)
+                faults.Add(
+                    "a brand new world said nothing, so what has been announced is being remembered "
+                    + "per installation rather than per world");
+
+            // And forgetting puts a world back to a new one.
+            sameWorld.Forget();
             var third = new Inventory(items);
             third.Add(items.Stack("driftoak_log", 1));
-            next.Poll(book, third, found);
+            sameWorld.Poll(book, third, found);
             if (found.Count == 0) faults.Add("forgetting what had been said announced nothing afterwards");
         }
         finally
         {
-            try { File.Delete(remembered); } catch (IOException) { }
+            try { File.Delete(WorldSave.PathFor(name)); } catch (IOException) { }
         }
 
         detail = $"an empty bag says nothing, a log says planks once, a second log says nothing, "
                + $"an unchanged bag is not searched, priming marks {primed} known without a word, "
-               + "and a returning player is not told twice";
+               + "a reloaded world is not told twice, and a new one is told everything again";
 
         return faults;
     }
