@@ -40,6 +40,18 @@ public sealed record ClientOptions
     /// </remarks>
     public bool ChunksGiven { get; init; }
 
+    /// <summary>
+    /// Open a screen by itself, read the pixels back off the framebuffer, and report them.
+    /// </summary>
+    /// <remarks>
+    /// The instrument this needed. "It is not appearing" and "it is appearing and I cannot see it"
+    /// have the same symptom and completely different causes, and everything short of reading the
+    /// framebuffer only proves the geometry was <em>built</em> — which it was, throughout a fault
+    /// where nothing reached the screen. Numbers off the front buffer are the only thing that
+    /// settles it, and they need no screenshot and no eyes.
+    /// </remarks>
+    public bool UiCheck { get; init; }
+
     /// <summary>Share of the surface at or below sea level, 0..0.9.</summary>
     public float OceanCoverage { get; init; } = TerrainGenerator.DefaultOceanCoverage;
 
@@ -403,7 +415,7 @@ public sealed class ClientHost : IDisposable
 
         _window.DoEvents();
         Shutdown();
-        return _exitCode;
+        return UiCheckFailed ? 1 : _exitCode;
     }
 
     /// <summary>
@@ -2327,7 +2339,122 @@ public sealed class ClientHost : IDisposable
             _hud.Draw(_blockTextures, _items, _inventory, _vitals, _hudScreen, _toasts, size.X, size.Y);
         }
 
+        if (_options.UiCheck) RunUiCheck(size);
+
         _renderMs = (Stopwatch.GetTimestamp() - renderStart) * TicksToMs;
+    }
+
+    /// <summary>How many frames the check has drawn, for its own timing.</summary>
+    private int _uiCheckFrame;
+
+    /// <summary>
+    /// Opens each screen in turn and reads the pixels back off the framebuffer.
+    /// </summary>
+    /// <remarks>
+    /// <para>The whole point is that it reads the <em>result</em>. Everything short of this proves
+    /// the geometry was built, and geometry was being built correctly all the way through a fault
+    /// where nothing arrived on screen — panels counted, glyphs counted, no exception, and a black
+    /// window. A count of quads cannot tell "not drawn" from "drawn somewhere else"; a pixel can.
+    /// </para>
+    /// <para>Sampled where the panel is, and again in a corner where it is not, so the check has
+    /// its own control: if both read the same the screen is not covering what it claims to, and if
+    /// the middle never changes at all nothing is being drawn there whatever the counters say.</para>
+    /// </remarks>
+    private unsafe void RunUiCheck(Vector2D<int> size)
+    {
+        _uiCheckFrame++;
+
+        // A few frames to let the world stream in, then one screen, then the other.
+        switch (_uiCheckFrame)
+        {
+            case 60: SampleUi(size, "no screen"); break;
+            case 61: OpenPlayer(PlayerTab.Craft, atBench: false, default); break;
+            case 90: SampleUi(size, "player"); break;
+            case 91: CloseScreen(); OpenGame(GameTab.Controls); break;
+            case 120: SampleUi(size, "game"); break;
+            case 121: JudgeUi(); _window.Close(); break;
+        }
+    }
+
+    /// <summary>What each sample read, so the run can judge itself rather than only report.</summary>
+    private readonly Dictionary<string, (byte R, byte G, byte B)> _uiSamples = [];
+
+    /// <summary>True when the check ran and something it insists on was not true.</summary>
+    public bool UiCheckFailed { get; private set; }
+
+    /// <summary>
+    /// Judges the samples. An instrument that only prints is one somebody has to remember to read.
+    /// </summary>
+    private void JudgeUi()
+    {
+        var faults = new List<string>();
+
+        (byte R, byte G, byte B) Read(string key) =>
+            _uiSamples.TryGetValue(key, out var v) ? v : default;
+
+        var bare = Read("no screen");
+        var player = Read("player");
+        var game = Read("game");
+        var world = Read("no screen corner");
+
+        // The crosshair sits at the exact middle of an untouched frame and is nearly white. If the
+        // middle reads as sky, the overlay is not reaching the screen at all — which is the fault
+        // this whole instrument was built for, and it looked like working software from every angle
+        // except this one.
+        if (bare.R < 200 || bare.G < 200 || bare.B < 200)
+            faults.Add($"no crosshair at the centre of a plain frame — read {bare.R} {bare.G} {bare.B}");
+
+        // A screen darkens what is behind it, so the middle must not still be whatever it was.
+        if (player == bare) faults.Add("opening the player screen changed nothing on screen");
+        if (game == bare) faults.Add("opening the game screen changed nothing on screen");
+
+        // And the options panel is neutral grey by design, so its middle has no colour cast.
+        var spread = Math.Max(game.R, Math.Max(game.G, game.B)) - Math.Min(game.R, Math.Min(game.G, game.B));
+        if (spread > 12)
+            faults.Add($"the options panel reads {game.R} {game.G} {game.B}, which is not the grey it is drawn in");
+
+        // The control: a corner of a plain frame must still be the world, or the samples are not
+        // measuring what they claim and every judgement above is on the same wrong pixels.
+        if (world.B <= world.R)
+            faults.Add($"the corner of a plain frame is not sky — read {world.R} {world.G} {world.B}");
+
+        UiCheckFailed = faults.Count > 0;
+
+        Console.WriteLine();
+        if (faults.Count == 0)
+        {
+            Console.WriteLine("OK  the overlay reaches the screen: crosshair, both screens, panel in grey");
+        }
+        else
+        {
+            foreach (var fault in faults) Console.WriteLine($"FAULT  {fault}");
+        }
+
+        Console.Out.Flush();
+    }
+
+    private unsafe void SampleUi(Vector2D<int> size, string what)
+    {
+        // Where the panel's own body is, and a corner it never reaches. Read in the framebuffer's
+        // own coordinates, which count up from the bottom.
+        var midX = size.X / 2;
+        var midY = size.Y / 2;
+
+        Span<byte> middle = stackalloc byte[4];
+        Span<byte> corner = stackalloc byte[4];
+
+        fixed (byte* p = middle)
+            _gl.ReadPixels(midX, midY, 1, 1, PixelFormat.Rgba, PixelType.UnsignedByte, p);
+        fixed (byte* p = corner)
+            _gl.ReadPixels(4, size.Y - 5, 1, 1, PixelFormat.Rgba, PixelType.UnsignedByte, p);
+
+        _uiSamples[what] = (middle[0], middle[1], middle[2]);
+        _uiSamples[$"{what} corner"] = (corner[0], corner[1], corner[2]);
+
+        Console.WriteLine(
+            $"ui-check    {what,-10} middle rgb {middle[0],3} {middle[1],3} {middle[2],3}   "
+            + $"top-left corner rgb {corner[0],3} {corner[1],3} {corner[2],3}");
+        Console.Out.Flush();
     }
 
     /// <summary>

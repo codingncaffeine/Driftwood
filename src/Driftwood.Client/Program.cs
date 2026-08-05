@@ -230,6 +230,9 @@ public static class Program
                 case "--mute":
                     options = options with { Mute = true };
                     break;
+                case "--ui-check":
+                    options = options with { UiCheck = true, Mute = true };
+                    break;
                 case "--audit":
                 case "--audio-check":
                 case "--pack-coverage":

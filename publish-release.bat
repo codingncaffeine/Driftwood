@@ -17,14 +17,28 @@ if errorlevel 1 goto :failed_publish
 
 REM Gate on the published binary, not the build output: this is the thing that ships, and it
 REM catches a publish that dropped a native dependency the build had sitting beside it.
-echo [3/3] auditing the published build...
+echo [3/4] auditing the published build...
 "%OUT%\Driftwood.exe" --audit --seed driftwood --chunks 12
 if errorlevel 1 goto :failed_audit
+
+REM Opens a window for about two seconds and reads its own pixels back off the framebuffer.
+REM The audit runs headless and cannot see the screen at all, and the overlay spent its whole
+REM life being back-face culled: built correctly, submitted correctly, no GL error reported, and
+REM never once drawn. Every check in the project passed throughout. Nothing but this catches it.
+echo [4/4] checking the overlay reaches the screen...
+"%OUT%\Driftwood.exe" --ui-check --chunks 6 --seed driftwood
+if errorlevel 1 goto :failed_ui
 
 echo.
 echo OK  %OUT%\Driftwood.exe
 popd
 exit /b 0
+
+:failed_ui
+echo.
+echo UI CHECK FAILED - the overlay is not reaching the screen. See the faults above.
+popd
+exit /b 1
 
 :failed_build
 echo.

@@ -178,6 +178,12 @@ public sealed class HudRenderer : IDisposable
 
     private float _lastScale;
 
+    /// <summary>What the screen last threw, so the same fault is reported once and not every frame.</summary>
+    private string _screenFault = "";
+
+    /// <summary>Which screen kind the batch sizes were last reported for.</summary>
+    private HudScreenKind _lastReported = HudScreenKind.None;
+
     /// <summary>
     /// How many screen pixels one layout unit is worth. A whole number, and never less than two
     /// unless the display genuinely cannot afford it.
@@ -305,8 +311,30 @@ public sealed class HudRenderer : IDisposable
 
         // A screen covers the world and the crosshair with it: a reticle over an inventory is
         // aiming at nothing, and it sits exactly where the eye is trying to read.
-        if (screen.IsOpen) Screen(catalogue, screen, w, h);
-        else Crosshair(w, h);
+        //
+        // Caught and reported rather than allowed to escape, because an exception thrown part way
+        // through laying a screen out abandons every batch built so far and draws NOTHING AT ALL —
+        // not the panel, not the backdrop, not the bar. From outside that is indistinguishable
+        // from the screen never having opened, and the window keeps running, so nothing anywhere
+        // says what happened. It is said once, with the kind, so the next frame is not a wall of it.
+        if (screen.IsOpen)
+        {
+            try
+            {
+                Screen(catalogue, screen, w, h);
+            }
+            catch (Exception ex) when (_screenFault != ex.GetType().Name + screen.Kind)
+            {
+                _screenFault = ex.GetType().Name + screen.Kind;
+                Console.Error.WriteLine(
+                    $"driftwood: the {screen.Kind} screen threw while drawing — {ex.GetType().Name}: {ex.Message}");
+                Console.Error.WriteLine($"           {ex.StackTrace}");
+            }
+        }
+        else
+        {
+            Crosshair(w, h);
+        }
 
         Hotbar(catalogue, inventory, w, h);
 
@@ -318,10 +346,40 @@ public sealed class HudRenderer : IDisposable
 
         Toasts(toasts, w);
 
+        // Said once per screen, on the frame it opens. "It is not appearing" and "it is appearing
+        // somewhere I am not looking" are different faults with the same symptom, and the only
+        // thing that tells them apart is whether any geometry was built at all.
+        if (screen.Kind != _lastReported)
+        {
+            _lastReported = screen.Kind;
+            if (screen.IsOpen)
+            {
+                Console.WriteLine(
+                    $"overlay     {screen.Kind} screen: {_plain.Count / (Floats * 4)} panels, "
+                    + $"{_text.Count / (Floats * 4)} glyphs, {_blocks.Count / (Floats * 4)} icons, "
+                    + $"{screen.Recipes.Count} recipes, {screen.Rows.Count} rows, "
+                    + $"{screen.TabNames.Length} tabs");
+                Console.Out.Flush();
+            }
+        }
+
         _shader.Use();
         _shader.SetVec2("uScreen", new Vector2(w, h));
         _shader.SetInt("uAtlas", 0);
 
+        // Culling OFF, and this is the line the whole overlay was missing.
+        //
+        // The world pass turns on back-face culling with counter-clockwise fronts and leaves it on.
+        // Rect lays its corners out top-left, top-right, bottom-right, bottom-left — clockwise on a
+        // screen whose y grows downward — and the vertex shader flips y to reach NDC, which leaves
+        // every quad wound clockwise there. Clockwise is the back face, so the driver threw away
+        // every panel, every glyph, the crosshair and the whole bar, reported no error, and drew a
+        // window with nothing in it. Every count on our side read correct throughout.
+        //
+        // Disabled rather than re-wound, for the same reason BlockCracks disables it: a
+        // two-dimensional overlay has no facing to get right, and leaving it to a corner order that
+        // has to survive a y-flip is how this happened in the first place.
+        _gl.Disable(EnableCap.CullFace);
         _gl.Disable(EnableCap.DepthTest);
         _gl.Enable(EnableCap.Blend);
         _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
@@ -335,7 +393,19 @@ public sealed class HudRenderer : IDisposable
         _gl.BindVertexArray(0);
         _gl.Disable(EnableCap.Blend);
         _gl.Enable(EnableCap.DepthTest);
+        _gl.Enable(EnableCap.CullFace);
+
+        // Said once. A silent GL error is the one failure mode where every count on our side reads
+        // correct and nothing arrives on the screen, which is exactly the shape of fault that sends
+        // somebody hunting through layout arithmetic for an afternoon.
+        var error = _gl.GetError();
+        if (error == GLEnum.NoError || _reportedError == error) return;
+
+        _reportedError = error;
+        Console.Error.WriteLine($"driftwood: the overlay's draw reported {error}");
     }
+
+    private GLEnum _reportedError = GLEnum.NoError;
 
     private unsafe void Flush(List<float> batch, bool textured, BlockTextureArray? atlas)
     {
