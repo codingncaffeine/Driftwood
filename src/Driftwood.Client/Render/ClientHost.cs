@@ -246,6 +246,19 @@ public sealed class ClientHost : IDisposable
 
     /// <summary>How many autosaves this session has taken, for the screen to show.</summary>
     private int _autosaves;
+
+    /// <summary>
+    /// Every world on this machine, newest first, as of the last time the screen was opened.
+    /// </summary>
+    /// <remarks>
+    /// Read when the screen opens and after a save, never per frame. The rows are rebuilt every
+    /// frame the screen is up, and walking the saves folder sixty times a second to draw a list
+    /// that changes twice an hour is a disk read per frame for nothing.
+    /// </remarks>
+    private List<SaveHeader> _saved = [];
+
+    /// <summary>Where the worlds are, which is the answer to most questions about them.</summary>
+    private static readonly string SavesFolderNote = $"they live in {WorldSave.Folder}";
     private readonly Dictionary<ChunkPos, ChunkMeshGpu> _meshes = [];
     private readonly FlyCamera _camera = new();
     private WorldStreamer _streamer = null!;
@@ -1033,6 +1046,9 @@ public sealed class ClientHost : IDisposable
             $"world       '{_worldName}' saved {why} — {state.World.Edits.Count} changes, "
             + $"played {Spoken(state.Played)}");
 
+        // The list is on screen while a save-by-hand happens, so it has to follow.
+        if (OnTab(GameTab.Saves)) _saved = WorldSave.List();
+
         return true;
     }
 
@@ -1295,6 +1311,12 @@ public sealed class ClientHost : IDisposable
                 _hudScreen.Tab = (_hudScreen.Tab + (many ? count - 1 : 1)) % count;
                 if (_hudScreen.Kind == HudScreenKind.Game) _hudScreen.Selected = _tabRow[_hudScreen.Tab];
                 _hudScreen.Scroll = 0;
+
+                // Arriving at the list is when it is worth walking the folder, and the only other
+                // way in is OpenGame. Missing this is how a tab shows an empty list until it is
+                // opened a second time.
+                if (OnTab(GameTab.Saves)) _saved = WorldSave.List();
+
                 RefreshScreen();
                 ShowSelectedRow();
                 return true;
@@ -1384,6 +1406,7 @@ public sealed class ClientHost : IDisposable
                 _hudScreen.Tab = at.Value.Index;
                 if (_hudScreen.Kind == HudScreenKind.Game) _hudScreen.Selected = _tabRow[_hudScreen.Tab];
                 _hudScreen.Scroll = 0;
+                if (OnTab(GameTab.Saves)) _saved = WorldSave.List();
                 _shown.Clear();
                 RefreshScreen();
                 ShowSelectedRow();
@@ -1979,6 +2002,10 @@ public sealed class ClientHost : IDisposable
         _hudScreen.Scroll = 0;
         _hudScreen.Recipes.Clear();
         _hudScreen.Payable.Clear();
+
+        // Once, here, rather than in the row builder that runs every frame the screen is up.
+        if (tab == GameTab.Saves) _saved = WorldSave.List();
+
         StopHands();
         TakeThePointer();
         RefreshScreen();
@@ -2276,6 +2303,50 @@ public sealed class ClientHost : IDisposable
                 _hudScreen.Rows.Add(new MenuRow("mute", OnOff(_settings.Mute)));
                 break;
 
+            case GameTab.Saves:
+                _hudScreen.Rows.Add(new MenuRow("this world", Heading: true));
+                _hudScreen.Rows.Add(new MenuRow(
+                    "name", _worldName.Length > 0 ? _worldName : "not being kept"));
+                _hudScreen.Rows.Add(new MenuRow("played", Spoken(_playedBefore + _elapsed)));
+                _hudScreen.Rows.Add(new MenuRow(
+                    "save now",
+                    _saveFault is null ? $"{_streamer.World.Edits.Count} changes" : "the last one failed",
+                    Note: _saveFault ?? "enter writes it; closing the window writes it anyway"));
+                _hudScreen.Rows.Add(new MenuRow(
+                    "last saved",
+                    _streamer.World.Changed || _unlocks.Dirty
+                        ? $"{(int)_sinceSave}s ago, with changes since"
+                        : $"{(int)_sinceSave}s ago, up to date",
+                    Note: $"written by itself every {(int)AutosaveSeconds}s when anything has changed, "
+                        + $"and on dying — {_autosaves} so far this session. "
+                        + $"The {WorldSave.Backups} states before this one are kept beside it"));
+
+                _hudScreen.Rows.Add(new MenuRow(
+                    _saved.Count == 1 ? "1 world on this machine" : $"{_saved.Count} worlds on this machine",
+                    Heading: true));
+
+                if (_saved.Count == 0)
+                {
+                    _hudScreen.Rows.Add(new MenuRow("none yet", "", Note: SavesFolderNote));
+                    break;
+                }
+
+                foreach (var world in _saved)
+                {
+                    // Local time, because a save is a thing that happened to the person reading it.
+                    // The header keeps UTC so the ordering survives moving a save between machines.
+                    var when = world.Saved.ToLocalTime();
+
+                    _hudScreen.Rows.Add(new MenuRow(
+                        world.Name == _worldName ? $"{world.Name}  (open)" : world.Name,
+                        $"{world.PlayedFor} · {when:d MMM HH:mm}",
+                        Note: world.Name == _worldName
+                            ? SavesFolderNote
+                            : $"{world.Edits} changes, seed {world.Seed}. "
+                              + "Opening another world from here arrives with the start screen"));
+                }
+                break;
+
             default:
                 var p = _walking ? _player.Position : _camera.Position;
 
@@ -2283,18 +2354,6 @@ public sealed class ClientHost : IDisposable
                 _hudScreen.Rows.Add(new MenuRow(
                     "name", _worldName.Length > 0 ? _worldName : "not being kept"));
                 _hudScreen.Rows.Add(new MenuRow("seed", _seed.ToString()));
-                _hudScreen.Rows.Add(new MenuRow("played", Spoken(_playedBefore + _elapsed)));
-                _hudScreen.Rows.Add(new MenuRow(
-                    "save now",
-                    _saveFault is null ? $"{_streamer.World.Edits.Count} changes" : "last one failed",
-                    Note: _saveFault ?? "enter writes it; closing the window writes it anyway"));
-                _hudScreen.Rows.Add(new MenuRow(
-                    "last saved",
-                    _streamer.World.Changed || _unlocks.Dirty
-                        ? $"{(int)_sinceSave}s ago, with changes since"
-                        : $"{(int)_sinceSave}s ago, up to date",
-                    Note: $"saved by itself every {(int)AutosaveSeconds}s when anything has changed, "
-                        + $"and on dying; {_autosaves} so far. The last {WorldSave.Backups} are kept beside it"));
                 _hudScreen.Rows.Add(new MenuRow("where you are", $"{p.X:F0} {p.Y:F0} {p.Z:F0}"));
                 _hudScreen.Rows.Add(new MenuRow(
                     "loaded", $"{_meshes.Count} chunks, {_drawnChunks} drawn"));
@@ -3751,7 +3810,29 @@ public sealed class ClientHost : IDisposable
             case 241: ScrollRows(int.MaxValue); break;
             case 250: ProbeRows("bottom"); break;
 
-            case 251: JudgeUi(); _window.Close(); break;
+            // The list of worlds, with two in it.
+            //
+            // ⚠ Planted rather than read off the disk, and both halves of that matter. What is being
+            // checked is that a world becomes a row carrying its name, its played time and its date
+            // — and a check reading the real folder would say something different on every machine,
+            // including nothing at all on one that has never been played. It would also be a check
+            // whose subject a player could delete.
+            case 251:
+                CloseScreen();
+                OpenGame(GameTab.Saves);
+                _saved =
+                [
+                    new SaveHeader("driftwood", "1234",
+                        new DateTime(2026, 8, 5, 14, 32, 0, DateTimeKind.Utc), 11_530, 0.4f, 812),
+                    new SaveHeader("saltmarsh", "9911",
+                        new DateTime(2026, 8, 1, 9, 5, 0, DateTimeKind.Utc), 240, 0.1f, 3),
+                ];
+                RefreshScreen();
+                break;
+
+            case 280: SampleUi(size, "saves"); ProbeRows("saves"); break;
+
+            case 281: JudgeUi(); _window.Close(); break;
         }
     }
 
@@ -4232,6 +4313,38 @@ public sealed class ClientHost : IDisposable
             faults.Add("the controls tab was never measured at the end");
         }
 
+        // The list of worlds. Two were planted, so the tab has to be five rows about this world plus
+        // two headings plus one row per world, and every one of them has to be a row the layout knows
+        // about — a list that draws its headings and drops its entries is the failure worth naming,
+        // because a screen with the right shape and no worlds on it reads as "no worlds".
+        var saves = Read("saves");
+        if (saves == bare) faults.Add("opening the saves tab changed nothing on screen");
+
+        if (_uiRows.TryGetValue("saves", out var savesRows))
+        {
+            // Written out as numbers rather than recomputed from the builder, which would be the
+            // builder agreeing with itself. Two headings, four lines about this world, and one row
+            // per planted world; a tab that drew its own furniture and dropped the list comes to
+            // six and four, which is a screen that reads as "no worlds" and is the fault worth
+            // naming.
+            const int Rows = 8;
+            const int Selectable = 6;   // the two headings are read-outs, not rows to land on
+
+            if (savesRows.Total != Rows)
+                faults.Add(
+                    $"the saves tab built {savesRows.Total} rows where two headings, four lines "
+                    + $"about this world and two worlds is {Rows}");
+
+            if (savesRows.Seen != Selectable)
+                faults.Add(
+                    $"{savesRows.Seen} of the saves tab's rows reached the layout where {Selectable} "
+                    + $"should have, and all of them fit in the {lines} lines there are");
+        }
+        else
+        {
+            faults.Add("the saves tab was never measured");
+        }
+
         // And that the running game's own layout answers for its own squares. Every one of them.
         foreach (var (screen, probe) in _uiProbes)
         {
@@ -4262,7 +4375,7 @@ public sealed class ClientHost : IDisposable
         if (faults.Count == 0)
         {
             Console.WriteLine(
-                "OK  the overlay reaches the screen: crosshair, six screens, panels in grey, "
+                "OK  the overlay reaches the screen: crosshair, seven screens, panels in grey, "
                 + $"{_uiProbes.Sum(p => p.Value.Hits)} squares answering for their own middles");
         }
         else

@@ -75,6 +75,7 @@ public enum GameTab
     Video,
     Audio,
     World,
+    Saves,
 }
 
 /// <summary>
