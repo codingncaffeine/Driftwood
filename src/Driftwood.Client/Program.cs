@@ -5,6 +5,7 @@ using Driftwood.Core.Blocks;
 using Driftwood.Core.Diagnostics;
 using Driftwood.Core.Entities;
 using Driftwood.Core.Gen;
+using Driftwood.Core.Textures;
 
 namespace Driftwood.Client;
 
@@ -36,6 +37,18 @@ public static class Program
             }
 
             if (args.Contains("--audio-check")) return AudioCheck();
+
+            if (args.Contains("--pack-coverage"))
+            {
+                if (string.IsNullOrWhiteSpace(options.PackPath))
+                {
+                    Console.Error.WriteLine("driftwood: --pack-coverage needs --pack <folder or zip>");
+                    return 1;
+                }
+
+                Console.WriteLine(PackCoverage.Report(options.PackPath));
+                return 0;
+            }
 
             using var host = new ClientHost(options);
             return host.Run();
@@ -203,6 +216,7 @@ public static class Program
                     break;
                 case "--audit":
                 case "--audio-check":
+                case "--pack-coverage":
                     break;   // handled in Main; listed here so they are not unknown arguments
                 default:
                     throw new ArgumentException($"unknown argument '{args[i]}' (try --help)");
@@ -277,6 +291,7 @@ public static class Program
               --mute            open no audio device at all
               --audit           generate and mesh headlessly, print a census and checks, then exit
               --audio-check     resolve every sound the block table names and report, silently
+              --pack-coverage   with --pack, report what the pack has art for that we do not
               --bench [secs]    fly a fixed path once the world has settled, report frame-time
                                 percentiles, then exit (default 15 s, seed defaults to 'driftwood')
               --uploads <n>     chunk uploads allowed per frame (default 4)

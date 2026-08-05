@@ -131,6 +131,29 @@ public sealed class TexturePack : IDisposable
         return close < 0 ? null : text[(open + 1)..close];
     }
 
+    /// <summary>
+    /// Every file in the pack, as forward-slashed paths from its root.
+    /// </summary>
+    /// <remarks>
+    /// For the coverage report rather than for loading. A pack is a complete inventory of the
+    /// reference game's art, so its file list is the clearest statement anywhere of what a game in
+    /// this genre contains — and by subtraction, of what this one does not.
+    /// </remarks>
+    public IEnumerable<string> Entries()
+    {
+        if (_zip is not null)
+        {
+            foreach (var entry in _zip.Entries)
+                if (entry.Length > 0) yield return entry.FullName;
+            yield break;
+        }
+
+        if (_root is null || !Directory.Exists(_root)) yield break;
+
+        foreach (var path in Directory.EnumerateFiles(_root, "*", SearchOption.AllDirectories))
+            yield return Path.GetRelativePath(_root, path).Replace(Path.DirectorySeparatorChar, '/');
+    }
+
     /// <summary>Loads one texture by its path inside the pack, scaled to the given tile size.</summary>
     public byte[]? TryLoadTile(string assetPath, int size)
     {
