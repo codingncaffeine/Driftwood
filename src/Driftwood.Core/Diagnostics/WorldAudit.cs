@@ -7,6 +7,7 @@ using Driftwood.Core.Gen;
 using Driftwood.Core.Lighting;
 using Driftwood.Core.Meshing;
 using Driftwood.Core.Physics;
+using Driftwood.Core.Sky;
 using Driftwood.Core.Spatial;
 using Driftwood.Core.Textures;
 using Driftwood.Core.World;
@@ -354,6 +355,22 @@ public static class WorldAudit
                 ? "slab half a cell, stairs three quarters, a dusting three sixteenths, a slender torch, "
                   + "and six outlines wrapping the shape rather than the cell"
                 : $"{volumeFaults.Count} faults: {volumeFaults[0]}");
+
+        var skyFaults = SkySelfTest();
+        Check("the sun crosses the sky", skyFaults.Count == 0,
+            skyFaults.Count == 0
+                ? "east at dawn, overhead at noon, west at dusk, 1,440 minutes without a step"
+                : $"{skyFaults.Count} faults: {skyFaults[0]}");
+
+        // Cover is calibrated per sheet, so it gets held to the number it was asked for rather than
+        // to a band wide enough to swallow the seed-to-seed swing it used to have.
+        var cloudField = new CloudField(seed);
+        var cloudFaults = CloudSelfTest(seed);
+        Check("clouds cover part of the sky", cloudFaults.Count == 0 && cloudField.Coverage is > 0.36f and < 0.40f,
+            cloudFaults.Count == 0
+                ? $"{cloudField.Coverage * 100:F1}% cover (want 36-40), {cloudField.Build().QuadCount:N0} quads, "
+                  + "every wall between a cloud and a gap, both seams wrapping"
+                : $"{cloudFaults.Count} faults: {cloudFaults[0]}");
 
         var placementFaults = PlacementSelfTest(registry);
         Check("placement picks the right form", placementFaults.Count == 0,
@@ -991,6 +1008,184 @@ public static class WorldAudit
 
         if (ChunkVertex.Quantise(Chunk.Size + 1) > 0xFFF)
             faults.Add("the position field cannot address a model reaching past the chunk");
+
+        return faults;
+    }
+
+    /// <summary>
+    /// Walks the whole day a minute at a time and checks the sky against what a sky has to do.
+    /// </summary>
+    /// <remarks>
+    /// <para>Everything about a sky is a judgement about colour, and a judgement about colour gets
+    /// made by eye at one moment of one day. The hours nobody happened to look at are where a ramp
+    /// runs backwards, a colour goes negative, or the sun sets in the east — none of which any
+    /// other check here can see, because none of them changes a single block.</para>
+    /// <para>The wrap gets its own test. Midnight is where the clock's arithmetic folds over, and a
+    /// discontinuity there is a visible flash once every twenty minutes of play — the kind of fault
+    /// that gets reported as "it flickered" and never reproduced.</para>
+    /// </remarks>
+    private static List<string> SkySelfTest()
+    {
+        var faults = new List<string>();
+
+        // Where the sun has to be at the four corners of the day. East at dawn, overhead at noon,
+        // west at dusk, under the world at midnight.
+        (float Time, string Name, float X, float Y)[] corners =
+        [
+            (0.25f, "sunrise", 1f, 0f),
+            (0.50f, "noon", 0f, 1f),
+            (0.75f, "sunset", -1f, 0f),
+            (0.00f, "midnight", 0f, -1f),
+        ];
+
+        foreach (var (time, name, wantX, wantY) in corners)
+        {
+            var sun = SkyClock.SunAt(time);
+            if (MathF.Abs(sun.X - wantX) > 0.02f)
+                faults.Add($"at {name} the sun is {sun.X:F2} east, expected {wantX:F0}");
+
+            // The arc leans, so the vertical corners are near rather than exactly one.
+            if (MathF.Abs(sun.Y) > 0.02f && wantY == 0f)
+                faults.Add($"at {name} the sun is {sun.Y:F2} above the horizon, expected level");
+            if (wantY != 0f && MathF.Sign(sun.Y) != MathF.Sign(wantY))
+                faults.Add($"at {name} the sun is {sun.Y:F2} above the horizon, expected the other side");
+            if (wantY != 0f && MathF.Abs(sun.Y) < 0.85f)
+                faults.Add($"at {name} the sun only reaches {sun.Y:F2}, which is not overhead enough");
+        }
+
+        var noon = SkyClock.At(0.5f);
+        var midnight = SkyClock.At(0f);
+
+        if (Luminance(noon.SkyAmbient) < Luminance(midnight.SkyAmbient) * 3f)
+            faults.Add($"noon ambient {Luminance(noon.SkyAmbient):F3} is not clear of midnight's {Luminance(midnight.SkyAmbient):F3}");
+        if (Luminance(noon.SunColor) < 0.3f) faults.Add($"the noon sun gives {Luminance(noon.SunColor):F3}");
+        if (Luminance(midnight.SunColor) > 0.02f) faults.Add($"the midnight sun still gives {Luminance(midnight.SunColor):F3}");
+        if (noon.StarFade > 0.001f) faults.Add($"stars are {noon.StarFade:F2} visible at noon");
+        if (midnight.StarFade < 0.95f) faults.Add($"stars are only {midnight.StarFade:F2} visible at midnight");
+
+        // A minute at a time through the whole day. Nothing may be negative, the sun's direction
+        // must stay a unit vector, and no step may jump — a ramp with a break in it is a flash.
+        var previous = SkyClock.At(0f);
+        var worstJump = 0f;
+        var worstAt = 0f;
+
+        for (var minute = 1; minute <= 1440; minute++)
+        {
+            var time = minute / 1440f;
+            var state = SkyClock.At(time);
+
+            if (MathF.Abs(state.SunDirection.Length() - 1f) > 1e-3f)
+                faults.Add($"at {minute / 60}:{minute % 60:00} the sun's direction is {state.SunDirection.Length():F3} long");
+
+            foreach (var (colour, what) in (( Vector3, string )[])
+                [(state.Zenith, "zenith"), (state.Horizon, "horizon"), (state.SunColor, "sun"),
+                 (state.SkyAmbient, "sky ambient"), (state.GroundAmbient, "ground ambient")])
+            {
+                if (colour.X >= 0f && colour.Y >= 0f && colour.Z >= 0f) continue;
+                faults.Add($"at {minute / 60}:{minute % 60:00} the {what} is negative");
+            }
+
+            var jump = Vector3.Distance(state.Zenith, previous.Zenith)
+                     + Vector3.Distance(state.Horizon, previous.Horizon)
+                     + Vector3.Distance(state.SunDirection, previous.SunDirection);
+
+            if (jump > worstJump) { worstJump = jump; worstAt = time; }
+            previous = state;
+        }
+
+        // A minute of a twenty-minute day is a twentieth of the whole cycle's motion; anything
+        // past a tenth of a unit in one minute is a step rather than a ramp. The loop above ends
+        // on minute 1440, which is midnight again, so the wrap is inside the same measurement.
+        if (worstJump > 0.10f)
+            faults.Add($"the sky jumps {worstJump:F3} in one minute at {worstAt * 24f:F1}h");
+
+        return faults;
+
+        static float Luminance(Vector3 c) => 0.2126f * c.X + 0.7152f * c.Y + 0.0722f * c.Z;
+    }
+
+    /// <summary>
+    /// Reads the cloud sheet's geometry back and asks what the bitmap says about each face.
+    /// </summary>
+    /// <remarks>
+    /// The side test is the one worth having. Emitting a wall wherever cloud meets sky is one
+    /// expression, and checking it by writing that expression again proves only that it matches
+    /// itself. Taking each wall the mesh actually produced, finding which two cells it stands
+    /// between, and insisting exactly one of them holds cloud is a different question — and it is
+    /// the question that catches a neighbour lookup that is off by one, or one that does not wrap.
+    /// </remarks>
+    private static List<string> CloudSelfTest(WorldSeed seed)
+    {
+        var faults = new List<string>();
+        var field = new CloudField(seed);
+        var mesh = field.Build();
+
+        if (mesh.TopQuads != field.CloudCells * 2)
+            faults.Add($"{mesh.TopQuads} caps over {field.CloudCells:N0} cells, expected {field.CloudCells * 2:N0}");
+
+        var walls = 0;
+        int wallsAtNear = 0, wallsAtFar = 0;
+        for (var quad = 0; quad < mesh.QuadCount; quad++)
+        {
+            var centre = Vector3.Zero;
+            for (var i = 0; i < 4; i++)
+            {
+                var v = mesh.Vertices[quad * 4 + i];
+                centre += new Vector3(v.X, v.Y, v.Z);
+            }
+            centre /= 4f;
+
+            // A cap's centre is on the top or the bottom; a wall's is half way up.
+            if (MathF.Abs(centre.Y - CloudField.Thickness * 0.5f) > 0.01f) continue;
+            walls++;
+
+            // The wall lies on a cell boundary in exactly one axis, between two cells.
+            var onX = MathF.Abs(centre.X / CloudField.CellBlocks - MathF.Round(centre.X / CloudField.CellBlocks)) < 0.01f;
+            var x = (int)MathF.Floor(centre.X / CloudField.CellBlocks);
+            var z = (int)MathF.Floor(centre.Z / CloudField.CellBlocks);
+
+            var near = field[x, z];
+            var far = onX ? field[x - 1, z] : field[x, z - 1];
+
+            if (near == far)
+                faults.Add($"a wall at ({centre.X:F0},{centre.Z:F0}) stands between two cells that agree");
+
+            if (onX && centre.X < 0.01f) wallsAtNear++;
+            if (onX && centre.X > CloudField.Period - 0.01f) wallsAtFar++;
+        }
+
+        if (walls != mesh.SideQuads)
+            faults.Add($"{walls} walls found in the geometry, {mesh.SideQuads} reported");
+
+        if (walls == 0) faults.Add("the sheet has no edges at all");
+
+        // The seam, counted from the bitmap's two outermost columns. This is the property that
+        // makes a finite sheet endless: a copy drawn beside this one must not show a wall down the
+        // join where both sides are cloud, and must show one where they differ. A neighbour lookup
+        // that clamps instead of wrapping passes every other test here and puts a wall across the
+        // whole sky every 1,536 blocks.
+        int expectNear = 0, expectFar = 0;
+        for (var z = 0; z < CloudField.Size; z++)
+        {
+            var first = field[0, z];
+            var last = field[CloudField.Size - 1, z];
+            if (first && !last) expectNear++;
+            if (last && !first) expectFar++;
+        }
+
+        if (wallsAtNear != expectNear || wallsAtFar != expectFar)
+            faults.Add($"the seam carries {wallsAtNear}+{wallsAtFar} walls, the bitmap wants {expectNear}+{expectFar}");
+
+        // And the wrap itself, unconditionally. How many walls the seam happens to want depends on
+        // whether this seed's two edge columns agree, so the count above can be right by luck; the
+        // sheet reading one block off its own far edge cannot be.
+        for (var i = 0; i < CloudField.Size; i++)
+        {
+            if (field[-1, i] != field[CloudField.Size - 1, i]) faults.Add($"column -1 is not column {CloudField.Size - 1} at row {i}");
+            if (field[CloudField.Size, i] != field[0, i]) faults.Add($"column {CloudField.Size} is not column 0 at row {i}");
+            if (field[i, -1] != field[i, CloudField.Size - 1]) faults.Add($"row -1 is not row {CloudField.Size - 1} at column {i}");
+            if (field[i, CloudField.Size] != field[i, 0]) faults.Add($"row {CloudField.Size} is not row 0 at column {i}");
+        }
 
         return faults;
     }

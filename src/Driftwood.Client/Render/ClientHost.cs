@@ -9,6 +9,7 @@ using Driftwood.Core.Gen;
 using Driftwood.Core.Lighting;
 using Driftwood.Core.Meshing;
 using Driftwood.Core.Physics;
+using Driftwood.Core.Sky;
 using Driftwood.Core.Spatial;
 using Driftwood.Core.Textures;
 using Driftwood.Core.World;
@@ -60,6 +61,12 @@ public sealed record ClientOptions
     /// renderer does is not measuring the renderer.
     /// </summary>
     public int MaxUploadsPerFrame { get; init; } = 4;
+
+    /// <summary>Where in the day to open, 0 to 1 with midnight at zero.</summary>
+    public float StartTime { get; init; } = 0.35f;
+
+    /// <summary>Seconds in a full day. Short values are how a sunset gets looked at twice.</summary>
+    public float DayLength { get; init; } = SkyClock.DefaultDayLength;
 }
 
 /// <summary>Where the camera sits relative to the player. Cycled with F5.</summary>
@@ -95,6 +102,15 @@ public sealed class ClientHost : IDisposable
     private IMouse _mouse = null!;
 
     private Shader _chunkShader = null!;
+    private SkyRenderer _sky = null!;
+    private CloudRenderer _clouds = null!;
+
+    /// <summary>The day/night cycle, and the one place the sky's colours come from.</summary>
+    private SkyClock _clock = null!;
+    private SkyState _skyState;
+
+    /// <summary>Seconds since the world opened, which is what makes the clouds drift.</summary>
+    private double _elapsed;
     private readonly Dictionary<ChunkPos, ChunkMeshGpu> _meshes = [];
     private readonly FlyCamera _camera = new();
     private WorldStreamer _streamer = null!;
@@ -214,14 +230,18 @@ public sealed class ClientHost : IDisposable
     private float _fogStart;
     private float _fogEnd;
 
+    /// <summary>What the window is cleared to before the sky pass paints over all of it.</summary>
     private static readonly Vector3 SkyColor = new(0.55f, 0.69f, 0.86f);
 
-    // A fixed mid-morning sun. Becomes a moving light driven by the day/night clock at P9;
-    // the shader already takes it as a direction so that change stays on this side.
-    private static readonly Vector3 SunDirection = Vector3.Normalize(new Vector3(0.42f, 0.80f, 0.30f));
-    private static readonly Vector3 SunColor = new Vector3(0.98f, 0.94f, 0.84f) * 0.62f;
-    private static readonly Vector3 SkyAmbient = new(0.44f, 0.50f, 0.62f);
-    private static readonly Vector3 GroundAmbient = new(0.22f, 0.20f, 0.17f);
+    /// <summary>
+    /// Cloud white, scaled by how much light the sky is giving before it is drawn.
+    /// </summary>
+    /// <remarks>
+    /// Not quite white, and lit rather than flat. Clouds sit outside the voxel lighting entirely —
+    /// they neither cast a shadow nor receive one — so something has to make them go grey at dusk
+    /// and dark at night, or the sky turns black around a layer of daylit cotton.
+    /// </remarks>
+    private static readonly Vector3 CloudTint = new(1.06f, 1.06f, 1.10f);
 
     /// <summary>
     /// What a cell reached by no light at all still shows. Not zero: a cave lit to pure black is
@@ -345,6 +365,16 @@ public sealed class ClientHost : IDisposable
 
         _chunkShader = new Shader(_gl, ChunkShaders.Vertex, ChunkShaders.Fragment);
         _outline = new BlockOutline(_gl);
+
+        _clock = new SkyClock(_options.StartTime, _options.DayLength);
+        _skyState = _clock.Now;
+        _sky = new SkyRenderer(_gl);
+
+        var cloudField = new CloudField(_options.Seed, _options.PackPath);
+        _clouds = new CloudRenderer(_gl, cloudField.Build());
+        Console.WriteLine(
+            $"clouds      {cloudField.Summary}, {cloudField.Coverage * 100:F0}% cover, "
+            + $"{_clouds.QuadCount:N0} quads over {CloudField.Period:F0} blocks");
 
         _textures = BlockTextureSet.Build(_options.PackPath, _options.TextureSize);
         _blockTextures = new BlockTextureArray(_gl, _textures.Tiles, _textures.Size);
@@ -551,6 +581,19 @@ public sealed class ClientHost : IDisposable
                 };
                 break;
 
+            // Holding the clock still. A sky is judged by eye at a particular hour, and waiting
+            // twenty minutes for the one you wanted to look at again is how a colour ramp ends up
+            // checked at noon and nowhere else.
+            case Key.F6:
+                _clock.Running = !_clock.Running;
+                break;
+
+            // Winding it. A tenth of a day a press, which walks dawn to dusk in five.
+            case Key.F7:
+                _clock.SetTime(_clock.TimeOfDay + 0.1f);
+                _skyState = _clock.Now;
+                break;
+
             // The hand, until an inventory owns it. The number row picks directly and the wheel
             // walks it, which is where every hand in the genre lives and where a player will look
             // for it without being told.
@@ -558,6 +601,13 @@ public sealed class ClientHost : IDisposable
                 SelectHandSlot(key - Key.Number1);
                 break;
         }
+    }
+
+    /// <summary>The time of day as a clock face, since 0.62 of a day means nothing to anybody.</summary>
+    private static string ClockFace(float time)
+    {
+        var minutes = (int)MathF.Round(time * 24f * 60f) % (24 * 60);
+        return $"{minutes / 60:00}:{minutes % 60:00}";
     }
 
     private void SelectHandSlot(int slot)
@@ -677,6 +727,10 @@ public sealed class ClientHost : IDisposable
             _camera.Update((float)dt, _keyboard);
         }
 
+        _elapsed += dt;
+        _clock.Advance((float)dt);
+        _skyState = _clock.Now;
+
         UpdateTarget();
         StepAnimation((float)dt);
         PlaceCamera();
@@ -709,6 +763,7 @@ public sealed class ClientHost : IDisposable
                       + $"{_drawnChunks}/{_meshes.Count} drawn")
                 : $"Driftwood — {_fps:F0} fps | seed {_options.Seed} | "
                   + $"xyz {p.X:F0} {p.Y:F0} {p.Z:F0} | "
+                  + $"{ClockFace(_clock.TimeOfDay)}{(_clock.Running ? "" : " held")} | "
                   + $"holding {_handSlot + 1}. {_hand[_handSlot].Label} | "
                   + $"{_drawnChunks}/{_meshes.Count} drawn, {_drawnTriangles:N0} tris"
                   + (queued > 0 ? $" | {queued} queued" : "")
@@ -1022,14 +1077,17 @@ public sealed class ClientHost : IDisposable
         var viewProj = view * projection;
         var frustum = Frustum.FromViewProjection(viewProj);
 
+        // Before anything else, with no depth. Everything in the frame is nearer than the sky.
+        _sky.Draw(_skyState, _viewForward, _camera.FovDegrees, aspect);
+
         _chunkShader.Use();
         _chunkShader.SetMatrix4("uViewProj", viewProj);
         _chunkShader.SetVec3("uCameraPos", _viewPosition);
-        _chunkShader.SetVec3("uFogColor", SkyColor);
-        _chunkShader.SetVec3("uSunDir", SunDirection);
-        _chunkShader.SetVec3("uSunColor", SunColor);
-        _chunkShader.SetVec3("uSkyAmbient", SkyAmbient);
-        _chunkShader.SetVec3("uGroundAmbient", GroundAmbient);
+        _chunkShader.SetVec3("uFogColor", _skyState.Horizon);
+        _chunkShader.SetVec3("uSunDir", _skyState.SunDirection);
+        _chunkShader.SetVec3("uSunColor", _skyState.SunColor);
+        _chunkShader.SetVec3("uSkyAmbient", _skyState.SkyAmbient);
+        _chunkShader.SetVec3("uGroundAmbient", _skyState.GroundAmbient);
         _chunkShader.SetVec3("uNightFloor", NightFloor);
         _chunkShader.SetInt("uBlocks", 0);
         _blockTextures.Bind();
@@ -1069,6 +1127,15 @@ public sealed class ClientHost : IDisposable
             _cracks.Draw(viewProj, new Vector3(cell.X, cell.Y, cell.Z), min, max, _mining.Stage);
         }
 
+        // Blended, and after the world has written its depth so terrain occludes them. Before the
+        // player, not after: drawing the held arm clears the depth buffer so it can sit in front of
+        // everything, and anything depth-tested after that clear is testing against an empty buffer
+        // — clouds drawn there pass in front of the hillside they are behind.
+        _clouds.Draw(
+            viewProj, frustum, _viewPosition,
+            CloudTint * MathF.Max(_skyState.SunColor.X + _skyState.SkyAmbient.X, 0.18f),
+            _skyState.Horizon, _fogStart, _fogEnd, (float)_elapsed);
+
         DrawPlayer(viewProj, projection, view);
 
         _renderMs = (Stopwatch.GetTimestamp() - renderStart) * TicksToMs;
@@ -1082,7 +1149,8 @@ public sealed class ClientHost : IDisposable
         if (_bench is not null) return;
 
         var sky = new SkyParams(
-            SunDirection, SunColor, SkyAmbient, GroundAmbient, NightFloor, SkyColor, _fogStart, _fogEnd);
+            _skyState.SunDirection, _skyState.SunColor, _skyState.SkyAmbient, _skyState.GroundAmbient,
+            NightFloor, _skyState.Horizon, _fogStart, _fogEnd);
 
         var light = SampleLight(_camera.Position);
 
@@ -1108,7 +1176,7 @@ public sealed class ClientHost : IDisposable
         // The sun has to arrive in the same space the geometry is in, or the arm lights from a
         // fixed corner of the screen and swings through its own shading as the player turns.
         _playerRenderer.DrawViewModel(
-            projection, Vector3.TransformNormal(SunDirection, view), sky, light,
+            projection, Vector3.TransformNormal(_skyState.SunDirection, view), sky, light,
             _animator.Swinging, _animator.SwingProgress);
     }
 
@@ -1127,6 +1195,8 @@ public sealed class ClientHost : IDisposable
         _meshes.Clear();
         _chunkShader?.Dispose();
         _outline?.Dispose();
+        _sky?.Dispose();
+        _clouds?.Dispose();
         _blockTextures?.Dispose();
         _playerRenderer?.Dispose();
         _cracks?.Dispose();

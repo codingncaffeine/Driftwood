@@ -90,6 +90,13 @@ public static class Program
                         BenchSeconds = TryTakeInt(args, ref i, out var seconds) ? Math.Clamp(seconds, 1, 600) : DefaultBenchSeconds,
                     };
                     break;
+                case "--time":
+                    // Hours, because "start at 19" is a thing anyone can say and 0.79 is not.
+                    options = options with { StartTime = ParseInt(Next(args, ref i, "--time"), 0, 23) / 24f };
+                    break;
+                case "--daylength":
+                    options = options with { DayLength = ParseInt(Next(args, ref i, "--daylength"), 10, 86400) };
+                    break;
                 case "--uploads":
                     options = options with { MaxUploadsPerFrame = ParseInt(Next(args, ref i, "--uploads"), 1, 4096) };
                     break;
@@ -165,6 +172,8 @@ public static class Program
               --texture-size n  tile resolution to build the texture array at (default 16)
               --skin <path>     wear a skin PNG: 64x64, or 64x32 for an old one, at any scale
               --skin-model m    'classic' or 'slim' arms, overriding what the sheet looks like
+              --time <hour>     hour of the day to open at, 0 to 23 (default 8)
+              --daylength <s>   seconds in a full day (default 1200); short values walk a sunset
               --vsync           cap to the display refresh rate (off by default so fps is readable)
               --audit           generate and mesh headlessly, print a census and checks, then exit
               --bench [secs]    fly a fixed path once the world has settled, report frame-time
@@ -184,6 +193,9 @@ public static class Program
               F2                frustum culling
               F3                walk or fly
               F5                first person, over the shoulder, facing
+              F6                hold the clock where it is
+              F7                wind the day on by an hour or two
+              1-9 / wheel       pick what is in hand
             """);
     }
 }
