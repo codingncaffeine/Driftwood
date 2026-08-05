@@ -683,9 +683,22 @@ public sealed class ClientHost : IDisposable
             return;
         }
 
-        Console.WriteLine("Arrows move (WASD also works), Space jump, Ctrl sneak, Shift sprint");
+        // Read out of the bindings rather than typed, so it cannot go stale the way it just did —
+        // it said Esc released the mouse for a while after Esc had stopped doing that.
+        var keys = _settings.Keys;
+
+        Console.WriteLine(
+            $"{keys.Describe(GameAction.MoveForward)} move, {keys.Describe(GameAction.Jump)} jump, "
+            + $"{keys.Describe(GameAction.Sneak)} sneak, {keys.Describe(GameAction.Sprint)} sprint");
         Console.WriteLine("Hold left to mine, right to place — the arm swings and the swing takes the block");
-        Console.WriteLine("Esc release mouse, F1 wireframe, F2 frustum culling, F3 walk/fly, F5 view");
+        Console.WriteLine(
+            $"{keys.Describe(GameAction.OpenInventory)} inventory and crafting, "
+            + $"{keys.Describe(GameAction.OpenOptions)} options — controls, video, audio, world");
+        Console.WriteLine(
+            $"{keys.Describe(GameAction.ToggleWireframe)} wireframe, "
+            + $"{keys.Describe(GameAction.ToggleCulling)} culling, "
+            + $"{keys.Describe(GameAction.ToggleFly)} walk/fly, "
+            + $"{keys.Describe(GameAction.ToggleView)} view");
     }
 
     /// <summary>

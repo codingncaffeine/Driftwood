@@ -176,6 +176,24 @@ public sealed class HudRenderer : IDisposable
     /// <summary>The height the layout is written against. Everything scales off this.</summary>
     private const float DesignHeight = 480f;
 
+    private float _lastScale;
+
+    /// <summary>
+    /// How many screen pixels one layout unit is worth. A whole number, and never less than two
+    /// unless the display genuinely cannot afford it.
+    /// </summary>
+    /// <remarks>
+    /// <para>Rounded rather than floored, and that distinction is a bug this already had: at the
+    /// default 1600x900 the window is 1.875 design heights tall, and flooring gave a scale of one —
+    /// so the whole interface came out at half the size it was drawn for, a 232-unit panel adrift
+    /// in a 1600-unit space. Rounding gives two, which is what 1.875 obviously means.</para>
+    /// <para>Whole numbers because everything here is pixel art and a half step puts a two-pixel
+    /// bevel on one and a half pixels, which the sampler resolves by blurring. One is allowed only
+    /// on a display too short for two, where a blurry interface beats one that does not fit.</para>
+    /// </remarks>
+    private static float ScaleFor(int screenHeight) =>
+        MathF.Max(1f, MathF.Round(screenHeight / DesignHeight));
+
     private const int Floats = 9;
 
     private readonly GL _gl;
@@ -270,9 +288,20 @@ public sealed class HudRenderer : IDisposable
         // bevels come out one and a half pixels wide, which the sampler resolves by blurring them,
         // and the whole interface goes soft in a way that reads as a low resolution rather than as
         // a deliberate one.
-        var scale = MathF.Max(1f, MathF.Floor(screenHeight / DesignHeight));
+        var scale = ScaleFor(screenHeight);
         var w = MathF.Floor(screenWidth / scale);
         var h = MathF.Floor(screenHeight / scale);
+
+        // Said once, and only when it changes. A layout that comes out the wrong size is invisible
+        // to every check in the project — it draws, it just draws somewhere nobody is looking — so
+        // the numbers that decide it are the ones worth being able to read back.
+        if (Math.Abs(scale - _lastScale) > 0.01f)
+        {
+            _lastScale = scale;
+            Console.WriteLine(
+                $"overlay     {screenWidth}x{screenHeight} at {scale:F0}x, laid out in {w:F0}x{h:F0} units");
+            Console.Out.Flush();
+        }
 
         // A screen covers the world and the crosshair with it: a reticle over an inventory is
         // aiming at nothing, and it sits exactly where the eye is trying to read.
