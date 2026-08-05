@@ -909,14 +909,11 @@ public sealed class ClientHost : IDisposable
     {
         var many = _keyboard.IsKeyPressed(Key.ShiftLeft) || _keyboard.IsKeyPressed(Key.ShiftRight);
         var tabbed = _hudScreen.Kind is HudScreenKind.Player or HudScreenKind.Game;
-        var craft = _hudScreen.Kind == HudScreenKind.Player && _hudScreen.Tab == (int)PlayerTab.Craft;
 
         // On a panel of squares the arrows drive the pointer itself rather than a separate
         // selection, so there is one cursor and not two things arguing about what is picked out.
         // Enter is then simply a left click where it is, which is also what a gamepad will want.
-        var squares = _hudScreen.IsContainer && _hudScreen.Tab == (int)PlayerTab.Items;
-
-        if (squares)
+        if (_hudScreen.IsContainer)
         {
             switch (key)
             {
@@ -924,6 +921,12 @@ public sealed class ClientHost : IDisposable
                 case Key.Down: MovePointer(0, 1); return true;
                 case Key.Left: MovePointer(-1, 0); return true;
                 case Key.Right: MovePointer(1, 0); return true;
+
+                // The book, on the key that has always opened one.
+                case Key.B:
+                    _hudScreen.BookOut = !_hudScreen.BookOut;
+                    RefreshScreen();
+                    return true;
 
                 case Key.Enter or Key.KeypadEnter or Key.Space:
                     ScreenClick(MouseButton.Left);
@@ -964,8 +967,7 @@ public sealed class ClientHost : IDisposable
                 return true;
 
             case Key.Enter or Key.KeypadEnter or Key.Space:
-                if (craft) CraftSelected(many);
-                else if (tabbed) ActivateRow();
+                if (tabbed) ActivateRow();
                 return true;
 
             case Key.Left or Key.A:
@@ -977,11 +979,11 @@ public sealed class ClientHost : IDisposable
                 return true;
 
             case Key.Up or Key.W:
-                Step(craft ? -RecipeColumns : -1, horizontal: false);
+                Step(-1, horizontal: false);
                 return true;
 
             case Key.Down or Key.S:
-                Step(craft ? RecipeColumns : 1, horizontal: false);
+                Step(1, horizontal: false);
                 return true;
 
             // The bar still picks, so a player can choose what to feed a furnace without closing it.
@@ -995,13 +997,6 @@ public sealed class ClientHost : IDisposable
 
         void Step(int by, bool horizontal)
         {
-            if (craft)
-            {
-                if (_shown.Count == 0) return;
-                _hudScreen.Selected = Math.Clamp(_hudScreen.Selected + by, 0, _shown.Count - 1);
-                return;
-            }
-
             // On a settings tab, up and down pick a line and left and right change it. Headings are
             // skipped rather than selectable, so holding down never lands on one.
             if (!horizontal)
@@ -1031,12 +1026,11 @@ public sealed class ClientHost : IDisposable
         var many = _keyboard.IsKeyPressed(Key.ShiftLeft) || _keyboard.IsKeyPressed(Key.ShiftRight);
         var at = _layout.At(_hudScreen.Pointer.X, _hudScreen.Pointer.Y);
 
-        // The layout is a frame behind, so on the one frame after a tab changes it still describes
-        // the screen that was there. Squares from a panel nobody is looking at are ignored rather
-        // than acted on, which is a single frame of nothing happening instead of a stack moving on
-        // a screen that is not showing it.
-        if (at is { Kind: ZoneKind.Slot } && !(_hudScreen.IsContainer && _hudScreen.Tab == (int)PlayerTab.Items))
-            return;
+        // The layout is a frame behind, so on the one frame after a screen changes it still
+        // describes the one that was there. Squares belonging to a panel nobody is looking at are
+        // ignored rather than acted on: a single frame of nothing happening, instead of a stack
+        // moving on a screen that is not showing it.
+        if (at is { Kind: ZoneKind.Slot or ZoneKind.Recipe } && !_hudScreen.IsContainer) return;
 
         // Clicked away from everything while holding something: put it down in the world. The one
         // way to get rid of a stack on purpose, and the answer to "how do I close this".
@@ -1080,10 +1074,33 @@ public sealed class ClientHost : IDisposable
                 RefreshScreen();
                 return;
 
+            case ZoneKind.Button:
+                switch ((ScreenButton)at.Value.Index)
+                {
+                    case ScreenButton.Book:
+                        _hudScreen.BookOut = !_hudScreen.BookOut;
+                        break;
+
+                    case ScreenButton.PageBack:
+                        _hudScreen.BookPage = Math.Max(0, _hudScreen.BookPage - 1);
+                        break;
+
+                    case ScreenButton.PageForward:
+                        var pages = Math.Max(1,
+                            (_hudScreen.Recipes.Count + ScreenLayout.BookPage - 1) / ScreenLayout.BookPage);
+                        _hudScreen.BookPage = Math.Min(pages - 1, _hudScreen.BookPage + 1);
+                        break;
+                }
+
+                RefreshScreen();
+                return;
+
             case ZoneKind.Recipe:
-                // The first click picks a recipe out, and a click on the one already picked makes
-                // it. Selecting and acting on one press would make a mis-click cost ingredients.
-                if (_hudScreen.Selected == at.Value.Index) CraftSelected(many);
+                // The first click picks a recipe out; a click on the one already picked lays it
+                // into the grid. Selecting and acting on one press would make a mis-click move
+                // things out of the pockets, and shift makes as many as it can outright.
+                if (many) CraftSelected(at.Value.Index, all: true);
+                else if (_hudScreen.Selected == at.Value.Index) LayOut(at.Value.Index);
                 else _hudScreen.Selected = at.Value.Index;
                 RefreshScreen();
                 return;
@@ -1341,7 +1358,10 @@ public sealed class ClientHost : IDisposable
         for (var i = 0; i < _layout.Zones.Count; i++)
         {
             var zone = _layout.Zones[i];
-            if (zone.Kind != ZoneKind.Slot) continue;
+
+            // Squares, the recipes in the book, and the buttons — everything on a container screen
+            // a press can land on, so the arrows reach all of it and a gamepad will too.
+            if (zone.Kind is not (ZoneKind.Slot or ZoneKind.Recipe or ZoneKind.Button)) continue;
 
             var toX = zone.CentreX - from.X;
             var toY = zone.CentreY - from.Y;
@@ -1569,23 +1589,27 @@ public sealed class ClientHost : IDisposable
 
         _hudScreen.Footer = FooterHint();
 
-        // A panel of squares reads itself. Nothing to rebuild — what is in a slot is asked of the
-        // inventory as it is drawn, so there is no list here that could fall out of step with it.
-        if (_hudScreen.IsContainer && _hudScreen.Tab == (int)PlayerTab.Items)
+        // The squares read themselves — what is in a slot is asked of the inventory as it is drawn,
+        // so there is no list here that could fall out of step with one. The book beside them does
+        // need a list, and what is on it depends on how wide the grid is: a bench lends three.
+        if (_hudScreen.IsContainer)
         {
-            _hudScreen.Recipes.Clear();
-            _hudScreen.Payable.Clear();
-            return;
-        }
+            if (_hudScreen.Kind == HudScreenKind.Furnace || _hudScreen.Grid is null)
+            {
+                _hudScreen.Recipes.Clear();
+                _hudScreen.Payable.Clear();
+                return;
+            }
 
-        if (_hudScreen.Kind == HudScreenKind.Player)
-        {
             if (_shown.Count == 0)
             {
                 foreach (var recipe in _book.Recipes)
-                    if (!recipe.NeedsBench || _atBench) _shown.Add(recipe);
+                    if (!recipe.NeedsBench || _hudScreen.Grid.Width >= 3) _shown.Add(recipe);
             }
 
+            // Built once per opening and only its affordability recomputed. A list that changed
+            // length as things were picked up would move the selection out from under a player on
+            // the frame they clicked it.
             _hudScreen.Recipes.Clear();
             _hudScreen.Recipes.AddRange(_shown);
 
@@ -1593,6 +1617,9 @@ public sealed class ClientHost : IDisposable
             foreach (var recipe in _shown) _hudScreen.Payable.Add(_book.CanPay(_inventory, recipe));
 
             _hudScreen.Selected = Math.Clamp(_hudScreen.Selected, 0, Math.Max(0, _shown.Count - 1));
+
+            var pages = Math.Max(1, (_shown.Count + ScreenLayout.BookPage - 1) / ScreenLayout.BookPage);
+            _hudScreen.BookPage = Math.Clamp(_hudScreen.BookPage, 0, pages - 1);
             return;
         }
 
@@ -1609,9 +1636,12 @@ public sealed class ClientHost : IDisposable
         var close = _settings.Keys.Primary(
             _hudScreen.Kind == HudScreenKind.Game ? GameAction.OpenOptions : GameAction.OpenInventory);
 
-        if (_hudScreen.IsContainer && _hudScreen.Tab == (int)PlayerTab.Items)
-            return "click takes and puts, right click halves, shift moves it across, "
-                + $"click away to drop, {close} closes";
+        if (_hudScreen.IsContainer)
+            return _hudScreen.BookOut
+                ? "click a recipe to lay it out, shift-click to make it, "
+                  + $"b shuts the book, {close} closes"
+                : "click takes and puts, right click halves, shift moves it across, "
+                  + $"b opens the recipe book, {close} closes";
 
         var wheel = _hudScreen.Rows.Count > ScreenLayout.MenuLines(LayoutHeight) ? ", wheel scrolls" : "";
 
@@ -1651,10 +1681,16 @@ public sealed class ClientHost : IDisposable
                 break;
 
             case GameTab.Video:
+                // What is loaded is only worth saying when it is not what the row already says.
+                // On a normal launch the two are the same number, so "8 chunks / 8 loaded now" was
+                // a reading of itself — and the whole note only means anything after a change.
+                var pending = _viewRadius == _settings.ViewDistance
+                    ? "how far the world is kept loaded around you"
+                    : $"{_viewRadius} loaded now; the new distance applies next time the game opens";
+
                 _hudScreen.Rows.Add(new MenuRow("picture", Heading: true));
                 _hudScreen.Rows.Add(new MenuRow(
-                    "view distance", $"{_settings.ViewDistance} chunks",
-                    Note: $"takes effect next time the game opens; {_viewRadius} loaded now"));
+                    "view distance", $"{_settings.ViewDistance} chunks", Note: pending));
                 _hudScreen.Rows.Add(new MenuRow("field of view", $"{_settings.FieldOfView}"));
                 _hudScreen.Rows.Add(new MenuRow("fullscreen", OnOff(_settings.Fullscreen)));
                 _hudScreen.Rows.Add(new MenuRow(
@@ -1667,7 +1703,7 @@ public sealed class ClientHost : IDisposable
                     Note: "said once ever, not once a session"));
                 _hudScreen.Rows.Add(new MenuRow(
                     "forget what has been said", $"{_unlocks.Announced} remembered",
-                    Note: "enter to hear the whole tree announce itself again"));
+                    Note: "enter forgets them, and the whole tree announces itself again"));
 
                 _hudScreen.Rows.Add(new MenuRow("looking at things", Heading: true));
                 _hudScreen.Rows.Add(new MenuRow("wireframe", OnOff(_wireframe)));
@@ -1712,8 +1748,19 @@ public sealed class ClientHost : IDisposable
 
     private static string OnOff(bool value) => value ? "on" : "off";
 
-    /// <summary>Nudges whatever is selected. Left is -1 and right is +1.</summary>
-    private void AdjustRow(int by)
+    /// <summary>
+    /// Nudges whatever is selected. Left is -1 and right is +1.
+    /// </summary>
+    /// <param name="activated">
+    /// True when this came from enter or a left click rather than from a direction.
+    /// </param>
+    /// <remarks>
+    /// <b>A row that throws something away must not answer to a direction.</b> Left and right are
+    /// how a player walks along every other setting to see what it does, and "forget what has been
+    /// said" wiped the whole persisted record on either of them, with no confirmation and nothing
+    /// to undo it with. It answers to enter alone now, which is what its own note says.
+    /// </remarks>
+    private void AdjustRow(int by, bool activated = false)
     {
         if (_hudScreen.Selected < 0 || _hudScreen.Selected >= _hudScreen.Rows.Count) return;
 
@@ -1736,7 +1783,10 @@ public sealed class ClientHost : IDisposable
                     case "fullscreen": _settings.Fullscreen = !_settings.Fullscreen; break;
                     case "wait for the display": _settings.VSync = !_settings.VSync; break;
                     case "new recipe notices": _settings.RecipeNotices = !_settings.RecipeNotices; break;
+                    // Enter only. A direction is how a player browses, not how they throw
+                    // something away that cannot be got back.
                     case "forget what has been said":
+                        if (!activated) return;
                         _unlocks.Forget();
                         _unlocks.Persist();
                         return;
@@ -1790,7 +1840,7 @@ public sealed class ClientHost : IDisposable
             return;
         }
 
-        AdjustRow(1);
+        AdjustRow(1, activated: true);
     }
 
     /// <summary>Which action the selected controls row is for, counting past the headings.</summary>
@@ -1862,12 +1912,67 @@ public sealed class ClientHost : IDisposable
             _audio.MasterVolume = _settings.Mute ? 0f : _settings.Volume / 100f;
     }
 
-    /// <summary>Makes one of the selected recipe, or as many as the pockets will pay for.</summary>
-    private void CraftSelected(bool many)
+    /// <summary>
+    /// Takes a recipe's ingredients out of the pockets and lays them into the grid.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>This is what a recipe book is for.</b> Not a button that makes the thing — a book
+    /// that arranges it, so the result appears in the same square a player would have filled by
+    /// hand and lands two squares from the pockets it is going into. It also teaches: the grid is
+    /// left holding the answer, so the next one can be made without opening the book at all.</para>
+    /// <para>Whatever was already in the grid goes back to the pockets first, so laying a second
+    /// recipe over a first cannot leave a stray plank in a corner and quietly match nothing.</para>
+    /// </remarks>
+    private void LayOut(int index)
     {
-        if (_hudScreen.Selected < 0 || _hudScreen.Selected >= _shown.Count) return;
+        if (_hudScreen.Grid is not { } grid) return;
+        if (index < 0 || index >= _shown.Count) return;
 
-        var recipe = _shown[_hudScreen.Selected];
+        var recipe = _shown[index];
+        if (recipe.NeedsBench && grid.Width < 3) return;
+        if (!_book.CanPay(_inventory, recipe)) return;
+
+        foreach (var left in grid.Empty(_inventory)) Spill(left);
+
+        // Shaped recipes are laid where they were written, in the top left of whatever grid this
+        // is; shapeless ones fill in reading order, because they have no arrangement to honour.
+        var cell = 0;
+        for (var y = 0; y < recipe.Height; y++)
+        for (var x = 0; x < recipe.Width; x++)
+        {
+            if (recipe.At(x, y) is not { } want) continue;
+
+            // Whichever member of the tag is actually being carried. Fewest of it first, so paying
+            // for a plank recipe tidies the odd single rather than breaking into a full stack.
+            var pick = ItemId.None;
+            var fewest = int.MaxValue;
+
+            foreach (var member in want.Members)
+            {
+                var have = _inventory.CountOf(member);
+                if (have <= 0 || have >= fewest) continue;
+                pick = member;
+                fewest = have;
+            }
+
+            if (pick.IsNone) continue;
+            if (_inventory.Take(pick, 1) != 1) continue;
+
+            cell = recipe.Shapeless ? cell : y * grid.Width + x;
+            Spill(grid.Put(cell, new ItemStack(pick, 1)));
+            cell++;
+        }
+
+        PlaySound(SoundMaterial.Wood, SoundEvent.Place, _viewPosition, 0.4f);
+    }
+
+    /// <summary>Makes the selected recipe outright, straight into the pockets.</summary>
+    private void CraftSelected(int index, bool all)
+    {
+        if (index < 0 || index >= _shown.Count) return;
+
+        var recipe = _shown[index];
+        var many = all;
         var made = 0;
 
         // Bounded even when asked for as many as possible: a bar of logs against a one-log recipe
@@ -2901,10 +3006,20 @@ public sealed class ClientHost : IDisposable
         {
             case 60: SampleUi(size, "no screen"); break;
             case 61: OpenPlayer(PlayerTab.Items, atBench: false, default); break;
-            case 90: SampleUi(size, "items"); ProbeSquares(); SampleFigure(size); break;
+            case 90:
+                SampleUi(size, "items");
+                ProbeSquares();
+                SampleFigure(size);
+                SampleWell(size, "book well before");
+                break;
 
-            case 91: _hudScreen.Tab = (int)PlayerTab.Craft; RefreshScreen(); break;
-            case 120: SampleUi(size, "player"); break;
+            case 91: _hudScreen.BookOut = true; RefreshScreen(); break;
+
+            case 120:
+                SampleUi(size, "book");
+                SampleWell(size, "book well after");
+                ProbeBook();
+                break;
 
             case 121: CloseScreen(); OpenBench(0, 0, 0); break;
             case 150: SampleUi(size, "bench"); ProbeSquares(); break;
@@ -2951,6 +3066,102 @@ public sealed class ClientHost : IDisposable
 
     /// <summary>What the capped list showed, at the top and at the bottom.</summary>
     private readonly Dictionary<string, (int Seen, int Lowest, int Highest, int Total)> _uiRows = [];
+
+    /// <summary>
+    /// Reads the pixel where the recipe book's page sits, whether or not it is out.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately the same point both times, computed from where the book <em>would</em> be —
+    /// which is why the panel's own origin is not used: it moves when the book appears, and a
+    /// sample that moves with what it is measuring cannot tell that anything happened.
+    /// </remarks>
+    private unsafe void SampleWell(Vector2D<int> size, string what)
+    {
+        var scale = HudRenderer.ScaleFor(size.Y);
+        var zoom = ScreenLayout.ZoomFor(size.X / scale, size.Y / scale, bookOut: true);
+
+        // Where the pair sits when the book is out, worked out from the window rather than read
+        // off a layout that may currently describe a panel on its own.
+        var pairLeft = MathF.Round(
+            (size.X / scale - (ScreenLayout.PanelWidth + ScreenLayout.BookWidth + ScreenLayout.BookGap) * zoom) * 0.5f);
+        var top = MathF.Round((size.Y / scale - ScreenLayout.PanelHeight * zoom) * 0.5f);
+
+        var wx = (int)((pairLeft + (ScreenLayout.BookWell.X + ScreenLayout.BookWell.W * 0.5f) * zoom) * scale);
+        var wy = (int)((top + (ScreenLayout.BookWell.Y + ScreenLayout.BookWell.H * 0.5f) * zoom) * scale);
+
+        Span<byte> px = stackalloc byte[4];
+        fixed (byte* p = px)
+            _gl.ReadPixels(wx, size.Y - 1 - wy, 1, 1, PixelFormat.Rgba, PixelType.UnsignedByte, p);
+
+        _uiSamples[what] = (px[0], px[1], px[2]);
+
+        Console.WriteLine($"ui-check    {what,-17} rgb {px[0],3} {px[1],3} {px[2],3}");
+        Console.Out.Flush();
+    }
+
+    /// <summary>
+    /// That the book folds out beside the panel rather than over it, and lays a recipe out.
+    /// </summary>
+    /// <remarks>
+    /// Two things worth insisting on and neither is visible from a screenshot. The book must sit
+    /// clear of the panel — a book overlapping the pockets is a book covering the thing it is
+    /// there to fill — and clicking a recipe must actually move ingredients out of the pockets and
+    /// into the grid, which is the whole reason the two are on one screen.
+    /// </remarks>
+    private void ProbeBook()
+    {
+        var entries = 0;
+        var overlapping = 0;
+
+        foreach (var zone in _layout.Zones)
+        {
+            if (zone.Kind != ZoneKind.Recipe) continue;
+            entries++;
+
+            // The book hangs to the LEFT. Anything of it reaching past the panel's own left edge
+            // is drawn over the pockets it exists to fill.
+            if (zone.X + zone.W > _layout.OriginX) overlapping++;
+        }
+
+        // Something to pay with. A new world starts with empty pockets, so on an empty inventory
+        // nothing is payable and the whole path below would be skipped without ever running —
+        // a check that quietly measures nothing, which is the failure this project keeps finding.
+        _inventory.Add(new ItemStack(_items.ByName("driftoak_log").Id, 8));
+        RefreshScreen();
+
+        var payable = -1;
+        for (var i = 0; i < _hudScreen.Payable.Count; i++)
+            if (_hudScreen.Payable[i]) { payable = i; break; }
+
+        var laid = 0;
+        if (payable >= 0)
+        {
+            _hudScreen.Selected = payable;
+            LayOut(payable);
+
+            for (var i = 0; i < (_hudScreen.Grid?.Cells ?? 0); i++)
+                if (!(_hudScreen.Grid?[i] ?? ItemStack.Empty).IsEmpty) laid++;
+        }
+
+        // And what the arrangement makes, which is the point of laying it out at all.
+        var makes = _hudScreen.Grid?.Result ?? ItemStack.Empty;
+
+        _uiBook = (entries, overlapping, laid, payable, _shown.Count, !makes.IsEmpty);
+
+        Console.WriteLine(
+            $"ui-check    book       {entries} recipes on the page of {_shown.Count}, "
+            + $"{overlapping} over the panel; laying out '{(payable >= 0 ? _shown[payable].Name : "nothing")}' "
+            + $"filled {laid} squares and makes "
+            + (makes.IsEmpty ? "nothing" : $"{makes.Count} {_items[makes.Item].Name}"));
+        Console.Out.Flush();
+
+        // Put it back the way it was found, so the screens after this one are measured on the same
+        // empty pockets every other check here assumes.
+        foreach (var left in _hudScreen.Grid?.Empty(_inventory) ?? []) _ = left;
+        _inventory.Clear();
+    }
+
+    private (int Entries, int Overlapping, int Laid, int Payable, int Total, bool Makes) _uiBook;
 
     /// <summary>
     /// Puts the pointer on a square and asks the layout what it is over.
@@ -3049,7 +3260,7 @@ public sealed class ClientHost : IDisposable
 
         var bare = Read("no screen");
         var items = Read("items");
-        var player = Read("player");
+        var book = Read("book");
         var bench = Read("bench");
         var game = Read("game");
         var world = Read("no screen corner");
@@ -3063,9 +3274,29 @@ public sealed class ClientHost : IDisposable
 
         // A screen darkens what is behind it, so the middle must not still be whatever it was.
         if (items == bare) faults.Add("opening the items screen changed nothing on screen");
-        if (player == bare) faults.Add("opening the craft tab changed nothing on screen");
         if (bench == bare) faults.Add("opening a bench changed nothing on screen");
         if (game == bare) faults.Add("opening the game screen changed nothing on screen");
+
+        _ = book;
+
+        // The book: read where the book's own well is, before and after folding it out. The middle
+        // of the window is the wrong place to ask — the panel shifts right when the book appears
+        // but the middle stays panel either way, so that sample said "nothing changed" about a book
+        // that was drawing perfectly. Ask where the thing actually is.
+        var wellBefore = Read("book well before");
+        var wellAfter = Read("book well after");
+
+        if (wellBefore == wellAfter)
+            faults.Add($"nothing appeared where the book goes — {wellAfter.R} {wellAfter.G} {wellAfter.B} either way");
+
+        if (_uiBook.Entries == 0) faults.Add($"the book drew no recipes at all, of {_uiBook.Total}");
+        if (_uiBook.Overlapping > 0) faults.Add($"{_uiBook.Overlapping} of the book's recipes are drawn over the panel");
+
+        // And that it does the one thing it is for. Given something to pay with, a payable recipe
+        // must exist, laying it out must fill squares, and those squares must make something.
+        if (_uiBook.Payable < 0) faults.Add("nothing was payable with eight logs in the pockets");
+        else if (_uiBook.Laid == 0) faults.Add("laying a recipe out of the book filled no squares");
+        else if (!_uiBook.Makes) faults.Add("the squares the book laid out make nothing");
 
         // The container panel is centred, so the middle of the window is inside it — and it is drawn
         // in the same neutral grey the options are. A middle that still reads dark is the backdrop

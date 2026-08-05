@@ -53,6 +53,19 @@ public enum ZoneKind
 
     /// <summary>The bar down the side of a list too long to show at once.</summary>
     Scrollbar,
+
+    /// <summary>Something that does one thing when pressed. The index says which.</summary>
+    Button,
+}
+
+/// <summary>Which button. The index of a <see cref="ZoneKind.Button"/> zone.</summary>
+public enum ScreenButton
+{
+    /// <summary>Folds the recipe book out beside the panel, and away again.</summary>
+    Book,
+
+    PageBack,
+    PageForward,
 }
 
 /// <summary>
@@ -116,10 +129,47 @@ public sealed class ScreenLayout
 
     public IReadOnlyList<Zone> Zones => _zones;
 
+    /// <summary>
+    /// The recipe book, which folds out beside the panel rather than living on a tab of its own.
+    /// </summary>
+    /// <remarks>
+    /// <b>147 by 166 — the same height as the container panel, which is the tell.</b> Two panels
+    /// painted to exactly one height are two panels meant to stand side by side, and that is what a
+    /// pack's <c>recipe_book.png</c> is: not a screen you go to, a leaf you unfold next to the one
+    /// you are on. Which matters for more than looks — a book on its own tab crafts into pockets
+    /// that are not on screen, so what you just made goes somewhere you cannot see.
+    /// </remarks>
+    public const int BookWidth = 147;
+
+    public const int BookHeight = 166;
+
+    /// <summary>Between the book and the panel it hangs off.</summary>
+    public const int BookGap = 4;
+
+    /// <summary>A recipe in the book. Twenty five, which is what the pack's own slot sprite is.</summary>
+    public const int BookCell = 25;
+
+    public const int BookColumns = 5;
+
+    public const int BookRows = 4;
+
+    /// <summary>How many recipes one page of the book holds.</summary>
+    public const int BookPage = BookColumns * BookRows;
+
+    // Inside the book's own frame: the well is 132x151 at 8,8, and this is what goes in it.
+    private const int BookGridX = 11;
+    private const int BookGridY = 34;
+
     /// <summary>Where the panel's top left corner sits, in layout units.</summary>
     public float OriginX { get; private set; }
 
     public float OriginY { get; private set; }
+
+    /// <summary>Where the book's top left corner sits, when it is out.</summary>
+    public float BookX { get; private set; }
+
+    /// <summary>True when the last panel was laid out with the book beside it.</summary>
+    public bool BookOut { get; private set; }
 
     /// <summary>Layout units per panel pixel. A whole number, never less than one.</summary>
     public float Zoom { get; private set; } = 1f;
@@ -170,11 +220,13 @@ public sealed class ScreenLayout
     /// settled on and the one that leaves the footer hint somewhere to go — then held down to
     /// whatever actually fits, so a short window gets a smaller panel rather than a clipped one.
     /// </remarks>
-    public static float ZoomFor(float width, float height)
+    public static float ZoomFor(float width, float height, bool bookOut = false)
     {
+        var across = bookOut ? PanelWidth + BookWidth + BookGap : PanelWidth;
+
         var want = MathF.Round(height * 0.62f / PanelHeight);
         var fitsTall = MathF.Floor((height - 40f) / PanelHeight);
-        var fitsWide = MathF.Floor(width / PanelWidth);
+        var fitsWide = MathF.Floor(width / across);
 
         return MathF.Max(1f, MathF.Min(want, MathF.Min(fitsTall, fitsWide)));
     }
@@ -186,14 +238,22 @@ public sealed class ScreenLayout
     /// How wide the crafting grid is — two for the player's own hands, three at a bench. Ignored by
     /// the furnace, which has no grid.
     /// </param>
-    public void BuildPanel(PanelKind kind, int craftCells, float screenWidth, float screenHeight)
+    public void BuildPanel(
+        PanelKind kind, int craftCells, float screenWidth, float screenHeight,
+        bool bookOut = false, int bookPage = 0, int bookCount = 0)
     {
         _zones.Clear();
         Kind = kind;
+        BookOut = bookOut && kind != PanelKind.Furnace;
 
-        Zoom = ZoomFor(screenWidth, screenHeight);
-        OriginX = MathF.Round((screenWidth - PanelWidth * Zoom) * 0.5f);
+        Zoom = ZoomFor(screenWidth, screenHeight, BookOut);
+
+        // The pair is centred together when the book is out, so folding it away does not leave the
+        // panel sitting off to one side of the screen.
+        var spread = BookOut ? (BookWidth + BookGap) * Zoom : 0f;
+        OriginX = MathF.Round((screenWidth - PanelWidth * Zoom + spread) * 0.5f);
         OriginY = MathF.Round((screenHeight - PanelHeight * Zoom) * 0.5f);
+        BookX = OriginX - (BookWidth + BookGap) * Zoom;
 
         switch (kind)
         {
@@ -208,6 +268,7 @@ public sealed class ScreenLayout
                     Square16(SlotRole.Craft, y * craftCells + x, 98 + x * Pitch, 18 + y * Pitch);
 
                 Square16(SlotRole.Result, 0, 154, 28);
+                Button(ScreenButton.Book, BookToggle.X, BookToggle.Y, BookToggle.W, BookToggle.H);
                 break;
 
             case PanelKind.Bench:
@@ -216,6 +277,7 @@ public sealed class ScreenLayout
                     Square16(SlotRole.Craft, y * craftCells + x, 30 + x * Pitch, 17 + y * Pitch);
 
                 Square16(SlotRole.Result, 0, 124, 35);
+                Button(ScreenButton.Book, BenchBookToggle.X, BenchBookToggle.Y, BenchBookToggle.W, BenchBookToggle.H);
                 break;
 
             case PanelKind.Furnace:
@@ -238,7 +300,64 @@ public sealed class ScreenLayout
 
         for (var column = 0; column < Inventory.HotbarSlots; column++)
             Square16(SlotRole.Pocket, column, PocketsLeft + column * Pitch, BarTop);
+
+        if (BookOut) BuildBook(bookPage, bookCount);
     }
+
+    /// <summary>The recipes on the open page, and the arrows to the pages either side.</summary>
+    private void BuildBook(int page, int count)
+    {
+        var pages = Math.Max(1, (count + BookPage - 1) / BookPage);
+        page = Math.Clamp(page, 0, pages - 1);
+
+        var from = page * BookPage;
+        var to = Math.Min(count, from + BookPage);
+
+        for (var i = from; i < to; i++)
+        {
+            var at = i - from;
+            _zones.Add(new Zone(
+                ZoneKind.Recipe, SlotRole.None, i,
+                BookX + (BookGridX + at % BookColumns * BookCell) * Zoom,
+                Y(BookGridY + at / BookColumns * BookCell),
+                Size(BookCell - 2), Size(BookCell - 2)));
+        }
+
+        // Both arrows exist whatever page it is on; whoever draws them dims the one that would do
+        // nothing. A button that vanishes is a button somebody hunts for.
+        _zones.Add(new Zone(
+            ZoneKind.Button, SlotRole.None, (int)ScreenButton.PageBack,
+            BookX + 12f * Zoom, Y(140), Size(12), Size(17)));
+
+        _zones.Add(new Zone(
+            ZoneKind.Button, SlotRole.None, (int)ScreenButton.PageForward,
+            BookX + 123f * Zoom, Y(140), Size(12), Size(17)));
+    }
+
+    /// <summary>
+    /// Where the button that folds the book out sits, on each panel that has one.
+    /// </summary>
+    /// <remarks>
+    /// Eighteen across rather than the pack's twenty, so it stands on the same pitch as the squares
+    /// and leaves the same two pixels of panel beside them. Twenty put it flush against the
+    /// two-by-two, which the audit caught by name: everything else on this panel has a gutter, and
+    /// a button touching a square is the one place a click could be one pixel from meaning
+    /// something completely different.
+    /// </remarks>
+    public static readonly (int X, int Y, int W, int H) BookToggle = (78, 18, 18, 18);
+
+    public static readonly (int X, int Y, int W, int H) BenchBookToggle = (5, 17, 18, 18);
+
+    /// <summary>The book's own frame and the well inside it, in the book's own pixels.</summary>
+    public static readonly (int X, int Y, int W, int H) BookWell = (8, 8, 132, 151);
+
+    /// <summary>Where a page's grid starts inside the book.</summary>
+    public static readonly (int X, int Y) BookGrid = (BookGridX, BookGridY);
+
+    private void Button(ScreenButton which, int panelX, int panelY, int w, int h) =>
+        _zones.Add(new Zone(
+            ZoneKind.Button, SlotRole.None, (int)which,
+            X(panelX), Y(panelY), Size(w), Size(h)));
 
     private void Square16(SlotRole role, int index, int panelX, int panelY) =>
         _zones.Add(new Zone(

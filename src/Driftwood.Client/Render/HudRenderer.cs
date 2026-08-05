@@ -47,13 +47,19 @@ public sealed class Toast(string title, string line, int icon, float life)
 }
 
 /// <summary>The tabs of the player screen, in the order they are shown.</summary>
-/// <remarks>Progress, handbook and map join this; the renderer is told names, not values.</remarks>
+/// <remarks>
+/// <para>Progress, handbook and map join this; the renderer is told names, not values.</para>
+/// <para><b>Crafting is not one of them and never should have been.</b> A recipe book on its own
+/// tab crafts into pockets that are not on screen, so what you just made goes somewhere you cannot
+/// see — and every pack in the genre answers this for us by painting <c>recipe_book.png</c> at
+/// exactly the height of <c>inventory.png</c>. Two panels drawn to one height are two panels meant
+/// to stand side by side. The book folds out beside the pockets now, and what it makes lands in a
+/// square that is already in view.</para>
+/// </remarks>
 public enum PlayerTab
 {
-    /// <summary>What is carried, what is worn, and the two-by-two a player always has.</summary>
+    /// <summary>What is carried, what is worn, the two-by-two, and the book beside them.</summary>
     Items,
-
-    Craft,
 }
 
 /// <summary>The tabs of the game screen.</summary>
@@ -128,6 +134,13 @@ public sealed class HudScreen
 
     /// <summary>The squares in front of the player, when the open screen has any.</summary>
     public CraftingGrid? Grid;
+
+    /// <summary>Whether the recipe book is folded out beside the panel.</summary>
+    /// <remarks>Remembered across openings — a player who wants it open wants it open.</remarks>
+    public bool BookOut;
+
+    /// <summary>Which page of it.</summary>
+    public int BookPage;
 
     /// <summary>
     /// What is on the cursor, between being picked up and being put down.
@@ -619,34 +632,24 @@ public sealed class HudRenderer : IDisposable
     {
         Rect(_plain, 0f, 0f, w, h, new Vector4(0.04f, 0.04f, 0.04f, 0.72f));
 
-        // The three container screens are drawn on the pack's own panel and share every square
-        // below the halfway line. Everything else is the tabbed settings layout.
-        if (screen.IsContainer && screen.Tab == (int)PlayerTab.Items)
+        // The three container screens are drawn on the pack's own panel, share every square below
+        // the halfway line, and carry the recipe book beside them. Everything else is settings.
+        if (screen.IsContainer)
         {
             Container(catalogue, inventory, equipment, screen, layout, w, h);
             Footer(screen, w, h);
             return;
         }
 
-        const float Panel = 232f;
+        const float Panel = MenuPanel;
         var left = MathF.Round((w - Panel) / 2f);
 
-        // Sat where it is tall rather than always a fixed way down the screen. A settings list is a
-        // fixed twelve lines now and a recipe book is however many rows the recipes come to, and
-        // pinning both to the same top leaves the short one floating in the upper third.
+        // Sat where it is tall rather than always a fixed way down the screen.
         var tall = 22f + Math.Min(screen.Rows.Count, ScreenLayout.MenuLines(h)) * ScreenLayout.MenuLine + 12f;
-        var top = screen.Recipes.Count > 0
-            ? MathF.Round(h * 0.12f)
-            : MathF.Round((h - tall) * 0.42f);
+        var top = MathF.Round((h - tall) * 0.42f);
 
         Tabs(screen, layout, left, top, Panel);
-        var body = top + 22f;
-
-        // A tab either lists recipes or lists rows. Which one is decided by whoever filled the
-        // screen in, not here — Recipes being non-empty is the signal, so a tab that wants to draw
-        // something else entirely adds a list rather than a case in this method.
-        if (screen.Recipes.Count > 0) Book(catalogue, screen, layout, left, body, Panel);
-        else Rows(screen, layout, left, body, Panel, h);
+        Rows(screen, layout, left, top + 22f, Panel, h);
 
         Footer(screen, w, h);
     }
@@ -733,13 +736,81 @@ public sealed class HudRenderer : IDisposable
                     lit ? Ink : InkDim);
             }
 
-            if (row.Note.Length > 0 && lit)
-                Text(row.Note, left + 6f, y + 9f, 7f, InkFaint);
-
             // A heading has no zone at all, so the pointer cannot land on something the keyboard
             // deliberately skips over. The row's whole width is clickable, not just its words.
             layout.Add(ZoneKind.Row, i, left - 2f, y - 2f, panel + 4f, Line);
         }
+
+        Note(screen, left, top - 4f + shown * Line + 16f, panel, first, shown);
+    }
+
+    /// <summary>
+    /// What the picked setting costs, or when it applies, in a strip below the list.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Below the list, not inside the row.</b> It used to be drawn nine units under its own
+    /// label on a thirteen unit line — so its bottom third landed on top of the next row's text, and
+    /// picking "view distance" wrote "…next time the game opens; 8 loaded now" across "field of
+    /// view". Reported as text that should not be there, which is exactly what it was.</para>
+    /// <para>Wrapped, because the longest of them is wider than the panel and a line drawn past the
+    /// edge simply keeps going over whatever is beside it. Wrapping is on words and falls back to
+    /// cutting a word that is wider than the whole panel on its own, so there is no input that makes
+    /// this loop forever.</para>
+    /// <para>One fixed place, so the eye learns where to look, and drawn only when the picked row
+    /// has something to say — nothing above it moves either way.</para>
+    /// </remarks>
+    private void Note(HudScreen screen, float left, float y, float panel, int first, int shown)
+    {
+        if (screen.Selected < first || screen.Selected >= first + shown) return;
+        if (screen.Rows[screen.Selected].Note is not { Length: > 0 } note) return;
+
+        const float Glyph = 7f;
+        var lines = Wrap(note, panel - 8f, Glyph);
+
+        Bevel(left - 4f, y, panel + 8f, lines.Count * 9f + 7f, raised: false,
+            new Vector4(0.20f, 0.20f, 0.20f, 0.96f));
+
+        for (var i = 0; i < lines.Count; i++)
+            Text(lines[i], left, y + 4f + i * 9f, Glyph, InkFaint);
+    }
+
+    /// <summary>Reused by the wrapper so a note costs no allocation per frame.</summary>
+    private readonly List<string> _wrapped = [];
+
+    /// <summary>Breaks a line on spaces so it fits a width, cutting a word only if it cannot.</summary>
+    private List<string> Wrap(string line, float width, float height)
+    {
+        _wrapped.Clear();
+
+        var start = 0;
+        while (start < line.Length)
+        {
+            var take = 0;
+            var lastSpace = -1;
+
+            while (start + take < line.Length)
+            {
+                if (line[start + take] == ' ') lastSpace = take;
+                if (TextWidth(line.AsSpan(start, take + 1), height) > width) break;
+                take++;
+            }
+
+            if (start + take >= line.Length)
+            {
+                _wrapped.Add(line[start..]);
+                break;
+            }
+
+            // Back up to the last space if there was one; otherwise cut the word, which only
+            // happens when one word is wider than the whole panel.
+            var end = lastSpace > 0 ? lastSpace : Math.Max(1, take);
+            _wrapped.Add(line.Substring(start, end).TrimEnd());
+            start += end;
+
+            while (start < line.Length && line[start] == ' ') start++;
+        }
+
+        return _wrapped;
     }
 
     /// <summary>
@@ -820,94 +891,132 @@ public sealed class HudRenderer : IDisposable
         TextCentred(screen.Footer, w / 2f, h - 46f, 8f, InkDim);
     }
 
-    /// <summary>The recipe list, and the selected recipe laid out as it would be in the grid.</summary>
-    private void Book(
-        ItemRegistry catalogue, HudScreen screen, ScreenLayout layout, float left, float top, float panel)
+    /// <summary>
+    /// The recipe book, folded out beside the panel it belongs to.
+    /// </summary>
+    /// <remarks>
+    /// <para>A page of what can be made here — craftable lit, everything else dark, because half
+    /// the value of a book is seeing that a stormglass pickaxe exists long before there is any
+    /// stormglass. Clicking one lays its ingredients into the grid on the panel beside it, which is
+    /// the whole reason the two are on one screen: what it makes lands in a square already in view,
+    /// a hand's width from the pockets it is going into.</para>
+    /// <para>The picked recipe is drawn under the page as what it costs. There is a font now, so it
+    /// is named as well — the pictures say what it takes and only a name says what it is for.</para>
+    /// </remarks>
+    private void Book(ItemRegistry catalogue, HudScreen screen, ScreenLayout layout)
     {
-        const float Cell = 22f;
-        const int Columns = 10;
+        var z = layout.Zoom;
+        var cell = layout.Size(ScreenLayout.BookCell);
 
-        var rows = Math.Max(1, (screen.Recipes.Count + Columns - 1) / Columns);
-        var listHeight = rows * Cell;
+        // The book's own frame, in its own pixels, hanging to the left of the panel.
+        BookBevel(layout, 0f, 0f, ScreenLayout.BookWidth, ScreenLayout.BookHeight, raised: true, PanelFill);
+        BookBevel(
+            layout, ScreenLayout.BookWell.X, ScreenLayout.BookWell.Y,
+            ScreenLayout.BookWell.W, ScreenLayout.BookWell.H,
+            raised: false, new Vector4(0.15f, 0.15f, 0.16f, 0.98f));
 
-        Frame(left - 4f, top - 4f, panel + 8f, listHeight + 8f);
+        var pages = Math.Max(1, (screen.Recipes.Count + ScreenLayout.BookPage - 1) / ScreenLayout.BookPage);
+        var page = Math.Clamp(screen.BookPage, 0, pages - 1);
 
-        for (var i = 0; i < screen.Recipes.Count; i++)
+        TextCentred(
+            screen.Grid is { Width: > 2 } ? "at a bench" : "in your hands",
+            layout.BookX + layout.Size(ScreenLayout.BookWidth * 0.5f), layout.Y(14f), 8f, InkDim);
+
+        foreach (var zone in layout.Zones)
         {
-            var x = left + i % Columns * Cell;
-            var y = top + i / Columns * Cell;
-            var payable = i < screen.Payable.Count && screen.Payable[i];
+            if (zone.Kind != ZoneKind.Recipe) continue;
 
-            Bevel(x, y, Cell - 2f, Cell - 2f, raised: false,
+            var payable = zone.Index < screen.Payable.Count && screen.Payable[zone.Index];
+
+            Bevel(zone.X, zone.Y, zone.W, zone.H, raised: false,
                 payable ? SlotFill : new Vector4(0.19f, 0.19f, 0.19f, 0.95f));
 
-            var result = screen.Recipes[i].Result;
-            var shade = payable ? Vector4.One : new Vector4(0.45f, 0.45f, 0.45f, 0.85f);
-            Rect(_blocks, x + 3f, y + 3f, Cell - 8f, Cell - 8f, shade, catalogue[result.Item].IconLayer);
+            if (screen.Hovered is { Kind: ZoneKind.Recipe } hot && hot.Index == zone.Index)
+                Rect(_plain, zone.X, zone.Y, zone.W, zone.H, new Vector4(1f, 1f, 1f, 0.20f));
 
-            if (screen.Hovered is { Kind: ZoneKind.Recipe } hot && hot.Index == i)
-                Rect(_plain, x, y, Cell - 2f, Cell - 2f, new Vector4(1f, 1f, 1f, 0.18f));
+            if (zone.Index == screen.Selected) Select(zone.X, zone.Y, zone.W, zone.H);
 
-            if (i == screen.Selected) Select(x, y, Cell - 2f, Cell - 2f);
+            var result = screen.Recipes[zone.Index].Result;
+            var inset = MathF.Round(z * 2f);
+            Rect(_blocks, zone.X + inset, zone.Y + inset, zone.W - inset * 2f, zone.H - inset * 2f,
+                payable ? Vector4.One : new Vector4(0.45f, 0.45f, 0.45f, 0.85f),
+                catalogue[result.Item].IconLayer);
 
-            layout.Add(ZoneKind.Recipe, i, x, y, Cell - 2f, Cell - 2f);
+            if (result.Count > 1)
+                Number(result.Count, zone.X + zone.W, zone.Y + zone.H - cell * 0.32f, MathF.Max(5f, z * 4f));
         }
 
-        // The selected recipe, drawn as its own picture: the grid on the left, the result on the
-        // right, at the size a player is about to reproduce.
+        // The pages either side. Both always drawn; the one that would do nothing is dim.
+        foreach (var zone in layout.Zones)
+        {
+            if (zone.Kind != ZoneKind.Button) continue;
+            if (zone.Index is not ((int)ScreenButton.PageBack or (int)ScreenButton.PageForward)) continue;
+
+            var back = zone.Index == (int)ScreenButton.PageBack;
+            var live = back ? page > 0 : page < pages - 1;
+            var hot = screen.Hovered is { Kind: ZoneKind.Button } over && over.Index == zone.Index;
+
+            var ink = !live ? new Vector4(0.35f, 0.35f, 0.35f, 0.8f) : hot ? Highlight : Ink;
+
+            // A triangle out of stacked bars, the same way the crafting arrow is drawn.
+            var rows = (int)MathF.Max(3f, MathF.Round(zone.H / (z * 2f)));
+            for (var i = 0; i < rows; i++)
+            {
+                var reach = zone.W * (1f - MathF.Abs(i - (rows - 1) * 0.5f) / (rows * 0.5f));
+                if (reach <= 0f) continue;
+
+                Rect(_plain,
+                    back ? zone.X + zone.W - reach : zone.X,
+                    zone.Y + i * (zone.H / rows), reach, MathF.Max(1f, zone.H / rows), ink);
+            }
+        }
+
+        if (pages > 1)
+            TextCentred(
+                $"{page + 1} of {pages}",
+                layout.BookX + layout.Size(ScreenLayout.BookWidth * 0.5f),
+                layout.Y(144f), 8f, InkDim);
+
+        // What the picked one costs, under the page.
         var chosen = screen.Selected >= 0 && screen.Selected < screen.Recipes.Count
             ? screen.Recipes[screen.Selected]
             : null;
 
-        var detailTop = top + listHeight + 14f;
-        Frame(left - 4f, detailTop - 4f, panel + 8f, 3f * Cell + 30f);
         if (chosen is null) return;
 
-        for (var y = 0; y < 3; y++)
-        for (var x = 0; x < 3; x++)
-        {
-            var px = left + x * Cell;
-            var py = detailTop + y * Cell;
-
-            // Shapeless recipes have no arrangement, so they are laid out in reading order rather
-            // than pretended into a shape the grid would not accept.
-            var slot = chosen.Shapeless
-                ? Nth(chosen, y * 3 + x)
-                : x < chosen.Width && y < chosen.Height ? chosen.At(x, y) : null;
-
-            Bevel(px, py, Cell - 2f, Cell - 2f, raised: false,
-                slot is null ? new Vector4(0.19f, 0.19f, 0.19f, 0.95f) : SlotFill);
-
-            if (slot is null) continue;
-            Rect(_blocks, px + 3f, py + 3f, Cell - 8f, Cell - 8f, Vector4.One,
-                catalogue[slot.Members[0]].IconLayer);
-
-            // A slot that will take more than one thing wears a corner mark, so a tag does not read
-            // as "exactly this plank".
-            if (slot.Members.Length > 1)
-                Rect(_plain, px + Cell - 6f, py + 2f, 3f, 3f, new Vector4(0.95f, 0.82f, 0.35f, 0.95f));
-        }
-
-        // The result, out to the right of the grid with a bar pointing at it.
-        var arrowY = detailTop + Cell * 1.5f - 1.5f;
-        Rect(_plain, left + 3f * Cell + 6f, arrowY, 20f, 3f, PanelLight);
-
-        var resultX = left + 3f * Cell + 34f;
-        var resultY = detailTop + Cell - 4f;
-        Bevel(resultX - 4f, resultY - 4f, 36f, 36f, raised: false, SlotFill);
-        Rect(_blocks, resultX, resultY, 28f, 28f, Vector4.One, catalogue[chosen.Result.Item].IconLayer);
-        if (chosen.Result.Count > 1) Number(chosen.Result.Count, resultX + 29f, resultY + 20f);
-
-        // What it is, in words. The pictures say what it costs; only a name says what it is for,
-        // and a bench full of grey squares is a puzzle rather than a menu.
-        var nameY = detailTop + 3f * Cell + 8f;
+        var nameY = layout.Y(ScreenLayout.BookHeight) + 6f;
         var payableNow = screen.Selected < screen.Payable.Count && screen.Payable[screen.Selected];
 
-        Text(chosen.Name, left, nameY, 9f,
+        TextCentred(
+            chosen.Name, layout.BookX + layout.Size(ScreenLayout.BookWidth * 0.5f), nameY, 9f,
             payableNow ? Vector4.One : InkDim);
 
-        Text(chosen.NeedsBench ? "at a bench" : "in hand", left, nameY + 12f, 7f,
-            InkFaint);
+        TextCentred(
+            payableNow ? "click to lay it out" : "not enough for this yet",
+            layout.BookX + layout.Size(ScreenLayout.BookWidth * 0.5f), nameY + 12f, 7f, InkFaint);
+    }
+
+    /// <summary>A bevel in the book's own pixels, which start at its own left edge.</summary>
+    private void BookBevel(
+        ScreenLayout layout, float px, float py, float pw, float ph, bool raised, Vector4 fill)
+    {
+        var z = layout.Zoom;
+        var edge = MathF.Max(1f, MathF.Round(z));
+        var x = layout.BookX + px * z;
+        var y = layout.Y(py);
+        var w = pw * z;
+        var h = ph * z;
+
+        var top = raised ? PanelLight : PanelDark;
+        var bottom = raised ? PanelDark : PanelLight;
+
+        Rect(_plain, x, y, w, h, fill);
+        Rect(_plain, x, y, w, edge, top);
+        Rect(_plain, x, y, edge, h, top);
+        Rect(_plain, x, y + h - edge, w, edge, bottom);
+        Rect(_plain, x + w - edge, y, edge, h, bottom);
+        Rect(_plain, x, y + h - edge, edge, edge, fill);
+        Rect(_plain, x + w - edge, y, edge, edge, fill);
     }
 
     /// <summary>The nth filled slot of a shapeless recipe, or null past the end.</summary>
@@ -948,17 +1057,42 @@ public sealed class HudRenderer : IDisposable
             _ => PanelKind.Player,
         };
 
-        layout.BuildPanel(kind, screen.Grid?.Width ?? 0, w, h);
+        layout.BuildPanel(
+            kind, screen.Grid?.Width ?? 0, w, h,
+            screen.BookOut, screen.BookPage, screen.Recipes.Count);
+
         var z = layout.Zoom;
+
+        // The book first, so the panel's own frame overlaps it rather than the other way round.
+        if (layout.BookOut) Book(catalogue, screen, layout);
 
         // The panel. Its border is two of the pack's own pixels, so it thickens with the panel
         // rather than staying two layout units while everything around it grows.
         PanelBevel(layout, 0f, 0f, ScreenLayout.PanelWidth, ScreenLayout.PanelHeight, raised: true, PanelFill);
 
         // The player screen's tabs sit on top of the panel. A station has none — a furnace is not a
-        // place you look up what you have unlocked.
+        // place you look up what you have unlocked. There is one tab until the progress, handbook
+        // and map ones land, so the strip draws nothing today.
         if (screen.TabNames.Length > 1)
             Tabs(screen, layout, layout.X(0f), layout.Y(0f) - 18f, layout.Size(ScreenLayout.PanelWidth));
+
+        // The button that folds the book out, on whichever panel has one.
+        foreach (var zone in layout.Zones)
+        {
+            if (zone.Kind != ZoneKind.Button || zone.Index != (int)ScreenButton.Book) continue;
+
+            var hot = screen.Hovered is { Kind: ZoneKind.Button } over && over.Index == zone.Index;
+            Bevel(zone.X, zone.Y, zone.W, zone.H, raised: !screen.BookOut,
+                hot ? PanelLight : screen.BookOut ? SlotFill : PanelFill);
+
+            // An open book on the face of it, which is the one picture that needs no label.
+            var ink = screen.BookOut ? Highlight : Ink;
+            var pad = MathF.Max(1f, MathF.Round(z * 1.5f));
+            Rect(_plain, zone.X + pad, zone.Y + pad, zone.W - pad * 2f, zone.H - pad * 2f,
+                new Vector4(0.10f, 0.10f, 0.10f, 0.9f));
+            Rect(_plain, zone.X + pad + z, zone.Y + pad + z, (zone.W - pad * 2f) / 2f - z, zone.H - pad * 2f - z * 2f, ink);
+            Rect(_plain, zone.X + zone.W / 2f + z * 0.5f, zone.Y + pad + z, (zone.W - pad * 2f) / 2f - z, zone.H - pad * 2f - z * 2f, ink);
+        }
 
         // A rule where the player's own pockets begin, which is where the pack's sheet puts one too.
         Rect(_plain, layout.X(7f), layout.Y(78f), layout.Size(162f), z, PanelDark);
@@ -1367,7 +1501,7 @@ public sealed class HudRenderer : IDisposable
     }
 
     /// <summary>How wide a line of text would come out, without drawing it.</summary>
-    private float TextWidth(string line, float height)
+    public float TextWidth(ReadOnlySpan<char> line, float height)
     {
         var width = 0f;
 
@@ -1379,6 +1513,17 @@ public sealed class HudRenderer : IDisposable
 
         return width;
     }
+
+    /// <summary>The sizes this interface writes at: a row's label and value, and a note under them.</summary>
+    public const float RowGlyph = 8f;
+
+    public const float NoteGlyph = 7f;
+
+    /// <summary>How wide the settings panel is, so anything checking what fits can ask.</summary>
+    public const float MenuPanel = 232f;
+
+    /// <summary>How many wrapped lines a note comes to at the width it is drawn in.</summary>
+    public int NoteLines(string note) => Wrap(note, MenuPanel - 8f, NoteGlyph).Count;
 
     /// <summary>
     /// How far the pen moves after one glyph, in whole layout units.

@@ -1794,9 +1794,38 @@ public static class WorldAudit
                     + $"the pack's sheet puts it at {panelX},{panelY}");
         }
 
+        // And with the book folded out beside it. It hangs to the LEFT, so nothing of it may reach
+        // the panel — a book drawn over the pockets is a book covering the thing it exists to fill,
+        // and because a recipe zone is added after the squares it would win the hit test as well,
+        // silently taking clicks meant for a slot.
+        var overlapping = 0;
+        var recipes = 0;
+
+        foreach (var (kind, cells) in new[] { (PanelKind.Player, 2), (PanelKind.Bench, 3) })
+        {
+            layout.BuildPanel(kind, cells, 800f, 450f, bookOut: true, bookPage: 0, bookCount: 40);
+
+            foreach (var zone in layout.Zones)
+            {
+                if (zone.Kind != ZoneKind.Recipe) continue;
+                recipes++;
+                if (zone.X + zone.W > layout.OriginX) overlapping++;
+            }
+
+            if (layout.BookX + ScreenLayout.BookWidth * layout.Zoom > layout.OriginX)
+                faults.Add($"{kind}'s book runs into the panel by "
+                    + $"{layout.BookX + ScreenLayout.BookWidth * layout.Zoom - layout.OriginX:F0} units");
+
+            if (layout.BookX < 0f) faults.Add($"{kind}'s book starts {-layout.BookX:F0} units off the left of the screen");
+        }
+
+        if (overlapping > 0) faults.Add($"{overlapping} of the book's recipes are laid over the panel");
+        if (recipes == 0) faults.Add("the book laid out no recipes at all");
+
         _ = z;
         detail = $"{tested} squares over 3 panels x 3 window shapes at zooms {string.Join("/", zooms)}, "
-            + "each hit-tested from its own middle and placed against the pack's own grid";
+            + $"each hit-tested from its own middle and placed against the pack's own grid; "
+            + $"{recipes} book entries all clear of it";
 
         return faults;
     }
