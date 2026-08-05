@@ -1293,6 +1293,25 @@ public sealed class ClientHost : IDisposable
         }
     }
 
+    /// <summary>
+    /// A world name nothing on disk is under yet.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ <b>Checked against the folder rather than against the list the screen is showing.</b> The
+    /// list is read when the menu is arrived at; the folder is what a name would collide with, and
+    /// a collision here would open somebody's world under the words "make another world".
+    /// </remarks>
+    private static string NextWorldName()
+    {
+        for (var n = 2; n < 1000; n++)
+        {
+            var name = $"world-{n}";
+            if (!File.Exists(WorldSave.PathFor(name))) return name;
+        }
+
+        return "world-new";
+    }
+
     /// <summary>A span of seconds as a person would say it.</summary>
     private static string Spoken(double seconds)
     {
@@ -2522,6 +2541,9 @@ public sealed class ClientHost : IDisposable
                 Note: $"a new one, seed {_seed}"));
 
         _hudScreen.Rows.Add(new MenuRow(
+            "make another world", NextWorldName(),
+            Note: "a fresh seed, kept under its own name — this one stays where it is"));
+        _hudScreen.Rows.Add(new MenuRow(
             "open a world", _saved.Count == 0 ? "none saved yet" : $"{_saved.Count} saved"));
         _hudScreen.Rows.Add(new MenuRow("options", "", Note: "keys, picture, sound"));
         _hudScreen.Rows.Add(new MenuRow("quit", ""));
@@ -2817,6 +2839,12 @@ public sealed class ClientHost : IDisposable
             case "carry on":
             case "start a world":
                 StartPlaying();
+                return;
+
+            case "make another world":
+                // A name nothing is under yet, and no seed — so the new run draws its own random
+                // one, which is what starting a world has always meant.
+                OpenAnotherWorld(NextWorldName());
                 return;
 
             case "open a world":
@@ -4739,8 +4767,9 @@ public sealed class ClientHost : IDisposable
 
         if (_uiRows.TryGetValue("start", out var menu))
         {
-            const int Choices = 5;      // the name, then carry on / open a world / options / quit
-            const int Selectable = 4;
+            // The name, then: carry on / make another world / open a world / options / quit.
+            const int Choices = 6;
+            const int Selectable = 5;
 
             if (menu.Total != Choices)
                 faults.Add($"the start menu built {menu.Total} rows where it offers {Choices}");
