@@ -67,21 +67,26 @@ public sealed class PlayerRenderer : IDisposable
     private const float RestRoll = -0.18f;
     private static readonly Vector3 RestOffset = new(0.58f, -0.76f, -0.58f);
 
-    // The swing is a diagonal slash: out and across, right to left. It cocks back to the right,
-    // sweeps forward and over to the left, then recovers.
+    // The swing is a sword's diagonal slice: it cocks up to the top right and cuts down across to
+    // the bottom left, then recovers.
     //
-    // The crossing is carried by yaw and by the sideways shift together — yaw turns the tool to
-    // face the way it is travelling, the shift moves it across the frame — and that pairing is what
-    // makes it read as a stroke rather than as a tool sliding sideways. Vertical travel is
-    // deliberately the smaller part of it: a chop that mostly goes up and down reads as a jab from
-    // behind the eye, which is what this was.
-    private const float WindUpShare = 0.30f;   // of the swing spent cocking back to the right
-    private const float DriveShare = 0.28f;    // of it spent crossing; the rest recovers
-    private const float SwingCock = 0.30f;     // radians raised above rest at the top of the wind-up
-    private const float SwingFollow = 0.30f;   // radians below rest at the end of the follow-through
-    private const float SwingCross = 0.80f;    // how far the tool turns across the screen, the big one
-    private const float SwingTwist = 0.45f;    // how far the forearm rolls over through the stroke
-    private static readonly Vector3 SwingShift = new(-0.26f, -0.04f, -0.16f);
+    // What makes it a slice rather than a chop or a sideways slide is that the rise and the
+    // crossing are the *same* motion — one number drives both, so the tool is always as high as it
+    // is far right. Pull them apart and it reads as two movements happening at once.
+    //
+    // Each of the three carries part of it. Pitch takes the tool up and brings it down, because
+    // over a right angle the arm points forward and up and under it forward and down. Yaw turns
+    // what is held to face the way it is travelling. The shift moves the whole thing across the
+    // frame, and its X and Y are deliberately in proportion: that ratio *is* the angle of the cut.
+    // Sized to read rather than to perform. The direction is the thing being said; a cut that
+    // throws the tool right across the frame says it twice and gets tiring by the tenth block.
+    private const float WindUpShare = 0.32f;   // of the swing spent cocking up to the right
+    private const float DriveShare = 0.22f;    // of it spent cutting down across; the rest recovers
+    private const float SwingCock = 0.34f;     // radians raised above rest at the top right
+    private const float SwingFollow = 0.42f;   // radians below rest at the bottom left
+    private const float SwingCross = 0.52f;    // how far it turns across the screen
+    private const float SwingTwist = 0.36f;    // how far the edge rolls over through the cut
+    private static readonly Vector3 SwingShift = new(-0.19f, -0.14f, -0.10f);
 
     public ArmStyle Arms { get; }
 
