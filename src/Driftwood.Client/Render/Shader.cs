@@ -85,6 +85,13 @@ public sealed class Shader : IDisposable
         _gl.Uniform1(loc, value);
     }
 
+    public void SetVec2(string name, Vector2 v)
+    {
+        var loc = Loc(name);
+        if (loc < 0) return;
+        _gl.Uniform2(loc, v.X, v.Y);
+    }
+
     public void SetVec4(string name, Vector4 v)
     {
         var loc = Loc(name);

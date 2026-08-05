@@ -176,6 +176,12 @@ public sealed class ClientHost : IDisposable
     /// <summary>Voices, and the clips they play. Null when the run asked for silence.</summary>
     private AudioEngine? _audio;
 
+    /// <summary>Health, breath, and what a fall costs.</summary>
+    private PlayerVitals _vitals = null!;
+
+    /// <summary>Everything on screen that is not the world.</summary>
+    private HudRenderer _hud = null!;
+
     /// <summary>
     /// Which of a material's several sounds to use, and how much to shift its pitch.
     /// </summary>
@@ -397,6 +403,7 @@ public sealed class ClientHost : IDisposable
         _outline = new BlockOutline(_gl);
 
         _particleRenderer = new ParticleRenderer(_gl);
+        _hud = new HudRenderer(_gl);
 
         // The benchmark opens no device at all. It flies a scripted path and hears nothing worth
         // hearing, and a measurement run that makes noise on somebody's machine is rude twice over.
@@ -458,6 +465,7 @@ public sealed class ClientHost : IDisposable
         _camera.FarPlane = _fogEnd + 200f;
 
         _player = new PlayerBody(registry);
+        _vitals = new PlayerVitals(registry);
         _particles = new ParticleSystem(registry);
         _hand = StarterBlocks.Hand(registry);
         _solid = registry.BuildSolidTable();
@@ -776,6 +784,7 @@ public sealed class ClientHost : IDisposable
         UpdateTarget();
         StepAnimation((float)dt);
         StepFootfall((float)dt);
+        StepVitals((float)dt);
         _particles.Update(_streamer.World, (float)dt);
         PlaceCamera();
         PumpStreaming();
@@ -970,6 +979,38 @@ public sealed class ClientHost : IDisposable
             LightValue.Sky(packed) / (float)LightValue.Max,
             new Vector3(LightValue.Red(packed), LightValue.Green(packed), LightValue.Blue(packed))
                 / LightValue.Max);
+    }
+
+    /// <summary>
+    /// Advances health and breath, and puts the player back on their feet when they run out.
+    /// </summary>
+    /// <remarks>
+    /// Only while walking. The fly camera is an inspection tool and a tool that can drown you is a
+    /// worse one; nothing is simulated for it and the bar stays where it was.
+    /// </remarks>
+    private void StepVitals(float dt)
+    {
+        if (_bench is not null || !_walking || !_spawned) return;
+
+        var what = _vitals.Update(_streamer.World, _player, dt);
+
+        // A hurt has to be felt. There is no player voice in the sound pack, so the ground the
+        // blow was taken on stands in for one — which is at least the right material.
+        if (what.Hurt > 0)
+        {
+            var under = _streamer.World.GetBlock(
+                (int)MathF.Floor(_player.Position.X),
+                (int)MathF.Floor(_player.Position.Y - 0.1f),
+                (int)MathF.Floor(_player.Position.Z));
+
+            if (!under.IsAir)
+                PlaySound(_registry[under], SoundEvent.Break, _player.Position, 0.8f);
+        }
+
+        if (!what.Died) return;
+
+        _player.Teleport(_spawnPoint);
+        _vitals.Restore();
     }
 
     /// <summary>Plays one of a material's sounds for one situation, at a point in the world.</summary>
@@ -1290,6 +1331,10 @@ public sealed class ClientHost : IDisposable
 
         DrawPlayer(viewProj, projection, view);
 
+        // Over everything, in screen space. The benchmark flies itself and wants a clean picture.
+        if (_bench is null)
+            _hud.Draw(_blockTextures, _registry, _hand, _handSlot, _vitals, size.X, size.Y);
+
         _renderMs = (Stopwatch.GetTimestamp() - renderStart) * TicksToMs;
     }
 
@@ -1350,6 +1395,7 @@ public sealed class ClientHost : IDisposable
         _sky?.Dispose();
         _clouds?.Dispose();
         _particleRenderer?.Dispose();
+        _hud?.Dispose();
         _audio?.Dispose();
         _blockTextures?.Dispose();
         _playerRenderer?.Dispose();

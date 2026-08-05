@@ -358,6 +358,12 @@ public static class WorldAudit
                   + "and six outlines wrapping the shape rather than the cell"
                 : $"{volumeFaults.Count} faults: {volumeFaults[0]}");
 
+        var vitalsFaults = VitalsSelfTest(registry, ids);
+        Check("falls and water cost health", vitalsFaults.Count == 0,
+            vitalsFaults.Count == 0
+                ? $"{PlayerVitals.SafeFall:F0} blocks free then a half-heart each, {PlayerVitals.MaxBreath / 60}s of breath, rest heals"
+                : $"{vitalsFaults.Count} faults: {vitalsFaults[0]}");
+
         var soundFaults = SoundSelfTest(registry, out var soundDetail);
         Check("every material has a sound", soundFaults.Count == 0, soundFaults.Count == 0
             ? soundDetail
@@ -1021,6 +1027,125 @@ public static class WorldAudit
 
         if (ChunkVertex.Quantise(Chunk.Size + 1) > 0xFFF)
             faults.Add("the position field cannot address a model reaching past the chunk");
+
+        return faults;
+    }
+
+    /// <summary>
+    /// Drops the body from a ladder of heights, holds its head under water, and reads the bar.
+    /// </summary>
+    /// <remarks>
+    /// <para>Every number here is one a player finds out by dying to it. How far a fall has to be
+    /// before it costs anything decides whether ordinary climbing is punished; how long a breath
+    /// lasts decides whether a lake is a shortcut or a trap. Neither can be tuned by eye and both
+    /// are wrong quietly.</para>
+    /// <para>The ladder matters more than any one rung. A single "a ten-block fall hurts" passes a
+    /// build where every fall costs the same, and a build where the free height is zero, and one
+    /// where damage is a constant. Walking heights either side of the free limit and checking the
+    /// cost rises with the height is what tells those apart.</para>
+    /// </remarks>
+    private static List<string> VitalsSelfTest(BlockRegistry registry, StarterBlocks.Ids ids)
+    {
+        var faults = new List<string>();
+        const float Step = 1f / 60f;
+
+        // Ground up to y=10, so the surface is y=11.
+        var world = new VoxelWorld(registry);
+        for (var z = -3; z <= 3; z++)
+        for (var x = -3; x <= 3; x++)
+        for (var y = 0; y <= 10; y++)
+            world.SetBlock(x, y, z, ids.Stone);
+
+        (float Height, int Want)[] ladder =
+        [
+            (1f, 0),
+            (3f, 0),
+            (5f, 2),
+            (9f, 6),
+            (14f, 11),
+        ];
+
+        var lastCost = -1;
+        foreach (var (height, want) in ladder)
+        {
+            var body = new PlayerBody(registry);
+            var vitals = new PlayerVitals(registry);
+            body.Teleport(new Vector3(0.5f, 11f + height, 0.5f));
+
+            for (var i = 0; i < 600 && (!body.OnGround || i < 4); i++)
+            {
+                body.Step(world, Step, Vector3.Zero, false, false, false);
+                vitals.Update(world, body, Step);
+            }
+
+            var cost = PlayerVitals.MaxHealth - vitals.Health;
+            if (Math.Abs(cost - want) > 1)
+                faults.Add($"a {height:F0} block fall cost {cost} half-hearts, expected about {want}");
+            if (cost < lastCost) faults.Add($"a {height:F0} block fall cost less than a shorter one");
+            lastCost = cost;
+        }
+
+        // Deep enough that the head is under and the feet are on the floor.
+        var pool = new VoxelWorld(registry);
+        for (var z = -3; z <= 3; z++)
+        for (var x = -3; x <= 3; x++)
+        {
+            for (var y = 0; y <= 10; y++) pool.SetBlock(x, y, z, ids.Stone);
+            for (var y = 11; y <= 16; y++) pool.SetBlock(x, y, z, ids.Water);
+        }
+
+        var swimmer = new PlayerBody(registry);
+        var lungs = new PlayerVitals(registry);
+        swimmer.Teleport(new Vector3(0.5f, 11f, 0.5f));
+
+        // Ten seconds: long enough for the breath to run out and the drowning to start, short
+        // enough to surface alive. A dead body has no vitals to advance, so drowning one outright
+        // would leave nothing to measure the recovery with.
+        var toEmpty = -1;
+        var firstHurt = -1;
+        for (var i = 0; i < 60 * 10; i++)
+        {
+            swimmer.Step(pool, Step, Vector3.Zero, false, false, false);
+            lungs.Update(pool, swimmer, Step);
+
+            if (toEmpty < 0 && lungs.Breath == 0) toEmpty = i;
+            if (firstHurt < 0 && lungs.Health < PlayerVitals.MaxHealth) firstHurt = i;
+        }
+
+        if (!lungs.Submerged) faults.Add("a body standing in six blocks of water is not submerged");
+        if (toEmpty < 60 * 3 || toEmpty > 60 * 8)
+            faults.Add($"breath ran out after {toEmpty / 60f:F1}s, wanted 3 to 8");
+        if (firstHurt <= toEmpty) faults.Add("drowning started before the breath was gone");
+        if (lungs.Health >= PlayerVitals.MaxHealth) faults.Add("ten seconds under water cost nothing");
+        if (!lungs.Alive) faults.Add("ten seconds under water was fatal, which is far too fast");
+
+        // And surfacing gives it back faster than it went.
+        var refilled = -1;
+        for (var i = 0; i < 60 * 20; i++)
+        {
+            swimmer.Teleport(new Vector3(0.5f, 40f, 0.5f));
+            lungs.Update(world, swimmer, Step);
+            if (lungs.Breath < PlayerVitals.MaxBreath) continue;
+            refilled = i;
+            break;
+        }
+
+        if (refilled < 0) faults.Add("breath never came back out of the water");
+        else if (refilled >= toEmpty) faults.Add($"breath took {refilled / 60f:F1}s to return, longer than it lasted");
+
+        // Rest heals, and not before it should.
+        var rester = new PlayerBody(registry);
+        var healing = new PlayerVitals(registry);
+        rester.Teleport(new Vector3(0.5f, 11f, 0.5f));
+        healing.Hurt(6);
+
+        var atStart = healing.Health;
+        for (var i = 0; i < 60 * 3; i++) healing.Update(world, rester, Step);
+        if (healing.Health != atStart) faults.Add("health started coming back within three seconds of being hurt");
+
+        for (var i = 0; i < 60 * 30; i++) healing.Update(world, rester, Step);
+        if (healing.Health != PlayerVitals.MaxHealth)
+            faults.Add($"half a minute of rest left health at {healing.Health} of {PlayerVitals.MaxHealth}");
 
         return faults;
     }

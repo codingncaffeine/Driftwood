@@ -399,6 +399,72 @@ public static class TileGen
         return t;
     }
 
+    /// <summary>The heart the health bar is counted in, as a white shape to be tinted.</summary>
+    /// <remarks>
+    /// Drawn white and coloured at the point of use, so full, half and empty are one tile and three
+    /// tints rather than three tiles that can drift apart. The outline is part of the shape rather
+    /// than a separate pass: an empty heart is the same pixels in a dark colour, and it has to read
+    /// as the same heart or the bar looks like two different rows.
+    /// </remarks>
+    public static byte[] Heart()
+    {
+        var t = new byte[BytesPerTile];
+
+        // Two lobes and a point. Written as a coverage test rather than as a pixel list so it
+        // scales with the tile size instead of being a bitmap somebody has to redraw.
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var u = (x + 0.5f) / Size * 2f - 1f;
+            var v = 1f - (y + 0.5f) / Size * 1.15f;
+
+            var lobes = MathF.Min(
+                Distance(u, v, -0.42f, 0.42f, 0.46f),
+                Distance(u, v, 0.42f, 0.42f, 0.46f));
+            var body = MathF.Abs(u) + MathF.Max(0f, 0.60f - v * 1.55f) - 0.60f;
+
+            var inside = lobes < 0f || (body < 0f && v < 0.46f);
+            if (!inside) continue;
+
+            // A darker rim wherever the shape is about to end, so the tint has an edge to read.
+            var edge = lobes > -0.10f && body > -0.10f;
+            Put(t, x, y, edge ? (byte)176 : (byte)255, edge ? (byte)176 : (byte)255, edge ? (byte)176 : (byte)255, 255);
+        }
+
+        return t;
+
+        static float Distance(float x, float y, float cx, float cy, float r) =>
+            MathF.Sqrt((x - cx) * (x - cx) + (y - cy) * (y - cy)) - r;
+    }
+
+    /// <summary>The bubble the breath meter is counted in, likewise white.</summary>
+    public static byte[] Bubble()
+    {
+        var t = new byte[BytesPerTile];
+        const float Centre = (Size - 1) / 2f;
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var dx = (x - Centre) / (Size * 0.42f);
+            var dy = (y - Centre) / (Size * 0.42f);
+            var r = MathF.Sqrt(dx * dx + dy * dy);
+            if (r > 1f) continue;
+
+            // A highlight up and left, which is what makes a flat disc read as a bubble.
+            var lit = (x - Centre) < -Size * 0.10f && (y - Centre) < -Size * 0.10f && r > 0.35f && r < 0.78f;
+            var rim = r > 0.72f;
+
+            Put(t, x, y,
+                lit ? (byte)255 : rim ? (byte)190 : (byte)225,
+                lit ? (byte)255 : rim ? (byte)190 : (byte)225,
+                lit ? (byte)255 : rim ? (byte)190 : (byte)225,
+                255);
+        }
+
+        return t;
+    }
+
     /// <summary>Glowing veins through dark rock.</summary>
     public static byte[] Ember(int seed, byte[] baseTile, byte r, byte g, byte b)
     {
