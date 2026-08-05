@@ -379,6 +379,19 @@ public static class WorldAudit
                   + $"{drops.BlocksLeavingNothing} of them leaving nothing, every icon painted"
                 : $"{catalogueFaults.Count} faults: {catalogueFaults[0]}");
 
+        var book = StarterRecipes.Build(items);
+
+        var recipeFaults = RecipeSelfTest(registry, items, book);
+        Check("recipes match what they are made of", recipeFaults.Count == 0,
+            recipeFaults.Count == 0
+                ? $"{book.Recipes.Count} recipes and {book.Smelting.Count} smelts, each laid back "
+                  + "into a grid and found again, none duplicated, none bigger than a bench"
+                : $"{recipeFaults.Count} faults: {recipeFaults[0]}");
+
+        var reach = ReachabilitySelfTest(registry, items, drops, book, counts, out var reachDetail);
+        Check("everything is reachable from bare hands", reach.Count == 0,
+            reach.Count == 0 ? reachDetail : $"{reach.Count} faults: {reach[0]}");
+
         var vitalsFaults = VitalsSelfTest(registry, ids);
         Check("falls and water cost health", vitalsFaults.Count == 0,
             vitalsFaults.Count == 0
@@ -1206,6 +1219,268 @@ public static class WorldAudit
         if (flooded.Count != DroppedItems.Capacity)
             faults.Add($"the ground holds {flooded.Count}, not the {DroppedItems.Capacity} it claims");
         if (flooded.Refused == 0) faults.Add("the ground never refused a drop, so it grew instead");
+
+        return faults;
+    }
+
+    /// <summary>
+    /// Lays every recipe back into a grid and asks the book what it makes.
+    /// </summary>
+    /// <remarks>
+    /// <para>The round trip is the check. A recipe table and a matcher are two descriptions of the
+    /// same rule written in different shapes, and nothing about either says whether they agree —
+    /// a recipe with its rows the wrong way up, a matcher that trims the grid wrong, an off-by-one
+    /// in the mirror all leave a table full of recipes and a game where nothing can be made.</para>
+    /// <para>It also catches duplicates for free, and better than comparing signatures does: if two
+    /// recipes match the same arrangement, the second one laid out comes back as the first, and the
+    /// failure names both.</para>
+    /// </remarks>
+    private static List<string> RecipeSelfTest(
+        BlockRegistry registry, ItemRegistry items, RecipeBook book)
+    {
+        var faults = new List<string>();
+        var seen = new Dictionary<string, string>(StringComparer.Ordinal);
+        var grid = new ItemStack[9];
+
+        foreach (var recipe in book.Recipes)
+        {
+            if (recipe.Width > 3 || recipe.Height > 3)
+            {
+                faults.Add($"'{recipe.Name}' is {recipe.Width}x{recipe.Height}, past the biggest bench");
+                continue;
+            }
+
+            if (recipe.SlotsUsed == 0) faults.Add($"'{recipe.Name}' costs nothing");
+            if (recipe.Result.IsEmpty) faults.Add($"'{recipe.Name}' makes nothing");
+
+            var signature = recipe.Signature();
+            if (seen.TryGetValue(signature, out var other))
+                faults.Add($"'{recipe.Name}' is laid out exactly like '{other}'");
+            else
+                seen[signature] = recipe.Name;
+
+            // Laid into the corner of a full bench, so the trim has something to do. A recipe that
+            // only matches when it fills the grid exactly is a recipe a player has to guess at.
+            Array.Clear(grid);
+            for (var y = 0; y < recipe.Height; y++)
+            for (var x = 0; x < recipe.Width; x++)
+            {
+                if (recipe.At(x, y) is not { } want) continue;
+                grid[y * 3 + x] = new ItemStack(want.Members[0], 1);
+            }
+
+            if (!book.TryMatch(grid, 3, 3, out var made))
+            {
+                faults.Add($"'{recipe.Name}' laid out in a bench matched nothing");
+                continue;
+            }
+
+            if (made != recipe)
+                faults.Add($"'{recipe.Name}' laid out in a bench came back as '{made!.Name}'");
+
+            // And the same arrangement in the two slots a player carries, which must work for the
+            // small ones and must not for the big ones.
+            if (recipe.Width > 2 || recipe.Height > 2) continue;
+
+            Array.Clear(grid);
+            for (var y = 0; y < recipe.Height; y++)
+            for (var x = 0; x < recipe.Width; x++)
+            {
+                if (recipe.At(x, y) is not { } want) continue;
+                grid[y * 2 + x] = new ItemStack(want.Members[0], 1);
+            }
+
+            if (!book.TryMatch(grid.AsSpan(0, 4), 2, 2, out _))
+                faults.Add($"'{recipe.Name}' fits in two by two and did not match there");
+        }
+
+        // Nothing bigger than a player's hands claims to fit in them, and nothing that fits claims
+        // it needs a bench — the rule is the shape, and this is what says the shape is read.
+        foreach (var recipe in book.Recipes)
+        {
+            var big = recipe.Width > 2 || recipe.Height > 2;
+            if (recipe.NeedsBench == big) continue;
+            faults.Add($"'{recipe.Name}' is {recipe.Width}x{recipe.Height} and {(recipe.NeedsBench ? "wants" : "does not want")} a bench");
+        }
+
+        // A grid holding something no recipe mentions has to make nothing. Without this the whole
+        // round trip above would pass a matcher that says yes to everything.
+        var mentioned = new HashSet<ushort>();
+        foreach (var recipe in book.Recipes)
+        foreach (var slot in recipe.Ingredients)
+        foreach (var member in slot.Members) mentioned.Add(member.Value);
+
+        var unused = ItemId.None;
+        foreach (var item in items.All)
+            if (!item.Id.IsNone && !mentioned.Contains(item.Id.Value)) { unused = item.Id; break; }
+
+        if (unused.IsNone)
+        {
+            faults.Add("every item in the game is a recipe ingredient, so the negative control cannot run");
+        }
+        else
+        {
+            Array.Clear(grid);
+            grid[4] = new ItemStack(unused, 1);
+            if (book.TryMatch(grid, 3, 3, out var spurious))
+                faults.Add($"one {items[unused].Name} in a bench made '{spurious!.Name}'");
+
+            // And a scattering of the right things in the wrong arrangement makes nothing either.
+            Array.Clear(grid);
+            grid[0] = items.Stack("stick");
+            grid[8] = items.Stack("driftoak_planks");
+            if (book.TryMatch(grid, 3, 3, out var crooked))
+                faults.Add($"a stick and a plank in opposite corners made '{crooked!.Name}'");
+        }
+
+        _ = registry;
+        return faults;
+    }
+
+    /// <summary>
+    /// Starts a player in this world with nothing and works out what they could eventually hold.
+    /// </summary>
+    /// <remarks>
+    /// <para>The one check the whole content phase rests on. Every other question about a recipe
+    /// set — is it balanced, is it interesting, does it read — is a matter of taste; whether the
+    /// last item in it can be obtained at all is not, and it is invisible. A tier written one rung
+    /// too high, an ore that generates nowhere, a smelt whose only fuel is behind the thing it
+    /// smelts: each of those leaves a game that looks complete and has a dead end in it.</para>
+    /// <para>It seeds from the <em>census of this world</em>, not from the block table. A block that
+    /// is registered and never generated cannot start anybody off, and the difference between those
+    /// two is exactly the mistake worth catching.</para>
+    /// <para>The walk is a fixed point over four ways to gain something: dig it with what you have,
+    /// craft it, smelt it, or gain a tool that unlocks more digging. They feed each other — the
+    /// first pickaxe is crafted from dug wood and unlocks the rock the second is made of — so it
+    /// runs to exhaustion rather than in passes.</para>
+    /// </remarks>
+    private static List<string> ReachabilitySelfTest(
+        BlockRegistry registry,
+        ItemRegistry items,
+        BlockDrops drops,
+        RecipeBook book,
+        long[] counts,
+        out string detail)
+    {
+        var faults = new List<string>();
+        var have = new HashSet<ushort>();
+
+        // The best tier of each tool class currently obtainable. Index by ToolClass.
+        var reach = new int[Enum.GetValues<ToolClass>().Length];
+        for (var i = 0; i < reach.Length; i++) reach[i] = -1;      // -1 = no tool of this class
+
+        bool Held(ItemId item) => have.Contains(item.Value);
+
+        bool Gain(ItemId item)
+        {
+            if (item.IsNone || !have.Add(item.Value)) return false;
+
+            var type = items[item];
+            if (type.IsTool && type.Tier > reach[(int)type.Tool]) reach[(int)type.Tool] = type.Tier;
+            return true;
+        }
+
+        var rounds = 0;
+        bool changed;
+        do
+        {
+            changed = false;
+            rounds++;
+
+            // Dig. A block has to be somewhere in this world, and the hand or tool has to reach its
+            // tier — which is why gaining a pickaxe opens this loop up again.
+            for (ushort id = 1; id < registry.Count; id++)
+            {
+                if (counts[id] == 0) continue;
+
+                var block = registry[id];
+                if (block.Unbreakable) continue;
+                if (block.HarvestTier > 0 && reach[(int)block.HarvestClass] < block.HarvestTier) continue;
+
+                var left = drops.Of(block.Id);
+                if (!left.IsEmpty) changed |= Gain(left.Item);
+            }
+
+            // Craft.
+            foreach (var recipe in book.Recipes)
+            {
+                var payable = true;
+                foreach (var slot in recipe.Ingredients)
+                {
+                    var any = false;
+                    foreach (var member in slot.Members) any |= Held(member);
+                    if (any) continue;
+                    payable = false;
+                    break;
+                }
+
+                if (payable) changed |= Gain(recipe.Result.Item);
+            }
+
+            // Smelt, which costs a second thing: something to burn.
+            var anyFuel = false;
+            foreach (var type in items.All) anyFuel |= type.IsFuel && Held(type.Id);
+
+            if (!anyFuel) continue;
+
+            foreach (var recipe in book.Smelting)
+            {
+                var any = false;
+                foreach (var member in recipe.Input.Members) any |= Held(member);
+                if (any) changed |= Gain(recipe.Result.Item);
+            }
+        }
+        while (changed && rounds < 64);
+
+        if (rounds >= 64) faults.Add("the reachability walk never settled, so something is cyclic");
+
+        var unreachable = new List<string>();
+        foreach (var type in items.All)
+        {
+            if (type.Id.IsNone || Held(type.Id)) continue;
+            unreachable.Add(type.Name);
+        }
+
+        foreach (var name in unreachable)
+            faults.Add($"'{name}' cannot be obtained by anyone starting with nothing");
+
+        // A recipe nobody can pay for is a row in a table that never runs. Reported separately from
+        // an unreachable item because the cause is different — the result may well be reachable
+        // another way, and the dead ingredient is the thing to look at.
+        foreach (var recipe in book.Recipes)
+        foreach (var slot in recipe.Ingredients)
+        {
+            var any = false;
+            foreach (var member in slot.Members) any |= Held(member);
+            if (!any) faults.Add($"'{recipe.Name}' needs {slot.Name}, which nobody can get");
+        }
+
+        foreach (var recipe in book.Smelting)
+        {
+            var any = false;
+            foreach (var member in recipe.Input.Members) any |= Held(member);
+            if (!any) faults.Add($"'{recipe.Name}' takes {recipe.Input.Name}, which nobody can get");
+        }
+
+        // The positive control. A walk that starts with everything would report everything reachable
+        // whatever the recipes said, so the seed is checked for being a seed: bare hands must open
+        // some of the world and must not open all of it.
+        var byHand = 0;
+        var gated = 0;
+        for (ushort id = 1; id < registry.Count; id++)
+        {
+            if (counts[id] == 0 || registry[id].Unbreakable) continue;
+            if (registry[id].HarvestTier > 0) gated++; else byHand++;
+        }
+
+        if (byHand == 0) faults.Add("bare hands can dig nothing that generates, so nobody could start");
+        if (gated == 0) faults.Add("nothing that generates is behind a tool, so the ladder is not gating anything");
+
+        var toolSteps = 0;
+        foreach (var tier in reach) if (tier > 0) toolSteps++;
+
+        detail = $"{have.Count} of {items.Count - 1} items in {rounds} rounds from {byHand} blocks "
+               + $"a hand can take, past {gated} it cannot, over {toolSteps} tool classes";
 
         return faults;
     }

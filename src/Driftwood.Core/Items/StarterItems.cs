@@ -21,6 +21,9 @@ public static class StarterItems
     /// The hardest <see cref="BlockType.HarvestTier"/> this rung will bring up.
     /// </param>
     /// <param name="Speed">How much faster than a bare hand it works at its own class.</param>
+    /// <param name="Material">
+    /// What its heads are cut from — an item's name, or a tag's when more than one thing will do.
+    /// </param>
     /// <param name="Palette">Which row of tool icons this tier wears.</param>
     public readonly record struct ToolTier(
         string Name, string Material, int Tier, float Speed, int Durability, ushort Palette);
@@ -36,8 +39,8 @@ public static class StarterItems
     /// </remarks>
     public static readonly ToolTier[] Tiers =
     [
-        new("wood", "driftoak_planks", 1, 2f, 60, 0),
-        new("stone", "rubble", 2, 4f, 132, 1),
+        new("wood", "#planks", 1, 2f, 60, 0),
+        new("stone", "#rough_stone", 2, 4f, 132, 1),
         new("copper", "copper_ingot", 3, 6f, 190, 2),
         new("gold", "gold_ingot", 2, 12f, 33, 3),
         new("iron", "iron_ingot", 4, 8f, 251, 4),
