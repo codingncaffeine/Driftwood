@@ -392,6 +392,10 @@ public static class WorldAudit
         Check("everything is reachable from bare hands", reach.Count == 0,
             reach.Count == 0 ? reachDetail : $"{reach.Count} faults: {reach[0]}");
 
+        var fontFaults = FontSelfTest(out var fontDetail);
+        Check("every letter is drawn and distinct", fontFaults.Count == 0,
+            fontFaults.Count == 0 ? fontDetail : $"{fontFaults.Count} faults: {fontFaults[0]}");
+
         var joinFaults = ConnectionSelfTest(registry, out var joinDetail);
         Check("things that join up find their neighbours", joinFaults.Count == 0,
             joinFaults.Count == 0 ? joinDetail : $"{joinFaults.Count} faults: {joinFaults[0]}");
@@ -1844,6 +1848,79 @@ public static class WorldAudit
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Reads the whole font back: right characters, all inked, none of them the same as another.
+    /// </summary>
+    /// <remarks>
+    /// <para>A hand-drawn table of ninety-five entries fails in three ways that all look like
+    /// working software. One glyph dropped shifts every letter after it and the game spells
+    /// nonsense — caught by asking each row which character it claims to be. One glyph left blank
+    /// puts a hole in a word — caught by counting ink. And one glyph pasted from the row above puts
+    /// the wrong letter in every word containing it, which is the only one of the three a human
+    /// reading the table would ever miss, so the check compares every pair.</para>
+    /// <para>The pair comparison is the point of the whole check. <c>O</c> and <c>0</c> are
+    /// deliberately different, and a font where they are not is a font that cannot show a seed.</para>
+    /// </remarks>
+    private static List<string> FontSelfTest(out string detail)
+    {
+        var faults = new List<string>();
+        var tiles = TileGen.Font();
+        var advance = TileGen.FontAdvance();
+
+        if (tiles.Length != TileGen.GlyphCount)
+            faults.Add($"the font has {tiles.Length} glyphs, not the {TileGen.GlyphCount} it claims");
+
+        var inked = 0;
+        var widest = 0;
+        var narrowest = int.MaxValue;
+
+        for (var i = 0; i < tiles.Length; i++)
+        {
+            var wanted = (char)(TileGen.FirstGlyph + i);
+            if (TileGen.GlyphChar(i) != wanted)
+                faults.Add($"glyph {i} says it is '{TileGen.GlyphChar(i)}' where '{wanted}' belongs");
+
+            var ink = 0;
+            for (var p = 3; p < tiles[i].Length; p += 4) if (tiles[i][p] > 0) ink++;
+
+            if (wanted == ' ')
+            {
+                if (ink > 0) faults.Add($"the space has {ink} lit pixels in it");
+            }
+            else if (ink == 0)
+            {
+                faults.Add($"'{wanted}' is blank");
+            }
+            else
+            {
+                inked++;
+            }
+
+            if (advance[i] is < 4 or > 14)
+                faults.Add($"'{wanted}' advances {advance[i]} pixels, which is outside 4 to 14");
+
+            widest = Math.Max(widest, advance[i]);
+            narrowest = Math.Min(narrowest, advance[i]);
+        }
+
+        // Every pair. Four and a half thousand comparisons of a hundred-odd bytes is nothing, and it
+        // is the only thing that catches a row pasted from the one above it.
+        var twins = 0;
+        for (var a = 0; a < tiles.Length; a++)
+        for (var b = a + 1; b < tiles.Length; b++)
+        {
+            if (!tiles[a].AsSpan().SequenceEqual(tiles[b])) continue;
+            twins++;
+            if (twins <= 3)
+                faults.Add($"'{TileGen.GlyphChar(a)}' and '{TileGen.GlyphChar(b)}' are drawn identically");
+        }
+
+        detail = $"{tiles.Length} glyphs, {inked} with ink, none alike, "
+               + $"advancing {narrowest} to {widest} pixels";
+
+        return faults;
     }
 
     /// <summary>How many distinct things a player can put down.</summary>

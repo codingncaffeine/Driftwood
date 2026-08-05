@@ -106,10 +106,13 @@ public sealed class HudRenderer : IDisposable
     private readonly uint _vbo;
     private readonly uint _ebo;
     private readonly BlockTextureArray _icons;
+    private readonly BlockTextureArray _font;
+    private readonly int[] _advance;
 
     private readonly List<float> _plain = new(4096);
     private readonly List<float> _blocks = new(2048);
     private readonly List<float> _iconQuads = new(2048);
+    private readonly List<float> _text = new(8192);
 
     private float[] _upload = new float[8192];
 
@@ -126,6 +129,9 @@ public sealed class HudRenderer : IDisposable
         var icons = new List<byte[]> { TileGen.Heart(), TileGen.Bubble() };
         icons.AddRange(TileGen.Digits());
         _icons = new BlockTextureArray(gl, [.. icons], TileGen.Size);
+
+        _font = new BlockTextureArray(gl, TileGen.Font(), TileGen.Size);
+        _advance = TileGen.FontAdvance();
 
         _vao = _gl.GenVertexArray();
         _gl.BindVertexArray(_vao);
@@ -177,6 +183,7 @@ public sealed class HudRenderer : IDisposable
         _plain.Clear();
         _blocks.Clear();
         _iconQuads.Clear();
+        _text.Clear();
 
         var scale = MathF.Max(1f, MathF.Floor(screenHeight / DesignHeight * 2f) / 2f);
         var w = screenWidth / scale;
@@ -207,6 +214,7 @@ public sealed class HudRenderer : IDisposable
         Flush(_plain, textured: false, null);
         Flush(_blocks, textured: true, blocks);
         Flush(_iconQuads, textured: true, _icons);
+        Flush(_text, textured: true, _font);
 
         _gl.BindVertexArray(0);
         _gl.Disable(EnableCap.Blend);
@@ -366,7 +374,7 @@ public sealed class HudRenderer : IDisposable
             : null;
 
         var detailTop = top + listHeight + 14f;
-        Frame(left - 4f, detailTop - 4f, panel + 8f, 3f * Cell + 8f);
+        Frame(left - 4f, detailTop - 4f, panel + 8f, 3f * Cell + 30f);
         if (chosen is null) return;
 
         for (var y = 0; y < 3; y++)
@@ -403,6 +411,17 @@ public sealed class HudRenderer : IDisposable
         Rect(_plain, resultX - 3f, resultY - 3f, 34f, 34f, new Vector4(0.16f, 0.18f, 0.20f, 0.9f));
         Rect(_blocks, resultX, resultY, 28f, 28f, Vector4.One, catalogue[chosen.Result.Item].IconLayer);
         if (chosen.Result.Count > 1) Number(chosen.Result.Count, resultX + 29f, resultY + 20f);
+
+        // What it is, in words. The pictures say what it costs; only a name says what it is for,
+        // and a bench full of grey squares is a puzzle rather than a menu.
+        var nameY = detailTop + 3f * Cell + 8f;
+        var payableNow = screen.Selected < screen.Payable.Count && screen.Payable[screen.Selected];
+
+        Text(chosen.Name, left, nameY, 9f,
+            payableNow ? Vector4.One : new Vector4(0.62f, 0.62f, 0.66f, 1f));
+
+        Text(chosen.NeedsBench ? "at a bench" : "in hand", left, nameY + 12f, 7f,
+            new Vector4(0.55f, 0.58f, 0.64f, 1f));
     }
 
     /// <summary>The nth filled slot of a shapeless recipe, or null past the end.</summary>
@@ -473,6 +492,60 @@ public sealed class HudRenderer : IDisposable
         Rect(_plain, x, y, 1.5f, h, frame);
         Rect(_plain, x + w - 1.5f, y, 1.5f, h, frame);
     }
+
+    /// <summary>
+    /// Draws a line of text, and returns how wide it came out.
+    /// </summary>
+    /// <param name="height">The glyph cell's height in layout units. Eight is a comfortable line.</param>
+    /// <remarks>
+    /// Each glyph is drawn as a full square quad and the pen advances by less than that, so
+    /// neighbouring letters overlap into each other's transparent margin. That is not a bodge — it
+    /// is what lets a variable-width font come out of an array where every layer is the same size,
+    /// with no texture coordinates and no second batch format.
+    /// </remarks>
+    private float Text(string line, float x, float y, float height, Vector4 colour, bool shadow = true)
+    {
+        var scale = height / TileGen.Size;
+        var pen = x;
+
+        foreach (var c in line)
+        {
+            var glyph = TileGen.GlyphOf(c);
+            if (glyph < 0) glyph = TileGen.GlyphOf('?');
+
+            // A dark copy one pixel down and right, so text stays readable over snow and over a
+            // cave mouth alike. The same reason the crosshair is two colours.
+            if (shadow)
+            {
+                Rect(_text, pen + scale * 2f, y + scale * 2f, height, height,
+                    new Vector4(0f, 0f, 0f, colour.W * 0.7f), glyph);
+            }
+
+            Rect(_text, pen, y, height, height, colour, glyph);
+            pen += _advance[glyph] * scale;
+        }
+
+        return pen - x;
+    }
+
+    /// <summary>How wide a line of text would come out, without drawing it.</summary>
+    private float TextWidth(string line, float height)
+    {
+        var scale = height / TileGen.Size;
+        var width = 0f;
+
+        foreach (var c in line)
+        {
+            var glyph = TileGen.GlyphOf(c);
+            width += _advance[glyph < 0 ? TileGen.GlyphOf('?') : glyph] * scale;
+        }
+
+        return width;
+    }
+
+    /// <summary>Draws a line centred on a point.</summary>
+    private void TextCentred(string line, float centreX, float y, float height, Vector4 colour) =>
+        Text(line, MathF.Round(centreX - TextWidth(line, height) / 2f), y, height, colour);
 
     /// <summary>Draws a number right-aligned at a point, digit by digit.</summary>
     private void Number(int value, float right, float top)
@@ -570,6 +643,7 @@ public sealed class HudRenderer : IDisposable
         _gl.DeleteBuffer(_ebo);
         _gl.DeleteVertexArray(_vao);
         _icons.Dispose();
+        _font.Dispose();
         _shader.Dispose();
     }
 }

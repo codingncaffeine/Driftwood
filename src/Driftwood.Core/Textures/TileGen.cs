@@ -1045,6 +1045,198 @@ public static class TileGen
         return t;
     }
 
+    /// <summary>Printable ASCII, from space to tilde. The range every string in the game uses.</summary>
+    public const int FirstGlyph = 32;
+
+    public const int GlyphCount = 95;
+
+    /// <summary>Ink width and height of a glyph cell, before it is drawn into a tile.</summary>
+    private const int GlyphWidth = 5;
+    private const int GlyphHeight = 8;
+
+    /// <summary>
+    /// Every printable character, five wide and eight tall, one row per slash.
+    /// </summary>
+    /// <remarks>
+    /// <para>Drawn rather than generated, for the same reason the tool silhouettes are: noise makes
+    /// a convincing material and cannot make a legible letter. A font is a drawing, and the only
+    /// honest way to write one is to draw it.</para>
+    /// <para>The character is repeated at the front of each row rather than the table relying on
+    /// ASCII order. One glyph accidentally dropped would otherwise shift every letter after it by
+    /// one, which reads as a font that works and spells nothing.</para>
+    /// <para>Five by eight is the smallest cell that still tells an <c>8</c> from a <c>B</c>, which
+    /// is the pair this size fails on first. The baseline is row six, so <c>g</c>, <c>j</c>,
+    /// <c>p</c>, <c>q</c> and <c>y</c> have row seven to hang into.</para>
+    /// </remarks>
+    private static readonly string[] Glyphs =
+    [
+        " ...../...../...../...../...../...../...../.....",
+        "!..#../..#../..#../..#../..#../...../..#../.....",
+        "\".#.#./.#.#./...../...../...../...../...../.....",
+        "#.#.#./.#.#./#####/.#.#./#####/.#.#./.#.#./.....",
+        "$..#../.####/#.#../.###./..#.#/####./..#../.....",
+        "%##..#/##..#/...#./..#../.#.../#..##/#..##/.....",
+        "&.##../#..#./#.#../.#.../#.#.#/#..#./.##.#/.....",
+        "'..#../..#../...../...../...../...../...../.....",
+        "(...#./..#../.#.../.#.../.#.../..#../...#./.....",
+        ").#.../..#../...#./...#./...#./..#../.#.../.....",
+        "*...../#.#.#/.###./#####/.###./#.#.#/...../.....",
+        "+...../..#../..#../#####/..#../..#../...../.....",
+        ",...../...../...../...../...../..#../..#../.#...",
+        "-...../...../...../#####/...../...../...../.....",
+        "....../...../...../...../...../..#../..#../.....",
+        "/....#/....#/...#./..#../.#.../#..../#..../.....",
+        "0.###./#...#/#..##/#.#.#/##..#/#...#/.###./.....",
+        "1..#../.##../..#../..#../..#../..#../.###./.....",
+        "2.###./#...#/....#/...#./..#../.#.../#####/.....",
+        "3#####/...#./..#../...#./....#/#...#/.###./.....",
+        "4...#./..##./.#.#./#..#./#####/...#./...#./.....",
+        "5#####/#..../####./....#/....#/#...#/.###./.....",
+        "6..##./.#.../#..../####./#...#/#...#/.###./.....",
+        "7#####/....#/...#./..#../.#.../.#.../.#.../.....",
+        "8.###./#...#/#...#/.###./#...#/#...#/.###./.....",
+        "9.###./#...#/#...#/.####/....#/...#./.##../.....",
+        ":...../..#../..#../...../..#../..#../...../.....",
+        ";...../..#../..#../...../..#../..#../.#.../.....",
+        "<...#./..#../.#.../#..../.#.../..#../...#./.....",
+        "=...../...../#####/...../#####/...../...../.....",
+        ">.#.../..#../...#./....#/...#./..#../.#.../.....",
+        "?.###./#...#/....#/...#./..#../...../..#../.....",
+        "@.###./#...#/#.###/#.#.#/#.###/#..../.###./.....",
+        "A.###./#...#/#...#/#####/#...#/#...#/#...#/.....",
+        "B####./#...#/#...#/####./#...#/#...#/####./.....",
+        "C.###./#...#/#..../#..../#..../#...#/.###./.....",
+        "D###../#..#./#...#/#...#/#...#/#..#./###../.....",
+        "E#####/#..../#..../####./#..../#..../#####/.....",
+        "F#####/#..../#..../####./#..../#..../#..../.....",
+        "G.###./#...#/#..../#.###/#...#/#...#/.###./.....",
+        "H#...#/#...#/#...#/#####/#...#/#...#/#...#/.....",
+        "I.###./..#../..#../..#../..#../..#../.###./.....",
+        "J....#/....#/....#/....#/#...#/#...#/.###./.....",
+        "K#...#/#..#./#.#../##.../#.#../#..#./#...#/.....",
+        "L#..../#..../#..../#..../#..../#..../#####/.....",
+        "M#...#/##.##/#.#.#/#.#.#/#...#/#...#/#...#/.....",
+        "N#...#/##..#/#.#.#/#..##/#...#/#...#/#...#/.....",
+        "O.###./#...#/#...#/#...#/#...#/#...#/.###./.....",
+        "P####./#...#/#...#/####./#..../#..../#..../.....",
+        "Q.###./#...#/#...#/#...#/#.#.#/#..#./.##.#/.....",
+        "R####./#...#/#...#/####./#.#../#..#./#...#/.....",
+        "S.####/#..../#..../.###./....#/....#/####./.....",
+        "T#####/..#../..#../..#../..#../..#../..#../.....",
+        "U#...#/#...#/#...#/#...#/#...#/#...#/.###./.....",
+        "V#...#/#...#/#...#/#...#/#...#/.#.#./..#../.....",
+        "W#...#/#...#/#...#/#.#.#/#.#.#/##.##/#...#/.....",
+        "X#...#/#...#/.#.#./..#../.#.#./#...#/#...#/.....",
+        "Y#...#/#...#/.#.#./..#../..#../..#../..#../.....",
+        "Z#####/....#/...#./..#../.#.../#..../#####/.....",
+        "[.###./.#.../.#.../.#.../.#.../.#.../.###./.....",
+        "\\#..../#..../.#.../..#../...#./....#/....#/.....",
+        "].###./...#./...#./...#./...#./...#./.###./.....",
+        "^..#../.#.#./#...#/...../...../...../...../.....",
+        "_...../...../...../...../...../...../#####/.....",
+        "`.#.../..#../...../...../...../...../...../.....",
+        "a...../...../.###./....#/.####/#...#/.####/.....",
+        "b#..../#..../####./#...#/#...#/#...#/####./.....",
+        "c...../...../.####/#..../#..../#..../.####/.....",
+        "d....#/....#/.####/#...#/#...#/#...#/.####/.....",
+        "e...../...../.###./#...#/#####/#..../.###./.....",
+        "f..##./.#..#/.#.../###../.#.../.#.../.#.../.....",
+        "g...../...../.####/#...#/#...#/.####/....#/.###.",
+        "h#..../#..../####./#...#/#...#/#...#/#...#/.....",
+        "i..#../...../.##../..#../..#../..#../.###./.....",
+        "j...#./...../..##./...#./...#./...#./#..#./.##..",
+        "k#..../#..../#..#./#.#../##.../#.#../#..#./.....",
+        "l.##../..#../..#../..#../..#../..#../.###./.....",
+        "m...../...../##.#./#.#.#/#.#.#/#...#/#...#/.....",
+        "n...../...../####./#...#/#...#/#...#/#...#/.....",
+        "o...../...../.###./#...#/#...#/#...#/.###./.....",
+        "p...../...../####./#...#/#...#/####./#..../#....",
+        "q...../...../.####/#...#/#...#/.####/....#/....#",
+        "r...../...../#.##./##..#/#..../#..../#..../.....",
+        "s...../...../.####/#..../.###./....#/####./.....",
+        "t.#.../.#.../###../.#.../.#.../.#..#/..##./.....",
+        "u...../...../#...#/#...#/#...#/#..##/.##.#/.....",
+        "v...../...../#...#/#...#/#...#/.#.#./..#../.....",
+        "w...../...../#...#/#...#/#.#.#/#.#.#/.#.#./.....",
+        "x...../...../#...#/.#.#./..#../.#.#./#...#/.....",
+        "y...../...../#...#/#...#/#...#/.####/....#/.###.",
+        "z...../...../#####/...#./..#../.#.../#####/.....",
+        "{...##/..#../..#../.#.../..#../..#../...##/.....",
+        "|..#../..#../..#../..#../..#../..#../..#../.....",
+        "}##.../..#../..#../...#./..#../..#../##.../.....",
+        "~...../...../.#..#/#.#.#/#..#./...../...../.....",
+    ];
+
+    /// <summary>
+    /// The whole font as tiles, one glyph per layer, drawn at twice its authored size.
+    /// </summary>
+    /// <remarks>
+    /// One layer per glyph rather than one atlas with texture coordinates, because the overlay
+    /// batcher already draws a rectangle with a layer number and nothing else. Ninety-five layers
+    /// of sixteen-pixel tile is under a hundred kilobytes, and it costs no new machinery at all.
+    /// </remarks>
+    public static byte[][] Font()
+    {
+        var tiles = new byte[GlyphCount][];
+        for (var i = 0; i < GlyphCount; i++) tiles[i] = DrawGlyph(i);
+        return tiles;
+    }
+
+    /// <summary>
+    /// How far the pen moves after each glyph, in tile pixels.
+    /// </summary>
+    /// <remarks>
+    /// Measured from the glyph's own ink rather than fixed, because a monospaced <c>i</c> reads as
+    /// a terminal and not as a game. A space has no ink at all, so it gets a width of its own.
+    /// </remarks>
+    public static int[] FontAdvance()
+    {
+        var advance = new int[GlyphCount];
+
+        for (var i = 0; i < GlyphCount; i++)
+        {
+            var rows = Glyphs[i][1..].Split('/');
+            var widest = 0;
+
+            for (var y = 0; y < rows.Length; y++)
+            for (var x = 0; x < rows[y].Length; x++)
+                if (rows[y][x] != '.') widest = Math.Max(widest, x + 1);
+
+            // Twice the ink, plus a pixel of air. Empty glyphs are a space, which is narrower than
+            // a letter and wider than nothing.
+            advance[i] = widest == 0 ? 6 : widest * 2 + 2;
+        }
+
+        return advance;
+    }
+
+    /// <summary>Which layer a character is on, or -1 for anything the font does not carry.</summary>
+    public static int GlyphOf(char c) =>
+        c >= FirstGlyph && c < FirstGlyph + GlyphCount ? c - FirstGlyph : -1;
+
+    /// <summary>The character a layer draws, for the check that reads the table back.</summary>
+    public static char GlyphChar(int index) => Glyphs[index][0];
+
+    private static byte[] DrawGlyph(int index)
+    {
+        var tile = new byte[BytesPerTile];
+        var rows = Glyphs[index][1..].Split('/');
+
+        for (var y = 0; y < GlyphHeight && y < rows.Length; y++)
+        for (var x = 0; x < GlyphWidth && x < rows[y].Length; x++)
+        {
+            if (rows[y][x] == '.') continue;
+
+            // Twice the size, so a five-by-eight letter fills a sixteen-pixel tile's height and
+            // stays crisp when the overlay scales it up.
+            for (var dy = 0; dy < 2; dy++)
+            for (var dx = 0; dx < 2; dx++)
+                Put(tile, x * 2 + dx, y * 2 + dy, 255, 255, 255, 255);
+        }
+
+        return tile;
+    }
+
     /// <summary>Nearest-neighbour upscale, so generated art stays as crisp as imported art.</summary>
     public static byte[] Upscale(byte[] tile, int size)
     {
