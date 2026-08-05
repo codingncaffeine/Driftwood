@@ -92,6 +92,7 @@ public static class BlockTextureSet
         // one whatever anybody calls them, and those are the two nearest.
         new("seaflax",     "textures/block/cornflower.png",       true),
         new("marshlily",   "textures/block/oxeye_daisy.png",      true),
+        new("torch",       "textures/block/torch.png",            true),
     ];
 
     /// <param name="GrassMap">Grass colormap, the pack's if it ships one.</param>
@@ -200,6 +201,7 @@ public static class BlockTextureSet
             StarterBlocks.LayerMeadowgrass => TileGen.Tuft(1030, 96, 148, 62),
             StarterBlocks.LayerSeaflax => TileGen.Flower(1031, 74, 118, 58, 78, 116, 208, 226, 232, 118),
             StarterBlocks.LayerMarshlily => TileGen.Flower(1032, 82, 126, 62, 236, 238, 232, 236, 196, 84),
+            StarterBlocks.LayerTorch => TileGen.Torch(1033),
             _ => TileGen.Solid(255, 0, 255, 255),
         };
     }

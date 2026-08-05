@@ -86,6 +86,18 @@ public sealed class BlockType
     /// <summary>Nothing takes this block. Bedrock, and the floor of the world.</summary>
     public bool Unbreakable => Hardness < 0f;
 
+    /// <summary>
+    /// True when this is built rather than dug, so nothing in the ground is expected to be made of it.
+    /// </summary>
+    /// <remarks>
+    /// The audit insists every material appears somewhere in a generated world, because a block
+    /// nobody can find is a block that does not exist — that check was written after half the rock
+    /// turned out to be registered, textured and nowhere in the ground. Planks, slabs, stairs and a
+    /// torch are the honest exceptions, and they say so here rather than in a list of names the
+    /// check has to be told about each time one is added.
+    /// </remarks>
+    public bool Crafted { get; init; }
+
     /// <summary>Texture array layer for the +Y face of the default cube shape.</summary>
     public ushort TopLayer { get; init; }
 

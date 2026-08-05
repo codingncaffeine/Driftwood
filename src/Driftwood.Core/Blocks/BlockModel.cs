@@ -158,6 +158,17 @@ public sealed class BlockModel
     /// <summary>Coplanar cube passes, 1 or more. Meaningless unless <see cref="IsFullCube"/>.</summary>
     public int PassCount { get; }
 
+    /// <summary>
+    /// The box a selection outline and a cracking overlay wrap around, in block units.
+    /// </summary>
+    /// <remarks>
+    /// Taken from the baked quads, so a turned shape gets the box it actually occupies rather than
+    /// the one its unturned corners describe. A few shapes override it: a torch stretches two
+    /// planes across the whole cell so a two-unit stick still reads at a distance, and outlining
+    /// the planes would draw a full cube around a candle.
+    /// </remarks>
+    public (Vector3 Min, Vector3 Max) Outline { get; private set; }
+
     private BlockModel(IReadOnlyList<ModelElement> elements)
     {
         Elements = elements;
@@ -165,6 +176,19 @@ public sealed class BlockModel
         var quads = new List<ModelQuad>(elements.Count * 6);
         foreach (var element in elements) Bake(element, quads);
         Quads = [.. quads];
+
+        var min = new Vector3(float.MaxValue);
+        var max = new Vector3(float.MinValue);
+        foreach (var quad in Quads)
+        foreach (var corner in quad.Corners)
+        {
+            min = Vector3.Min(min, corner.Position);
+            max = Vector3.Max(max, corner.Position);
+        }
+
+        Outline = Quads.Length > 0
+            ? (min, max)
+            : (Vector3.Zero, Vector3.One);
 
         var whole = elements.Count is > 0 and <= MaxPasses;
         foreach (var element in elements) whole &= IsWholeBlock(element);
@@ -348,7 +372,7 @@ public sealed class BlockModel
         alongZ[Faces.NegZ] = new ModelFace { Layer = layer, Uv = new Vector4(16f, 0f, 0f, 16f) };
         alongZ[Faces.PosZ] = new ModelFace { Layer = layer, Uv = new Vector4(0f, 0f, 16f, 16f) };
 
-        return new BlockModel(
+        var model = new BlockModel(
         [
             new ModelElement
             {
@@ -366,6 +390,10 @@ public sealed class BlockModel
                 Faces = alongZ, Shade = false, AmbientOcclusion = false,
             },
         ]);
+
+        // The stick, not the planes that draw it.
+        model.Outline = (new Vector3(7f, 0f, 7f) / 16f, new Vector3(9f, 10f, 9f) / 16f);
+        return model;
     }
 
     /// <summary>

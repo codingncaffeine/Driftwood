@@ -362,6 +362,43 @@ public static class TileGen
         return t;
     }
 
+    /// <summary>A stick down the middle with a flame on it, everything else empty — a torch.</summary>
+    /// <remarks>
+    /// Two columns wide and stopping ten rows up, because the model reads that patch and no other:
+    /// the cap of the post samples the 2x2 square at the top of the stick and the sides stretch the
+    /// whole tile across the cell. Art drawn anywhere else on the tile is art nobody sees.
+    /// </remarks>
+    public static byte[] Torch(int seed)
+    {
+        var t = new byte[BytesPerTile];
+        const int Left = 7;
+
+        // The stick, from the bottom edge up to where the flame starts.
+        for (var y = 8; y < Size; y++)
+        for (var x = Left; x < Left + 2; x++)
+        {
+            var d = (int)((Noise(x, y, seed) * 2f - 1f) * 18f);
+            Put(t, x, y, Clamp(148 + d), Clamp(112 + d), Clamp(68 + d), 255);
+        }
+
+        // The flame, sitting in the 2x2 the model's cap reads plus a little above it.
+        for (var y = 5; y < 8; y++)
+        for (var x = Left - 1; x < Left + 3; x++)
+        {
+            var edge = y == 5 || x == Left - 1 || x == Left + 2;
+            if (edge && Noise(x, y, seed + 41) < 0.45f) continue;
+
+            var heat = 1f - (y - 5) / 3f;
+            Put(t, x, y,
+                Clamp((int)(232 + heat * 20f)),
+                Clamp((int)(150 + heat * 80f)),
+                Clamp((int)(60 + heat * 90f)),
+                255);
+        }
+
+        return t;
+    }
+
     /// <summary>Glowing veins through dark rock.</summary>
     public static byte[] Ember(int seed, byte[] baseTile, byte r, byte g, byte b)
     {

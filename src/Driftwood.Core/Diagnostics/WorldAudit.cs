@@ -348,23 +348,36 @@ public static class WorldAudit
         Check("shapes reach the mesh", totalModelQuads > 0,
             $"{totalModelQuads:N0} unmerged quads from {counts[ids.Meadowgrass.Value]:N0} shaped blocks");
 
+        var volumeFaults = ShapeVolumeSelfTest(registry);
+        Check("shapes fill the space they claim", volumeFaults.Count == 0,
+            volumeFaults.Count == 0
+                ? "slab half a cell, stairs three quarters, a dusting three sixteenths, a slender torch, "
+                  + "and six outlines wrapping the shape rather than the cell"
+                : $"{volumeFaults.Count} faults: {volumeFaults[0]}");
+
+        var placementFaults = PlacementSelfTest(registry);
+        Check("placement picks the right form", placementFaults.Count == 0,
+            placementFaults.Count == 0
+                ? $"{StarterBlocks.Hand(registry).Length} things in hand, every face, height and heading"
+                : $"{placementFaults.Count} faults: {placementFaults[0]}");
+
         // A material nobody can find is a material that does not exist, and this is the check that
         // says so. It was written after the world turned out to hold two ores and no stone variants
         // at all — every block registered and textured, half of them nowhere in the ground. Anything
         // that is only ever built rather than dug is named here on purpose, so adding a block and
         // forgetting to place it fails rather than quietly joining the list.
-        string[] craftOnly = ["air", "driftoak_planks"];
         var missing = new List<string>();
-        for (ushort id = 0; id < registry.Count; id++)
+        var crafted = 0;
+        for (ushort id = 1; id < registry.Count; id++)
         {
-            var name = registry[id].Name;
-            if (counts[id] > 0 || Array.IndexOf(craftOnly, name) >= 0) continue;
-            missing.Add(name);
+            if (registry[id].Crafted) { crafted++; continue; }
+            if (counts[id] > 0) continue;
+            missing.Add(registry[id].Name);
         }
 
         Check("every material is in the world", missing.Count == 0,
             missing.Count == 0
-                ? $"{registry.Count - craftOnly.Length} of {registry.Count} blocks generate; {string.Join(", ", craftOnly[1..])} are built, not dug"
+                ? $"{registry.Count - crafted - 1} of {registry.Count - 1} blocks generate; {crafted} are built, not dug"
                 : $"never generated: {string.Join(", ", missing)}");
 
         // Ore gets a band, not a floor. Too little and mining never gates progression; too much
@@ -980,6 +993,183 @@ public static class WorldAudit
             faults.Add("the position field cannot address a model reaching past the chunk");
 
         return faults;
+    }
+
+    /// <summary>
+    /// Measures how much of its cell each shape actually fills.
+    /// </summary>
+    /// <remarks>
+    /// A shape that is subtly the wrong size is invisible to everything else here: the models
+    /// validate, the quads wind outward, the mesh emits them. It reads on screen as a slab that is
+    /// a little too tall or a step you cannot quite walk up, which is the sort of thing that gets
+    /// noticed months later and blamed on the physics.
+    /// </remarks>
+    private static List<string> ShapeVolumeSelfTest(BlockRegistry registry)
+    {
+        var faults = new List<string>();
+
+        (string Name, float Want)[] cases =
+        [
+            ("driftoak_slab_lower", 0.5f),
+            ("driftoak_slab_upper", 0.5f),
+            ("stone_slab_lower", 0.5f),
+            ("driftoak_stairs_east_lower", 0.75f),
+            ("driftoak_stairs_north_upper", 0.75f),
+            ("snow_layer", 3f / 16f),
+        ];
+
+        foreach (var (name, want) in cases)
+        {
+            var got = BoxVolume(registry.ByName(name).Model);
+            if (MathF.Abs(got - want) > 0.001f)
+                faults.Add($"{name} fills {got:F3} of its cell, expected {want:F3}");
+        }
+
+        // The torch is not a box count — its planes overlap and its post is inside them — so it gets
+        // the one property that matters instead: it must be slender enough to read as a stick.
+        var torch = registry.ByName("torch").Model;
+        var widest = 0f;
+        foreach (var element in torch.Elements)
+        {
+            var span = MathF.Min(element.To.X - element.From.X, element.To.Z - element.From.Z);
+            widest = MathF.Max(widest, span);
+        }
+
+        if (widest > 4f) faults.Add($"the torch is {widest / 16f:F2} of a block thick, which is a post not a torch");
+
+        // The box the selection outline and the cracking overlay wrap around. Nothing else notices
+        // when it quietly goes back to being a unit cube — the shape still draws, the block still
+        // breaks — and a full-cube outline around a slab is the tell that the game thinks in cubes.
+        (string Name, Vector3 Min, Vector3 Max)[] outlines =
+        [
+            ("stone", Vector3.Zero, Vector3.One),
+            ("driftoak_slab_lower", Vector3.Zero, new Vector3(1f, 0.5f, 1f)),
+            ("driftoak_slab_upper", new Vector3(0f, 0.5f, 0f), Vector3.One),
+            ("snow_layer", Vector3.Zero, new Vector3(1f, 3f / 16f, 1f)),
+            ("torch", new Vector3(7f, 0f, 7f) / 16f, new Vector3(9f, 10f, 9f) / 16f),
+            ("meadowgrass", new Vector3(0.05f, 0f, 0.05f), new Vector3(0.95f, 1f, 0.95f)),
+        ];
+
+        foreach (var (name, wantMin, wantMax) in outlines)
+        {
+            var (min, max) = registry.ByName(name).Model.Outline;
+            if (Vector3.Distance(min, wantMin) > 0.01f || Vector3.Distance(max, wantMax) > 0.01f)
+                faults.Add(
+                    $"{name} outlines ({min.X:F2},{min.Y:F2},{min.Z:F2})-({max.X:F2},{max.Y:F2},{max.Z:F2}), "
+                    + $"expected ({wantMin.X:F2},{wantMin.Y:F2},{wantMin.Z:F2})-({wantMax.X:F2},{wantMax.Y:F2},{wantMax.Z:F2})");
+        }
+
+        return faults;
+    }
+
+    /// <summary>Total volume of a model's boxes, in cells. Assumes they do not overlap.</summary>
+    private static float BoxVolume(BlockModel model)
+    {
+        var total = 0f;
+        foreach (var element in model.Elements)
+        {
+            var size = element.To - element.From;
+            total += size.X * size.Y * size.Z;
+        }
+        return total / (16f * 16f * 16f);
+    }
+
+    /// <summary>
+    /// Puts every hand entry down against every face, at every height, facing every way.
+    /// </summary>
+    /// <remarks>
+    /// <para>The check reads the shape back rather than the id. Comparing against a table of
+    /// expected block names would only prove the table matches itself; asking where the raised half
+    /// of the stair actually ended up is what catches a facing that is a quarter turn out, which is
+    /// the single most likely thing to be wrong here and looks exactly like a modelling bug from
+    /// inside the game.</para>
+    /// <para>Heights are chosen either side of the boundary rather than at round numbers, because
+    /// "the half the ray landed in" is a comparison against one half and both sides of it have to
+    /// be walked.</para>
+    /// </remarks>
+    private static List<string> PlacementSelfTest(BlockRegistry registry)
+    {
+        var faults = new List<string>();
+        var hand = StarterBlocks.Hand(registry);
+
+        (Vector3 Look, int Facing)[] looks =
+        [
+            (new Vector3(1f, 0f, 0f), Faces.PosX),
+            (new Vector3(-1f, 0f, 0f), Faces.NegX),
+            (new Vector3(0f, 0f, 1f), Faces.PosZ),
+            (new Vector3(0f, 0f, -1f), Faces.NegZ),
+            (new Vector3(0.9f, -0.6f, 0.2f), Faces.PosX),      // looking down and mostly east
+            (new Vector3(0.2f, 0.5f, -0.9f), Faces.NegZ),      // looking up and mostly north
+        ];
+
+        float[] heights = [0f, 0.25f, 0.5f, 0.501f, 0.75f, 1f];
+        int[] hitFaces = [Faces.PosY, Faces.NegY, Faces.PosX, Faces.NegZ];
+
+        foreach (var entry in hand)
+        foreach (var face in hitFaces)
+        foreach (var height in heights)
+        foreach (var (look, wantFacing) in looks)
+        {
+            var where = $"{entry.Label} on face {face} at height {height:F3} looking {wantFacing}";
+            var placed = entry.TryResolve(face, height, look, out var id);
+
+            if (entry.Kind == PlacementKind.Standing)
+            {
+                if (placed != (face == Faces.PosY))
+                    faults.Add($"{where}: {(placed ? "stood on nothing" : "refused a floor")}");
+                continue;
+            }
+
+            if (!placed)
+            {
+                faults.Add($"{where}: refused to place at all");
+                continue;
+            }
+
+            if (entry.Kind == PlacementKind.Plain) continue;
+
+            var model = registry[id].Model;
+            var wantUpper = height > 0.5f;
+            var gotUpper = SitsInUpperHalf(model);
+
+            if (gotUpper != wantUpper)
+                faults.Add($"{where}: landed in the {(gotUpper ? "upper" : "lower")} half, wanted the other");
+
+            if (entry.Kind != PlacementKind.Stairs) continue;
+
+            var gotFacing = StepFacing(model);
+            if (gotFacing != wantFacing)
+                faults.Add($"{where}: step ended up facing {gotFacing}");
+        }
+
+        return faults;
+    }
+
+    /// <summary>Whether the box covering the whole footprint sits in the cell's upper half.</summary>
+    private static bool SitsInUpperHalf(BlockModel model)
+    {
+        foreach (var element in model.Elements)
+        {
+            if (element.To.X - element.From.X < 15.9f) continue;
+            if (element.To.Z - element.From.Z < 15.9f) continue;
+            return element.From.Y > 7.9f;
+        }
+
+        return false;
+    }
+
+    /// <summary>Which side of the cell a stair's raised step sits on, or -1 when nothing does.</summary>
+    private static int StepFacing(BlockModel model)
+    {
+        foreach (var element in model.Elements)
+        {
+            if (element.To.X - element.From.X < 15.9f)
+                return element.From.X > 0.1f ? Faces.PosX : Faces.NegX;
+            if (element.To.Z - element.From.Z < 15.9f)
+                return element.From.Z > 0.1f ? Faces.PosZ : Faces.NegZ;
+        }
+
+        return -1;
     }
 
     /// <summary>

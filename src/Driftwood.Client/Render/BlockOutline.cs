@@ -22,11 +22,14 @@ public sealed class BlockOutline : IDisposable
         layout(location = 0) in vec3 aPos;
         uniform mat4 uViewProj;
         uniform vec3 uOrigin;
+        uniform vec3 uMin;
+        uniform vec3 uMax;
         uniform float uSwell;
         void main()
         {
-            vec3 p = uOrigin + (aPos - 0.5) * (1.0 + uSwell) + 0.5;
-            gl_Position = uViewProj * vec4(p, 1.0);
+            vec3 centre = (uMin + uMax) * 0.5;
+            vec3 local = mix(uMin, uMax, aPos);
+            gl_Position = uViewProj * vec4(uOrigin + centre + (local - centre) * (1.0 + uSwell), 1.0);
         }
         """;
 
@@ -80,11 +83,15 @@ public sealed class BlockOutline : IDisposable
         _gl.BindVertexArray(0);
     }
 
-    public unsafe void Draw(Matrix4x4 viewProj, Vector3 blockOrigin)
+    /// <param name="min">The shape's own lower corner within the cell, in block units.</param>
+    /// <param name="max">Its upper corner. A full cube is 0 to 1.</param>
+    public unsafe void Draw(Matrix4x4 viewProj, Vector3 blockOrigin, Vector3 min, Vector3 max)
     {
         _shader.Use();
         _shader.SetMatrix4("uViewProj", viewProj);
         _shader.SetVec3("uOrigin", blockOrigin);
+        _shader.SetVec3("uMin", min);
+        _shader.SetVec3("uMax", max);
         _shader.SetFloat("uSwell", 0.004f);
         _shader.SetVec4("uColor", new Vector4(0.05f, 0.05f, 0.07f, 1f));
 

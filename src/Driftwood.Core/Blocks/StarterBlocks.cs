@@ -49,8 +49,9 @@ public static class StarterBlocks
     public const ushort LayerMeadowgrass = 29;
     public const ushort LayerSeaflax = 30;
     public const ushort LayerMarshlily = 31;
+    public const ushort LayerTorch = 32;
 
-    public const int LayerCount = 32;
+    public const int LayerCount = 33;
 
     public sealed record Ids(
         BlockId Stone,
@@ -167,7 +168,7 @@ public static class StarterBlocks
 
         var planks = registry.Register(new BlockType
         {
-            Name = "driftoak_planks", Hardness = 2f,
+            Name = "driftoak_planks", Hardness = 2f, Crafted = true,
             TopLayer = LayerPlanks, SideLayer = LayerPlanks, BottomLayer = LayerPlanks,
         });
         var coal = registry.Register(new BlockType
@@ -323,9 +324,107 @@ public static class StarterBlocks
             Model = BlockModel.Cross(LayerMarshlily, tinted: false),
         });
 
+        // The built shapes. Every orientation is its own block, because there is nowhere else to
+        // keep one — a cell holds an id and nothing beside it. That is also how the genre stores it
+        // underneath, and it means the mesher never asks which way a stair faces: the id says.
+        RegisterShapes(registry);
+
+        // Standing on the floor, and the first light a player can carry into a cave. Warm and
+        // slightly red, so a torch-lit tunnel does not read as daylight underground.
+        registry.Register(new BlockType
+        {
+            Name = "torch", Hardness = 0.05f, Solid = false, Opaque = false, Crafted = true,
+            LightEmission = LightValue.PackBlock(14, 10, 5),
+            Model = BlockModel.Torch(LayerTorch),
+        });
+
         return new Ids(
             stone, dirt, grass, sand, water, gravel, log, leaves, planks, coal, iron, bedrock,
             emberstone, vine, deepstone, coralstone, driftstone, saltstone, copper, gold, stormglass,
             azurite, clay, sandstone, snow, snowLayer, meadowgrass, seaflax, marshlily);
+    }
+
+    /// <summary>The materials that come in slab and stair form, and the tiles each wears.</summary>
+    private static readonly (string Name, ushort Top, ushort Side, ushort Bottom)[] ShapedMaterials =
+    [
+        ("driftoak", LayerPlanks, LayerPlanks, LayerPlanks),
+        ("stone", LayerStone, LayerStone, LayerStone),
+    ];
+
+    /// <summary>Facing names in <see cref="Placeable.Facings"/> order: +x, -x, +z, -z.</summary>
+    private static readonly string[] FacingNames = ["east", "west", "south", "north"];
+
+    private static void RegisterShapes(BlockRegistry registry)
+    {
+        foreach (var (name, top, side, bottom) in ShapedMaterials)
+        {
+            foreach (var upper in (bool[])[false, true])
+            {
+                registry.Register(new BlockType
+                {
+                    Name = $"{name}_slab_{(upper ? "upper" : "lower")}",
+                    Hardness = 2f, Opaque = false, Crafted = true,
+                    Model = BlockModel.Slab(top, side, bottom, upper),
+                });
+            }
+
+            for (var i = 0; i < Placeable.Facings.Length; i++)
+            foreach (var upper in (bool[])[false, true])
+            {
+                registry.Register(new BlockType
+                {
+                    Name = $"{name}_stairs_{FacingNames[i]}_{(upper ? "upper" : "lower")}",
+                    Hardness = 2f, Opaque = false, Crafted = true,
+                    Model = BlockModel.Stairs(top, side, bottom, Placeable.Facings[i], upper),
+                });
+            }
+        }
+    }
+
+    /// <summary>
+    /// What a player can hold and put down, in the order a picker walks through it.
+    /// </summary>
+    /// <remarks>
+    /// Built by name out of the registry rather than threaded through <see cref="Ids"/>. Twenty-odd
+    /// stair orientations have no business in a record every caller has to carry, and the names are
+    /// generated a few lines above from the same two tables — so a material added there appears in
+    /// the hand without anything here changing.
+    /// </remarks>
+    public static Placeable[] Hand(BlockRegistry registry)
+    {
+        var hand = new List<Placeable>
+        {
+            new() { Label = "driftoak planks", Kind = PlacementKind.Plain, Variants = [registry.ByName("driftoak_planks").Id] },
+        };
+
+        foreach (var (name, _, _, _) in ShapedMaterials)
+        {
+            hand.Add(new Placeable
+            {
+                Label = $"{name} slab",
+                Kind = PlacementKind.Halved,
+                Variants =
+                [
+                    registry.ByName($"{name}_slab_lower").Id,
+                    registry.ByName($"{name}_slab_upper").Id,
+                ],
+            });
+
+            var stairs = new BlockId[Placeable.Facings.Length * 2];
+            for (var i = 0; i < Placeable.Facings.Length; i++)
+            {
+                stairs[i * 2] = registry.ByName($"{name}_stairs_{FacingNames[i]}_lower").Id;
+                stairs[i * 2 + 1] = registry.ByName($"{name}_stairs_{FacingNames[i]}_upper").Id;
+            }
+
+            hand.Add(new Placeable { Label = $"{name} stairs", Kind = PlacementKind.Stairs, Variants = stairs });
+        }
+
+        hand.Add(new Placeable { Label = "torch", Kind = PlacementKind.Standing, Variants = [registry.ByName("torch").Id] });
+
+        foreach (var plain in (string[])["stone", "dirt", "sand", "meadowgrass"])
+            hand.Add(new Placeable { Label = plain, Kind = PlacementKind.Plain, Variants = [registry.ByName(plain).Id] });
+
+        return [.. hand];
     }
 }

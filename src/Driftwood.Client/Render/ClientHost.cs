@@ -134,8 +134,18 @@ public sealed class ClientHost : IDisposable
     /// <summary>How far a player can reach to break or place. Genre-standard.</summary>
     private const float Reach = 5f;
 
-    /// <summary>What gets placed on right-click until an inventory decides otherwise.</summary>
-    private BlockId _heldBlock;
+    /// <summary>What can be placed on right-click until an inventory decides otherwise.</summary>
+    /// <remarks>
+    /// A hand rather than a single block, because a slab and a stair are not one block each — they
+    /// are two and eight, and which one lands depends on where you clicked and which way you were
+    /// looking. Without something to pick from, every shape the mesher can now draw would be
+    /// unreachable and unlookable-at, which is the same as not having built it.
+    /// </remarks>
+    private Placeable[] _hand = null!;
+    private int _handSlot;
+
+    /// <summary>Each block's own box, so the selection and cracking overlays wrap the shape.</summary>
+    private (Vector3 Min, Vector3 Max)[] _outlines = null!;
 
     /// <summary>
     /// Walking rather than flying. The fly camera stays available behind F3 — it is how terrain
@@ -313,6 +323,7 @@ public sealed class ClientHost : IDisposable
         _mouse.MouseMove += OnMouseMove;
         _mouse.MouseDown += OnMouseDown;
         _mouse.MouseUp += OnMouseUp;
+        _mouse.Scroll += OnScroll;
 
         // The benchmark flies itself, so it leaves the cursor alone; stealing the mouse for a
         // measurement run is rude and changes nothing about what is measured.
@@ -377,8 +388,11 @@ public sealed class ClientHost : IDisposable
         _camera.FarPlane = _fogEnd + 200f;
 
         _player = new PlayerBody(registry);
-        _heldBlock = ids.Planks;
+        _hand = StarterBlocks.Hand(registry);
         _solid = registry.BuildSolidTable();
+
+        _outlines = new (Vector3, Vector3)[registry.Count];
+        for (var id = 0; id < registry.Count; id++) _outlines[id] = registry[(ushort)id].Model.Outline;
 
         // A ray stops at anything but air and open water. Water is the exception that matters: you
         // can neither stand on it nor break it, so a ray fired across a lake has to reach the bed or
@@ -536,7 +550,26 @@ public sealed class ClientHost : IDisposable
                     _ => ViewMode.First,
                 };
                 break;
+
+            // The hand, until an inventory owns it. The number row picks directly and the wheel
+            // walks it, which is where every hand in the genre lives and where a player will look
+            // for it without being told.
+            case >= Key.Number1 and <= Key.Number9:
+                SelectHandSlot(key - Key.Number1);
+                break;
         }
+    }
+
+    private void SelectHandSlot(int slot)
+    {
+        if (_hand.Length == 0) return;
+        _handSlot = ((slot % _hand.Length) + _hand.Length) % _hand.Length;
+    }
+
+    private void OnScroll(IMouse mouse, ScrollWheel wheel)
+    {
+        if (wheel.Y == 0f) return;
+        SelectHandSlot(_handSlot - Math.Sign(wheel.Y));
     }
 
     /// <summary>
@@ -676,6 +709,7 @@ public sealed class ClientHost : IDisposable
                       + $"{_drawnChunks}/{_meshes.Count} drawn")
                 : $"Driftwood — {_fps:F0} fps | seed {_options.Seed} | "
                   + $"xyz {p.X:F0} {p.Y:F0} {p.Z:F0} | "
+                  + $"holding {_handSlot + 1}. {_hand[_handSlot].Label} | "
                   + $"{_drawnChunks}/{_meshes.Count} drawn, {_drawnTriangles:N0} tris"
                   + (queued > 0 ? $" | {queued} queued" : "")
                   + (_frustumCulling ? "" : " | CULLING OFF");
@@ -770,6 +804,10 @@ public sealed class ClientHost : IDisposable
                 / LightValue.Max);
     }
 
+    /// <summary>The box the shape in one cell occupies, for the overlays that wrap it.</summary>
+    private (Vector3 Min, Vector3 Max) OutlineOf(int x, int y, int z) =>
+        _outlines[_streamer.World.GetBlock(x, y, z).Value];
+
     /// <summary>Finds the block under the crosshair, if any is within reach.</summary>
     private void UpdateTarget()
     {
@@ -802,17 +840,29 @@ public sealed class ClientHost : IDisposable
         var (x, y, z) = hit.Adjacent;
         if (!_streamer.World.GetBlock(x, y, z).IsAir) return;
 
+        var held = _hand[_handSlot];
+
+        // Where in the target cell the ray landed, which is what decides a slab's half. Taken from
+        // the ray rather than from which face was struck: clicking a block's top lands at the floor
+        // of the cell above, its underside at the ceiling of the cell below, and a side wherever
+        // the crosshair was, so one number already answers all three.
+        var landing = _camera.Position + _camera.Forward * hit.Distance;
+        var height = Math.Clamp(landing.Y - y, 0f, 1f);
+
+        if (!held.TryResolve(hit.Face, height, _camera.Forward, out var block)) return;
+        if (held.NeedsFloor && !_solid[_streamer.World.GetBlock(x, y - 1, z).Value]) return;
+
         if (_walking)
         {
             var probe = _streamer.World;
             var before = probe.GetBlock(x, y, z);
-            probe.SetBlock(x, y, z, _heldBlock);
+            probe.SetBlock(x, y, z, block);
             var blocked = _player.Collides(probe, _player.Position);
             probe.SetBlock(x, y, z, before);
             if (blocked) return;
         }
 
-        _streamer.EditBlock(x, y, z, _heldBlock);
+        _streamer.EditBlock(x, y, z, block);
     }
 
     /// <summary>
@@ -1003,13 +1053,21 @@ public sealed class ClientHost : IDisposable
         _drawnChunks = drawn;
         _drawnTriangles = triangles;
 
+        // Both overlays wrap the shape rather than the cell. A full-cube outline around a slab or a
+        // torch is the tell that the game still thinks in cubes, and it is on screen constantly.
         if (_target is { } hit && !_wireframe)
-            _outline.Draw(viewProj, new Vector3(hit.X, hit.Y, hit.Z));
+        {
+            var (min, max) = OutlineOf(hit.X, hit.Y, hit.Z);
+            _outline.Draw(viewProj, new Vector3(hit.X, hit.Y, hit.Z), min, max);
+        }
 
         // Keyed off the mining state's own cell rather than the crosshair's, so cracking is never
         // drawn on a block that is not the one being worked loose.
         if (_mining.Target is { } cell && _mining.Stage >= 0 && !_wireframe)
-            _cracks.Draw(viewProj, new Vector3(cell.X, cell.Y, cell.Z), _mining.Stage);
+        {
+            var (min, max) = OutlineOf(cell.X, cell.Y, cell.Z);
+            _cracks.Draw(viewProj, new Vector3(cell.X, cell.Y, cell.Z), min, max, _mining.Stage);
+        }
 
         DrawPlayer(viewProj, projection, view);
 

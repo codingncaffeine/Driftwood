@@ -24,12 +24,15 @@ public sealed class BlockCracks : IDisposable
         layout(location = 1) in vec2 aUv;
         uniform mat4 uViewProj;
         uniform vec3 uOrigin;
+        uniform vec3 uMin;
+        uniform vec3 uMax;
         uniform float uSwell;
         out vec2 vUv;
         void main()
         {
-            vec3 p = uOrigin + (aPos - 0.5) * (1.0 + uSwell) + 0.5;
-            gl_Position = uViewProj * vec4(p, 1.0);
+            vec3 centre = (uMin + uMax) * 0.5;
+            vec3 local = mix(uMin, uMax, aPos);
+            gl_Position = uViewProj * vec4(uOrigin + centre + (local - centre) * (1.0 + uSwell), 1.0);
             vUv = aUv;
         }
         """;
@@ -119,12 +122,16 @@ public sealed class BlockCracks : IDisposable
         _gl.BindVertexArray(0);
     }
 
-    /// <summary>Draws one stage of cracking over the cell at <paramref name="blockOrigin"/>.</summary>
-    public unsafe void Draw(Matrix4x4 viewProj, Vector3 blockOrigin, int stage)
+    /// <summary>Draws one stage of cracking over the shape in the cell at <paramref name="blockOrigin"/>.</summary>
+    /// <param name="min">The shape's own lower corner within the cell, in block units.</param>
+    /// <param name="max">Its upper corner. A full cube is 0 to 1.</param>
+    public unsafe void Draw(Matrix4x4 viewProj, Vector3 blockOrigin, Vector3 min, Vector3 max, int stage)
     {
         _shader.Use();
         _shader.SetMatrix4("uViewProj", viewProj);
         _shader.SetVec3("uOrigin", blockOrigin);
+        _shader.SetVec3("uMin", min);
+        _shader.SetVec3("uMax", max);
         _shader.SetFloat("uSwell", 0.006f);
         _shader.SetFloat("uStage", stage);
         _shader.SetInt("uCracks", 0);
