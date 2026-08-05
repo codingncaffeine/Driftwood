@@ -67,6 +67,20 @@ public static class StarterBlocks
     public const ushort LayerFurnaceFront = 40;
     public const ushort LayerFurnaceFrontLit = 41;
 
+    // Cut stone. Every rock a player can dig turns into a worked form and the worked form into a
+    // bonded one, and each of those is a slab, a stair and a wall as well — which is the whole of
+    // why the tables below are tables. This one axis is more buildable blocks than everything that
+    // came before it put together, and not one of them needed a new system to exist.
+    public const ushort LayerStoneBricks = 42;
+    public const ushort LayerSmoothStone = 43;
+    public const ushort LayerDeepstonePolished = 44;
+    public const ushort LayerDeepstoneBricks = 45;
+    public const ushort LayerCoralstonePolished = 46;
+    public const ushort LayerDriftstonePolished = 47;
+    public const ushort LayerSaltstonePolished = 48;
+    public const ushort LayerSandstoneCut = 49;
+    public const ushort LayerSandstoneChiseled = 50;
+
     /// <summary>The first layer that is an item icon rather than a block face.</summary>
     /// <remarks>
     /// Items share the block texture array rather than taking one of their own. They are the same
@@ -74,24 +88,24 @@ public static class StarterBlocks
     /// spinning on the floor — and a second array would be a second bind, a second upload and a
     /// second pack-import path for no difference anybody could see.
     /// </remarks>
-    public const ushort LayerFirstIcon = 42;
+    public const ushort LayerFirstIcon = 51;
 
-    public const ushort LayerStick = 42;
-    public const ushort LayerCoal = 43;
-    public const ushort LayerCharcoal = 44;
-    public const ushort LayerRawCopper = 45;
-    public const ushort LayerRawIron = 46;
-    public const ushort LayerRawGold = 47;
-    public const ushort LayerCopperIngot = 48;
-    public const ushort LayerIronIngot = 49;
-    public const ushort LayerGoldIngot = 50;
-    public const ushort LayerStormglass = 51;
-    public const ushort LayerAzurite = 52;
-    public const ushort LayerClayLump = 53;
-    public const ushort LayerBrick = 54;
+    public const ushort LayerStick = 51;
+    public const ushort LayerCoal = 52;
+    public const ushort LayerCharcoal = 53;
+    public const ushort LayerRawCopper = 54;
+    public const ushort LayerRawIron = 55;
+    public const ushort LayerRawGold = 56;
+    public const ushort LayerCopperIngot = 57;
+    public const ushort LayerIronIngot = 58;
+    public const ushort LayerGoldIngot = 59;
+    public const ushort LayerStormglass = 60;
+    public const ushort LayerAzurite = 61;
+    public const ushort LayerClayLump = 62;
+    public const ushort LayerBrick = 63;
 
     /// <summary>The tool icons: one palette per tier, four heads each, tier-major.</summary>
-    public const ushort LayerFirstTool = 55;
+    public const ushort LayerFirstTool = 64;
 
     /// <summary>Head shapes a tier comes in — pickaxe, axe, shovel, sword.</summary>
     public const int ToolShapeCount = 4;
@@ -422,6 +436,19 @@ public static class StarterBlocks
             TopLayer = LayerBricks, SideLayer = LayerBricks, BottomLayer = LayerBricks,
         });
 
+        // Cut stone: every rock worked, and the harder ones bonded after that. One loop, because
+        // the difference between them is a name, a tile and how hard it is to break — which is what
+        // a family is. A hand-written block each would be nine near-identical declarations and a
+        // tenth that quietly disagreed with the others about something.
+        foreach (var cut in CutStones)
+            registry.Register(new BlockType
+            {
+                Name = cut.Name, Hardness = cut.Hardness, Crafted = true,
+                HarvestClass = ToolClass.Pickaxe, HarvestTier = cut.Tier,
+                Sounds = SoundMaterial.Stone,
+                TopLayer = cut.Layer, SideLayer = cut.Layer, BottomLayer = cut.Layer,
+            });
+
         RegisterConnected(registry);
 
         // The built shapes. Every orientation is its own block, because there is nowhere else to
@@ -507,7 +534,62 @@ public static class StarterBlocks
         new("driftoak", LayerPlanks, LayerPlanks, LayerPlanks, SoundMaterial.Wood, ToolClass.Axe, 0),
         new("stone", LayerStone, LayerStone, LayerStone, SoundMaterial.Stone, ToolClass.Pickaxe, 1),
         new("rubble", LayerRubble, LayerRubble, LayerRubble, SoundMaterial.Stone, ToolClass.Pickaxe, 1),
+        new("bricks", LayerBricks, LayerBricks, LayerBricks, SoundMaterial.Stone, ToolClass.Pickaxe, 1),
+        new("sandstone", LayerSandstoneTop, LayerSandstone, LayerSandstoneTop,
+            SoundMaterial.Stone, ToolClass.Pickaxe, 0),
+
+        // And every cut form, which is where this table stops being a list and starts being a
+        // multiplier: nine rows below turn into eighteen shapes and eighteen recipes.
+        new("stone_bricks", LayerStoneBricks, LayerStoneBricks, LayerStoneBricks,
+            SoundMaterial.Stone, ToolClass.Pickaxe, 1),
+        new("smooth_stone", LayerSmoothStone, LayerSmoothStone, LayerSmoothStone,
+            SoundMaterial.Stone, ToolClass.Pickaxe, 1),
+        new("polished_deepstone", LayerDeepstonePolished, LayerDeepstonePolished, LayerDeepstonePolished,
+            SoundMaterial.Stone, ToolClass.Pickaxe, 1),
+        new("deepstone_bricks", LayerDeepstoneBricks, LayerDeepstoneBricks, LayerDeepstoneBricks,
+            SoundMaterial.Stone, ToolClass.Pickaxe, 1),
+        new("polished_coralstone", LayerCoralstonePolished, LayerCoralstonePolished, LayerCoralstonePolished,
+            SoundMaterial.Stone, ToolClass.Pickaxe, 1),
+        new("polished_driftstone", LayerDriftstonePolished, LayerDriftstonePolished, LayerDriftstonePolished,
+            SoundMaterial.Stone, ToolClass.Pickaxe, 1),
+        new("polished_saltstone", LayerSaltstonePolished, LayerSaltstonePolished, LayerSaltstonePolished,
+            SoundMaterial.Stone, ToolClass.Pickaxe, 1),
+        new("cut_sandstone", LayerSandstoneCut, LayerSandstoneCut, LayerSandstoneCut,
+            SoundMaterial.Stone, ToolClass.Pickaxe, 0),
     ];
+
+    /// <summary>One rock worked into another form: what it is called, what it looks like, its cost.</summary>
+    public readonly record struct CutStone(string Name, ushort Layer, float Hardness, int Tier);
+
+    /// <summary>
+    /// Every worked form of every rock a player can dig.
+    /// </summary>
+    /// <remarks>
+    /// <para>Nine rows, and between them and the tables either side of this one they are more
+    /// buildable blocks than everything that existed before them — each is also a slab, a stair and
+    /// most are a wall. Not one needed a new system: they are stone, arranged.</para>
+    /// <para>Which is the content-scope finding made concrete. Eight hundred blocks in this genre is
+    /// fifty-odd families times a few axes, and this is the axis that costs least and shows most.
+    /// </para>
+    /// </remarks>
+    private static readonly CutStone[] CutStones =
+    [
+        new("stone_bricks", LayerStoneBricks, 2f, 1),
+        new("smooth_stone", LayerSmoothStone, 2f, 1),
+        new("polished_deepstone", LayerDeepstonePolished, 3.5f, 1),
+        new("deepstone_bricks", LayerDeepstoneBricks, 3.5f, 1),
+        new("polished_coralstone", LayerCoralstonePolished, 1.5f, 1),
+        new("polished_driftstone", LayerDriftstonePolished, 1.5f, 1),
+        new("polished_saltstone", LayerSaltstonePolished, 1.5f, 1),
+        new("cut_sandstone", LayerSandstoneCut, 0.8f, 0),
+        new("chiseled_sandstone", LayerSandstoneChiseled, 0.8f, 0),
+    ];
+
+    /// <summary>The worked forms, for whatever wants to walk them.</summary>
+    public static IEnumerable<string> CutStoneNames
+    {
+        get { foreach (var cut in CutStones) yield return cut.Name; }
+    }
 
     /// <summary>Facing names in <see cref="Placeable.Facings"/> order: +x, -x, +z, -z.</summary>
     private static readonly string[] FacingNames = ["east", "west", "south", "north"];
@@ -526,6 +608,14 @@ public static class StarterBlocks
         new("driftoak_fence", LayerPlanks, SoundMaterial.Wood, ToolClass.Axe, 0,
             2f, 1f, [(6f, 9f), (12f, 15f)]),
         new("rubble_wall", LayerRubble, SoundMaterial.Stone, ToolClass.Pickaxe, 1,
+            4f, 3f, [(0f, 14f)]),
+        new("stone_brick_wall", LayerStoneBricks, SoundMaterial.Stone, ToolClass.Pickaxe, 1,
+            4f, 3f, [(0f, 14f)]),
+        new("deepstone_brick_wall", LayerDeepstoneBricks, SoundMaterial.Stone, ToolClass.Pickaxe, 1,
+            4f, 3f, [(0f, 14f)]),
+        new("sandstone_wall", LayerSandstone, SoundMaterial.Stone, ToolClass.Pickaxe, 0,
+            4f, 3f, [(0f, 14f)]),
+        new("brick_wall", LayerBricks, SoundMaterial.Stone, ToolClass.Pickaxe, 1,
             4f, 3f, [(0f, 14f)]),
         new("glass_pane", LayerGlass, SoundMaterial.Glass, ToolClass.None, 0,
             1f, 1f, [(0f, 16f)]),

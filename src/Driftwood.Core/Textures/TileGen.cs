@@ -839,6 +839,82 @@ public static class TileGen
     }
 
     /// <summary>Courses of brick in running bond, offset every other row.</summary>
+    /// <summary>
+    /// Rock worked flat: the grain of the speckle knocked back and a soft sheen across it.
+    /// </summary>
+    /// <remarks>
+    /// The whole job of a polished form is to read as <em>the same rock, worked</em>, so it takes
+    /// the rough one's own colours and its own seed and quietens them rather than being drawn from
+    /// scratch. A polished granite that shares nothing with the granite beside it looks like a
+    /// different rock, which is exactly the mistake this axis exists to avoid.
+    /// </remarks>
+    public static byte[] Polished(int seed, byte r, byte g, byte b)
+    {
+        var t = new byte[BytesPerTile];
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            // A third of the roughness the raw rock carries, so the material still reads through.
+            var grain = (int)((Noise(x, y, seed) * 2f - 1f) * 6f);
+
+            // And a broad diagonal sheen, which is what a cut face does to light.
+            var sheen = (int)(MathF.Sin((x + y) * 0.24f) * 4f);
+
+            var d = grain + sheen;
+            Put(t, x, y, Clamp(r + d), Clamp(g + d), Clamp(b + d), 255);
+        }
+
+        return t;
+    }
+
+    /// <summary>A block cut square: a flat face inside a chiselled border.</summary>
+    public static byte[] CutBlock(int seed, byte r, byte g, byte b)
+    {
+        var t = Polished(seed, r, g, b);
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var edge = x == 0 || y == 0 || x == Size - 1 || y == Size - 1;
+            var inner = x == 1 || y == 1 || x == Size - 2 || y == Size - 2;
+            if (!edge && !inner) continue;
+
+            // Lit on the inside lip and shaded on the outside, so the border reads as cut rather
+            // than as a line drawn round a square.
+            var d = edge ? -14 : 10;
+            Put(t, x, y, Clamp(r + d), Clamp(g + d), Clamp(b + d), 255);
+        }
+
+        return t;
+    }
+
+    /// <summary>A worked face carrying a motif: a bordered square with a mark struck into it.</summary>
+    /// <remarks>
+    /// Ours, and deliberately not anybody else's — a chiselled block is a place a game puts its own
+    /// iconography, so this one wears the same lozenge the project's own mark does rather than a
+    /// copy of a creature nobody here has drawn.
+    /// </remarks>
+    public static byte[] Chiselled(int seed, byte r, byte g, byte b)
+    {
+        var t = CutBlock(seed, r, g, b);
+        const float Centre = (Size - 1) / 2f;
+
+        for (var y = 3; y < Size - 3; y++)
+        for (var x = 3; x < Size - 3; x++)
+        {
+            var reach = MathF.Abs(x - Centre) + MathF.Abs(y - Centre);
+            if (reach > Size * 0.34f) continue;
+
+            // Cut in, with its upper left lit the way every other bevel in the project is.
+            var lit = x - Centre + (y - Centre) < 0f;
+            var d = reach > Size * 0.24f ? (lit ? 12 : -16) : -8;
+            Put(t, x, y, Clamp(r + d), Clamp(g + d), Clamp(b + d), 255);
+        }
+
+        return t;
+    }
+
     public static byte[] Bricks(int seed, byte r, byte g, byte b, byte mortar)
     {
         var t = new byte[BytesPerTile];

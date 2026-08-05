@@ -82,7 +82,7 @@ public static class PackCoverage
             n => n.EndsWith("_ore") || n.StartsWith("raw_") || n.EndsWith("_ingot")
               || n.EndsWith("_nugget") || n.EndsWith("_block")),
 
-        new("stone families", "five rocks today, no cut or polished forms",
+        new("stone families", "five rocks, each worked and bonded; no cobbled or mossy forms",
             n => n.Contains("stone") || n.Contains("granite") || n.Contains("andesite")
               || n.Contains("diorite") || n.Contains("basalt") || n.Contains("tuff")
               || n.Contains("calcite") || n.Contains("cobble") || n.Contains("brick")),

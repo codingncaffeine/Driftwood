@@ -77,6 +77,16 @@ public static class PackLayouts
         ["torch"] = ["torch_on"],
         ["furnace_front"] = ["furnace_front_off"],
 
+        // Cut stone. The polished forms were "smooth" before they were "polished", and the bonded
+        // one was one word. All checked against a real pack of the old layout.
+        ["stone_bricks"] = ["stonebrick"],
+        ["polished_granite"] = ["stone_granite_smooth"],
+        ["polished_andesite"] = ["stone_andesite_smooth"],
+        ["polished_diorite"] = ["stone_diorite_smooth"],
+        ["cut_sandstone"] = ["sandstone_smooth"],
+        ["chiseled_sandstone"] = ["sandstone_carved"],
+        ["smooth_stone"] = ["stone_slab_top"],
+
         // Ground cover and flowers.
         ["short_grass"] = ["tallgrass"],
         ["grass"] = ["tallgrass"],

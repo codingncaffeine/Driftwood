@@ -87,6 +87,11 @@ public static class StarterItems
         Block(items, blocks, "bricks", "bricks", StarterBlocks.LayerBricks);
         Block(items, blocks, "bench", "bench", StarterBlocks.LayerBenchTop, Timber);
 
+        // Every worked form of every rock, off the same table the blocks came from. Nine lines of
+        // nothing, which is what a family is supposed to cost by the time it reaches here.
+        foreach (var cut in StarterBlocks.CutStoneNames)
+            Block(items, blocks, cut, cut.Replace('_', ' '), blocks.ByName(cut).Model.ParticleLayer);
+
         // Slabs and stairs, straight off the same table the blocks came from.
         foreach (var material in StarterBlocks.ShapedNames)
         {

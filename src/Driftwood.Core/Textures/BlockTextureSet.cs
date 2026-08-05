@@ -108,6 +108,21 @@ public static class BlockTextureSet
         new("furnace_front", "textures/block/furnace_front.png",  false),
         new("furnace_front_lit", "textures/block/furnace_front_on.png", false),
 
+        // Cut stone. Ours on the left and the nearest thing a pack will already have painted on the
+        // right — our deepstone is their deepslate, our coralstone their granite — which is the
+        // same trade the raw rocks made and the reason a pack skins a vocabulary it has never heard
+        // of. Every one of these was checked against a real pack of each layout before it was
+        // written down.
+        new("stone_bricks", "textures/block/stone_bricks.png",    false),
+        new("smooth_stone", "textures/block/smooth_stone.png",    false),
+        new("deepstone_polished", "textures/block/polished_deepslate.png", false),
+        new("deepstone_bricks", "textures/block/deepslate_bricks.png", false),
+        new("coralstone_polished", "textures/block/polished_granite.png", false),
+        new("driftstone_polished", "textures/block/polished_andesite.png", false),
+        new("saltstone_polished", "textures/block/polished_diorite.png", false),
+        new("sandstone_cut", "textures/block/cut_sandstone.png",  false),
+        new("sandstone_chiseled", "textures/block/chiseled_sandstone.png", false),
+
         // Items, from here to the end. They live in the same array as the block faces because they
         // are the same sixteen-pixel tiles drawn by the same two places — a slot on the bar and a
         // thing spinning on the floor — and a pack that reskins the world should reskin the pockets
@@ -429,6 +444,21 @@ public static class BlockTextureSet
             StarterBlocks.LayerRubble => TileGen.Cobble(1034, 126, 126, 130),
             StarterBlocks.LayerGlass => TileGen.Glass(1035),
             StarterBlocks.LayerBricks => TileGen.Bricks(1036, 154, 90, 74, 168),
+
+            // Cut stone. Each worked form takes the colour of the rock it is cut from — the same
+            // numbers, a few lines up — so a polished coralstone reads as coralstone that has been
+            // worked rather than as a new rock somebody happened to draw in the same palette. That
+            // relationship is the whole point of the axis and it is one a generator can hold and a
+            // hand-drawn set cannot.
+            StarterBlocks.LayerStoneBricks => TileGen.Bricks(1051, 122, 122, 126, 104),
+            StarterBlocks.LayerSmoothStone => TileGen.Polished(1052, 132, 132, 136),
+            StarterBlocks.LayerDeepstonePolished => TileGen.Polished(1053, 74, 74, 80),
+            StarterBlocks.LayerDeepstoneBricks => TileGen.Bricks(1054, 74, 74, 80, 60),
+            StarterBlocks.LayerCoralstonePolished => TileGen.Polished(1019, 154, 111, 97),
+            StarterBlocks.LayerDriftstonePolished => TileGen.Polished(1020, 134, 136, 132),
+            StarterBlocks.LayerSaltstonePolished => TileGen.Polished(1021, 202, 202, 205),
+            StarterBlocks.LayerSandstoneCut => TileGen.CutBlock(1027, 214, 199, 152),
+            StarterBlocks.LayerSandstoneChiseled => TileGen.Chiselled(1027, 214, 199, 152),
 
             // The bench is planks that have been worked on: grooves where a straight edge was laid
             // and nicks where it was not.

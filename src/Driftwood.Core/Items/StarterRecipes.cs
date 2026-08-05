@@ -37,6 +37,49 @@ public static class StarterRecipes
         ("driftoak", "#planks"),
         ("stone", "stone"),
         ("rubble", "rubble"),
+        ("bricks", "bricks"),
+        ("sandstone", "sandstone"),
+        ("stone_bricks", "stone_bricks"),
+        ("smooth_stone", "smooth_stone"),
+        ("polished_deepstone", "polished_deepstone"),
+        ("deepstone_bricks", "deepstone_bricks"),
+        ("polished_coralstone", "polished_coralstone"),
+        ("polished_driftstone", "polished_driftstone"),
+        ("polished_saltstone", "polished_saltstone"),
+        ("cut_sandstone", "cut_sandstone"),
+    ];
+
+    /// <summary>
+    /// Four of a rock laid in a square, worked into four of something else.
+    /// </summary>
+    /// <remarks>
+    /// <para>The genre's own gesture and the reason a two-by-two in the hands matters: a whole
+    /// building vocabulary opens without a bench, out of stone the player is already carrying. Four
+    /// in and four out, so working a rock costs nothing but the doing of it — which is what makes
+    /// it a decision about what a wall should look like rather than about whether it is affordable.
+    /// </para>
+    /// <para>Each row is also its own slab, stair and often wall through the tables above, so the
+    /// nine rows here are most of the buildable set.</para>
+    /// </remarks>
+    private static readonly (string From, string Into)[] CutFrom =
+    [
+        ("stone", "stone_bricks"),
+        ("deepstone", "polished_deepstone"),
+        ("polished_deepstone", "deepstone_bricks"),
+        ("coralstone", "polished_coralstone"),
+        ("driftstone", "polished_driftstone"),
+        ("saltstone", "polished_saltstone"),
+        ("sandstone", "cut_sandstone"),
+    ];
+
+    /// <summary>The walls, and the rock each is stacked from. Six across two rows makes six.</summary>
+    private static readonly (string Wall, string From)[] WallsFrom =
+    [
+        ("rubble_wall", "rubble"),
+        ("stone_brick_wall", "stone_bricks"),
+        ("deepstone_brick_wall", "deepstone_bricks"),
+        ("sandstone_wall", "sandstone"),
+        ("brick_wall", "bricks"),
     ];
 
     public static RecipeBook Build(ItemRegistry items)
@@ -145,12 +188,25 @@ public static class StarterRecipes
             Shaped($"{material} stairs", $"{material}_stairs", 4, ["M  ", "MM ", "MMM"], from);
         }
 
+        // Working a rock: four in a square, four out. In the hands, without a bench, because the
+        // whole building vocabulary opening out of stone somebody is already carrying is the point
+        // — and four for four means the choice is what a wall should look like, never whether it
+        // can be afforded.
+        foreach (var (from, into) in CutFrom)
+            Shaped($"{into.Replace('_', ' ')}", into, 4, ["MM", "MM"], from);
+
+        // The one that is not four for four, because it is not a cut but a carving: two worked
+        // slabs stacked, which is the genre's own gesture for putting a face on something.
+        Shaped("chiseled sandstone", "chiseled_sandstone", 1, ["M", "M"], "sandstone_slab");
+
         // Things that join up with what is beside them. A run of six across two rows is the genre's
         // own grammar for anything wall-shaped, and the count is what says how far it goes: six
         // rubble is six wall, six glass is sixteen panes because a pane is a sixteenth of a wall.
         Shaped("fence", "driftoak_fence", 3, ["MSM", "MSM"], "#planks");
-        Shaped("wall", "rubble_wall", 6, ["MMM", "MMM"], "rubble");
         Shaped("pane", "glass_pane", 16, ["MMM", "MMM"], "glass");
+
+        foreach (var (wall, from) in WallsFrom)
+            Shaped($"{wall.Replace('_', ' ')}", wall, 6, ["MMM", "MMM"], from);
 
         // Packing four of something loose back into a block, which is how the genre's own storage
         // of a powder or a lump works and is what gives brick and clay somewhere to go.
@@ -167,6 +223,13 @@ public static class StarterRecipes
         // before there is any metal to melt, and charcoal is what keeps it burning where there is
         // no coal — a forest is fuel, which is the answer to spawning somewhere with no cave.
         Smelt("rubble", "stone");
+
+        // Stone taken past stone. A furnace giving back something that is not the thing it was
+        // given is the one place the smelter is a shaping tool rather than a refiner, and it is
+        // what makes a second pass through the fire worth doing.
+        Smelt("stone", "smooth_stone");
+        Smelt("sandstone", "cut_sandstone");
+
         Smelt("sand", "glass");
         Smelt("clay_lump", "brick");
         Smelt("#logs", "charcoal");
