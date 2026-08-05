@@ -293,22 +293,27 @@ public static class Program
             Driftwood
 
               --seed <text>     world seed; digits are literal, words are hashed, omit for random
-              --chunks <n>      chunks across the generated square (default 16, so 512 blocks)
+              --chunks <n>      how far the world stays loaded, in chunks across; overrides the
+                                view distance saved on the video tab for this run only
               --ocean <pct>     percent of the surface under water (default 25)
               --width <n>       window width (default 1600)
               --height <n>      window height (default 900)
-              --pack <path>     import block textures from a texture pack folder or .zip;
-                                anything the pack does not carry keeps Driftwood's own art
-              --texture-size n  tile resolution to build the texture array at (default 16)
+              --pack <path>     import block, item and skin textures from a texture pack folder
+                                or .zip; anything the pack does not carry keeps Driftwood's own art
+              --texture-size n  tile size to build the texture array at; omit it and the pack's own
+                                resolution is used, which is almost always what is wanted. Clamped
+                                to what the card reports and a memory budget allows.
               --skin <path>     wear a skin PNG: 64x64, or 64x32 for an old one, at any scale
               --skin-model m    'classic' or 'slim' arms, overriding what the sheet looks like
               --time <hour>     hour of the day to open at, 0 to 23 (default 8)
               --daylength <s>   seconds in a full day (default 1200); short values walk a sunset
-              --vsync           cap to the display refresh rate (off by default so fps is readable)
+              --vsync           cap to the display refresh rate, for this run only
               --mute            open no audio device at all
               --audit           generate and mesh headlessly, print a census and checks, then exit
               --audio-check     resolve every sound the block table names and report, silently
               --pack-coverage   with --pack, report what the pack has art for that we do not
+              --pack-report     with --pack, report which of OUR layers the pack supplied and
+                                which kept our art — the answer to "is the pack even being used"
               --bench [secs]    fly a fixed path once the world has settled, report frame-time
                                 percentiles, then exit (default 15 s, seed defaults to 'driftwood')
               --uploads <n>     chunk uploads allowed per frame (default 4)
@@ -316,12 +321,15 @@ public static class Program
                                 proves the benchmark can see a hitch it is known to contain
               --help            this text
 
-            Controls
-              Arrow keys        move (WASD also works)
+            Controls — all rebindable on the screen's controls tab, and saved between sessions.
+            These are what they ship as.
+
+              Arrow keys        move (WASD also works; both are bound)
               Space / Ctrl      jump / sneak — up and down when flying
               Shift             sprint (boost when flying)
               Left / right      hold to mine or place; the arm swings and the swing takes the block
-              Esc               release or recapture the mouse
+              E                 open the screen: craft, controls, video, audio, world
+              Esc               release or recapture the mouse; closes the screen when one is open
               F1                wireframe
               F2                frustum culling
               F3                walk or fly
@@ -329,6 +337,9 @@ public static class Program
               F6                hold the clock where it is
               F7                wind the day on by an hour or two
               1-9 / wheel       pick what is in hand
+
+            Settings live beside your other application data, as plain key=value text you can
+            edit. The path is printed at startup.
             """);
     }
 }

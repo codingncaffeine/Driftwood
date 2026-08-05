@@ -42,8 +42,11 @@ public sealed class Bindings
         bindings.Set(GameAction.Sneak, "ControlLeft");
         bindings.Set(GameAction.Sprint, "ShiftLeft");
 
-        bindings.Set(GameAction.OpenScreen, "E");
-        bindings.Set(GameAction.ReleaseMouse, "Escape");
+        // I is what this project's player reaches for; E is what the genre trained everybody else
+        // to press. Two keys per action exists precisely so that is not a choice anybody has to
+        // make. Escape opens the options and gives the mouse back, which is one gesture everywhere.
+        bindings.Set(GameAction.OpenInventory, "I", "E");
+        bindings.Set(GameAction.OpenOptions, "Escape");
 
         bindings.Set(GameAction.ToggleView, "F5");
         bindings.Set(GameAction.ToggleFly, "F3");
@@ -145,6 +148,30 @@ public sealed class Bindings
         }
 
         return faults;
+    }
+
+    /// <summary>
+    /// Gives a key back to any action that has none, from another table, without disturbing the rest.
+    /// </summary>
+    /// <remarks>
+    /// The upgrade path for a renamed action. A key already in use is skipped rather than bound
+    /// twice — a default arriving late must not steal a key the player deliberately moved.
+    /// </remarks>
+    public void FillGapsFrom(Bindings source)
+    {
+        foreach (var action in GameActions.All)
+        {
+            if (Primary(action).Length > 0 || Secondary(action).Length > 0) continue;
+
+            var first = source.Primary(action);
+            var second = source.Secondary(action);
+
+            if (first.Length > 0 && ActionFor(first) is not null) first = "";
+            if (second.Length > 0 && ActionFor(second) is not null) second = "";
+            if (first.Length == 0 && second.Length > 0) (first, second) = (second, "");
+
+            Set(action, first, second);
+        }
     }
 
     public Bindings Copy()

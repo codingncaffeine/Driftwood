@@ -194,7 +194,7 @@ public sealed class ClientHost : IDisposable
     private readonly List<Recipe> _shown = [];
 
     /// <summary>Where the selection sits on each tab, so switching away and back comes home.</summary>
-    private readonly int[] _tabRow = new int[Enum.GetValues<MenuTab>().Length];
+    private readonly int[] _tabRow = new int[Enum.GetValues<GameTab>().Length];
 
     /// <summary>The action waiting for a key, while the controls tab is listening.</summary>
     private GameAction? _rebinding;
@@ -769,15 +769,19 @@ public sealed class ClientHost : IDisposable
 
         switch (action)
         {
-            case GameAction.ReleaseMouse:
-                SetMouseCaptured(!_mouseCaptured);
+            // What this character is carrying and can make. The bench a player always has is two by
+            // two, in their own hands; anything wider needs a real one, and the screen says so by
+            // simply not listing it.
+            case GameAction.OpenInventory:
+                if (_bench is not null) break;
+                OpenPlayer(PlayerTab.Craft, atBench: false, default);
                 break;
 
-            // The bench a player always has: two by two, in their own hands. Anything wider needs
-            // a real one, and the screen says so by simply not listing it.
-            case GameAction.OpenScreen:
+            // What this installation is set to. Opening it gives the mouse back, which is one
+            // gesture in every game in this space and is why nothing else needs to.
+            case GameAction.OpenOptions:
                 if (_bench is not null) break;
-                OpenMenu(MenuTab.Craft, atBench: false, default);
+                OpenGame(GameTab.Controls);
                 break;
 
             case GameAction.ToggleWireframe:
@@ -853,28 +857,34 @@ public sealed class ClientHost : IDisposable
     private bool ScreenKey(Key key)
     {
         var many = _keyboard.IsKeyPressed(Key.ShiftLeft) || _keyboard.IsKeyPressed(Key.ShiftRight);
-        var menu = _hudScreen.Kind == HudScreenKind.Menu;
-        var craft = menu && _hudScreen.Tab == MenuTab.Craft;
+        var tabbed = _hudScreen.Kind is HudScreenKind.Player or HudScreenKind.Game;
+        var craft = _hudScreen.Kind == HudScreenKind.Player && _hudScreen.Tab == (int)PlayerTab.Craft;
 
         switch (key)
         {
-            case Key.Escape or Key.E:
+            // Whichever key opened it closes it, and escape always does — a screen you cannot back
+            // out of with escape is one people press escape at twice and then alt-tab out of.
+            case Key.Escape:
+                CloseScreen();
+                return true;
+
+            case var _ when _keys.ActionFor(key) is GameAction.OpenInventory or GameAction.OpenOptions:
                 CloseScreen();
                 return true;
 
             // Tab walks the tabs, which is where a hand already is and what every other program
             // does with it. Shift walks back.
-            case Key.Tab when menu:
-                var count = Enum.GetValues<MenuTab>().Length;
-                _tabRow[(int)_hudScreen.Tab] = _hudScreen.Selected;
-                _hudScreen.Tab = (MenuTab)(((int)_hudScreen.Tab + (many ? count - 1 : 1)) % count);
-                _hudScreen.Selected = _tabRow[(int)_hudScreen.Tab];
+            case Key.Tab when tabbed && _hudScreen.TabNames.Length > 1:
+                var count = _hudScreen.TabNames.Length;
+                if (_hudScreen.Kind == HudScreenKind.Game) _tabRow[_hudScreen.Tab] = _hudScreen.Selected;
+                _hudScreen.Tab = (_hudScreen.Tab + (many ? count - 1 : 1)) % count;
+                if (_hudScreen.Kind == HudScreenKind.Game) _hudScreen.Selected = _tabRow[_hudScreen.Tab];
                 RefreshScreen();
                 return true;
 
             case Key.Enter or Key.KeypadEnter or Key.Space:
                 if (craft) CraftSelected(many);
-                else if (menu) ActivateRow();
+                else if (tabbed) ActivateRow();
                 else MoveFurnaceSlot();
                 return true;
 
@@ -953,23 +963,59 @@ public sealed class ClientHost : IDisposable
         _hudScreen.Selected = at;
     }
 
-    private void OpenMenu(MenuTab tab, bool atBench, (int X, int Y, int Z) at)
+    /// <summary>The names across the top of each screen. Lower case, because the font has both.</summary>
+    private static readonly string[] PlayerTabNames =
+        [.. Enum.GetNames<PlayerTab>().Select(n => n.ToLowerInvariant())];
+
+    private static readonly string[] GameTabNames =
+        [.. Enum.GetNames<GameTab>().Select(n => n.ToLowerInvariant())];
+
+    private void OpenPlayer(PlayerTab tab, bool atBench, (int X, int Y, int Z) at)
     {
-        _hudScreen.Kind = HudScreenKind.Menu;
-        _hudScreen.Tab = tab;
-        _hudScreen.Selected = tab == MenuTab.Craft ? 0 : _tabRow[(int)tab];
+        _hudScreen.Kind = HudScreenKind.Player;
+        _hudScreen.TabNames = PlayerTabNames;
+        _hudScreen.Tab = (int)tab;
+        _hudScreen.Selected = 0;
         _atBench = atBench;
         _station = at;
         _shown.Clear();
+        StopHands();
+        RefreshScreen();
+    }
+
+    /// <summary>
+    /// Opens the settings, and lets go of the mouse while it is up.
+    /// </summary>
+    /// <remarks>
+    /// The pointer is unambiguously wanted on a settings screen and unambiguously not wanted in the
+    /// world, so the two travel together. It is taken back on the way out, which means a player who
+    /// opens the options and closes them again is looking exactly where they were.
+    /// </remarks>
+    private void OpenGame(GameTab tab)
+    {
+        _hudScreen.Kind = HudScreenKind.Game;
+        _hudScreen.TabNames = GameTabNames;
+        _hudScreen.Tab = (int)tab;
+        _hudScreen.Selected = _tabRow[(int)tab];
+        _hudScreen.Recipes.Clear();
+        _hudScreen.Payable.Clear();
+        StopHands();
+        SetMouseCaptured(false);
+        RefreshScreen();
+    }
+
+    /// <summary>Puts the hands down. A screen opening must not leave a swing half-taken.</summary>
+    private void StopHands()
+    {
         _holdingBreak = false;
         _holdingPlace = false;
         _mining.Cancel();
-        RefreshScreen();
     }
 
     private void OpenFurnace(int x, int y, int z)
     {
         _hudScreen.Kind = HudScreenKind.Furnace;
+        _hudScreen.TabNames = [];
         _hudScreen.Slot = 0;
         _station = (x, y, z);
         _holdingBreak = false;
@@ -978,6 +1024,10 @@ public sealed class ClientHost : IDisposable
         _furnaces.Open(x, y, z);
         RefreshScreen();
     }
+
+    /// <summary>True when the game screen is open on one particular tab.</summary>
+    private bool OnTab(GameTab tab) =>
+        _hudScreen.Kind == HudScreenKind.Game && _hudScreen.Tab == (int)tab;
 
     /// <summary>
     /// Closes the screen, and writes the settings out if anything in it changed.
@@ -989,7 +1039,14 @@ public sealed class ClientHost : IDisposable
     /// </remarks>
     private void CloseScreen()
     {
-        if (_hudScreen.Kind == HudScreenKind.Menu) _tabRow[(int)_hudScreen.Tab] = _hudScreen.Selected;
+        // The pointer goes back where it was. A player who opened the options and shut them again
+        // is looking exactly where they were looking, which is the whole reason the two travel
+        // together — and it is why closing takes the mouse back rather than leaving it loose.
+        if (_hudScreen.Kind == HudScreenKind.Game)
+        {
+            _tabRow[_hudScreen.Tab] = _hudScreen.Selected;
+            if (_bench is null) SetMouseCaptured(true);
+        }
 
         _rebinding = null;
         _hudScreen.Kind = HudScreenKind.None;
@@ -1021,7 +1078,7 @@ public sealed class ClientHost : IDisposable
 
         if (_hudScreen.Kind == HudScreenKind.Furnace) return;
 
-        if (_hudScreen.Tab == MenuTab.Craft)
+        if (_hudScreen.Kind == HudScreenKind.Player)
         {
             if (_shown.Count == 0)
             {
@@ -1049,14 +1106,17 @@ public sealed class ClientHost : IDisposable
         if (_rebinding is { } waiting)
             return $"press a key for {GameActions.Label(waiting)}, or escape to leave it alone";
 
+        var close = _settings.Keys.Primary(
+            _hudScreen.Kind == HudScreenKind.Game ? GameAction.OpenOptions : GameAction.OpenInventory);
+
         return _hudScreen.Kind switch
         {
             HudScreenKind.Furnace => "left and right pick a slot, enter moves it, 1-9 picks from the bar",
-            _ when _hudScreen.Tab == MenuTab.Craft =>
-                "arrows pick, enter makes one, shift and enter makes as many as it can, tab changes tab",
-            _ when _hudScreen.Tab == MenuTab.Controls =>
-                "up and down pick, enter listens for a key, left clears it, tab changes tab",
-            _ => "up and down pick, left and right change it, tab changes tab",
+            HudScreenKind.Player =>
+                $"arrows pick, enter makes one, shift and enter makes as many as it can, {close} closes",
+            _ when OnTab(GameTab.Controls) =>
+                $"up and down pick, enter listens for a key, left clears it, tab changes tab, {close} closes",
+            _ => $"up and down pick, left and right change it, tab changes tab, {close} closes",
         };
     }
 
@@ -1065,9 +1125,9 @@ public sealed class ClientHost : IDisposable
     {
         _hudScreen.Rows.Clear();
 
-        switch (_hudScreen.Tab)
+        switch ((GameTab)_hudScreen.Tab)
         {
-            case MenuTab.Controls:
+            case GameTab.Controls:
                 var group = "";
                 foreach (var action in GameActions.All)
                 {
@@ -1085,7 +1145,7 @@ public sealed class ClientHost : IDisposable
                 }
                 break;
 
-            case MenuTab.Video:
+            case GameTab.Video:
                 _hudScreen.Rows.Add(new MenuRow("picture", Heading: true));
                 _hudScreen.Rows.Add(new MenuRow(
                     "view distance", $"{_settings.ViewDistance} chunks",
@@ -1111,7 +1171,7 @@ public sealed class ClientHost : IDisposable
                     Note: "turning it off must change the chunk count and nothing on screen"));
                 break;
 
-            case MenuTab.Audio:
+            case GameTab.Audio:
                 _hudScreen.Rows.Add(new MenuRow("sound", Heading: true));
                 _hudScreen.Rows.Add(new MenuRow("volume", $"{_settings.Volume}"));
                 _hudScreen.Rows.Add(new MenuRow("mute", OnOff(_settings.Mute)));
@@ -1154,16 +1214,16 @@ public sealed class ClientHost : IDisposable
 
         var label = _hudScreen.Rows[_hudScreen.Selected].Label;
 
-        switch (_hudScreen.Tab)
+        switch ((GameTab)_hudScreen.Tab)
         {
-            case MenuTab.Controls:
+            case GameTab.Controls:
                 // Left is the only thing a direction can mean on a key: take it off.
                 if (by >= 0 || ActionAtRow() is not { } action) break;
                 _settings.Keys.Bind(action, "");
                 AfterRebind();
                 break;
 
-            case MenuTab.Video:
+            case GameTab.Video:
                 switch (label)
                 {
                     case "view distance": _settings.ViewDistance = Nudge(_settings.ViewDistance, by, 2, 32); break;
@@ -1183,7 +1243,7 @@ public sealed class ClientHost : IDisposable
                 }
                 break;
 
-            case MenuTab.Audio:
+            case GameTab.Audio:
                 switch (label)
                 {
                     case "volume": _settings.Volume = Nudge(_settings.Volume, by * 5, 0, 100); break;
@@ -1218,7 +1278,7 @@ public sealed class ClientHost : IDisposable
     /// <summary>Enter, on a settings row. Toggles what toggles and listens for a key on a binding.</summary>
     private void ActivateRow()
     {
-        if (_hudScreen.Tab == MenuTab.Controls)
+        if (OnTab(GameTab.Controls))
         {
             if (ActionAtRow() is { } action) _rebinding = action;
             RefreshScreen();
@@ -1231,7 +1291,7 @@ public sealed class ClientHost : IDisposable
     /// <summary>Which action the selected controls row is for, counting past the headings.</summary>
     private GameAction? ActionAtRow()
     {
-        if (_hudScreen.Tab != MenuTab.Controls) return null;
+        if (!OnTab(GameTab.Controls)) return null;
 
         var seen = 0;
         for (var i = 0; i < _hudScreen.Rows.Count; i++)
@@ -1565,7 +1625,7 @@ public sealed class ClientHost : IDisposable
         // What a screen can afford changes as the world hands things over, so it is recomputed
         // rather than only rebuilt on a keypress: a stack flying into the bar while the book is
         // open should light up what it just made possible.
-        if (_hudScreen.Kind == HudScreenKind.Menu) RefreshScreen();
+        if (_hudScreen.Kind == HudScreenKind.Player) RefreshScreen();
 
         // Collected from the middle of the body rather than the feet, so a stack lying against a
         // wall is still reachable from the other side of it.
@@ -1959,7 +2019,7 @@ public sealed class ClientHost : IDisposable
         var struck = _registry[_streamer.World.GetBlock(hit.X, hit.Y, hit.Z)];
         if (struck.Interactive)
         {
-            if (struck.Name == "bench") OpenMenu(MenuTab.Craft, atBench: true, (hit.X, hit.Y, hit.Z));
+            if (struck.Name == "bench") OpenPlayer(PlayerTab.Craft, atBench: true, (hit.X, hit.Y, hit.Z));
             else OpenFurnace(hit.X, hit.Y, hit.Z);
             return;
         }

@@ -12,8 +12,11 @@ public enum HudScreenKind
 {
     None,
 
-    /// <summary>The tabbed one: what can be made, and everything that can be changed.</summary>
-    Menu,
+    /// <summary>This character in this world: what is carried, and what can be made.</summary>
+    Player,
+
+    /// <summary>This installation: keys, picture, sound, and the testing dials.</summary>
+    Game,
 
     /// <summary>A station rather than a menu, so it has no tabs.</summary>
     Furnace,
@@ -39,10 +42,16 @@ public sealed class Toast(string title, string line, int icon, float life)
     public float Alpha => Math.Clamp((Life - Age) / FadeSeconds, 0f, 1f);
 }
 
-/// <summary>The tabs across the top of the menu, in the order they are shown.</summary>
-public enum MenuTab
+/// <summary>The tabs of the player screen, in the order they are shown.</summary>
+/// <remarks>Items, progress, handbook and map join this; the renderer is told names, not values.</remarks>
+public enum PlayerTab
 {
     Craft,
+}
+
+/// <summary>The tabs of the game screen.</summary>
+public enum GameTab
+{
     Controls,
     Video,
     Audio,
@@ -71,7 +80,15 @@ public readonly record struct MenuRow(string Label, string Value = "", bool Head
 public sealed class HudScreen
 {
     public HudScreenKind Kind;
-    public MenuTab Tab;
+
+    /// <summary>Which tab, as an index into <see cref="TabNames"/>.</summary>
+    /// <remarks>
+    /// An index and a list of names rather than an enum, so the renderer never learns what any
+    /// particular tab means and a new one is a row in the host rather than a case in here.
+    /// </remarks>
+    public int Tab;
+
+    public string[] TabNames = [];
 
     /// <summary>What this station can make, craftable or not.</summary>
     /// <remarks>
@@ -409,7 +426,10 @@ public sealed class HudRenderer : IDisposable
         Tabs(screen, left, top, Panel);
         var body = top + 22f;
 
-        if (screen.Tab == MenuTab.Craft) Book(catalogue, screen, left, body, Panel);
+        // A tab either lists recipes or lists rows. Which one is decided by whoever filled the
+        // screen in, not here — Recipes being non-empty is the signal, so a tab that wants to draw
+        // something else entirely adds a list rather than a case in this method.
+        if (screen.Recipes.Count > 0) Book(catalogue, screen, left, body, Panel);
         else Rows(screen, left, body, Panel);
 
         Footer(screen, w, h);
@@ -418,14 +438,14 @@ public sealed class HudRenderer : IDisposable
     /// <summary>The tabs, with the open one lit and underlined.</summary>
     private void Tabs(HudScreen screen, float left, float top, float panel)
     {
-        var names = Enum.GetNames<MenuTab>();
+        var names = screen.TabNames;
         var pen = left;
 
         for (var i = 0; i < names.Length; i++)
         {
-            var name = names[i].ToLowerInvariant();
+            var name = names[i];
             var width = MathF.Round(TextWidth(name, 8f)) + 10f;
-            var open = (int)screen.Tab == i;
+            var open = screen.Tab == i;
 
             // The open one stands out of the screen and the shut ones are pressed into it, which is
             // the oldest way of drawing a tab and still the one that needs no explaining.

@@ -2085,6 +2085,29 @@ public static class WorldAudit
         if (stealing.ActionFor(had) != GameAction.Sneak)
             faults.Add($"'{had}' does not run sneak after being bound to it");
 
+        // A file from an older build names actions that no longer exist. The first line that IS
+        // recognised throws away the defaults, so without filling the gaps afterwards a renamed
+        // action ends up with no key on it and nothing on screen saying so — a player who upgrades
+        // simply cannot open their inventory. This is the check that a rename stays survivable.
+        var stale = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "driftwood-settings-stale.txt");
+        try
+        {
+            File.WriteAllText(
+                stale,
+                "bind.moveforward=Up\nbind.moveforward.2=W\nbind.openscreen=E\nbind.releasemouse=Escape\n");
+
+            var upgraded = GameSettings.Load(stale);
+            foreach (var fault in upgraded.Keys.Faults())
+                faults.Add($"after loading a file from an older build: {fault}");
+
+            if (upgraded.Keys.Primary(GameAction.MoveForward) != "Up")
+                faults.Add("a binding the old file DID name was lost on the way through");
+        }
+        finally
+        {
+            try { File.Delete(stale); } catch (IOException) { }
+        }
+
         // A file that says nothing about keys keeps the shipped ones rather than ending up with none.
         var bare = GameSettings.Load(System.IO.Path.Combine(
             System.IO.Path.GetTempPath(), "driftwood-settings-absent.txt"));

@@ -21,11 +21,19 @@ public enum GameAction
     Sneak,
     Sprint,
 
-    /// <summary>Opens the screen, and closes it again.</summary>
-    OpenScreen,
+    /// <summary>Opens what this character is carrying and can make. Closes it again.</summary>
+    OpenInventory,
 
-    /// <summary>Lets go of the mouse, or takes it back.</summary>
-    ReleaseMouse,
+    /// <summary>
+    /// Opens what this installation is set to, and lets go of the mouse while it is up.
+    /// </summary>
+    /// <remarks>
+    /// Two screens rather than one, because "what am I carrying" and "which key jumps" are not the
+    /// same kind of question and a single row of ten tabs answers neither well. Releasing the mouse
+    /// is folded in here rather than being its own key: opening a menu is how every game in this
+    /// space gives the pointer back, and a separate binding for it would be a key nobody presses.
+    /// </remarks>
+    OpenOptions,
 
     ToggleView,
     ToggleFly,
@@ -54,7 +62,7 @@ public static class GameActions
     public static string GroupOf(GameAction action) => action switch
     {
         <= GameAction.Sprint => "moving",
-        <= GameAction.ReleaseMouse => "hands",
+        <= GameAction.OpenOptions => "screens",
         <= GameAction.WindClock => "looking at things",
         _ => "the bar",
     };
@@ -69,8 +77,8 @@ public static class GameActions
         GameAction.Jump => "jump",
         GameAction.Sneak => "sneak",
         GameAction.Sprint => "sprint",
-        GameAction.OpenScreen => "open screen",
-        GameAction.ReleaseMouse => "release mouse",
+        GameAction.OpenInventory => "inventory",
+        GameAction.OpenOptions => "options",
         GameAction.ToggleView => "change view",
         GameAction.ToggleFly => "walk or fly",
         GameAction.ToggleWireframe => "wireframe",

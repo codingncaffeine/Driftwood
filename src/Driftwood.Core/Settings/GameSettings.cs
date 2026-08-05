@@ -117,6 +117,16 @@ public sealed class GameSettings
             }
         }
 
+        // Anything the file said nothing about gets its shipped key back.
+        //
+        // This is the upgrade path, and without it renaming an action silently unbinds it: a file
+        // written by an older build names actions that no longer exist, the first one that IS
+        // recognised throws away every default, and the renamed ones are left with no key on them
+        // and nothing on screen saying so. Filling the gaps afterwards costs nothing when the file
+        // is current and is the difference between a rename and a player who cannot open their
+        // inventory. A key already taken by something else is left alone rather than duplicated.
+        if (boundAnything) settings.Keys.FillGapsFrom(Bindings.Defaults());
+
         return settings;
     }
 
