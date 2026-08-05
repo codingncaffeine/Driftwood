@@ -149,6 +149,16 @@ public static class BlockTextureSet
         new("door_upper",  "textures/block/oak_door_top.png",     true),
         new("trapdoor",    "textures/block/oak_trapdoor.png",     true),
 
+        // ⚠ A chest keeps ours, and not for want of trying. The genre renders one as an ENTITY — a
+        // single wrapped sheet on a hinged model at textures/entity/chest/normal.png, a separate
+        // draw path since the game was in beta — so there is no block texture at any path for these
+        // three to point at, and a block-texture importer silently skips every chest reskin in every
+        // pack ever made. Ours are drawn as a finished chest rather than as something expecting to
+        // be replaced, because they are what anybody will actually be looking at.
+        new("chest_top",   "",                                    false),
+        new("chest_side",  "",                                    false),
+        new("chest_front", "",                                    false),
+
         // Items, from here to the end. They live in the same array as the block faces because they
         // are the same sixteen-pixel tiles drawn by the same two places — a slot on the bar and a
         // thing spinning on the floor — and a pack that reskins the world should reskin the pockets
@@ -500,6 +510,10 @@ public static class BlockTextureSet
             StarterBlocks.LayerDoorLower => TileGen.Door(1061, 168, 132, 80, upper: false),
             StarterBlocks.LayerDoorUpper => TileGen.Door(1061, 168, 132, 80, upper: true),
             StarterBlocks.LayerTrapdoor => TileGen.Trapdoor(1062, 164, 128, 76),
+
+            StarterBlocks.LayerChestTop => TileGen.ChestFace(1063, 158, 118, 68, front: false, lid: true),
+            StarterBlocks.LayerChestSide => TileGen.ChestFace(1063, 158, 118, 68, front: false, lid: false),
+            StarterBlocks.LayerChestFront => TileGen.ChestFace(1063, 158, 118, 68, front: true, lid: false),
 
             // The bench is planks that have been worked on: grooves where a straight edge was laid
             // and nicks where it was not.

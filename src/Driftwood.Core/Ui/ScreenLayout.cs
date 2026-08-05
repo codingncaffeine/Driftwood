@@ -13,6 +13,9 @@ public enum PanelKind
 
     /// <summary>A furnace: what goes in, what burns, what comes out, and the pockets.</summary>
     Furnace,
+
+    /// <summary>A chest: three rows of nine over the pockets, and nothing else at all.</summary>
+    Chest,
 }
 
 /// <summary>What a square is for. The index means something different for each.</summary>
@@ -40,6 +43,9 @@ public enum SlotRole
 
     /// <summary>What a furnace has finished. Gives only.</summary>
     Smelted,
+
+    /// <summary>A slot of whatever container is open. The index is a slot of a <see cref="Chest"/>.</summary>
+    Stored,
 }
 
 /// <summary>What kind of thing the pointer is over.</summary>
@@ -120,10 +126,23 @@ public sealed class ScreenLayout
     /// <summary>A result square wears a wider frame. The square inside it is still sixteen.</summary>
     public const int ResultFrame = 26;
 
-    // The bottom half, shared by all three panels: three rows of nine, then the bar.
+    // The bottom half, shared by every panel: three rows of nine, then the bar.
     private const int PocketsLeft = 8;
     private const int PocketsTop = 84;
     private const int BarTop = 142;
+
+    /// <summary>
+    /// Where a container's own rows begin, and the pitch they run at.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ Measured out of the pack's own <c>shulker_box.png</c> by sampling pixels, not remembered —
+    /// three rows of nine at 8,18 with the pockets still at 84 and the bar still at 142, which is to
+    /// say a twenty-seven-slot container is <em>exactly</em> the panel we already draw. That is worth
+    /// knowing rather than assuming: a chest could have needed a taller panel and a second set of
+    /// numbers, and it does not. (A double chest does — six rows at 18, pockets at 140, bar at 198,
+    /// 176 by 222 — measured off <c>generic_54.png</c> at the same time, for when it lands.)
+    /// </remarks>
+    private const int StoredTop = 18;
 
     private readonly List<Zone> _zones = [];
 
@@ -284,6 +303,16 @@ public sealed class ScreenLayout
                 Square16(SlotRole.Smelting, 0, 56, 17);
                 Square16(SlotRole.Fuel, 0, 56, 53);
                 Square16(SlotRole.Smelted, 0, 116, 35);
+                break;
+
+            case PanelKind.Chest:
+                for (var row = 0; row < Chest.Slots / Inventory.HotbarSlots; row++)
+                for (var column = 0; column < Inventory.HotbarSlots; column++)
+                    Square16(
+                        SlotRole.Stored,
+                        row * Inventory.HotbarSlots + column,
+                        PocketsLeft + column * Pitch,
+                        StoredTop + row * Pitch);
                 break;
         }
 

@@ -418,6 +418,10 @@ public static class WorldAudit
         Check("light can be built, and blocked", lampFaults.Count == 0,
             lampFaults.Count == 0 ? lampDetail : $"{lampFaults.Count} faults: {lampFaults[0]}");
 
+        var chestFaults = ChestSelfTest(items, out var chestDetail);
+        Check("a chest keeps what it is given", chestFaults.Count == 0,
+            chestFaults.Count == 0 ? chestDetail : $"{chestFaults.Count} faults: {chestFaults[0]}");
+
         var furnaceFaults = FurnaceSelfTest(items, book, out var furnaceDetail);
         Check("a furnace burns only when it has work", furnaceFaults.Count == 0,
             furnaceFaults.Count == 0 ? furnaceDetail : $"{furnaceFaults.Count} faults: {furnaceFaults[0]}");
@@ -2376,6 +2380,79 @@ public static class WorldAudit
     }
 
     /// <summary>
+    /// Fills a chest, overfills it, empties it, and counts what comes out.
+    /// </summary>
+    /// <remarks>
+    /// <para>One rule, asked four ways: nothing is created and nothing is lost. A chest that
+    /// silently swallowed the stack that would not fit would look exactly like one that fitted it,
+    /// and the only way anybody would find out is by counting — which is what this does, in items
+    /// rather than in stacks, because a merge that drops a remainder loses items and not slots.</para>
+    /// <para>The overfill is deliberately not a round number of stacks. Twenty-eight stacks of a
+    /// thing that caps at sixty-four into twenty-seven slots leaves exactly one over, and a check
+    /// that put in twenty-seven would agree with a chest that quietly discarded anything past the
+    /// last slot.</para>
+    /// </remarks>
+    private static List<string> ChestSelfTest(ItemRegistry items, out string detail)
+    {
+        var faults = new List<string>();
+        var bank = new ChestBank(items);
+        var chest = bank.Open(0, 64, 0);
+
+        if (!chest.IsEmpty) faults.Add("a chest nobody has touched already holds something");
+        if (bank.Open(0, 64, 0) != chest) faults.Add("opening the same chest twice made two of them");
+
+        var plank = items.ByName("driftoak_planks").Id;
+        var cap = items[plank].MaxStack;
+
+        // Merging before filling: twenty into a slot that already holds twenty leaves one stack.
+        chest.Contents[0] = new ItemStack(plank, 20);
+        var over = bank.Add(chest, new ItemStack(plank, 20));
+
+        if (!over.IsEmpty) faults.Add($"topping up a part-full slot left {over.Count} over");
+        if (chest.Contents[0].Count != 40)
+            faults.Add($"twenty onto twenty came to {chest.Contents[0].Count}");
+        if (chest.Used != 1) faults.Add($"topping up a slot used {chest.Used} of them");
+
+        // And then past the end of it. Twenty-eight full stacks into twenty-seven slots, so the
+        // remainder is a whole stack and cannot be confused with rounding.
+        var full = new ChestBank(items);
+        var packed = full.Open(0, 64, 0);
+        var given = 0;
+        var refused = 0;
+
+        for (var i = 0; i < Chest.Slots + 1; i++)
+        {
+            given += cap;
+            refused += full.Add(packed, new ItemStack(plank, cap)).Count;
+        }
+
+        var held = 0;
+        foreach (var stack in packed.Contents) held += stack.Count;
+
+        if (packed.Used != Chest.Slots) faults.Add($"a chest filled past the end used {packed.Used} slots");
+        if (held + refused != given)
+            faults.Add($"{given} planks went in, {held} are in the chest and {refused} came back — "
+                     + $"{given - held - refused} are nowhere");
+        if (refused != cap)
+            faults.Add($"a chest with {Chest.Slots} slots took {held} of {given} and refused {refused}");
+
+        // Breaking it hands back everything and takes the chest out of the world with it.
+        var out1 = 0;
+        var stacks = 0;
+        foreach (var stack in full.Remove(0, 64, 0)) { out1 += stack.Count; stacks++; }
+
+        if (out1 != held) faults.Add($"breaking a chest holding {held} gave back {out1}");
+        if (stacks != Chest.Slots) faults.Add($"breaking a full chest gave back {stacks} stacks");
+        if (full.Count != 0) faults.Add("a broken chest is still in the world");
+        if (full.Remove(0, 64, 0).Any()) faults.Add("breaking the same chest twice gave its contents twice");
+
+        detail = $"{Chest.Slots} slots; topping up merges, {given} in gives {held} held and {refused} "
+               + $"back with none lost, and breaking it returns all {stacks} stacks once";
+
+        return faults;
+    }
+
+    /// <summary>
     /// Builds a shaft with a ladder up one wall and checks what it takes to go up it.
     /// </summary>
     /// <remarks>
@@ -3981,17 +4058,28 @@ public static class WorldAudit
     /// </remarks>
     private static int FrontFace(BlockModel model)
     {
-        // The four sides of a cube share one layer except the front, so the odd one out is the face.
+        // The four sides share one layer except the front, so the odd one out is the face. Read
+        // from the first element rather than only from the merged-cube tables, because a chest is a
+        // facing block that is deliberately not a cube — asking the cube path alone answered -1 for
+        // every chest in the world and said nothing about any of them.
+        ushort LayerOn(int face) => model.IsFullCube
+            ? model.PassLayer(0, face)
+            : model.Elements.Count > 0 && model.Elements[0].Faces[face] is { } spec
+                ? spec.Layer
+                : BlockModel.NoLayer;
+
         for (var face = 0; face < Faces.Count; face++)
         {
             if (face is Faces.PosY or Faces.NegY) continue;
 
-            var layer = model.PassLayer(0, face);
+            var layer = LayerOn(face);
+            if (layer == BlockModel.NoLayer) continue;
+
             var matches = 0;
             for (var other = 0; other < Faces.Count; other++)
             {
                 if (other == face || other is Faces.PosY or Faces.NegY) continue;
-                if (model.PassLayer(0, other) == layer) matches++;
+                if (LayerOn(other) == layer) matches++;
             }
 
             if (matches == 0) return face;

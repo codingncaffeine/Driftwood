@@ -99,6 +99,11 @@ public static class StarterBlocks
     public const ushort LayerDoorUpper = 57;
     public const ushort LayerTrapdoor = 58;
 
+    // The first place in the world a player can put something down and expect to find it again.
+    public const ushort LayerChestTop = 59;
+    public const ushort LayerChestSide = 60;
+    public const ushort LayerChestFront = 61;
+
     /// <summary>The first layer that is an item icon rather than a block face.</summary>
     /// <remarks>
     /// Items share the block texture array rather than taking one of their own. They are the same
@@ -106,24 +111,24 @@ public static class StarterBlocks
     /// spinning on the floor — and a second array would be a second bind, a second upload and a
     /// second pack-import path for no difference anybody could see.
     /// </remarks>
-    public const ushort LayerFirstIcon = 59;
+    public const ushort LayerFirstIcon = 62;
 
-    public const ushort LayerStick = 59;
-    public const ushort LayerCoal = 60;
-    public const ushort LayerCharcoal = 61;
-    public const ushort LayerRawCopper = 62;
-    public const ushort LayerRawIron = 63;
-    public const ushort LayerRawGold = 64;
-    public const ushort LayerCopperIngot = 65;
-    public const ushort LayerIronIngot = 66;
-    public const ushort LayerGoldIngot = 67;
-    public const ushort LayerStormglass = 68;
-    public const ushort LayerAzurite = 69;
-    public const ushort LayerClayLump = 70;
-    public const ushort LayerBrick = 71;
+    public const ushort LayerStick = 62;
+    public const ushort LayerCoal = 63;
+    public const ushort LayerCharcoal = 64;
+    public const ushort LayerRawCopper = 65;
+    public const ushort LayerRawIron = 66;
+    public const ushort LayerRawGold = 67;
+    public const ushort LayerCopperIngot = 68;
+    public const ushort LayerIronIngot = 69;
+    public const ushort LayerGoldIngot = 70;
+    public const ushort LayerStormglass = 71;
+    public const ushort LayerAzurite = 72;
+    public const ushort LayerClayLump = 73;
+    public const ushort LayerBrick = 74;
 
     /// <summary>The tool icons: one palette per tier, four heads each, tier-major.</summary>
-    public const ushort LayerFirstTool = 72;
+    public const ushort LayerFirstTool = 75;
 
     /// <summary>Head shapes a tier comes in — pickaxe, axe, shovel, sword.</summary>
     public const int ToolShapeCount = 4;
@@ -487,6 +492,20 @@ public static class StarterBlocks
         RegisterLights(registry);
         RegisterOpenings(registry);
 
+        // Four facings, and the whole block is its front. Not a full cube — a chest stands a little
+        // clear of the cell so a row of them reads as a row, which is also why it can never hide
+        // what is behind it and says so with Opaque.
+        for (var i = 0; i < Placeable.Facings.Length; i++)
+            registry.Register(new BlockType
+            {
+                Name = $"chest_{FacingNames[i]}",
+                Hardness = 2.5f, Opaque = false, Crafted = true, Use = BlockUse.Chest,
+                HarvestClass = ToolClass.Axe, Sounds = SoundMaterial.Wood,
+                SupportFace = Faces.NegY,
+                Model = BlockModel.Chest(
+                    LayerChestTop, LayerChestSide, LayerChestFront, Placeable.Facings[i]),
+            });
+
         // The two blocks a player uses rather than builds with. Both answer a right click, which is
         // what makes one open instead of having another stacked on top of it — the first time the
         // world had a block that answers back.
@@ -685,6 +704,14 @@ public static class StarterBlocks
     private static string DoorName(int facing, int hinge, bool upper, bool open) =>
         $"door_{FacingNames[facing]}_{FacingNames[Array.IndexOf(Placeable.Facings, hinge)]}"
         + $"_{(upper ? "upper" : "lower")}{(open ? "_open" : "")}";
+
+    /// <summary>The four chests, one per facing.</summary>
+    public static BlockId[] Chests(BlockRegistry registry)
+    {
+        var ids = new BlockId[Placeable.Facings.Length];
+        for (var i = 0; i < ids.Length; i++) ids[i] = registry.ByName($"chest_{FacingNames[i]}").Id;
+        return ids;
+    }
 
     /// <summary>The four ladders, one per wall, in <see cref="Placeable.Facings"/> order.</summary>
     public static BlockId[] Ladders(BlockRegistry registry)

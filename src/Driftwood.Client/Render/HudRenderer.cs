@@ -24,6 +24,9 @@ public enum HudScreenKind
 
     /// <summary>The other station: three by three, and the pockets under it.</summary>
     Bench,
+
+    /// <summary>A chest: twenty seven slots over the pockets, and nothing else.</summary>
+    Chest,
 }
 
 /// <summary>
@@ -168,7 +171,16 @@ public sealed class HudScreen
     /// the bottom of the world is not drawn under them — it would be the same nine slots twice.
     /// </remarks>
     public bool IsContainer =>
-        Kind is HudScreenKind.Player or HudScreenKind.Bench or HudScreenKind.Furnace;
+        Kind is HudScreenKind.Player or HudScreenKind.Bench or HudScreenKind.Furnace or HudScreenKind.Chest;
+
+    /// <summary>What is in the chest this screen is a screen of, or null when it is not one.</summary>
+    /// <remarks>
+    /// Held on the screen rather than looked up from the world every frame, for the same reason the
+    /// crafting grid is: the renderer draws what the screen says it is showing, and a screen that
+    /// went and asked the world would need to know where the chest was and what happens when it is
+    /// no longer there.
+    /// </remarks>
+    public Chest? Stored;
 }
 
 /// <summary>
@@ -1054,6 +1066,7 @@ public sealed class HudRenderer : IDisposable
         {
             HudScreenKind.Bench => PanelKind.Bench,
             HudScreenKind.Furnace => PanelKind.Furnace,
+            HudScreenKind.Chest => PanelKind.Chest,
             _ => PanelKind.Player,
         };
 
@@ -1191,6 +1204,7 @@ public sealed class HudRenderer : IDisposable
         SlotRole.Smelting => screen.Burning?.Input ?? ItemStack.Empty,
         SlotRole.Fuel => screen.Burning?.Fuel ?? ItemStack.Empty,
         SlotRole.Smelted => screen.Burning?.Output ?? ItemStack.Empty,
+        SlotRole.Stored => screen.Stored?.Contents[zone.Index] ?? ItemStack.Empty,
         _ => ItemStack.Empty,
     };
 

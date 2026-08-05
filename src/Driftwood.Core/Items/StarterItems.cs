@@ -227,6 +227,18 @@ public static class StarterItems
 
         items.Register(new ItemType
         {
+            Name = "chest", Label = "chest", IconLayer = StarterBlocks.LayerChestFront,
+            BurnSeconds = Timber,
+            Places = new Placeable
+            {
+                Label = "chest",
+                Kind = PlacementKind.Facing,
+                Variants = StarterBlocks.Chests(blocks),
+            },
+        });
+
+        items.Register(new ItemType
+        {
             Name = "furnace", Label = "furnace", IconLayer = StarterBlocks.LayerFurnaceFront,
             DrawsAsCube = true,
             Places = new Placeable

@@ -177,6 +177,10 @@ public static class StarterRecipes
         Shaped("bench", "bench", 1, ["PP", "PP"]);
         Shaped("furnace", "furnace", 1, ["RRR", "R R", "RRR"]);
 
+        // The same gesture as the furnace in a different material, which is what makes it legible
+        // without being told: eight of something round a hole is a box made of that something.
+        Shaped("chest", "chest", 1, ["PPP", "P P", "PPP"]);
+
         // Light. Either coal will do — the one that comes out of the ground and the one that comes
         // out of a furnace are the same thing on the end of a stick.
         Shaped("torch", "torch", 4, ["C", "S"]);

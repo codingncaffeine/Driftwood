@@ -194,9 +194,10 @@ public sealed class ClientHost : IDisposable
     private ItemRegistry _items = null!;
     private BlockDrops _dropTable = null!;
 
-    /// <summary>Everything that can be made, and every furnace in the world.</summary>
+    /// <summary>Everything that can be made, and every furnace and chest in the world.</summary>
     private RecipeBook _book = null!;
     private FurnaceBank _furnaces = null!;
+    private ChestBank _chests = null!;
 
     /// <summary>Which screen is over the world, and everything it is showing.</summary>
     private readonly HudScreen _hudScreen = new();
@@ -630,6 +631,7 @@ public sealed class ClientHost : IDisposable
         _dropTable = StarterItems.Drops(registry, _items);
         _book = StarterRecipes.Build(_items);
         _furnaces = new FurnaceBank(_items, _book);
+        _chests = new ChestBank(_items);
         _furnaceCold = StarterBlocks.Furnaces(registry, lit: false);
         _furnaceHot = StarterBlocks.Furnaces(registry, lit: true);
         foreach (var (slab, whole) in StarterBlocks.SlabMerges(registry)) _slabMerge[slab.Value] = whole;
@@ -1193,6 +1195,7 @@ public sealed class ClientHost : IDisposable
         SlotRole.Craft => _hudScreen.Grid?.TakeAll(zone.Index) ?? ItemStack.Empty,
         SlotRole.Equip => _equipment.TakeAll((EquipSlot)zone.Index),
         SlotRole.Smelting or SlotRole.Fuel => EmptyFurnaceSlot(zone.Role),
+        SlotRole.Stored => TakeStored(zone.Index, half: false),
         _ => ItemStack.Empty,
     };
 
@@ -1200,6 +1203,7 @@ public sealed class ClientHost : IDisposable
     {
         SlotRole.Pocket => _inventory.TakeHalf(zone.Index),
         SlotRole.Craft => _hudScreen.Grid?.TakeHalf(zone.Index) ?? ItemStack.Empty,
+        SlotRole.Stored => TakeStored(zone.Index, half: true),
         _ => TakeAllFrom(zone),
     };
 
@@ -1209,6 +1213,7 @@ public sealed class ClientHost : IDisposable
         SlotRole.Craft => _hudScreen.Grid?.Put(zone.Index, carried) ?? carried,
         SlotRole.Equip => _equipment.Put((EquipSlot)zone.Index, carried),
         SlotRole.Smelting or SlotRole.Fuel => FeedFurnace(zone.Role, carried),
+        SlotRole.Stored => PutStored(zone.Index, carried, one: false),
         _ => carried,
     };
 
@@ -1216,14 +1221,88 @@ public sealed class ClientHost : IDisposable
     {
         SlotRole.Pocket => _inventory.PutOne(zone.Index, carried),
         SlotRole.Craft => _hudScreen.Grid?.PutOne(zone.Index, carried) ?? carried,
+        SlotRole.Stored => PutStored(zone.Index, carried, one: true),
         _ => PutInto(zone, carried),
     };
+
+    /// <summary>Lifts one chest slot, all of it or half.</summary>
+    private ItemStack TakeStored(int slot, bool half)
+    {
+        if (_hudScreen.Stored is not { } chest) return ItemStack.Empty;
+
+        var there = chest.Contents[slot];
+        if (there.IsEmpty) return ItemStack.Empty;
+
+        if (!half)
+        {
+            chest.Contents[slot] = ItemStack.Empty;
+            return there;
+        }
+
+        var taken = (there.Count + 1) / 2;
+        chest.Contents[slot] = there.Minus(taken);
+        return there with { Count = taken };
+    }
+
+    /// <summary>
+    /// Puts what is carried into one chest slot, and hands back whatever would not go.
+    /// </summary>
+    /// <remarks>
+    /// The same three gestures every other slot in the game answers: drop what fits onto a matching
+    /// stack, swap with what is there when it does not match, and put down exactly one on a right
+    /// click. Written out rather than shared with <see cref="Inventory"/> because a chest is not an
+    /// inventory — it has no selected slot, no bar and no sweep — and the day it grows a lid the two
+    /// would have had to come apart again.
+    /// </remarks>
+    private ItemStack PutStored(int slot, ItemStack carried, bool one)
+    {
+        if (_hudScreen.Stored is not { } chest || carried.IsEmpty) return carried;
+
+        var there = chest.Contents[slot];
+        var cap = _items[carried.Item].MaxStack;
+
+        if (one)
+        {
+            if (!there.IsEmpty && !there.Matches(carried)) return carried;
+            if (!there.IsEmpty && there.Count >= cap) return carried;
+
+            chest.Contents[slot] = there.IsEmpty ? carried with { Count = 1 } : there with { Count = there.Count + 1 };
+            return carried.MinusOne();
+        }
+
+        if (there.IsEmpty)
+        {
+            chest.Contents[slot] = carried;
+            return ItemStack.Empty;
+        }
+
+        if (!there.Matches(carried))
+        {
+            chest.Contents[slot] = carried;
+            return there;
+        }
+
+        chest.Contents[slot] = there.Merge(carried, cap, out var over);
+        return over;
+    }
 
     /// <summary>Shift-click: the bar and the backpack trade, and a grid empties into the pockets.</summary>
     private void SweepSlot(Zone zone)
     {
         switch (zone.Role)
         {
+            // With a chest open the pockets empty into it, which is what a chest is for. Without
+            // one, the bar and the backpack trade, which is what they did before there was anywhere
+            // else for a stack to go.
+            case SlotRole.Pocket when _hudScreen.Stored is { } into:
+                var moving = _inventory.TakeAll(zone.Index);
+                if (moving.IsEmpty) return;
+
+                var back = _chests.Add(into, moving);
+                if (!back.IsEmpty) _inventory.PutInto(zone.Index, back);
+                if (back.Count != moving.Count) PlaySound(SoundMaterial.Wood, SoundEvent.Place, _viewPosition, 0.3f);
+                return;
+
             case SlotRole.Pocket:
                 if (_inventory.Sweep(zone.Index)) PlaySound(SoundMaterial.Wood, SoundEvent.Place, _viewPosition, 0.3f);
                 return;
@@ -1237,6 +1316,13 @@ public sealed class ClientHost : IDisposable
                 return;
 
             case SlotRole.Smelting or SlotRole.Fuel:
+                Spill(TakeAllFrom(zone));
+                return;
+
+            // Shift moves a whole slot between the chest and the pockets, whichever way round it is
+            // — which is what everybody reaches for and the only reason a chest is quicker than
+            // dragging twenty seven stacks by hand.
+            case SlotRole.Stored when _hudScreen.Stored is not null:
                 Spill(TakeAllFrom(zone));
                 return;
         }
@@ -1533,6 +1619,20 @@ public sealed class ClientHost : IDisposable
         RefreshScreen();
     }
 
+    /// <summary>A chest: twenty seven slots, and the player's own pockets under them.</summary>
+    private void OpenChest(int x, int y, int z)
+    {
+        _hudScreen.Kind = HudScreenKind.Chest;
+        _hudScreen.TabNames = [];
+        _hudScreen.Tab = 0;
+        _hudScreen.Grid = null;
+        _hudScreen.Stored = _chests.Open(x, y, z);
+        _station = (x, y, z);
+        StopHands();
+        TakeThePointer();
+        RefreshScreen();
+    }
+
     /// <summary>True when the game screen is open on one particular tab.</summary>
     private bool OnTab(GameTab tab) =>
         _hudScreen.Kind == HudScreenKind.Game && _hudScreen.Tab == (int)tab;
@@ -1563,6 +1663,10 @@ public sealed class ClientHost : IDisposable
         _rebinding = null;
         _hudScreen.Kind = HudScreenKind.None;
         _hudScreen.Grid = null;
+
+        // The chest keeps what is in it — that is the whole point of one — but the screen lets go
+        // of it, so a shift-click on a pocket goes back to trading with the bar.
+        _hudScreen.Stored = null;
         _hudScreen.Hovered = null;
         _shown.Clear();
         _hudScreen.Recipes.Clear();
@@ -2668,6 +2772,7 @@ public sealed class ClientHost : IDisposable
         // clean it up — and a player who mines one mid-smelt has lost both the ore and the coal.
         var centre = new Vector3(hit.X + 0.5f, hit.Y + 0.5f, hit.Z + 0.5f);
         foreach (var spilled in _furnaces.Remove(hit.X, hit.Y, hit.Z)) _drops.Drop(spilled, centre);
+        foreach (var spilled in _chests.Remove(hit.X, hit.Y, hit.Z)) _drops.Drop(spilled, centre);
 
         _streamer.EditBlock(hit.X, hit.Y, hit.Z, BlockId.Air);
         ShedUnsupported(hit.X, hit.Y, hit.Z);
@@ -2731,6 +2836,10 @@ public sealed class ClientHost : IDisposable
 
             case BlockUse.Furnace:
                 OpenFurnace(hit.X, hit.Y, hit.Z);
+                return;
+
+            case BlockUse.Chest:
+                OpenChest(hit.X, hit.Y, hit.Z);
                 return;
 
             case BlockUse.Toggle when _toggle.TryGetValue(struck.Id.Value, out var other):
@@ -3125,13 +3234,24 @@ public sealed class ClientHost : IDisposable
             case 121: CloseScreen(); OpenBench(0, 0, 0); break;
             case 150: SampleUi(size, "bench"); ProbeSquares(); break;
 
-            case 151: CloseScreen(); OpenGame(GameTab.Controls); break;
-            case 180: SampleUi(size, "game"); ProbeRows("top"); break;
+            // A chest with something in it, because an empty one draws the same twenty seven wells
+            // whether or not anything reaches a slot — the icon in the corner is the part that
+            // proves a stored stack is being read from where the screen says it is.
+            case 151:
+                CloseScreen();
+                OpenChest(0, 0, 0);
+                _chests.Add(_hudScreen.Stored!, new ItemStack(_items.ByName("driftoak_planks").Id, 7));
+                break;
 
-            case 181: ScrollRows(int.MaxValue); break;
-            case 190: ProbeRows("bottom"); break;
+            case 180: SampleUi(size, "chest"); ProbeSquares(); SampleStored(size); break;
 
-            case 191: JudgeUi(); _window.Close(); break;
+            case 181: CloseScreen(); OpenGame(GameTab.Controls); break;
+            case 210: SampleUi(size, "game"); ProbeRows("top"); break;
+
+            case 211: ScrollRows(int.MaxValue); break;
+            case 220: ProbeRows("bottom"); break;
+
+            case 221: JudgeUi(); _window.Close(); break;
         }
     }
 
@@ -3343,6 +3463,45 @@ public sealed class ClientHost : IDisposable
         Console.Out.Flush();
     }
 
+    /// <summary>
+    /// Reads a filled chest slot and an empty one beside it.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ The pair is the check. A chest's twenty seven squares are drawn from the panel whether or
+    /// not a single one of them reaches the chest, so "there is a well there" says nothing at all —
+    /// what has to differ is the slot holding something against the slot holding nothing, which is
+    /// the one comparison that cannot pass on a screen that never read the chest.
+    /// </remarks>
+    private unsafe void SampleStored(Vector2D<int> size)
+    {
+        var scale = HudRenderer.ScaleFor(size.Y);
+
+        (byte R, byte G, byte B) ReadSlot(int index)
+        {
+            if (_layout.Find(SlotRole.Stored, index) is not { } zone) return default;
+
+            var wx = (int)(zone.CentreX * scale);
+            var wy = (int)(zone.CentreY * scale);
+
+            Span<byte> px = stackalloc byte[4];
+            fixed (byte* p = px)
+                _gl.ReadPixels(wx, size.Y - 1 - wy, 1, 1, PixelFormat.Rgba, PixelType.UnsignedByte, p);
+
+            return (px[0], px[1], px[2]);
+        }
+
+        var filled = ReadSlot(0);
+        var empty = ReadSlot(Chest.Slots - 1);
+
+        _uiSamples["chest slot"] = filled;
+        _uiSamples["chest empty"] = empty;
+
+        Console.WriteLine(
+            $"ui-check    chest      a full slot reads rgb {filled.R,3} {filled.G,3} {filled.B,3}, "
+            + $"an empty one {empty.R,3} {empty.G,3} {empty.B,3}");
+        Console.Out.Flush();
+    }
+
     /// <summary>What each sample read, so the run can judge itself rather than only report.</summary>
     private readonly Dictionary<string, (byte R, byte G, byte B)> _uiSamples = [];
 
@@ -3363,6 +3522,7 @@ public sealed class ClientHost : IDisposable
         var items = Read("items");
         var book = Read("book");
         var bench = Read("bench");
+        var chestPanel = Read("chest");
         var game = Read("game");
         var world = Read("no screen corner");
 
@@ -3376,7 +3536,17 @@ public sealed class ClientHost : IDisposable
         // A screen darkens what is behind it, so the middle must not still be whatever it was.
         if (items == bare) faults.Add("opening the items screen changed nothing on screen");
         if (bench == bare) faults.Add("opening a bench changed nothing on screen");
+        if (chestPanel == bare) faults.Add("opening a chest changed nothing on screen");
         if (game == bare) faults.Add("opening the game screen changed nothing on screen");
+
+        // A chest slot with something in it must not read as one without. Both are wells drawn from
+        // the panel, so this is the only sample that says the screen is reading the chest at all.
+        var storedFull = Read("chest slot");
+        var storedEmpty = Read("chest empty");
+
+        if (storedFull == storedEmpty)
+            faults.Add($"a chest slot holding seven planks reads the same as an empty one, "
+                     + $"{storedFull.R} {storedFull.G} {storedFull.B}");
 
         _ = book;
 
@@ -3402,7 +3572,7 @@ public sealed class ClientHost : IDisposable
         // The container panel is centred, so the middle of the window is inside it — and it is drawn
         // in the same neutral grey the options are. A middle that still reads dark is the backdrop
         // with no panel on it, which is what a panel laid out off the edge looks like from here.
-        foreach (var (name, read) in new[] { ("items", items), ("bench", bench) })
+        foreach (var (name, read) in new[] { ("items", items), ("bench", bench), ("chest", chestPanel) })
         {
             if (read.R < 40) faults.Add($"the {name} panel's middle reads {read.R} {read.G} {read.B}, too dark for a panel");
 
@@ -3472,7 +3642,7 @@ public sealed class ClientHost : IDisposable
         if (faults.Count == 0)
         {
             Console.WriteLine(
-                "OK  the overlay reaches the screen: crosshair, four screens, panels in grey, "
+                "OK  the overlay reaches the screen: crosshair, five screens, panels in grey, "
                 + $"{_uiProbes.Sum(p => p.Value.Hits)} squares answering for their own middles");
         }
         else

@@ -1206,6 +1206,57 @@ public static class TileGen
         return t;
     }
 
+    /// <summary>
+    /// Boards with a band across them and, on the front, a clasp — the faces of a chest.
+    /// </summary>
+    /// <param name="front">True for the face that wears the lock.</param>
+    /// <param name="lid">True for the face seen from above, which has no band on it.</param>
+    /// <remarks>
+    /// ⚠ The genre draws a chest as an <em>entity</em> — one sheet wrapped round a hinged model, not
+    /// six block faces — so an imported pack has nothing at these paths and every chest in the game
+    /// keeps ours. Which is why this is drawn as a whole chest rather than as a texture expecting to
+    /// be replaced: it is the one we will be looking at.
+    /// </remarks>
+    public static byte[] ChestFace(int seed, byte r, byte g, byte b, bool front, bool lid)
+    {
+        var t = Planks(seed, r, g, b);
+
+        // The lid line, three rows down, on every side but the top.
+        if (!lid)
+            for (var y = 3; y < 5; y++)
+            for (var x = 0; x < Size; x++)
+            {
+                var i = y * Stride + x * 4;
+                var d = y == 3 ? 30 : -16;
+                t[i] = Clamp(t[i] - d);
+                t[i + 1] = Clamp(t[i + 1] - d);
+                t[i + 2] = Clamp(t[i + 2] - d);
+            }
+
+        // A dark border all the way round, so the box reads as a box at any distance.
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            if (x is not (0 or 15) && y is not (0 or 15)) continue;
+            var i = y * Stride + x * 4;
+            t[i] = Clamp(t[i] - 34);
+            t[i + 1] = Clamp(t[i + 1] - 34);
+            t[i + 2] = Clamp(t[i + 2] - 34);
+        }
+
+        if (!front) return t;
+
+        // The clasp, straddling the lid line, and a keyhole in it.
+        for (var y = 2; y < 8; y++)
+        for (var x = 7; x < 10; x++)
+            Put(t, x, y, 186, 158, 92, 255);
+
+        Put(t, 8, 5, 62, 50, 30, 255);
+        Put(t, 8, 6, 62, 50, 30, 255);
+
+        return t;
+    }
+
     /// <summary>A tile with a darker inset panel on it — the side and front of built furniture.</summary>
     public static byte[] Panel(byte[] baseTile, int inset, int darken)
     {

@@ -698,6 +698,38 @@ public sealed class BlockModel
     }
 
     /// <summary>
+    /// A box standing a little clear of its cell on all four sides, with a front — a chest.
+    /// </summary>
+    /// <remarks>
+    /// One unit in and two down from the top, which is the shape the genre uses and is the reason a
+    /// row of chests reads as a row of chests rather than as a plank wall: the gaps between them are
+    /// what draw the outline of each. That also means it can never be a full cube, so it cannot hide
+    /// what is behind it — and no face is flush, so nothing culls any of them.
+    /// </remarks>
+    public static BlockModel Chest(ushort top, ushort side, ushort front, int facing)
+    {
+        var faces = new ModelFace?[Faces.Count];
+        for (var face = 0; face < Faces.Count; face++)
+        {
+            var layer = face == facing
+                ? front
+                : face is Faces.PosY or Faces.NegY ? top : side;
+
+            faces[face] = new ModelFace { Layer = layer, Uv = new Vector4(0f, 0f, 16f, 16f) };
+        }
+
+        return new BlockModel(
+        [
+            new ModelElement
+            {
+                From = new Vector3(1f, 0f, 1f),
+                To = new Vector3(15f, 14f, 15f),
+                Faces = faces,
+            },
+        ]);
+    }
+
+    /// <summary>
     /// A flat sheet fixed to a wall, drawn on both sides — a ladder.
     /// </summary>
     /// <param name="facing">The way it faces, which is out of the wall it is fixed to.</param>

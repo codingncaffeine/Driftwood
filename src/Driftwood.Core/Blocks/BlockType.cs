@@ -18,6 +18,9 @@ public enum BlockUse
     /// <summary>Opens the furnace at this cell.</summary>
     Furnace,
 
+    /// <summary>Opens the chest at this cell.</summary>
+    Chest,
+
     /// <summary>Swaps to this block's other state — lit or out, open or shut.</summary>
     Toggle,
 }
