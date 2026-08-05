@@ -392,6 +392,10 @@ public static class WorldAudit
         Check("everything is reachable from bare hands", reach.Count == 0,
             reach.Count == 0 ? reachDetail : $"{reach.Count} faults: {reach[0]}");
 
+        var furnaceFaults = FurnaceSelfTest(items, book, out var furnaceDetail);
+        Check("a furnace burns only when it has work", furnaceFaults.Count == 0,
+            furnaceFaults.Count == 0 ? furnaceDetail : $"{furnaceFaults.Count} faults: {furnaceFaults[0]}");
+
         var vitalsFaults = VitalsSelfTest(registry, ids);
         Check("falls and water cost health", vitalsFaults.Count == 0,
             vitalsFaults.Count == 0
@@ -1481,6 +1485,155 @@ public static class WorldAudit
 
         detail = $"{have.Count} of {items.Count - 1} items in {rounds} rounds from {byHand} blocks "
                + $"a hand can take, past {gated} it cannot, over {toolSteps} tool classes";
+
+        return faults;
+    }
+
+    /// <summary>
+    /// Feeds a furnace, starves it, and holds a full one under a burning fire.
+    /// </summary>
+    /// <remarks>
+    /// <para>Every fault worth catching here is one that only shows up over time and looks like
+    /// nothing while it is happening. A furnace that burns fuel with an empty top loses a player's
+    /// coal in a way they will blame on the coal; one that never spends fuel is a free furnace; one
+    /// that smelts into a full output slot destroys what it made and reports nothing.</para>
+    /// <para>The starving case is the positive control for the burning case, and it is the reason
+    /// both are here: a build that never lights at all would pass "it does not burn when idle" on
+    /// its own.</para>
+    /// </remarks>
+    private static List<string> FurnaceSelfTest(ItemRegistry items, RecipeBook book, out string detail)
+    {
+        var faults = new List<string>();
+        const float Step = 1f / 20f;
+        var relit = new List<(int, int, int, bool)>();
+
+        var iron = items.ByName("raw_iron").Id;
+        var ingot = items.ByName("iron_ingot").Id;
+        var planks = items.ByName("driftoak_planks").Id;
+        var smelt = book.SmeltFor(iron);
+
+        if (smelt is null)
+        {
+            detail = "nothing smelts raw iron";
+            faults.Add("raw iron has no smelting recipe, so nothing below could run");
+            return faults;
+        }
+
+        // Fed and fuelled: it lights, it produces, and it takes about as long as it says.
+        //
+        // Four ore rather than a rounder number, deliberately. A plank is fifteen seconds and a
+        // smelt is ten, so three ore is exactly two planks — a boundary where an off-by-one frame
+        // and a correct run cost the same, and where a check written as "smelts per plank" agrees
+        // with a furnace that throws the remainder of every plank away. Four is forty seconds of
+        // work against fifteen-second planks and only comes to three if the leftover carries over.
+        const int Ore = 4;
+        var bank = new FurnaceBank(items, book);
+        var working = bank.Open(0, 0, 0);
+        working.Input = new ItemStack(iron, Ore);
+        working.Fuel = new ItemStack(planks, 8);
+
+        var litAfter = -1f;
+        var madeAfter = -1f;
+        var doneAfter = -1f;
+        for (var frame = 1; frame <= 4000; frame++)
+        {
+            bank.Update(Step, relit);
+            if (litAfter < 0f && working.Lit) litAfter = frame * Step;
+            if (madeAfter < 0f && !working.Output.IsEmpty) madeAfter = frame * Step;
+            if (!working.Input.IsEmpty || working.Output.Count < Ore) continue;
+            doneAfter = frame * Step;
+            break;
+        }
+
+        if (litAfter < 0f) faults.Add("a fed and fuelled furnace never lit");
+        if (madeAfter < 0f) faults.Add("a fed and fuelled furnace made nothing");
+        else if (MathF.Abs(madeAfter - smelt.Seconds) > Step * 3f)
+            faults.Add($"the first ingot took {madeAfter:F2}s, the recipe says {smelt.Seconds:F2}s");
+
+        // A frame of slack per smelt, plus a couple. Progress is a float summed a twentieth of a
+        // second at a time, so ten seconds of it lands a hair under ten and each item costs one
+        // extra tick — real, harmless, and about a quarter of a percent. A tolerance tight enough to
+        // fail that would only ever be reporting the addition.
+        var work = Ore * smelt.Seconds;
+        if (doneAfter < 0f) faults.Add($"{Ore} ore never finished");
+        else if (MathF.Abs(doneAfter - work) > Step * (Ore + 2))
+            faults.Add($"{Ore} smelts took {doneAfter:F2}s, the recipe says {work:F2}s");
+
+        if (working.Output.Item.Value != ingot.Value || working.Output.Count != Ore)
+            faults.Add($"{Ore} raw iron came to {working.Output.Count} of {items[working.Output.Item].Name}");
+
+        // The property, not the arithmetic of one path through it: fuel is spent to cover the work
+        // and what is left of a piece is still there for the next smelt.
+        var burnt = 8 - working.Fuel.Count;
+        var perFuel = items[planks].BurnSeconds;
+        var wanted = (int)MathF.Ceiling(work / perFuel);
+        if (burnt != wanted)
+            faults.Add(
+                $"{Ore} smelts is {work:F0}s of work and burnt {burnt} planks of {perFuel:F0}s, "
+                + $"which is {wanted} if the leftover carries over");
+
+        // Fuel and nothing to do: it must not light, and must not lose a single plank. This is the
+        // one a player notices a long time after it happened.
+        var idle = new FurnaceBank(items, book);
+        var waiting = idle.Open(0, 0, 0);
+        waiting.Fuel = new ItemStack(planks, 4);
+        for (var frame = 0; frame < 2000; frame++) idle.Update(Step, relit);
+
+        if (waiting.Lit) faults.Add("an empty furnace lit itself");
+        if (waiting.Fuel.Count != 4) faults.Add($"an empty furnace burnt {4 - waiting.Fuel.Count} planks doing nothing");
+
+        // Ore and no fuel: no progress at all, rather than slow progress.
+        var cold = new FurnaceBank(items, book);
+        var starved = cold.Open(0, 0, 0);
+        starved.Input = new ItemStack(iron, 4);
+        for (var frame = 0; frame < 2000; frame++) cold.Update(Step, relit);
+
+        if (starved.Lit) faults.Add("a furnace with no fuel lit anyway");
+        if (!starved.Output.IsEmpty) faults.Add("a furnace with no fuel smelted something");
+        if (starved.Progress > 0f) faults.Add($"a furnace with no fuel got {starved.Progress:F2}s through a smelt");
+
+        // A full output stops the work rather than swallowing it.
+        var full = new FurnaceBank(items, book);
+        var blocked = full.Open(0, 0, 0);
+        blocked.Input = new ItemStack(iron, 8);
+        blocked.Fuel = new ItemStack(planks, 8);
+        blocked.Output = new ItemStack(ingot, ItemStack.MaxCount);
+        for (var frame = 0; frame < 2000; frame++) full.Update(Step, relit);
+
+        if (blocked.Output.Count != ItemStack.MaxCount)
+            faults.Add($"a full furnace output reached {blocked.Output.Count}");
+        if (blocked.Input.Count != 8) faults.Add($"a blocked furnace still ate {8 - blocked.Input.Count} ore");
+        if (blocked.Fuel.Count != 8) faults.Add($"a blocked furnace still burnt {8 - blocked.Fuel.Count} planks");
+
+        // Lighting and going out are both reported, so the block that is drawn can follow.
+        var watched = new FurnaceBank(items, book);
+        var brief = watched.Open(4, 5, 6);
+        brief.Input = new ItemStack(iron, 1);
+        brief.Fuel = new ItemStack(planks, 1);
+
+        var lights = 0;
+        var outs = 0;
+        for (var frame = 0; frame < 2000; frame++)
+        {
+            watched.Update(Step, relit);
+            foreach (var (x, y, z, on) in relit)
+            {
+                if ((x, y, z) != (4, 5, 6)) faults.Add($"a change was reported at {x},{y},{z}");
+                if (on) lights++; else outs++;
+            }
+        }
+
+        if (lights != 1) faults.Add($"one plank and one ore lit the fire {lights} times");
+        if (outs != 1) faults.Add($"one plank and one ore put the fire out {outs} times");
+
+        // And breaking one hands back everything that was inside it.
+        var carried = 0;
+        foreach (var stack in watched.Remove(4, 5, 6)) carried += stack.Count;
+        if (carried != 1) faults.Add($"breaking a furnace holding one ingot handed back {carried} things");
+        if (watched.Count != 0) faults.Add("a broken furnace is still in the world");
+
+        detail = $"{Ore} ore into {Ore} ingots in {doneAfter:F0}s on {burnt} planks of {perFuel:F0}s; "
+               + "idle burns nothing, unfuelled makes no progress, a full one stops, and the flame is reported both ways";
 
         return faults;
     }

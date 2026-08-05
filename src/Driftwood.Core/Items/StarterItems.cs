@@ -56,6 +56,9 @@ public static class StarterItems
         ("sword", ToolClass.Sword),
     ];
 
+    /// <summary>Seconds of burn one piece of timber is worth — one and a half smelts.</summary>
+    public const float Timber = 15f;
+
     public static ItemRegistry Register(BlockRegistry blocks)
     {
         var items = new ItemRegistry();
@@ -63,8 +66,10 @@ public static class StarterItems
         // Blocks you can hold. Every entry is one item however many block ids it covers — a stair
         // is eight orientations and one thing to carry, which is the whole reason items got an id
         // space of their own.
-        Block(items, blocks, "driftoak_log", "driftoak log", StarterBlocks.LayerLogSide);
-        Block(items, blocks, "driftoak_planks", "driftoak planks", StarterBlocks.LayerPlanks);
+        // Anything made of timber burns, which is what stops a player who spawned in a forest with
+        // no cave nearby from being unable to light their first furnace at all.
+        Block(items, blocks, "driftoak_log", "driftoak log", StarterBlocks.LayerLogSide, Timber);
+        Block(items, blocks, "driftoak_planks", "driftoak planks", StarterBlocks.LayerPlanks, Timber);
         Block(items, blocks, "stone", "stone", StarterBlocks.LayerStone);
         Block(items, blocks, "rubble", "rubble", StarterBlocks.LayerRubble);
         Block(items, blocks, "dirt", "dirt", StarterBlocks.LayerDirt);
@@ -80,7 +85,7 @@ public static class StarterItems
         Block(items, blocks, "emberstone", "emberstone", StarterBlocks.LayerEmberstone);
         Block(items, blocks, "glass", "glass", StarterBlocks.LayerGlass);
         Block(items, blocks, "bricks", "bricks", StarterBlocks.LayerBricks);
-        Block(items, blocks, "bench", "bench", StarterBlocks.LayerBenchTop);
+        Block(items, blocks, "bench", "bench", StarterBlocks.LayerBenchTop, Timber);
 
         // Slabs and stairs, straight off the same table the blocks came from.
         foreach (var material in StarterBlocks.ShapedNames)
@@ -221,13 +226,15 @@ public static class StarterItems
         new BlockDrops.Rule("furnace_north_lit", "furnace"));
 
     private static void Block(
-        ItemRegistry items, BlockRegistry blocks, string name, string label, ushort icon) =>
+        ItemRegistry items, BlockRegistry blocks, string name, string label, ushort icon,
+        float burn = 0f) =>
         items.Register(new ItemType
         {
             Name = name,
             Label = label,
             IconLayer = icon,
             DrawsAsCube = true,
+            BurnSeconds = burn,
             Places = new Placeable
             {
                 Label = label,
