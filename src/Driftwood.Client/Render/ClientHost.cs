@@ -444,6 +444,11 @@ public sealed class ClientHost : IDisposable
     private readonly int _maxUploadsPerFrame;
 
     /// <summary>
+    /// Where the time before the first frame goes. Running from the moment the host is made.
+    /// </summary>
+    private readonly StartupTrace _startup = new();
+
+    /// <summary>
     /// The longest step any one update is allowed to advance the world by, in seconds.
     /// </summary>
     /// <remarks>
@@ -452,6 +457,16 @@ public sealed class ClientHost : IDisposable
     /// <see cref="OnUpdate"/> for what happened without it.
     /// </remarks>
     private const double MaxStep = 0.25;
+
+    /// <summary>
+    /// Milliseconds the controller scan may take before it is worth telling somebody about it.
+    /// </summary>
+    /// <remarks>
+    /// A machine with nothing paired comes in under a hundred. A second is far enough past that to
+    /// mean something is being waited on rather than counted, and near enough that a player who
+    /// noticed the pause gets an explanation for it.
+    /// </remarks>
+    private const double SlowControllerScanMs = 1000;
 
     private static readonly double TicksToMs = 1000.0 / Stopwatch.Frequency;
 
@@ -640,6 +655,8 @@ public sealed class ClientHost : IDisposable
 
     private void OnLoad()
     {
+        _startup.Mark("window and GL");
+
         _gl = GL.GetApi(_window);
         ApplyWindowIcon();
 
@@ -647,6 +664,7 @@ public sealed class ClientHost : IDisposable
         // A bad file costs the setting it names and nothing else — see GameSettings.Load.
         _settings = GameSettings.Load();
         _keys = new InputMap(_settings.Keys);
+        _startup.Mark("settings");
 
         // A command line still wins over a saved setting for the run it is on, without writing
         // itself into the file — starting once with --vsync should not turn it on for good.
@@ -656,10 +674,42 @@ public sealed class ClientHost : IDisposable
         // Which world this is and what seed it is made of, before anything is built out of one.
         // Nothing else in here may read _options.Seed after this point.
         OpenWorld();
+        _startup.Mark("world header");
 
         Console.WriteLine($"settings    {GameSettings.Path}");
 
+        // ⛔ ON ITS OWN LINE, AND MEASURED, BECAUSE IT IS THE MOST EXPENSIVE THING IN DRIFTWOOD'S
+        // STARTUP AND IT IS NOT DRIFTWOOD'S.
+        //
+        // Creating the input context builds thirty two joystick and gamepad wrappers, and the first
+        // one of them makes GLFW initialise the Windows joystick stack — DirectInput, XInput and a
+        // device enumeration. Measured on the machine this was written on: 10.3 seconds, against
+        // twelve milliseconds to build every texture in the game. It was 97% of the whole startup,
+        // and the guess written down beforehand had been the texture build.
+        //
+        // The cause is a device rather than a quantity of work: a Bluetooth controller that is
+        // paired and not switched on, which the enumeration waits on until it gives up. Three runs
+        // came to 10341, 10323 and 10339 ms — a spread of eighteen milliseconds on ten seconds is a
+        // timeout, not work. So it is measured and named rather than engineered around, because on
+        // a machine with no such device it is a few milliseconds and there would be nothing to fix.
+        // Fully qualified rather than imported: Silk.NET.GLFW and Silk.NET.Input both define
+        // MouseButton, and bringing the whole namespace in for one call makes every mouse handler
+        // in this file ambiguous.
+        var before = _startup.ElapsedMs;
+        Silk.NET.GLFW.Glfw.GetApi().JoystickPresent(0);
+        var joystickMs = _startup.ElapsedMs - before;
+        _startup.Mark("looking for controllers");
+
+        if (joystickMs > SlowControllerScanMs)
+            Console.WriteLine(
+                $"controllers {joystickMs / 1000:F1}s to enumerate — this is Windows waiting on a "
+                + "controller that is paired but not switched on, not Driftwood loading. Unpairing "
+                + "it, or turning it on, takes this off the startup entirely.");
+
+        // Fast now: the stack above is initialised once, and this is what was paying for it.
         _input = _window.CreateInput();
+        _startup.Mark("input context");
+
         _keyboard = _input.Keyboards[0];
         _mouse = _input.Mice[0];
 
@@ -668,6 +718,7 @@ public sealed class ClientHost : IDisposable
         _mouse.MouseDown += OnMouseDown;
         _mouse.MouseUp += OnMouseUp;
         _mouse.Scroll += OnScroll;
+        _startup.Mark("settings and input");
 
         // The benchmark flies itself, so it leaves the cursor alone; stealing the mouse for a
         // measurement run is rude and changes nothing about what is measured. Same for a timed play.
@@ -693,6 +744,7 @@ public sealed class ClientHost : IDisposable
         _particleRenderer = new ParticleRenderer(_gl);
         _itemRenderer = new ItemRenderer(_gl);
         _hud = new HudRenderer(_gl);
+        _startup.Mark("shaders");
 
         // The benchmark opens no device at all. It flies a scripted path and hears nothing worth
         // hearing, and a measurement run that makes noise on somebody's machine is rude twice over.
@@ -701,6 +753,8 @@ public sealed class ClientHost : IDisposable
             _audio = new AudioEngine(new SoundLibrary(SoundLibrary.FindRoot()));
             Console.WriteLine($"sound       {_audio.Summary}");
         }
+
+        _startup.Mark("sound");
 
         // A loaded world opens where it was put down, and --time only says where a new one starts.
         _clock = new SkyClock(_loadedWorld ? _savedDayTime : _options.StartTime, _options.DayLength);
@@ -712,11 +766,15 @@ public sealed class ClientHost : IDisposable
         Console.WriteLine(
             $"clouds      {cloudField.Summary}, {cloudField.Coverage * 100:F0}% cover, "
             + $"{_clouds.QuadCount:N0} quads over {CloudField.Period:F0} blocks");
+        _startup.Mark("sky and clouds");
 
         var ceiling = TextureCeiling();
         _textures = BlockTextureSet.Build(_options.PackPath, _options.TextureSize, ceiling);
+        _startup.Mark("block textures");
+
         _blockTextures = new BlockTextureArray(_gl, _textures.Tiles, _textures.Size);
         Console.WriteLine($"textures    {_textures.Summary}");
+        _startup.Mark("texture upload");
 
         var skin = PlayerSkin.Build(_options.SkinPath, _options.Arms);
         _playerRenderer = new PlayerRenderer(_gl, skin);
@@ -728,6 +786,7 @@ public sealed class ClientHost : IDisposable
         var cracks = CrackTextures.Build(_options.PackPath, _textures.Size);
         _cracks = new BlockCracks(_gl, cracks);
         Console.WriteLine($"cracks      {cracks.Summary}");
+        _startup.Mark("skin and cracks");
 
         BuildWorld();
 
@@ -735,6 +794,7 @@ public sealed class ClientHost : IDisposable
         // it here rather than in half a dozen constructors also means there is exactly one place
         // that turns a setting into an effect, which is the place to look when one does nothing.
         ApplySettings();
+        _startup.Mark("settings applied");
     }
 
     private void BuildWorld()
@@ -743,6 +803,7 @@ public sealed class ClientHost : IDisposable
         var ids = StarterBlocks.Register(registry);
         registry.Seal();
         _registry = registry;
+        _startup.Mark("blocks");
 
         // The item layer sits on top of the block layer and never the other way round, which is why
         // it is built here rather than beside it: everything it needs is an id the blocks have
@@ -758,6 +819,7 @@ public sealed class ClientHost : IDisposable
         foreach (var (from, to) in StarterBlocks.Toggles(registry)) _toggle[from.Value] = to;
         foreach (var (lower, upper) in StarterBlocks.TallPairs(registry)) _tallUpper[lower.Value] = upper;
         _supports = new SupportTable(registry);
+        _startup.Mark("items and recipes");
 
         var generator = new TerrainGenerator(_seed, ids, _options.OceanCoverage);
 
@@ -846,10 +908,12 @@ public sealed class ClientHost : IDisposable
         // is what takes delivery of it, so an edit read after its chunk has already been generated
         // has missed its moment. See VoxelWorld.Restore.
         LoadWorld();
+        _startup.Mark("world opened");
 
         // Prime the pipeline before the first frame so the viewer does not open inside an empty
         // world, then let the render loop take delivery of the rest as it arrives.
         _streamer.Update(_camera.Position);
+        _startup.Mark("first chunks queued");
 
         Console.WriteLine($"seed        {_seed}");
         Console.WriteLine($"view        {viewRadius} chunks ({reach} blocks), streaming");
@@ -3736,6 +3800,11 @@ public sealed class ClientHost : IDisposable
         if (_options.UiCheck) RunUiCheck(size);
 
         _renderMs = (Stopwatch.GetTimestamp() - renderStart) * TicksToMs;
+
+        // ⛳ Here rather than at the end of loading, because "the world is on screen" is the moment
+        // a player is actually waiting for and it is later than the moment the loading code stops.
+        // Reports once and then costs a bool.
+        _startup.Report("first frame drawn");
     }
 
     /// <summary>How many frames the check has drawn, for its own timing.</summary>
