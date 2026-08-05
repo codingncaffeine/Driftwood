@@ -75,6 +75,61 @@ public static class WorldSave
 
     public static string PathFor(string name) => Path.Combine(Folder, $"{Sanitised(name)}.dws");
 
+    /// <summary>How many previous states of a world are kept beside it.</summary>
+    public const int Backups = 3;
+
+    /// <summary>
+    /// Where an earlier state of a world lives. Slot 1 is the most recent.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ <b>A different extension on purpose.</b> <see cref="List"/> enumerates <c>*.dws</c>, so a
+    /// backup named as one would appear in the list as a world of its own — four entries where
+    /// somebody has one world, three of them older copies they never made. Being unable to match
+    /// beats remembering to filter.
+    /// </remarks>
+    public static string BackupPath(string name, int slot) =>
+        Path.Combine(Folder, $"{Sanitised(name)}.{slot}.dwsbak");
+
+    /// <summary>
+    /// Moves the world's previous states down a slot and takes a copy of the current one.
+    /// </summary>
+    /// <remarks>
+    /// <para>The write itself cannot half-happen — it goes to a temporary file and is moved over the
+    /// real one — so this is not insurance against a torn file. It is insurance against a
+    /// <em>state</em>: an autosave taken as somebody falls into lava, or after a build of ours does
+    /// something to a world that it should not have. Those are recoverable only if the step before
+    /// them still exists.</para>
+    /// <para><b>The current file is copied, never moved.</b> Moving it would leave a moment with no
+    /// world on disk at all, and that moment is exactly when the power goes off.</para>
+    /// <para>A failure here is reported and never stops the save. A world that will not write
+    /// because its backup would not is worse than a world with no backup.</para>
+    /// </remarks>
+    /// <returns>Null on success, or what went wrong.</returns>
+    public static string? Backup(string name)
+    {
+        try
+        {
+            var current = PathFor(name);
+            if (!File.Exists(current)) return null;
+
+            var oldest = BackupPath(name, Backups);
+            if (File.Exists(oldest)) File.Delete(oldest);
+
+            for (var slot = Backups - 1; slot >= 1; slot--)
+            {
+                var from = BackupPath(name, slot);
+                if (File.Exists(from)) File.Move(from, BackupPath(name, slot + 1), overwrite: true);
+            }
+
+            File.Copy(current, BackupPath(name, 1), overwrite: true);
+            return null;
+        }
+        catch (Exception fault)
+        {
+            return fault.Message;
+        }
+    }
+
     /// <summary>
     /// A name that is safe to be a file name, and still recognisably what was typed.
     /// </summary>
@@ -148,7 +203,12 @@ public static class WorldSave
             }
 
             File.Move(temporary, path, overwrite: true);
+
+            // Both, and the second is easy to forget. Picking something up can announce a recipe
+            // without changing a block, so a periodic save that only watched the world would never
+            // notice it had something to write.
             state.World.Settled();
+            state.Unlocks.Settled();
             return null;
         }
         catch (Exception fault)

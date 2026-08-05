@@ -53,6 +53,9 @@ public sealed class RecipeUnlocks
     /// </remarks>
     public bool Dirty { get; private set; }
 
+    /// <summary>Forgets that anything is unwritten. What a save does once it is safely down.</summary>
+    public void Settled() => Dirty = false;
+
     /// <summary>Forgets everything, so the notices start again. What the settings screen offers.</summary>
     public void Forget()
     {

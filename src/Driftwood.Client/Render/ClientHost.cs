@@ -230,6 +230,22 @@ public sealed class ClientHost : IDisposable
 
     /// <summary>What went wrong the last time the world was written, if anything.</summary>
     private string? _saveFault;
+
+    /// <summary>
+    /// Seconds between autosaves, when there is anything to write.
+    /// </summary>
+    /// <remarks>
+    /// Two minutes. Long enough that a session of steady building is not a session of steady disk
+    /// writing, and short enough that what a crash costs is a couple of minutes of work rather than
+    /// an evening. A save is the seed and a diff, so it is small however long somebody has played.
+    /// </remarks>
+    private const double AutosaveSeconds = 120;
+
+    /// <summary>Seconds since the last save of any kind.</summary>
+    private double _sinceSave;
+
+    /// <summary>How many autosaves this session has taken, for the screen to show.</summary>
+    private int _autosaves;
     private readonly Dictionary<ChunkPos, ChunkMeshGpu> _meshes = [];
     private readonly FlyCamera _camera = new();
     private WorldStreamer _streamer = null!;
@@ -997,6 +1013,13 @@ public sealed class ClientHost : IDisposable
     {
         if (_worldName.Length == 0 || _streamer is null || _items is null) return false;
 
+        _sinceSave = 0;
+
+        // The step before this one, kept. Reported and never fatal: a world that will not write
+        // because its backup would not is worse than a world with no backup.
+        if (WorldSave.Backup(_worldName) is { } spare)
+            Console.Error.WriteLine($"driftwood: could not keep a copy of '{_worldName}': {spare}");
+
         var state = CaptureState();
         _saveFault = WorldSave.Write(_worldName, state);
 
@@ -1011,6 +1034,33 @@ public sealed class ClientHost : IDisposable
             + $"played {Spoken(state.Played)}");
 
         return true;
+    }
+
+    /// <summary>
+    /// Writes the world every so often, once something has happened worth writing.
+    /// </summary>
+    /// <remarks>
+    /// <para>⚠ <b>The clock is not reset when there is nothing to save</b>, and that is deliberate.
+    /// Resetting it would mean a world stood still in for ten minutes and then built on saves ten
+    /// minutes after the first block, rather than at the first block. As written, the period is a
+    /// floor on how often a save can happen and not a delay before one can.</para>
+    /// <para>Both flags are asked. Picking something up can announce a recipe without changing a
+    /// single block, so a world that watched only itself would say there was nothing to write.</para>
+    /// <para><b>An unlock is not its own trigger.</b> The task called for one, and it would fire
+    /// twenty times in the first two minutes of a new world — the tree announces itself as fast as a
+    /// player picks things up. Making the world dirty is the useful half of that trigger, and the
+    /// period is what stops it being churn.</para>
+    /// </remarks>
+    private void StepAutosave(double dt)
+    {
+        if (_worldName.Length == 0 || _bench is not null) return;
+
+        _sinceSave += dt;
+        if (_sinceSave < AutosaveSeconds) return;
+        if (!_streamer.World.Changed && !_unlocks.Dirty) return;
+
+        _autosaves++;
+        SaveWorld("automatically");
     }
 
     /// <summary>A span of seconds as a person would say it.</summary>
@@ -2238,6 +2288,13 @@ public sealed class ClientHost : IDisposable
                     "save now",
                     _saveFault is null ? $"{_streamer.World.Edits.Count} changes" : "last one failed",
                     Note: _saveFault ?? "enter writes it; closing the window writes it anyway"));
+                _hudScreen.Rows.Add(new MenuRow(
+                    "last saved",
+                    _streamer.World.Changed || _unlocks.Dirty
+                        ? $"{(int)_sinceSave}s ago, with changes since"
+                        : $"{(int)_sinceSave}s ago, up to date",
+                    Note: $"saved by itself every {(int)AutosaveSeconds}s when anything has changed, "
+                        + $"and on dying; {_autosaves} so far. The last {WorldSave.Backups} are kept beside it"));
                 _hudScreen.Rows.Add(new MenuRow("where you are", $"{p.X:F0} {p.Y:F0} {p.Z:F0}"));
                 _hudScreen.Rows.Add(new MenuRow(
                     "loaded", $"{_meshes.Count} chunks, {_drawnChunks} drawn"));
@@ -2812,6 +2869,7 @@ public sealed class ClientHost : IDisposable
         StepLeaffall((float)dt);
         StepFurnaces((float)dt);
         StepToasts((float)dt);
+        StepAutosave(dt);
         _particles.Update(_streamer.World, (float)dt);
 
         // What a screen can afford changes as the world hands things over, so it is recomputed
@@ -3116,6 +3174,11 @@ public sealed class ClientHost : IDisposable
 
         _player.Teleport(_spawnPoint);
         _vitals.Restore();
+
+        // ⛳ Dying is the one moment a player most wants the last few minutes to have been kept, and
+        // the least likely to have thought about it. The copy taken alongside is the step before the
+        // death, which is the only thing that makes it recoverable.
+        SaveWorld("after dying");
     }
 
     /// <summary>Plays one of a material's sounds for one situation, at a point in the world.</summary>

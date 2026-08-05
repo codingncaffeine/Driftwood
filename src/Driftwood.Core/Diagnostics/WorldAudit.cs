@@ -428,6 +428,10 @@ public static class WorldAudit
         Check("a loaded world is still the world the generator makes", loadFaults.Count == 0,
             loadFaults.Count == 0 ? loadDetail : $"{loadFaults.Count} faults: {loadFaults[0]}");
 
+        var backupFaults = BackupSelfTest(registry, items, book, out var backupDetail);
+        Check("the last few states of a world are kept beside it", backupFaults.Count == 0,
+            backupFaults.Count == 0 ? backupDetail : $"{backupFaults.Count} faults: {backupFaults[0]}");
+
         var chestFaults = ChestSelfTest(items, out var chestDetail);
         Check("a chest keeps what it is given", chestFaults.Count == 0,
             chestFaults.Count == 0 ? chestDetail : $"{chestFaults.Count} faults: {chestFaults[0]}");
@@ -2675,6 +2679,101 @@ public static class WorldAudit
         finally
         {
             try { File.Delete(WorldSave.PathFor(Path.GetFileNameWithoutExtension(path))); } catch (Exception) { }
+        }
+
+        return faults;
+    }
+
+    /// <summary>
+    /// Saves a world five times over and checks the four states behind the current one.
+    /// </summary>
+    /// <remarks>
+    /// <para>The rotation is pure file shuffling with an order that is easy to get backwards, and
+    /// getting it backwards has no symptom at all until somebody needs it — at which point the three
+    /// copies kept against exactly that moment turn out to be three copies of the same state, or of
+    /// the wrong ones.</para>
+    /// <para><b>Each save is given a different number of edits</b>, so every file can be told apart
+    /// by its own header without reading a block. A rotation that copies the same file into every
+    /// slot, or shifts the wrong way, comes out as the wrong numbers rather than as a pass.</para>
+    /// <para>Five saves against three slots, because the interesting case is the one that pushes the
+    /// oldest out. Four would leave the last slot never having been overwritten.</para>
+    /// </remarks>
+    private static List<string> BackupSelfTest(
+        BlockRegistry registry, ItemRegistry items, RecipeBook book, out string detail)
+    {
+        var faults = new List<string>();
+        var name = $"driftwood-audit-backup-{Environment.ProcessId}";
+        var stone = registry.ByName("stone").Id;
+
+        try
+        {
+            var world = new VoxelWorld(registry);
+
+            // Save n has n edits in it, which is the whole identity of that state.
+            for (var save = 1; save <= 5; save++)
+            {
+                world.SetBlock(save, 64, 0, stone);
+
+                var state = new WorldState(
+                    "backups", items, world,
+                    new FurnaceBank(items, book), new ChestBank(items),
+                    new Inventory(items), new Equipment(items),
+                    new PlayerVitals(registry), new RecipeUnlocks());
+
+                if (WorldSave.Backup(name) is { } spare) faults.Add($"keeping a copy failed: {spare}");
+                if (WorldSave.Write(name, state) is { } wrote) faults.Add($"save {save} failed: {wrote}");
+            }
+
+            // The current file is the fifth, and slot n is the state n saves ago.
+            if (!WorldSave.TryReadHeader(WorldSave.PathFor(name), out var current))
+                faults.Add("the world itself is not readable after five saves");
+            else if (current.Edits != 5)
+                faults.Add($"the world holds {current.Edits} edits after five saves of 1..5");
+
+            for (var slot = 1; slot <= WorldSave.Backups; slot++)
+            {
+                var path = WorldSave.BackupPath(name, slot);
+                var want = 5 - slot;
+
+                if (!File.Exists(path))
+                {
+                    faults.Add($"slot {slot} was never written, so only {slot - 1} states are kept");
+                    continue;
+                }
+
+                if (!WorldSave.TryReadHeader(path, out var kept))
+                    faults.Add($"slot {slot} is not readable");
+                else if (kept.Edits != want)
+                    faults.Add(
+                        $"slot {slot} holds the state with {kept.Edits} edits where the one "
+                        + $"{slot} saves back has {want} — the rotation is not moving them along");
+            }
+
+            // ⛔ And the one a fifth save must have pushed out. Without this the check passes a
+            // rotation that only ever grows, which keeps every state a world has ever been in.
+            if (File.Exists(WorldSave.BackupPath(name, WorldSave.Backups + 1)))
+                faults.Add(
+                    $"a {WorldSave.Backups + 1}th slot exists, so nothing is ever dropped and the "
+                    + "saves folder grows without limit");
+
+            // ⚠ And the backups must not read as worlds. A list built from *.dws would show four
+            // entries where somebody has one world, three of them copies they never made.
+            var listed = WorldSave.List().Count(w => w.Name == name);
+            if (listed != 1)
+                faults.Add($"one world with {WorldSave.Backups} copies behind it lists as {listed} worlds");
+
+            detail = $"five saves of 1..5 edits leave the world holding 5 and the {WorldSave.Backups} "
+                   + "slots holding 4, 3 and 2; the oldest is dropped and none of them list as a world";
+        }
+        finally
+        {
+            try
+            {
+                File.Delete(WorldSave.PathFor(name));
+                for (var slot = 1; slot <= WorldSave.Backups + 1; slot++)
+                    File.Delete(WorldSave.BackupPath(name, slot));
+            }
+            catch (Exception) { }
         }
 
         return faults;
