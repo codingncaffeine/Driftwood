@@ -114,6 +114,13 @@ public sealed class HudScreen
     /// <summary>Which recipe or row is picked out.</summary>
     public int Selected;
 
+    /// <summary>The first row of a settings list actually on screen.</summary>
+    /// <remarks>
+    /// The list is capped at a readable number of lines and what does not fit is scrolled to, so
+    /// this is a window onto <see cref="Rows"/> rather than a property of it.
+    /// </remarks>
+    public int Scroll;
+
     /// <summary>The hint along the bottom — what the keys do here, right now.</summary>
     public string Footer = "";
 
@@ -253,6 +260,13 @@ public sealed class HudRenderer : IDisposable
     private readonly List<float> _blocks = new(2048);
     private readonly List<float> _iconQuads = new(2048);
     private readonly List<float> _text = new(8192);
+    private readonly List<float> _skinQuads = new(256);
+
+    /// <summary>The player's own sheet, as a single-layer array so the batcher can sample it.</summary>
+    private BlockTextureArray? _skin;
+
+    /// <summary>The model the sheet dresses, so the figure follows it rather than a copy of it.</summary>
+    private ModelBox[] _dollBoxes = [];
 
     private float[] _upload = new float[8192];
 
@@ -346,6 +360,7 @@ public sealed class HudRenderer : IDisposable
         _blocks.Clear();
         _iconQuads.Clear();
         _text.Clear();
+        _skinQuads.Clear();
         layout.Clear();
 
         // A whole number of screen pixels per layout unit, never a half. Everything here is pixel
@@ -452,6 +467,7 @@ public sealed class HudRenderer : IDisposable
         _gl.BindVertexArray(_vao);
 
         Flush(_plain, textured: false, null);
+        Flush(_skinQuads, textured: true, _skin);
         Flush(_blocks, textured: true, blocks);
         Flush(_iconQuads, textured: true, _icons);
         Flush(_text, textured: true, _font);
@@ -614,7 +630,14 @@ public sealed class HudRenderer : IDisposable
 
         const float Panel = 232f;
         var left = MathF.Round((w - Panel) / 2f);
-        var top = MathF.Round(h * 0.12f);
+
+        // Sat where it is tall rather than always a fixed way down the screen. A settings list is a
+        // fixed twelve lines now and a recipe book is however many rows the recipes come to, and
+        // pinning both to the same top leaves the short one floating in the upper third.
+        var tall = 22f + Math.Min(screen.Rows.Count, ScreenLayout.MenuLines(h)) * ScreenLayout.MenuLine + 12f;
+        var top = screen.Recipes.Count > 0
+            ? MathF.Round(h * 0.12f)
+            : MathF.Round((h - tall) * 0.42f);
 
         Tabs(screen, layout, left, top, Panel);
         var body = top + 22f;
@@ -623,7 +646,7 @@ public sealed class HudRenderer : IDisposable
         // screen in, not here — Recipes being non-empty is the signal, so a tab that wants to draw
         // something else entirely adds a list rather than a case in this method.
         if (screen.Recipes.Count > 0) Book(catalogue, screen, layout, left, body, Panel);
-        else Rows(screen, layout, left, body, Panel);
+        else Rows(screen, layout, left, body, Panel, h);
 
         Footer(screen, w, h);
     }
@@ -656,17 +679,36 @@ public sealed class HudRenderer : IDisposable
         Rect(_plain, left, top + 16f, panel, 2f, PanelLight);
     }
 
-    /// <summary>A settings tab: a label on the left and what it is set to on the right.</summary>
-    private void Rows(HudScreen screen, ScreenLayout layout, float left, float top, float panel)
+    /// <summary>
+    /// A settings tab: a label on the left and what it is set to on the right.
+    /// </summary>
+    /// <remarks>
+    /// <para>A window onto the list rather than the whole of it. The controls tab is twenty eight
+    /// rows and grows by one with every binding added, so drawn at its full length it is a panel
+    /// that eventually runs off the bottom of the window — and a panel that has run off the bottom
+    /// looks exactly like a panel that is fine, from everywhere except the row nobody can reach.
+    /// </para>
+    /// <para>Only the rows actually on screen get a zone, so a click can never land on one that has
+    /// been scrolled past — the same property that makes the layout worth having in the first place,
+    /// falling out of building it from what was drawn.</para>
+    /// </remarks>
+    private void Rows(HudScreen screen, ScreenLayout layout, float left, float top, float panel, float h)
     {
-        const float Line = 13f;
+        const float Line = ScreenLayout.MenuLine;
 
-        Frame(left - 4f, top - 4f, panel + 8f, screen.Rows.Count * Line + 12f);
+        var total = screen.Rows.Count;
+        var lines = ScreenLayout.MenuLines(h);
+        var shown = Math.Min(lines, total);
+        var first = Math.Clamp(screen.Scroll, 0, Math.Max(0, total - lines));
 
-        for (var i = 0; i < screen.Rows.Count; i++)
+        Frame(left - 4f, top - 4f, panel + 8f, shown * Line + 12f);
+
+        if (total > lines) Scrollbar(screen, layout, left + panel + 6f, top - 2f, shown * Line + 8f, first, lines, total);
+
+        for (var i = first; i < first + shown; i++)
         {
             var row = screen.Rows[i];
-            var y = top + i * Line + 2f;
+            var y = top + (i - first) * Line + 2f;
 
             if (row.Heading)
             {
@@ -698,6 +740,34 @@ public sealed class HudRenderer : IDisposable
             // deliberately skips over. The row's whole width is clickable, not just its words.
             layout.Add(ZoneKind.Row, i, left - 2f, y - 2f, panel + 4f, Line);
         }
+    }
+
+    /// <summary>
+    /// The bar down the side of a list too long to show at once.
+    /// </summary>
+    /// <remarks>
+    /// The thumb's length is the share of the list on screen and its position is how far down that
+    /// share sits, which between them are the only two things a scrollbar has ever said. It is one
+    /// zone rather than three — no separate arrows at the ends — because the whole track is
+    /// clickable and draggable, and a pair of one-line-at-a-time buttons on a twelve-line list is
+    /// furniture nobody uses.
+    /// </remarks>
+    private void Scrollbar(
+        HudScreen screen, ScreenLayout layout, float x, float y, float height, int first, int lines, int total)
+    {
+        const float Width = ScreenLayout.ScrollbarWidth;
+
+        Bevel(x, y, Width, height, raised: false, new Vector4(0.17f, 0.17f, 0.17f, 0.97f));
+
+        var span = MathF.Max(1f, total - lines);
+        var thumb = MathF.Max(10f, MathF.Round(height * lines / total));
+        var travel = height - thumb - 4f;
+        var at = MathF.Round(y + 2f + travel * (first / span));
+
+        var held = screen.Hovered is { Kind: ZoneKind.Scrollbar };
+        Bevel(x + 1f, at, Width - 2f, thumb, raised: true, held ? PanelLight : PanelFill);
+
+        layout.Add(ZoneKind.Scrollbar, 0, x, y, Width, height);
     }
 
     /// <summary>
@@ -1053,14 +1123,91 @@ public sealed class HudRenderer : IDisposable
         }
     }
 
-    /// <summary>The window the player's own figure stands in.</summary>
+    /// <summary>
+    /// The window the player's own figure stands in, and the figure.
+    /// </summary>
+    /// <remarks>
+    /// <para>A flat front view cut out of the skin sheet rather than the model rendered into the
+    /// panel: the overlay is a quad batcher in screen space, and standing up a second camera, a
+    /// depth buffer and a lighting rig to show a player who is standing still and facing forward
+    /// would be a renderer to keep working forever for a picture that has no depth in it anyway.
+    /// </para>
+    /// <para><b>Built from <see cref="PlayerModel.Build"/> and <see cref="PlayerModel.FaceRect"/>,
+    /// not from a copy of their numbers.</b> Each box already knows where it sits in model space and
+    /// where its front face lands on the sheet, so the figure is those two things read out — a slim
+    /// arm is narrower here because it is narrower there, a legacy sheet points both arms at one
+    /// patch here because it does there, and an overlay stands proud by the same quarter unit. The
+    /// alternative is a second table of skin coordinates, and the day the two disagree the figure is
+    /// wearing somebody's shoe on its head.</para>
+    /// <para>The model's own right appears on the viewer's left, which is why screen x runs against
+    /// model x — and it is the same reason a skin's face looks back at you.</para>
+    /// </remarks>
     private void Figure(ScreenLayout layout, HudScreen screen)
     {
         _ = screen;
+        var box = ScreenLayout.Figure;
+
         PanelBevel(
-            layout, ScreenLayout.Figure.X, ScreenLayout.Figure.Y,
-            ScreenLayout.Figure.W, ScreenLayout.Figure.H,
+            layout, box.X, box.Y, box.W, box.H,
             raised: false, new Vector4(0.13f, 0.14f, 0.16f, 0.98f));
+
+        if (_skin is null || _dollBoxes.Length == 0) return;
+
+        // The model is thirty two units tall and sixteen across at the shoulders. Two panel pixels
+        // per unit fits both inside the window with a margin, and two is a whole number, which is
+        // the only kind this interface uses.
+        const float Units = PlayerModel.UnitsTall;
+        const float Across = 16f;
+        const float PerUnit = 2f;
+
+        var left = box.X + MathF.Round((box.W - Across * PerUnit) * 0.5f);
+        var top = box.Y + MathF.Round((box.H - Units * PerUnit) * 0.5f);
+
+        foreach (var part in _dollBoxes)
+        {
+            var grow = part.Inflate;
+            var minX = part.Pivot.X + part.Offset.X - grow;
+            var maxX = minX + part.Width + grow * 2f;
+            var minY = part.Pivot.Y + part.Offset.Y - grow;
+            var maxY = minY + part.Height + grow * 2f;
+
+            var (fx, fy, fw, fh) = PlayerModel.FaceRect(part, 0);
+
+            // Normalised against sixty four whatever the sheet is stored at — a 128 or 512 pixel
+            // skin is the same layout at a different resolution, which is the whole reason the
+            // loader squares every sheet up on the way in.
+            var u0 = fx / (float)PlayerModel.SheetSize;
+            var u1 = (fx + fw) / (float)PlayerModel.SheetSize;
+            var v0 = fy / (float)PlayerModel.SheetSize;
+            var v1 = (fy + fh) / (float)PlayerModel.SheetSize;
+
+            // A mirrored net is applied left-for-right, so its u runs the other way across the face.
+            if (part.Mirror) (u0, u1) = (u1, u0);
+
+            RectUv(
+                _skinQuads,
+                layout.X(left + (Across * 0.5f - maxX) * PerUnit),
+                layout.Y(top + (Units - maxY) * PerUnit),
+                layout.Size((maxX - minX) * PerUnit),
+                layout.Size((maxY - minY) * PerUnit),
+                u0, v0, u1, v1,
+                Vector4.One);
+        }
+    }
+
+    /// <summary>
+    /// Hands the overlay the skin the player is wearing, so the figure can be cut out of it.
+    /// </summary>
+    /// <remarks>
+    /// After construction rather than in it, because the window and its GL context exist before
+    /// anybody has decided which skin is being worn — and because a skin can change without the
+    /// overlay needing to be built again.
+    /// </remarks>
+    public void SetSkin(PlayerSkinData skin)
+    {
+        _skin?.Dispose();
+        _skin = new BlockTextureArray(_gl, [skin.Pixels], skin.Size);
+        _dollBoxes = PlayerModel.Build(skin.Arms, skin.Legacy);
     }
 
     /// <summary>A furnace's flame burning down, and the work filling toward the output.</summary>
@@ -1331,6 +1478,22 @@ public sealed class HudRenderer : IDisposable
         Vertex(into, x, y + h, 0f, 1f, layer, colour);
     }
 
+    /// <summary>A rectangle reading an arbitrary patch of its texture, rather than the whole of it.</summary>
+    /// <remarks>
+    /// Everything else here draws one tile, whole, which is what a texture array is for. A skin
+    /// sheet is the exception: it is one image holding thirty six patches, and a figure made of it
+    /// needs to name the corners of each one.
+    /// </remarks>
+    private static void RectUv(
+        List<float> into, float x, float y, float w, float h,
+        float u0, float v0, float u1, float v1, Vector4 colour)
+    {
+        Vertex(into, x, y, u0, v0, 0f, colour);
+        Vertex(into, x + w, y, u1, v0, 0f, colour);
+        Vertex(into, x + w, y + h, u1, v1, 0f, colour);
+        Vertex(into, x, y + h, u0, v1, 0f, colour);
+    }
+
     private static void Vertex(List<float> into, float x, float y, float u, float v, float layer, Vector4 colour)
     {
         into.Add(x);
@@ -1351,6 +1514,7 @@ public sealed class HudRenderer : IDisposable
         _gl.DeleteVertexArray(_vao);
         _icons.Dispose();
         _font.Dispose();
+        _skin?.Dispose();
         _shader.Dispose();
     }
 }

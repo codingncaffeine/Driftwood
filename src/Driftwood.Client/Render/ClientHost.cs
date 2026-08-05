@@ -587,6 +587,7 @@ public sealed class ClientHost : IDisposable
 
         var skin = PlayerSkin.Build(_options.SkinPath, _options.Arms);
         _playerRenderer = new PlayerRenderer(_gl, skin);
+        _hud.SetSkin(skin);
         Console.WriteLine($"skin        {skin.Summary}");
 
         // The same size the block tiles came out at, whatever decided it — cracks are laid over a
@@ -957,7 +958,9 @@ public sealed class ClientHost : IDisposable
                 if (_hudScreen.Kind == HudScreenKind.Game) _tabRow[_hudScreen.Tab] = _hudScreen.Selected;
                 _hudScreen.Tab = (_hudScreen.Tab + (many ? count - 1 : 1)) % count;
                 if (_hudScreen.Kind == HudScreenKind.Game) _hudScreen.Selected = _tabRow[_hudScreen.Tab];
+                _hudScreen.Scroll = 0;
                 RefreshScreen();
+                ShowSelectedRow();
                 return true;
 
             case Key.Enter or Key.KeypadEnter or Key.Space:
@@ -1053,8 +1056,18 @@ public sealed class ClientHost : IDisposable
                 if (_hudScreen.Kind == HudScreenKind.Game) _tabRow[_hudScreen.Tab] = _hudScreen.Selected;
                 _hudScreen.Tab = at.Value.Index;
                 if (_hudScreen.Kind == HudScreenKind.Game) _hudScreen.Selected = _tabRow[_hudScreen.Tab];
+                _hudScreen.Scroll = 0;
                 _shown.Clear();
                 RefreshScreen();
+                ShowSelectedRow();
+                return;
+
+            // The whole track, not a thumb with two arrows on the ends. Clicking anywhere on it puts
+            // that share of the list on screen, and holding the button drags it.
+            case ZoneKind.Scrollbar:
+                if (button != MouseButton.Left) return;
+                _draggingScrollbar = true;
+                DragScrollbar(at.Value);
                 return;
 
             case ZoneKind.Row:
@@ -1080,6 +1093,25 @@ public sealed class ClientHost : IDisposable
                 RefreshScreen();
                 return;
         }
+    }
+
+    /// <summary>True while the left button is down on the scrollbar.</summary>
+    private bool _draggingScrollbar;
+
+    /// <summary>Puts the pointer's share of the track on screen.</summary>
+    private void DragScrollbar(Zone track)
+    {
+        var lines = ScreenLayout.MenuLines(LayoutHeight);
+        var span = Math.Max(0, _hudScreen.Rows.Count - lines);
+        if (span == 0) return;
+
+        // Measured from the middle of where the thumb would be rather than from its top, so the
+        // list does not jump by half a thumb the moment the button goes down on it.
+        var thumb = MathF.Max(10f, MathF.Round(track.H * lines / _hudScreen.Rows.Count));
+        var travel = MathF.Max(1f, track.H - thumb - 4f);
+        var along = (_hudScreen.Pointer.Y - track.Y - thumb * 0.5f) / travel;
+
+        ScrollRows((int)MathF.Round(along * span));
     }
 
     /// <summary>One click on one square, whatever that square is a square of.</summary>
@@ -1360,6 +1392,7 @@ public sealed class ClientHost : IDisposable
         }
 
         _hudScreen.Selected = at;
+        ShowSelectedRow();
     }
 
     /// <summary>The names across the top of each screen. Lower case, because the font has both.</summary>
@@ -1433,11 +1466,13 @@ public sealed class ClientHost : IDisposable
         _hudScreen.Tab = (int)tab;
         _hudScreen.Selected = _tabRow[(int)tab];
         _hudScreen.Grid = null;
+        _hudScreen.Scroll = 0;
         _hudScreen.Recipes.Clear();
         _hudScreen.Payable.Clear();
         StopHands();
         TakeThePointer();
         RefreshScreen();
+        ShowSelectedRow();
     }
 
     /// <summary>Puts the hands down. A screen opening must not leave a swing half-taken.</summary>
@@ -1578,13 +1613,15 @@ public sealed class ClientHost : IDisposable
             return "click takes and puts, right click halves, shift moves it across, "
                 + $"click away to drop, {close} closes";
 
+        var wheel = _hudScreen.Rows.Count > ScreenLayout.MenuLines(LayoutHeight) ? ", wheel scrolls" : "";
+
         return _hudScreen.Kind switch
         {
             HudScreenKind.Player =>
                 $"arrows pick, enter makes one, shift and enter makes as many as it can, {close} closes",
             _ when OnTab(GameTab.Controls) =>
-                $"up and down pick, enter listens for a key, left clears it, tab changes tab, {close} closes",
-            _ => $"up and down pick, left and right change it, tab changes tab, {close} closes",
+                $"up and down pick, enter listens for a key, left clears it{wheel}, {close} closes",
+            _ => $"up and down pick, left and right change it, tab changes tab{wheel}, {close} closes",
         };
     }
 
@@ -1922,7 +1959,44 @@ public sealed class ClientHost : IDisposable
     private void OnScroll(IMouse mouse, ScrollWheel wheel)
     {
         if (wheel.Y == 0f) return;
+
+        // Over a list, the wheel is the list's. Three lines a notch, which is what a wheel means
+        // everywhere else on the machine.
+        if (_hudScreen.Kind == HudScreenKind.Game)
+        {
+            ScrollRows(_hudScreen.Scroll - Math.Sign(wheel.Y) * 3);
+            return;
+        }
+
         _inventory.Scroll(-Math.Sign(wheel.Y));
+    }
+
+    /// <summary>Moves the settings list's window, held inside what there is to look at.</summary>
+    private void ScrollRows(int to) =>
+        _hudScreen.Scroll = Math.Clamp(
+            to, 0, Math.Max(0, _hudScreen.Rows.Count - ScreenLayout.MenuLines(LayoutHeight)));
+
+    /// <summary>How tall the screen is in layout units — what the overlay lays everything out in.</summary>
+    private float LayoutHeight => _window.Size.Y / HudRenderer.ScaleFor(_window.Size.Y);
+
+    /// <summary>
+    /// Scrolls the list so the picked row is on it.
+    /// </summary>
+    /// <remarks>
+    /// Only when it has fallen off, and only far enough. Re-centring on every step makes the whole
+    /// list slide under a player who pressed down once, which reads as the selection standing still
+    /// and everything else moving.
+    /// </remarks>
+    private void ShowSelectedRow()
+    {
+        if (_hudScreen.Kind != HudScreenKind.Game) return;
+
+        var lines = ScreenLayout.MenuLines(LayoutHeight);
+
+        // A heading sits above the row it heads, so pulling one extra line into view when scrolling
+        // up keeps the group's name with it rather than just above the top edge.
+        if (_hudScreen.Selected < _hudScreen.Scroll + 1) ScrollRows(_hudScreen.Selected - 1);
+        else if (_hudScreen.Selected >= _hudScreen.Scroll + lines) ScrollRows(_hudScreen.Selected - lines + 1);
     }
 
     /// <summary>
@@ -1976,7 +2050,7 @@ public sealed class ClientHost : IDisposable
     {
         switch (button)
         {
-            case MouseButton.Left: _holdingBreak = false; break;
+            case MouseButton.Left: _holdingBreak = false; _draggingScrollbar = false; break;
             case MouseButton.Right: _holdingPlace = false; break;
         }
     }
@@ -2024,6 +2098,14 @@ public sealed class ClientHost : IDisposable
             _hudScreen.Pointer = new Vector2(
                 Math.Clamp(position.X / scale, 0f, _window.Size.X / scale),
                 Math.Clamp(position.Y / scale, 0f, _window.Size.Y / scale));
+
+            // A drag follows the pointer wherever it went, including off the end of the track —
+            // which is the whole point of a drag, and is why it is not simply another click.
+            if (_draggingScrollbar)
+            {
+                foreach (var zone in _layout.Zones)
+                    if (zone.Kind == ZoneKind.Scrollbar) DragScrollbar(zone);
+            }
 
             _haveMouseAnchor = false;
             return;
@@ -2819,7 +2901,7 @@ public sealed class ClientHost : IDisposable
         {
             case 60: SampleUi(size, "no screen"); break;
             case 61: OpenPlayer(PlayerTab.Items, atBench: false, default); break;
-            case 90: SampleUi(size, "items"); ProbeSquares(); break;
+            case 90: SampleUi(size, "items"); ProbeSquares(); SampleFigure(size); break;
 
             case 91: _hudScreen.Tab = (int)PlayerTab.Craft; RefreshScreen(); break;
             case 120: SampleUi(size, "player"); break;
@@ -2828,10 +2910,47 @@ public sealed class ClientHost : IDisposable
             case 150: SampleUi(size, "bench"); ProbeSquares(); break;
 
             case 151: CloseScreen(); OpenGame(GameTab.Controls); break;
-            case 180: SampleUi(size, "game"); break;
-            case 181: JudgeUi(); _window.Close(); break;
+            case 180: SampleUi(size, "game"); ProbeRows("top"); break;
+
+            case 181: ScrollRows(int.MaxValue); break;
+            case 190: ProbeRows("bottom"); break;
+
+            case 191: JudgeUi(); _window.Close(); break;
         }
     }
+
+    /// <summary>
+    /// Which rows of a capped list are actually on screen and reachable.
+    /// </summary>
+    /// <remarks>
+    /// The list is a window onto something longer, and the two ways that goes wrong are opposite:
+    /// a window that shows more than it was capped at is a panel running off the bottom again, and
+    /// one that cannot be scrolled to the end is a row nobody can ever reach. Both are asked here,
+    /// off the zones the renderer actually laid down — the rows a click can land on, not the rows
+    /// the list holds.
+    /// </remarks>
+    private void ProbeRows(string where)
+    {
+        int seen = 0, lowest = int.MaxValue, highest = -1;
+
+        foreach (var zone in _layout.Zones)
+        {
+            if (zone.Kind != ZoneKind.Row) continue;
+            seen++;
+            lowest = Math.Min(lowest, zone.Index);
+            highest = Math.Max(highest, zone.Index);
+        }
+
+        _uiRows[where] = (seen, lowest, highest, _hudScreen.Rows.Count);
+
+        Console.WriteLine(
+            $"ui-check    rows {where,-6} {seen} of {_hudScreen.Rows.Count} on screen, "
+            + $"{lowest}..{highest}, {ScreenLayout.MenuLines(LayoutHeight)} lines at a time");
+        Console.Out.Flush();
+    }
+
+    /// <summary>What the capped list showed, at the top and at the bottom.</summary>
+    private readonly Dictionary<string, (int Seen, int Lowest, int Highest, int Total)> _uiRows = [];
 
     /// <summary>
     /// Puts the pointer on a square and asks the layout what it is over.
@@ -2869,6 +2988,48 @@ public sealed class ClientHost : IDisposable
 
     /// <summary>What the running game's own layout answered, per screen.</summary>
     private readonly Dictionary<string, (int Hits, int Misses)> _uiProbes = [];
+
+    /// <summary>
+    /// Reads the pixel where the figure's chest ought to be, and one just outside the window.
+    /// </summary>
+    /// <remarks>
+    /// The figure is a texture patch on a quad, and every way that goes wrong looks the same from
+    /// the outside — a sheet that never uploaded, uv normalised against the stored size instead of
+    /// sixty four, a batch flushed against the wrong binding — and all of them leave the window
+    /// empty rather than raising anything. The inset it sits in is a known dark colour, so "the
+    /// chest is not the inset" is a real question with a real answer. Sampled with a control just
+    /// outside the figure's own box, which must still BE the inset.
+    /// </remarks>
+    private unsafe void SampleFigure(Vector2D<int> size)
+    {
+        var scale = HudRenderer.ScaleFor(size.Y);
+
+        // Panel coordinates: the doll stands centred in the figure window, and its torso spans
+        // model y 12..24, which lands about a third of the way down. Asked of the layout rather
+        // than worked out here, so the sample follows the panel if it ever moves.
+        (byte R, byte G, byte B) Read(float panelX, float panelY)
+        {
+            var wx = (int)((_layout.OriginX + panelX * _layout.Zoom) * scale);
+            var wy = (int)((_layout.OriginY + panelY * _layout.Zoom) * scale);
+
+            Span<byte> px = stackalloc byte[4];
+            fixed (byte* p = px)
+                _gl.ReadPixels(wx, size.Y - 1 - wy, 1, 1, PixelFormat.Rgba, PixelType.UnsignedByte, p);
+
+            return (px[0], px[1], px[2]);
+        }
+
+        var chest = Read(ScreenLayout.Figure.X + 25f, ScreenLayout.Figure.Y + 32f);
+        var backdrop = Read(ScreenLayout.Figure.X + 3f, ScreenLayout.Figure.Y + 60f);
+
+        _uiSamples["figure"] = chest;
+        _uiSamples["figure backdrop"] = backdrop;
+
+        Console.WriteLine(
+            $"ui-check    figure     chest rgb {chest.R,3} {chest.G,3} {chest.B,3}   "
+            + $"its own backdrop rgb {backdrop.R,3} {backdrop.G,3} {backdrop.B,3}");
+        Console.Out.Flush();
+    }
 
     /// <summary>What each sample read, so the run can judge itself rather than only report.</summary>
     private readonly Dictionary<string, (byte R, byte G, byte B)> _uiSamples = [];
@@ -2915,6 +3076,45 @@ public sealed class ClientHost : IDisposable
 
             var cast = Math.Max(read.R, Math.Max(read.G, read.B)) - Math.Min(read.R, Math.Min(read.G, read.B));
             if (cast > 12) faults.Add($"the {name} panel reads {read.R} {read.G} {read.B}, which is not grey");
+        }
+
+        // The figure. Its window is a known dark inset, so a chest that still reads as the inset is
+        // a skin patch that never arrived — and the control beside it must still read as the inset,
+        // or the sample is not where it says it is and the judgement above means nothing.
+        var chest = Read("figure");
+        var behind = Read("figure backdrop");
+
+        if (chest == behind)
+            faults.Add($"the figure's chest reads the same as its own backdrop, {chest.R} {chest.G} {chest.B}");
+
+        if (behind.R > 70 || behind.G > 70 || behind.B > 80)
+            faults.Add($"the figure's window is not the dark inset it is drawn in — read {behind.R} {behind.G} {behind.B}");
+
+        // The capped list. A controls tab with twenty eight rows in it must show a dozen and no
+        // more, must start at the top, and must scroll all the way to the last one — the row that
+        // cannot be reached is the whole reason a cap needs a scrollbar rather than just a cap.
+        var lines = ScreenLayout.MenuLines(LayoutHeight);
+
+        if (_uiRows.TryGetValue("top", out var atTop))
+        {
+            if (atTop.Total <= lines) faults.Add($"the controls tab is only {atTop.Total} rows, so nothing here was tested");
+            if (atTop.Seen > lines) faults.Add($"{atTop.Seen} rows are on screen where {lines} fit");
+            if (atTop.Lowest > 1) faults.Add($"the list opens at row {atTop.Lowest} rather than the top");
+        }
+        else
+        {
+            faults.Add("the controls tab was never measured at the top");
+        }
+
+        if (_uiRows.TryGetValue("bottom", out var atEnd))
+        {
+            if (atEnd.Highest < atEnd.Total - 1)
+                faults.Add($"scrolled to the end the list stops at row {atEnd.Highest} of {atEnd.Total - 1}");
+            if (atEnd.Seen > lines) faults.Add($"{atEnd.Seen} rows are on screen at the end where {lines} fit");
+        }
+        else
+        {
+            faults.Add("the controls tab was never measured at the end");
         }
 
         // And that the running game's own layout answers for its own squares. Every one of them.

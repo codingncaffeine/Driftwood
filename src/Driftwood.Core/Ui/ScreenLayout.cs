@@ -50,6 +50,9 @@ public enum ZoneKind
     Tab,
     Row,
     Recipe,
+
+    /// <summary>The bar down the side of a list too long to show at once.</summary>
+    Scrollbar,
 }
 
 /// <summary>
@@ -252,4 +255,24 @@ public sealed class ScreenLayout
 
     /// <summary>The window the player's own figure is shown in.</summary>
     public static readonly (int X, int Y, int W, int H) Figure = (25, 7, 50, 71);
+
+    /// <summary>One line of a settings list, in layout units.</summary>
+    public const float MenuLine = 13f;
+
+    /// <summary>How wide the bar down the side of a long list is.</summary>
+    public const float ScrollbarWidth = 7f;
+
+    /// <summary>
+    /// How many lines of a settings list are shown at once.
+    /// </summary>
+    /// <remarks>
+    /// <b>Capped, and the cap is the point.</b> The controls tab has twenty eight rows in it and
+    /// every new binding adds one, so a list drawn at its full length is a panel that grows until it
+    /// runs off the bottom of the window — and then keeps growing, invisibly. Twelve lines is a
+    /// panel that reads at a glance, and what does not fit is scrolled to. Held further down on a
+    /// window too short even for that, so the answer is always a shorter list rather than a clipped
+    /// one.
+    /// </remarks>
+    public static int MenuLines(float height) =>
+        Math.Clamp((int)MathF.Floor((height - 150f) / MenuLine), 5, 12);
 }
