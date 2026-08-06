@@ -348,6 +348,10 @@ public static class WorldAudit
         Check("fluid flows, settles, and drains", fluidFaults.Count == 0,
             fluidFaults.Count == 0 ? fluidDetail : string.Join("; ", fluidFaults));
 
+        var spawnFaults = SpawnBandFaults(out var spawnDetail);
+        Check("where a thing lives takes two questions", spawnFaults.Count == 0,
+            spawnFaults.Count == 0 ? spawnDetail : string.Join("; ", spawnFaults));
+
         var frustumFaults = Frustum.SelfTest();
         Check("frustum culls correctly", frustumFaults.Count == 0,
             frustumFaults.Count == 0
@@ -859,6 +863,10 @@ public static class WorldAudit
             physicsFaults.Count == 0
                 ? "falls, lands, walks, jumps, is stopped by walls, does not sneak off ledges"
                 : $"{physicsFaults.Count} faults: {string.Join("; ", physicsFaults)}");
+
+        var swimFaults = SwimSelfTest(registry, ids, out var swimDetail);
+        Check("a body swims rather than drowning where it lands", swimFaults.Count == 0,
+            swimFaults.Count == 0 ? swimDetail : string.Join("; ", swimFaults));
 
         var shapeFaults = ShapeCollisionSelfTest(registry, items, ids, out var shapeDetail);
         Check("a body collides with the shape, not the cell", shapeFaults.Count == 0,
@@ -1903,6 +1911,22 @@ public static class WorldAudit
                 if (most <= 0 || StarterCreatures.ByName(kind) is null) continue;
                 if (tool != ToolClass.None && reach[(int)tool] < 0) continue;
                 changed |= Gain(item);
+            }
+
+            // ⛳ Draw. The fifth source, after dig, hunt, craft and smelt, and it has the same two
+            // halves every other one has: the fluid has to actually exist in this world, and the
+            // thing that carries it has to be in hand. A bucket of water is not a recipe and not a
+            // drop; without this the walk calls it unobtainable, and the day something is crafted
+            // FROM one it would call that unobtainable too and be right for the wrong reason.
+            foreach (var (source, filled) in new[]
+                     {
+                         ("water", "water_bucket"),
+                         ("lava", "lava_bucket"),
+                     })
+            {
+                if (counts[registry.ByName(source).Id.Value] == 0) continue;
+                if (!Held(items.ByName("bucket").Id)) continue;
+                changed |= Gain(items.ByName(filled).Id);
             }
 
             // Craft. ⚠ A recipe worked at a station cannot be made until the station itself has been
@@ -4360,6 +4384,97 @@ public static class WorldAudit
     }
 
     /// <summary>
+    /// Drops a body into a lake and asks whether it can get out of it.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>Every claim here is also satisfied by "nothing happens", so every one has its dry twin.</b>
+    /// "It did not take fall damage" passes on a build with no fall damage; "it rose" passes on a
+    /// build where gravity is off; "it sank slowly" passes on one where nothing moves at all. The
+    /// same drop onto stone, and the same body in air, are what give the numbers meaning.
+    /// </remarks>
+    private static List<string> SwimSelfTest(
+        BlockRegistry registry, StarterBlocks.Ids ids, out string detail)
+    {
+        const float Step = 1f / 60f;
+
+        var faults = new List<string>();
+
+        var world = new VoxelWorld(registry);
+        for (var cy = 0; cy <= 1; cy++)
+            world.GetOrCreateChunk(new ChunkPos(0, cy, 0));
+
+        // A pool eight deep with a stone shelf beside it, both under thirty blocks of air.
+        for (var z = 0; z <= 20; z++)
+        for (var x = 0; x <= 20; x++)
+        {
+            Put(world, x, 0, z, ids.Stone);
+            for (var y = 1; y <= 8; y++) Put(world, x, y, z, x < 12 ? ids.Water : ids.Stone);
+        }
+
+        var wet = new PlayerBody(registry);
+        var wetVitals = new PlayerVitals(registry);
+        wet.Teleport(new Vector3(5.5f, 40f, 5.5f));
+
+        var dry = new PlayerBody(registry);
+        var dryVitals = new PlayerVitals(registry);
+        dry.Teleport(new Vector3(16.5f, 40f, 16.5f));
+
+        for (var i = 0; i < 60 * 8; i++)
+        {
+            wet.Step(world, Step, Vector3.Zero, false, false, false);
+            wetVitals.Update(world, wet, Step);
+            dry.Step(world, Step, Vector3.Zero, false, false, false);
+            dryVitals.Update(world, dry, Step);
+        }
+
+        var wetHurt = PlayerVitals.MaxHealth - wetVitals.Health;
+        var dryHurt = PlayerVitals.MaxHealth - dryVitals.Health;
+
+        // ⛳ THE CONTROL. The dry body fell exactly as far onto stone and has to be hurt by it, or
+        // "the water broke the fall" is measuring a build with no fall damage in it.
+        if (dryHurt <= 0)
+            faults.Add("a thirty-block drop onto stone cost nothing, so the water is proving nothing");
+
+        // The wet one will have drowned by eight seconds — breath is five — so the fall is judged on
+        // the first second, before the lungs come into it.
+        var early = new PlayerBody(registry);
+        var earlyVitals = new PlayerVitals(registry);
+        early.Teleport(new Vector3(5.5f, 40f, 5.5f));
+
+        for (var i = 0; i < 60 * 4; i++)
+        {
+            early.Step(world, Step, Vector3.Zero, false, false, false);
+            earlyVitals.Update(world, early, Step);
+        }
+
+        if (earlyVitals.Health != PlayerVitals.MaxHealth)
+            faults.Add($"a thirty-block drop into eight blocks of water cost {PlayerVitals.MaxHealth - earlyVitals.Health}");
+
+        if (!early.InWater) faults.Add("the body that fell in the lake does not think it is in water");
+
+        // It sinks with nothing pressed, and not at a stone's rate.
+        var sankFrom = early.Position.Y;
+        for (var i = 0; i < 60; i++) early.Step(world, Step, Vector3.Zero, false, false, false);
+        var sank = sankFrom - early.Position.Y;
+
+        // And a stroke beats the sink, or there is no getting out of a lake.
+        var roseFrom = early.Position.Y;
+        for (var i = 0; i < 60; i++) early.Step(world, Step, Vector3.Zero, true, false, false);
+        var rose = early.Position.Y - roseFrom;
+
+        if (sank >= PlayerBody.Gravity * 0.5f)
+            faults.Add($"a body in water fell {sank:F1} in a second, which is not swimming");
+
+        if (rose <= 0.5f)
+            faults.Add($"a stroke lifted the body {rose:F2} in a second, so a lake cannot be climbed out of");
+
+        detail = $"a 30-block drop into water costs 0 where the same drop onto stone costs {dryHurt}; "
+               + $"it settles {sank:F1} a second and a stroke lifts it {rose:F1}";
+
+        return faults;
+    }
+
+    /// <summary>
     /// Stands a body in one block for two seconds, walks it out, and reports what happened.
     /// </summary>
     private static (int Hurt, bool StillBurning, bool Drowned) Bathe(
@@ -5222,7 +5337,10 @@ public static class WorldAudit
         ((ushort)(StarterBlocks.LayerFirstFluid - 1), "stormglass_sword"),
         (StarterBlocks.LayerWaterFlow, "water_flow"),
         (StarterBlocks.LayerLava, "lava"),
-        ((ushort)(StarterBlocks.LayerCount - 1), "lava_flow"),
+        (StarterBlocks.LayerLavaFlow, "lava_flow"),
+        (StarterBlocks.LayerBucket, "bucket"),
+        (StarterBlocks.LayerLavaBucket, "lava_bucket"),
+        ((ushort)(StarterBlocks.LayerCount - 1), "coal_block"),
     ];
 
     private static List<string> TextureSelfTest()
@@ -6333,6 +6451,62 @@ public static class WorldAudit
 
     private static BlockId At(VoxelWorld world, int x, int y, int z) => world.GetBlock(x, y, z);
 
+    /// <summary>
+    /// The four cells that matter, put through both spawn questions.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>A field at midnight is the whole check.</b> It is the one cell where the two questions
+    /// disagree, and a build with only the first one — which is what shipped until now — answers it
+    /// "dark, so anything may live here" and puts cave animals in meadows. Every other row is a
+    /// control: without them "the two disagree somewhere" is satisfied by two predicates that always
+    /// disagree, which would be just as wrong in the other direction.
+    /// </remarks>
+    private static List<string> SpawnBandFaults(out string detail)
+    {
+        var faults = new List<string>();
+
+        var open = LightValue.Pack(15, 0, 0, 0);        // a field, sky wide open
+        var cave = LightValue.Pack(0, 0, 0, 0);         // rock all round
+        var lit = LightValue.Pack(0, 14, 10, 4);        // a cave with a torch in it
+
+        void Want(string what, bool got, bool expected)
+        {
+            if (got != expected) faults.Add($"{what} came back {got}, expected {expected}");
+        }
+
+        Want("a field at noon, dark", SpawnRules.Dark(open, 1f), false);
+        Want("a field at noon, buried", SpawnRules.Buried(open), false);
+
+        // ⛳ THE DISCRIMINATOR. Dark, and not a cave — one question cannot tell those apart.
+        Want("a field at midnight, dark", SpawnRules.Dark(open, 0f), true);
+        Want("a field at midnight, buried", SpawnRules.Buried(open), false);
+
+        Want("a cave at noon, dark", SpawnRules.Dark(cave, 1f), true);
+        Want("a cave at noon, buried", SpawnRules.Buried(cave), true);
+
+        Want("a lit cave, dark", SpawnRules.Dark(lit, 1f), false);
+        Want("a lit cave, buried", SpawnRules.Buried(lit), false);
+
+        // And the fault this was written for: a cave animal filed as a meadow animal.
+        foreach (var kind in CreatureSet.All)
+        {
+            if (kind.Name != "bat") continue;
+            if (kind.Family != CreatureFamily.Cave)
+                faults.Add($"the bat is a {kind.Family}, so it spawns in fields with the cows");
+        }
+
+        var families = new HashSet<CreatureFamily>();
+        foreach (var kind in CreatureSet.All) families.Add(kind.Family);
+
+        if (families.Count < 3)
+            faults.Add($"only {families.Count} families exist, so a band check has nothing to separate");
+
+        detail = $"a field at midnight is dark and not buried, a cave at noon is both, "
+               + $"a torch clears either; {families.Count} families";
+
+        return faults;
+    }
+
     /// <summary>A bare world of empty chunks, with a stone floor laid across it.</summary>
     private static VoxelWorld FluidBox(
         BlockRegistry registry, StarterBlocks.Ids ids, int floorY, int chunksLow, int chunksHigh)
@@ -6556,19 +6730,74 @@ public static class WorldAudit
                 faults.Add($"the fall resumed only to y {resumedTo} after the chunk below it loaded");
         }
 
-        // ── The two fluids do not mix ───────────────────────────────────────────────────────────
+        // ── Lava meets water, and what it leaves depends on which lava it was ────────────────────
+        //
+        // ⛔ BOTH HALVES, SEPARATELY, and the second one IS the design decision. "It became coal"
+        // passes on a rule that leaves the lava sitting there — which would make coal an infinite
+        // tap, and coal is fuel AND black dye AND every torch in the game. Asserting the source is
+        // GONE is what separates a transformation from a generator.
+        var quenched = 0;
+        var chilled = 0;
         {
             var world = FluidBox(registry, ids, 0, -1, 1);
             var engine = new FluidEngine(table);
 
-            Put(world, -4, 1, 0, ids.Water);
-            Put(world, 4, 1, 0, ids.Lava);
-            engine.Touch(-4, 1, 0);
-            engine.Touch(4, 1, 0);
+            // Two sources side by side: the lava is a source, so it should be consumed.
+            Put(world, 0, 1, 0, ids.Lava);
+            Put(world, 1, 1, 0, ids.Water);
+            engine.Touch(0, 1, 0);
+            engine.Touch(1, 1, 0);
+            engine.Settle(world, changed);
+
+            var left = At(world, 0, 1, 0);
+            if (left != registry.ByName("coal_block").Id)
+                faults.Add($"a quenched lava source left '{registry[left].Name}', not a block of coal");
+            else quenched++;
+
+            if (table.KindOf(left.Value) == FluidKind.Lava)
+                faults.Add("the lava source survived being quenched, so coal is an infinite tap");
+
+            // ⛳ It is a real world edit and has to be in the save, unlike everything else the flow
+            // does. Reversible fluid state is derived; irreversible terrain change is written down.
+            if (world.Edits.Count == 0)
+                faults.Add("a quenched source was not recorded, so it comes back when the world reopens");
+        }
+        {
+            var world = FluidBox(registry, ids, 0, -1, 1);
+            var engine = new FluidEngine(table);
+
+            // A lava source three cells away, so what meets the water is its flowing tail.
+            Put(world, -3, 1, 0, ids.Lava);
+            Put(world, 1, 1, 0, ids.Water);
+            engine.Touch(-3, 1, 0);
+            engine.Touch(1, 1, 0);
+            engine.Settle(world, changed);
+
+            var rubble = registry.ByName("rubble").Id;
+            for (var x = -3; x <= 1; x++) if (At(world, x, 1, 0) == rubble) chilled++;
+
+            if (chilled == 0) faults.Add("flowing lava quenched by water left no rubble anywhere");
+
+            // ⛳ AND THE SOURCE IS STILL THERE. That is the difference between the two rules: a
+            // stone generator is a device the genre expects and rubble is worth almost nothing, so
+            // it may go on making it — but the coal one must not.
+            if (!table.IsSource(At(world, -3, 1, 0).Value))
+                faults.Add("the lava source behind a quenched flow was consumed too");
+        }
+
+        // ── Away from each other, the two fluids do not mix ──────────────────────────────────────
+        {
+            var world = FluidBox(registry, ids, 0, -1, 1);
+            var engine = new FluidEngine(table);
+
+            Put(world, -9, 1, 0, ids.Water);
+            Put(world, 9, 1, 0, ids.Lava);
+            engine.Touch(-9, 1, 0);
+            engine.Touch(9, 1, 0);
             engine.Settle(world, changed);
 
             var mixed = 0;
-            for (var x = -8; x <= 8; x++)
+            for (var x = -12; x <= 12; x++)
             {
                 var kind = table.KindOf(At(world, x, 1, 0).Value);
                 var above = table.KindOf(At(world, x, 2, 0).Value);
@@ -6580,7 +6809,8 @@ public static class WorldAudit
 
         detail = $"a fall crossed {fell} cells and spread {reach}; breaking a wall let it {filled} further "
                + $"and taking the source drained {drained}; a fall stalled at the seam and resumed to "
-               + $"y {resumedTo}; nothing reached the save";
+               + $"y {resumedTo}; a quenched source became coal and a quenched flow left {chilled} rubble "
+               + $"with its source intact; only the {quenched} reaction reached the save";
 
         return faults;
     }

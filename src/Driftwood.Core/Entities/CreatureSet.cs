@@ -11,6 +11,17 @@ public enum CreatureFamily
 
     /// <summary>Comes at you in the dark.</summary>
     Hostile,
+
+    /// <summary>
+    /// Lives underground and harms nobody.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ <b>The bat was a <see cref="Beast"/>, and so it spawned in fields with the cows.</b> That
+    /// is a real fault, and it was found by asking where things live rather than by anybody seeing
+    /// it: a spawner with one axis cannot tell a cave animal from a meadow animal, so it put both
+    /// everywhere. Underground and harmless is a third answer rather than a shade of either.
+    /// </remarks>
+    Cave,
 }
 
 /// <summary>
@@ -78,7 +89,7 @@ public static class CreatureSet
              "textures/entity/cat/red.png", "textures/entity/cat/black.png"]),
         new("squid", "squid", CreatureFamily.Beast, "squid",
             ["textures/entity/squid.png", "textures/entity/squid/squid.png"]),
-        new("bat", "bat", CreatureFamily.Beast, "bat",
+        new("bat", "bat", CreatureFamily.Cave, "bat",
             ["textures/entity/bat.png", "textures/entity/bat/bat.png"]),
 
         // ── Hostiles. Plain English words stay; coined ones become ours. ──

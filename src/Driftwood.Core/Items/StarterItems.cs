@@ -112,6 +112,7 @@ public static class StarterItems
         Block(items, blocks, "emberstone", "emberstone", StarterBlocks.LayerEmberstone);
         Block(items, blocks, "glass", "glass", StarterBlocks.LayerGlass);
         Block(items, blocks, "bricks", "bricks", StarterBlocks.LayerBricks);
+        Block(items, blocks, "coal_block", "block of coal", StarterBlocks.LayerCoalBlock);
 
         // ⛳ The flowers, which are worth carrying now that they are worth crushing. All four:
         // until the dye tree there was nothing to do with one, so picking a flower left nothing at
@@ -363,6 +364,31 @@ public static class StarterItems
         {
             Name = "shears", Label = "shears", IconLayer = StarterBlocks.LayerShears,
             MaxStack = 1, Tool = ToolClass.Shears, Durability = 238,
+        });
+
+        // ⛳ The buckets, and they are what turn a fluid from scenery into a thing a player uses.
+        // Everything about flow that anybody can actually DO — a moat, a farm, quenching a flow you
+        // have to cross, a cauldron — is downstream of being able to pick one cell of it up and put
+        // it down somewhere else. A full one carries a single source, so plumbing is a series of
+        // trips rather than one gesture.
+        items.Register(new ItemType
+        {
+            Name = "bucket", Label = "bucket", IconLayer = StarterBlocks.LayerBucket, MaxStack = 16,
+        });
+
+        items.Register(new ItemType
+        {
+            Name = "water_bucket", Label = "bucket of water",
+            IconLayer = StarterBlocks.LayerWaterBucket, MaxStack = 1,
+        });
+
+        // ⚠ Fuel, and the best in the game — which is the genre's own answer and a good one. A
+        // hundred smelts is worth a trip to the deep and a burn or two, and it is the first reason
+        // to go down there that is not simply another ore.
+        items.Register(new ItemType
+        {
+            Name = "lava_bucket", Label = "bucket of lava",
+            IconLayer = StarterBlocks.LayerLavaBucket, MaxStack = 1, BurnSeconds = 1000f,
         });
 
         return items.Seal(blocks);

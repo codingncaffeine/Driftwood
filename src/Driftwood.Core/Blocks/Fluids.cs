@@ -27,6 +27,29 @@ public sealed class FluidTable
 
     private const int Kinds = 3;   // None, Water, Lava
 
+    /// <summary>
+    /// What a lava SOURCE leaves when water reaches it, and what a flowing tail leaves.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛔ <b>Two results on purpose, and the reason is that one would make coal infinite.</b>
+    /// Coal is fuel AND black dye AND every torch in the game, and charcoal is already the renewable
+    /// one; a second infinite source would flatten the early economy outright. Consuming a source
+    /// makes it a <em>transformation</em> — a finite reward for a clever bit of plumbing — while a
+    /// flowing edge quenched into rubble is the stone generator the genre expects and is welcome to
+    /// keep, because rubble is worth almost nothing and the source that fed it is still there.</para>
+    /// <para>⛳ Both terminate. Rubble is solid, so it blocks the path that made it; making another
+    /// costs a player one swing. And quenching a source strictly reduces the number of sources there
+    /// are, so a lake crusts over and stops rather than crusting for ever.</para>
+    /// <para>⚠ <b>Both are real world edits and go in the save</b>, unlike everything else the flow
+    /// does. That is the line: reversible fluid state is derived, irreversible terrain change is
+    /// written down. It costs one entry per cell and there are never many of them, because the
+    /// generator never puts the two fluids near each other — water is only ever placed at or under
+    /// the sea, and lava never reaches above y −84.</para>
+    /// </remarks>
+    public BlockId Quenched { get; }
+
+    public BlockId Chilled { get; }
+
     public FluidTable(BlockRegistry registry)
     {
         _kind = new FluidKind[registry.Count];
@@ -49,6 +72,9 @@ public sealed class FluidTable
             if (type.Fluid == FluidKind.None) continue;
             _states[StateIndex(type.Fluid, type.FluidLevel, type.FluidFalling)] = (ushort)id;
         }
+
+        Quenched = registry.ByName("coal_block").Id;
+        Chilled = registry.ByName("rubble").Id;
     }
 
     private static int StateIndex(FluidKind kind, int level, bool falling) =>
@@ -308,6 +334,10 @@ public sealed class FluidEngine
 
         var have = world.GetBlock(x, y, z).Value;
 
+        // The two fluids meeting is resolved before either of them is allowed to move, or a cell
+        // would flow into the space the reaction is about to fill.
+        if (React(world, x, y, z, have)) return true;
+
         // Never write over anything that is not ours to write over. A source resolves to itself and
         // stops here; stone stops here because stone is not replaceable.
         if (!_table.Replaceable(have)) return false;
@@ -322,6 +352,52 @@ public sealed class FluidEngine
         // filling, and the cell above that may stop falling.
         Ring(x, y, z);
         return true;
+    }
+
+    /// <summary>
+    /// Turns lava that has met water into something solid. True when it did.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ <b>The lava is what changes, whichever of the two is being looked at.</b> A water cell
+    /// that finds lava beside it does not transform — it asks the lava to look again, which keeps the
+    /// rule in one place and means the result cannot depend on which of the pair came off the queue
+    /// first. That matters: the whole settle is order-independent and a reaction that broke it would
+    /// make the save wrong rather than merely surprising.</para>
+    /// <para>⚠ <b>Through <see cref="VoxelWorld.SetBlock"/> and not <see cref="VoxelWorld.SetFluid"/>,
+    /// which is the only place in the flow that does that.</b> A quenched source does not come back
+    /// when the world is reopened, so it is not derivable and has to be written down.</para>
+    /// </remarks>
+    private bool React(VoxelWorld world, int x, int y, int z, ushort have)
+    {
+        var kind = _table.KindOf(have);
+        if (kind == FluidKind.None) return false;
+
+        var other = kind == FluidKind.Lava ? FluidKind.Water : FluidKind.Lava;
+        var asked = false;
+
+        for (var face = 0; face < Faces.Count; face++)
+        {
+            var (dx, dy, dz) = Faces.Normals[face];
+            int nx = x + dx, ny = y + dy, nz = z + dz;
+
+            if (!Loaded(world, nx, ny, nz)) continue;
+            if (_table.KindOf(world.GetBlock(nx, ny, nz).Value) != other) continue;
+
+            if (kind == FluidKind.Water)
+            {
+                Seed(nx, ny, nz);
+                asked = true;
+                continue;
+            }
+
+            world.SetBlock(x, y, z, _table.IsSource(have) ? _table.Quenched : _table.Chilled);
+            Ring(x, y, z);
+            return true;
+        }
+
+        // A water cell that asked the lava to react has not moved and must not be counted as having.
+        _ = asked;
+        return false;
     }
 
     /// <summary>The state this cell should hold, given what is around it.</summary>

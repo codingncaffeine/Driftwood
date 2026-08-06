@@ -341,6 +341,16 @@ public static class StarterRecipes
         // on the walk back from the mine would be the one exception with nothing to justify it.
         Shaped("shears", "shears", 1, [" I", "I "], station: CraftStation.Bench);
 
+        // ⛳ A pail: three plates beaten into a V, which is the shape the genre uses and the shape a
+        // bucket actually is. It is the gate on every fluid a player moves, and it sits behind iron
+        // deliberately — carrying water down a shaft should be something you earn, and it is a large
+        // part of what a first trip underground is now FOR.
+        Shaped("bucket", "bucket", 1, ["I I", " I "], station: CraftStation.Bench);
+
+        // Nine into one and back again, the same storage gesture bricks and clay already use.
+        Shaped("coal block", "coal_block", 1, ["CCC", "CCC", "CCC"], "coal", station: CraftStation.Bench);
+        Loose("coal from a block", "coal", 9, "coal_block");
+
         // Every tool, off the two tables. The material is a tag for the tiers that have more than
         // one source — any plank, any rough stone — and a plain item for the metals.
         foreach (var tier in StarterItems.Tiers)

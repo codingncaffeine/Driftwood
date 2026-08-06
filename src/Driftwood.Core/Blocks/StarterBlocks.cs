@@ -257,7 +257,22 @@ public static class StarterBlocks
     public const ushort LayerLava = LayerFirstFluid + 1;
     public const ushort LayerLavaFlow = LayerFirstFluid + 2;
 
-    public const int LayerCount = LayerFirstFluid + 3;
+    /// <summary>
+    /// The buckets, which are what turn a fluid from scenery into something a player uses.
+    /// </summary>
+    /// <remarks>
+    /// Three icons rather than one with a tint: an empty pail, a pail of water and a pail of lava are
+    /// three different things in a slot and a player picks between them at a glance. Every pack in the
+    /// genre paints all three separately for the same reason.
+    /// </remarks>
+    public const ushort LayerBucket = LayerFirstFluid + 3;
+    public const ushort LayerWaterBucket = LayerFirstFluid + 4;
+    public const ushort LayerLavaBucket = LayerFirstFluid + 5;
+
+    /// <summary>Nine coal packed into a block — and what quenching a lava source leaves.</summary>
+    public const ushort LayerCoalBlock = LayerFirstFluid + 6;
+
+    public const int LayerCount = LayerFirstFluid + 7;
 
     public sealed record Ids(
         BlockId Stone,
@@ -376,6 +391,16 @@ public static class StarterBlocks
             registry, "lava", FluidKind.Lava,
             LayerLava, LayerLavaFlow, TintSource.None, SoundMaterial.Stone,
             attenuation: 2, emission: LightValue.PackBlock(15, 8, 2));
+
+        // ⛳ Nine coal packed away, and the one thing quenching a lava SOURCE leaves behind. The two
+        // uses are the same block on purpose: what you get for a clever bit of plumbing should be
+        // something you already know the value of, not a curiosity with one recipe.
+        registry.Register(new BlockType
+        {
+            Name = "coal_block", Hardness = 5f, Crafted = true, Sounds = SoundMaterial.Stone,
+            HarvestClass = ToolClass.Pickaxe, HarvestTier = 1,
+            TopLayer = LayerCoalBlock, SideLayer = LayerCoalBlock, BottomLayer = LayerCoalBlock,
+        });
 
         var gravel = registry.Register(new BlockType
         {

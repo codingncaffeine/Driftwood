@@ -270,6 +270,13 @@ public static class BlockTextureSet
         new("water_flow",  "textures/block/water_flow.png",       false),
         new("lava",        "textures/block/lava_still.png",       false),
         new("lava_flow",   "textures/block/lava_flow.png",        false),
+
+        // And the pail that carries them, which is what makes a fluid a thing a player uses rather
+        // than a thing a player looks at.
+        new("bucket",      "textures/item/bucket.png",            true),
+        new("water_bucket", "textures/item/water_bucket.png",     true),
+        new("lava_bucket", "textures/item/lava_bucket.png",       true),
+        new("coal_block",  "textures/block/coal_block.png",       false),
     ];
 
     /// <summary>One row per colour of wool, off the colour table rather than written out.</summary>
@@ -809,6 +816,14 @@ public static class BlockTextureSet
             StarterBlocks.LayerWaterFlow => TileGen.FlowFrames(1090, 1, 41, 92, 158, 11f)[0],
             StarterBlocks.LayerLava => TileGen.LavaFrames(1091, 1)[0],
             StarterBlocks.LayerLavaFlow => TileGen.FlowFrames(1092, 1, 176, 74, 22, 46f)[0],
+
+            StarterBlocks.LayerBucket => TileGen.IconBucket(1097, false, 0, 0, 0),
+            StarterBlocks.LayerWaterBucket => TileGen.IconBucket(1098, true, 52, 108, 178),
+            StarterBlocks.LayerLavaBucket => TileGen.IconBucket(1099, true, 214, 108, 34),
+
+            // Darker and shinier than the ore it is made of, so a wall of it does not read as a
+            // seam of coal in stone — a storage block and its ore are seen side by side constantly.
+            StarterBlocks.LayerCoalBlock => TileGen.Speckle(1101, 30, 30, 34, 22, 0.75f),
 
             _ => Wool(layer) ?? Meat(layer) ?? Dye(layer) ?? Tool(layer),
         };

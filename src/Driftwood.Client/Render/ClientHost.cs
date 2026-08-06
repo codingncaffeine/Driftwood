@@ -414,6 +414,12 @@ public sealed class ClientHost : IDisposable
     private ItemRegistry _items = null!;
     private BlockDrops _dropTable = null!;
 
+    /// <summary>The block ids the world is built from, kept for the handful of rules that name one.</summary>
+    private StarterBlocks.Ids _ids = null!;
+
+    /// <summary>Which fluid each block is, for the bucket's own ray.</summary>
+    private FluidTable _fluidTable = null!;
+
     /// <summary>And what each animal leaves, and what had to happen for it to leave it.</summary>
     private CreatureDrops _creatureDropTable = null!;
 
@@ -1040,7 +1046,50 @@ public sealed class ClientHost : IDisposable
 
         TopUpBeasts();
         TopUpHostiles();
+        TopUpCaveLife();
     }
+
+    /// <summary>Puts a few harmless things in the dark under the ground.</summary>
+    /// <remarks>
+    /// ⛳ <b>The third answer, and the reason it had to exist.</b> Spawning was one axis — is this
+    /// cell dark — so a bat and a cow were the same question asked twice, and the bat turned up in
+    /// meadows. Where a creature lives takes <em>two</em> axes: how dark it is, and whether the cell
+    /// can see the sky at all. The second is free, because sky light is already what a cell would
+    /// get at noon regardless of what the clock says — it is exactly "is there a way out above you".
+    /// </remarks>
+    private void TopUpCaveLife()
+    {
+        if (_creatureRenderer is null || _herd is null) return;
+
+        var living = 0;
+        foreach (var creature in _herd.All)
+            if (!creature.Hostile && FamilyOf(creature.Kind) == CreatureFamily.Cave) living++;
+
+        if (living >= CaveLifeCount) return;
+
+        var kinds = KindsOf(CreatureFamily.Cave);
+        if (kinds.Count == 0) return;
+
+        _herd.Spawn(
+            SolidForCreature, kinds, _player.Position, CaveLifeCount - living,
+            where: Buried, minRadius: 8f);
+    }
+
+    /// <summary>How many cave things are kept about. Fewer than a herd: they are atmosphere.</summary>
+    private const int CaveLifeCount = 3;
+
+    /// <summary>
+    /// True where a cell is dark AND has no way to the sky above it.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ <b>Raw sky light, not the scaled kind <see cref="Dark"/> uses.</b> The scaled one answers
+    /// "is it dark here now", which at midnight is true of an open field; the raw one answers "could
+    /// the sun ever reach here", which is the question about where a place <em>is</em> rather than
+    /// what time it is. Using the scaled value would put bats in fields at night, which is precisely
+    /// the fault this exists to fix.
+    /// </remarks>
+    private bool Buried(int x, int y, int z) =>
+        SpawnRules.Buried(_streamer.World.GetLight(x, y, z));
 
     /// <summary>Keeps a herd of animals about, wherever there is ground.</summary>
     private void TopUpBeasts()
@@ -1098,20 +1147,8 @@ public sealed class ClientHost : IDisposable
     /// clear the ground round it, and sunlight has to actually clear a field — a test on either one
     /// alone leaves the other kind of light doing nothing.
     /// </remarks>
-    private bool Dark(int x, int y, int z)
-    {
-        var packed = _streamer.World.GetLight(x, y, z);
-
-        // ⚠ Sky light is what a cell WOULD get at noon, so it has to be scaled by how far up the
-        // sun actually is. Read raw it says a field is bright at midnight, and nothing would ever
-        // spawn above ground.
-        var sky = LightValue.Sky(packed) * Daylight;
-
-        var block = Math.Max(
-            LightValue.Red(packed), Math.Max(LightValue.Green(packed), LightValue.Blue(packed)));
-
-        return MathF.Max(sky, block) <= SpawnDarkness;
-    }
+    private bool Dark(int x, int y, int z) =>
+        SpawnRules.Dark(_streamer.World.GetLight(x, y, z), Daylight);
 
     /// <summary>
     /// How much of the day is on, 0 at night to 1 with the sun properly up.
@@ -1129,6 +1166,15 @@ public sealed class ClientHost : IDisposable
         && LightValue.Sky(_streamer.World.GetLight(x, y, z)) >= LightValue.Max;
 
     /// <summary>Every kind of one family we can actually draw, with the size its own mesh has.</summary>
+    /// <summary>Which family a creature belongs to, by name. Beast when nothing claims it.</summary>
+    private static CreatureFamily FamilyOf(string kind)
+    {
+        foreach (var entry in CreatureSet.All)
+            if (entry.Name == kind) return entry.Family;
+
+        return CreatureFamily.Beast;
+    }
+
     private List<SpawnKind> KindsOf(CreatureFamily family)
     {
         var kinds = new List<SpawnKind>();
@@ -1150,6 +1196,8 @@ public sealed class ClientHost : IDisposable
         var ids = StarterBlocks.Register(registry);
         registry.Seal();
         _registry = registry;
+        _ids = ids;
+        _fluidTable = new FluidTable(registry);
         _startup.Mark("blocks");
 
         // The item layer sits on top of the block layer and never the other way round, which is why
@@ -4631,8 +4679,67 @@ public sealed class ClientHost : IDisposable
         PlaceOnTarget();
     }
 
+    /// <summary>
+    /// A bucket filled from a source, or emptied into a space. True when it did something.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ <b>Before the target is even consulted</b>, because the crosshair passes through fluid — it
+    /// has to, or nothing under water could be mined — so a bucket aimed at a lake would reach the
+    /// sand under it. It walks the same line with its own rule about what stops it.
+    /// </remarks>
+    private bool UseBucket()
+    {
+        var held = _inventory.HeldType;
+        if (held is null) return false;
+
+        var eye = _camera.Position;
+        var forward = _camera.Forward;
+
+        if (held.Name == "bucket")
+        {
+            if (!Buckets.TrySource(
+                    _streamer.World, _fluidTable, _targetable, eye, forward, out var from, out var kind))
+                return false;
+
+            if (Buckets.Filled(kind) is not { } becomes) return false;
+
+            _streamer.EditBlock(from.X, from.Y, from.Z, BlockId.Air);
+            _inventory.SpendHeld();
+            _inventory.Add(new ItemStack(_items.ByName(becomes).Id, 1));
+
+            PlaySound(
+                _registry[_ids.Water], SoundEvent.Break,
+                new Vector3(from.X + 0.5f, from.Y + 0.5f, from.Z + 0.5f), 0.8f);
+            return true;
+        }
+
+        var pouring = Buckets.Holds(held.Name);
+        if (pouring == FluidKind.None) return false;
+
+        // Into the cell the crosshair would build in, which is the one a player is looking at.
+        if (_target is not { } aim) return false;
+
+        var (px, py, pz) = aim.Adjacent;
+        if (!_registry[_streamer.World.GetBlock(px, py, pz)].Replaceable) return false;
+
+        var source = pouring == FluidKind.Water ? _ids.Water : _ids.Lava;
+        _streamer.EditBlock(px, py, pz, source);
+
+        _inventory.SpendHeld();
+        _inventory.Add(new ItemStack(_items.ByName("bucket").Id, 1));
+
+        PlaySound(
+            _registry[source], SoundEvent.Place,
+            new Vector3(px + 0.5f, py + 0.5f, pz + 0.5f), 0.8f);
+        return true;
+    }
+
     private void PlaceOnTarget()
     {
+        // A bucket is used on the world rather than placed into it, and it reaches things the
+        // crosshair cannot — so it is asked before anything that needs a target at all.
+        if (UseBucket()) return;
+
         if (_target is not { } hit) return;
 
         // Using comes before building. A block that does something answers the right button itself,
@@ -5547,6 +5654,11 @@ public sealed class ClientHost : IDisposable
         // which is seconds however fast the frames go.
         if (_uiCheckFrame is > 20 and < 320 && !_waterMoved) JudgeWater();
 
+        // ⛳ Polled rather than scheduled, for the same reason the water is. The tooltip probe waits
+        // for the pocket to be laid out and then for the box to be drawn; four fixed frames worked
+        // until the day the world got three times taller and stopped lining up with them.
+        if (_tipStage is > 0 and < 5 && _uiCheckFrame < 118) StepTooltipProbe(size);
+
         // A few frames to let the world stream in, then each screen in turn.
         switch (_uiCheckFrame)
         {
@@ -5595,20 +5707,7 @@ public sealed class ClientHost : IDisposable
             case 91:
                 _inventory.Add(new ItemStack(_items.ByName("stone_pickaxe").Id, 1));
                 RefreshScreen();
-                PointAt(SlotRole.Pocket, 0);
-                break;
-
-            case 93: SampleTooltip(size, "tip on a slot"); break;
-
-            case 94: PointAt(SlotRole.Pocket, 0, gutter: true); break;
-
-            case 96:
-                SampleTooltip(size, "tip on a gutter");
-                _inventory.Clear();
-                _hudScreen.Pointer = Vector2.Zero;
-                _hudScreen.Hovered = null;
-                _hudScreen.BookOut = true;
-                RefreshScreen();
+                _tipStage = 1;
                 break;
 
             case 120:
@@ -6006,17 +6105,63 @@ public sealed class ClientHost : IDisposable
     /// ⚠ <b>A frame before the sample</b>, because the check runs after the draw: a pointer moved and
     /// read in the same call is read against the frame it was drawn without.
     /// </remarks>
-    private void PointAt(SlotRole role, int index, bool gutter = false)
+    /// <summary>
+    /// Walks the tooltip probe, a stage per frame, waiting on the layout rather than on a count.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>It used to be four fixed frames and it went red on a correct build.</b> The layout is
+    /// built as the overlay draws, so pointing at a pocket two frames after opening a screen works
+    /// only while the frames happen to line up — and the day the world became three times taller,
+    /// they stopped. A window measured in frames measures the frame rate; this waits for the pocket
+    /// to <em>exist</em> and then for the box to be drawn, which is what it was always asking.
+    /// </remarks>
+    private void StepTooltipProbe(Vector2D<int> size)
+    {
+        switch (_tipStage)
+        {
+            case 1:
+                // Not laid out yet. Try again next frame; the guard on the caller gives up eventually.
+                if (PointAt(SlotRole.Pocket, 0)) _tipStage = 2;
+                break;
+
+            case 2:
+                SampleTooltip(size, "tip on a slot");
+                _tipStage = 3;
+                break;
+
+            case 3:
+                if (PointAt(SlotRole.Pocket, 0, gutter: true)) _tipStage = 4;
+                break;
+
+            case 4:
+                SampleTooltip(size, "tip on a gutter");
+
+                _inventory.Clear();
+                _hudScreen.Pointer = Vector2.Zero;
+                _hudScreen.Hovered = null;
+                _hudScreen.BookOut = true;
+                RefreshScreen();
+
+                _tipStage = 5;
+                break;
+        }
+    }
+
+    /// <summary>0 before the probe, 5 once it is done. Never a frame number.</summary>
+    private int _tipStage;
+
+    /// <returns>False when the layout has no such square yet, so the caller can wait.</returns>
+    private bool PointAt(SlotRole role, int index, bool gutter = false)
     {
         var first = _layout.Find(role, index);
-        if (first is not { } a) return;
+        if (first is not { } a) return false;
 
         if (gutter)
         {
             // ⚠ The gap between two squares, found off the layout rather than worked out from the
             // pitch — two units of panel that no zone claims, and the only honest "over nothing".
             var second = _layout.Find(role, index + 1);
-            if (second is not { } b) return;
+            if (second is not { } b) return false;
 
             _hudScreen.Pointer = new Vector2((a.X + a.W + b.X) * 0.5f, a.CentreY);
         }
@@ -6026,6 +6171,7 @@ public sealed class ClientHost : IDisposable
         }
 
         _hudScreen.Hovered = _layout.At(_hudScreen.Pointer.X, _hudScreen.Pointer.Y);
+        return true;
     }
 
     /// <summary>Whether a box was laid out at each of the two points, and what colour it was.</summary>

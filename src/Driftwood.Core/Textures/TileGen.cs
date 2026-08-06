@@ -199,6 +199,72 @@ public static class TileGen
              Clamp((int)float.Lerp(b0, b1, k)));
     }
 
+    /// <summary>
+    /// A pail: a tapered body with a rim and a handle, optionally full of something.
+    /// </summary>
+    /// <remarks>
+    /// <para>Drawn as a silhouette walked per row rather than as a stack of rectangles, so the taper
+    /// is a real slope instead of two steps — a bucket is one of the few item shapes where the outline
+    /// is the whole recognisability, and a straight-sided one reads as a tin can.</para>
+    /// <para>⚠ The ink stays one square in from the tile's edge, the way every tool here does. A
+    /// sprite extruded into the fist wears the square one step in from the edge it stands on, so ink
+    /// on the border comes out as a wall of outline running the length of the item.</para>
+    /// </remarks>
+    public static byte[] IconBucket(int seed, bool filled, byte fr, byte fg, byte fb)
+    {
+        var t = new byte[BytesPerTile];
+
+        const int Top = 4;
+        const int Bottom = 14;
+        const byte Metal = 176;
+
+        for (var y = Top; y <= Bottom; y++)
+        {
+            // Wide at the rim, narrower at the base: one column in over the body's height.
+            var k = (y - Top) / (float)(Bottom - Top);
+            var half = (int)MathF.Round(float.Lerp(5.5f, 3.5f, k));
+
+            for (var x = 8 - half; x <= 7 + half; x++)
+            {
+                var edge = x == 8 - half || x == 7 + half || y == Bottom;
+                var rim = y <= Top + 1;
+
+                if (edge || rim)
+                {
+                    // A little grain, so the metal is not a flat plate.
+                    var d = (int)((Noise(x, y, seed) * 2f - 1f) * 18f);
+                    var shade = x < 8 ? 1.0f : 0.82f;      // lit from the left, like every other icon
+                    var v = Clamp((int)((Metal + d) * shade));
+                    Put(t, x, y, v, v, Clamp((int)(v * 1.06f)), 255);
+                    continue;
+                }
+
+                if (!filled)
+                {
+                    // The dark inside of an empty pail, which is what tells it from a full one at a
+                    // glance far more than the rim does.
+                    var v = Clamp(58 + (int)((Noise(x, y, seed + 7) * 2f - 1f) * 10f));
+                    Put(t, x, y, v, v, Clamp(v + 6), 255);
+                    continue;
+                }
+
+                var w = (int)((Noise(x, y, seed + 13) * 2f - 1f) * 22f);
+                Put(t, x, y, Clamp(fr + w), Clamp(fg + w), Clamp(fb + w), 255);
+            }
+        }
+
+        // The handle, an arc over the rim.
+        for (var x = 3; x <= 12; x++)
+        {
+            var k = (x - 3) / 9f;
+            var y = 3 - (int)MathF.Round(MathF.Sin(k * MathF.PI) * 1.6f);
+            if (y < 1) y = 1;
+            Put(t, x, y, Metal, Metal, Clamp(Metal + 10), 255);
+        }
+
+        return t;
+    }
+
     /// <summary>Speckle plus scattered blobs of a second colour, for ore in rock.</summary>
     public static byte[] Ore(int seed, byte[] baseTile, byte r, byte g, byte b, int blobs)
     {

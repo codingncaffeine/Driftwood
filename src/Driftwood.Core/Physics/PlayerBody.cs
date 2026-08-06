@@ -102,6 +102,40 @@ public sealed class PlayerBody
     /// <summary>True while the body is in something it can climb, for the caller and the checks.</summary>
     public bool OnLadder { get; private set; }
 
+    /// <summary>True while the feet are in water. Drives buoyancy, drag and the swim stroke.</summary>
+    public bool InWater { get; private set; }
+
+    /// <summary>True while the feet are in lava, which is water with the numbers made cruel.</summary>
+    public bool InLava { get; private set; }
+
+    /// <summary>How much of walking speed a fluid leaves. Lava is a wall you can wade into.</summary>
+    private const float WaterDrag = 0.55f;
+
+    private const float LavaDrag = 0.22f;
+
+    /// <summary>How fast a body settles through a fluid with nothing pressed.</summary>
+    private const float WaterSink = 1.2f;
+
+    private const float LavaSink = 0.55f;
+
+    /// <summary>How fast a stroke carries it up. Above the sink rate, or you cannot get out.</summary>
+    private const float WaterStroke = 3.2f;
+
+    /// <summary>
+    /// Lava is climbed out of far more slowly than water, and it is meant to be.
+    /// </summary>
+    /// <remarks>
+    /// Just fast enough to escape a one-block spill and far too slow to cross a lake. What kills a
+    /// player in the deep should be a decision about how far in they went, not a reflex test.
+    /// </remarks>
+    private const float LavaStroke = 1.1f;
+
+    /// <summary>Nothing falls fast in a fluid, which is what makes a lake break a plunge.</summary>
+    private const float SwimTerminal = 6f;
+
+    /// <summary>How quickly the body reaches whatever a fluid is doing to it.</summary>
+    private const float SwimAcceleration = 8f;
+
     /// <summary>Centre of the feet.</summary>
     public Vector3 Position;
     public Vector3 Velocity;
@@ -112,9 +146,15 @@ public sealed class PlayerBody
     /// <summary>Fall distance since last touching the ground, for fall damage at P3-7.</summary>
     public float FallDistance { get; private set; }
 
+    /// <summary>Which fluid each block is, for the buoyancy test. Indexed by raw block id.</summary>
+    private readonly Blocks.FluidKind[] _fluid;
+
     public PlayerBody(BlockRegistry registry)
     {
         _boxes = registry.BuildCollisionTable(out _cellsBelow);
+
+        _fluid = new Blocks.FluidKind[registry.Count];
+        for (var id = 1; id < registry.Count; id++) _fluid[id] = registry[(ushort)id].Fluid;
 
         _climbTo = new int[registry.Count];
         Array.Fill(_climbTo, -1);
@@ -143,11 +183,22 @@ public sealed class PlayerBody
 
         Sneaking = sneak;
 
+        // ⛳ Which fluid the body is standing in, before anything else uses it. Water was a hole you
+        // fell through and drowned in until fluids landed — there was no swimming at all — and it is
+        // asked here rather than inside each rule so that one traversal answers gravity, speed and
+        // whether a jump is a jump or a stroke.
+        InWater = Steeped(world, Blocks.FluidKind.Water);
+        InLava = Steeped(world, Blocks.FluidKind.Lava);
+
         var wishLength = new Vector2(wish.X, wish.Z).Length();
         if (wishLength > 1f) wish /= wishLength;
 
         var target = sneak ? SneakSpeed : sprint ? SprintSpeed : WalkSpeed;
+        if (InLava) target *= LavaDrag;
+        else if (InWater) target *= WaterDrag;
+
         var accel = OnGround ? GroundAcceleration : AirAcceleration;
+        if (InWater || InLava) accel = SwimAcceleration;
 
         var desired = new Vector3(wish.X, 0f, wish.Z) * target;
         var horizontal = new Vector3(Velocity.X, 0f, Velocity.Z);
@@ -172,19 +223,68 @@ public sealed class PlayerBody
 
         Velocity = new Vector3(horizontal.X, Velocity.Y, horizontal.Z);
 
-        if (jump && OnGround)
+        if (jump && OnGround && !InWater && !InLava)
         {
             Velocity.Y = JumpSpeed;
             OnGround = false;
         }
 
-        Velocity.Y = MathF.Max(Velocity.Y - Gravity * dt, -TerminalSpeed);
+        if (InWater || InLava)
+        {
+            // ⛳ Swimming: a slow sink, a stroke that beats it, and a terminal speed low enough that
+            // falling into a lake is survivable. Buoyancy is written as a target velocity rather than
+            // as an upward force because a force has to be balanced against gravity to hold still and
+            // a target does not — the failure mode of the other way is a body that bobs.
+            var sink = InLava ? LavaSink : WaterSink;
+            var rise = jump ? (InLava ? LavaStroke : WaterStroke) : sneak ? -sink * 3f : -sink;
+
+            Velocity.Y += (rise - Velocity.Y) * MathF.Min(1f, SwimAcceleration * dt);
+
+            // Nothing falls fast in a fluid, and this is also what stops a plunge from a cliff into
+            // a lake killing you: the fall damage is worked out from how far you fell, so the water
+            // has to arrest you before the landing rather than cushioning it afterwards.
+            Velocity.Y = Math.Clamp(Velocity.Y, -SwimTerminal, SwimTerminal);
+            FallDistance = 0f;
+        }
+        else
+        {
+            Velocity.Y = MathF.Max(Velocity.Y - Gravity * dt, -TerminalSpeed);
+        }
 
         // A ladder replaces gravity rather than fighting it, which is why this comes after the fall
         // and not before: pressing into one holds you against it and a fall becomes a slide.
         Climb(world, wish, sneak);
 
         MoveWithCollisions(world, Velocity * dt);
+    }
+
+    /// <summary>
+    /// True when the body's lower half is in the named fluid.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ <b>The lower half, not the head and not the whole box.</b> Wading through a stream is not
+    /// swimming and standing waist-deep should not lift you off the bottom, so a test on the head
+    /// is too high; a test on the whole box means a body with one toe in the water starts floating,
+    /// which is too low. The lower half is where a person's buoyancy actually comes from.
+    /// </remarks>
+    private bool Steeped(VoxelWorld world, Blocks.FluidKind kind)
+    {
+        var half = Width * 0.5f;
+        var top = Position.Y + CurrentHeight * 0.5f;
+
+        var minX = (int)MathF.Floor(Position.X - half);
+        var maxX = (int)MathF.Floor(Position.X + half);
+        var minZ = (int)MathF.Floor(Position.Z - half);
+        var maxZ = (int)MathF.Floor(Position.Z + half);
+        var minY = (int)MathF.Floor(Position.Y);
+        var maxY = (int)MathF.Floor(top);
+
+        for (var y = minY; y <= maxY; y++)
+        for (var z = minZ; z <= maxZ; z++)
+        for (var x = minX; x <= maxX; x++)
+            if (_fluid[world.GetBlock(x, y, z).Value] == kind) return true;
+
+        return false;
     }
 
     /// <summary>
