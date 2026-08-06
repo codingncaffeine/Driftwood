@@ -23,8 +23,19 @@ public enum ToolClass
     /// <summary>Loose ground: dirt, sand, gravel, clay, snow.</summary>
     Shovel,
 
-    /// <summary>Nothing yet. It is the reason mobs have something to be fought with.</summary>
+    /// <summary>What creatures are fought with.</summary>
     Sword,
+
+    /// <summary>
+    /// Takes something off a live animal.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ A tool class rather than a named item, so <c>CreatureDrops</c> can say "whatever shears"
+    /// exactly as a block says "whatever picks". It is also the first class here whose work is not
+    /// mining at all — which is the point: the class says what a tool is <em>for</em>, and only some
+    /// of those things are digging.
+    /// </remarks>
+    Shears,
 }
 
 /// <summary>
@@ -95,6 +106,21 @@ public sealed class ItemType
 
     /// <summary>Seconds of furnace burn this is worth. Zero means it is not fuel.</summary>
     public float BurnSeconds { get; init; }
+
+    /// <summary>
+    /// Half-hearts eating this puts back. Zero for anything that is not food.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>Healing rather than feeding, and that is a decision to revisit rather than a shortcut.</b>
+    /// There is no hunger yet, so a meat that only filled a bar nothing showed would be a drop with
+    /// nothing on the other end of it — which is exactly what the animals were added to stop. Health
+    /// is the resource that exists, so that is what food is measured in; the day hunger lands, this
+    /// number splits into two and every food already says how much it is worth.
+    /// </remarks>
+    public int Feeds { get; init; }
+
+    /// <summary>True when this can be eaten.</summary>
+    public bool IsFood => Feeds > 0;
 
     /// <summary>
     /// Where on the body this is worn, or null for anything that is not armour.

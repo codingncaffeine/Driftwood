@@ -1581,6 +1581,323 @@ public static class TileGen
         return t;
     }
 
+    /// <summary>
+    /// A fleece laid as a block: soft, clumped, and lit from nowhere in particular.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ <b>Two scales of noise and almost no contrast.</b> Wool is the one material here with no
+    /// edges in it at all — no grain, no facets, no mortar — so everything that makes a rock read as
+    /// a rock makes wool read as a rock painted white. What it does have is <em>clumping</em>: a
+    /// coarse field that gathers the fleece into tufts and a fine one that gives each tuft its fibre.
+    /// The coarse field is the whole tell, and it is why one call to <see cref="Speckle"/> is not
+    /// enough however the spread is tuned.
+    /// </remarks>
+    public static byte[] Wool(int seed, byte r, byte g, byte b)
+    {
+        var t = new byte[BytesPerTile];
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            // Tufts, on a lattice a quarter the size of the tile, so a clump spans about four
+            // pixels — big enough to see against a wall and small enough not to read as a pattern.
+            var clump = (Noise(x >> 2, y >> 2, seed) * 2f - 1f) * 13f;
+            var fibre = (Noise(x, y, seed + 47) * 2f - 1f) * 7f;
+
+            // ⚠ A fleece has no lit side, so the only shading is the hollows between the tufts —
+            // taken from the clump field itself rather than from a direction, which is what stops a
+            // wall of it looking like a wall of stone that has been recoloured.
+            var hollow = Noise((x + 2) >> 2, (y + 2) >> 2, seed + 91) < 0.28f ? -9 : 0;
+
+            var d = (int)(clump + fibre) + hollow;
+            Put(t, x, y, Clamp(r + d), Clamp(g + d), Clamp(b + d), 255);
+        }
+
+        return t;
+    }
+
+    /// <summary>A cured hide: a rounded piece with a darker edge and a couple of creases.</summary>
+    public static byte[] IconLeather(int seed, byte r, byte g, byte b)
+    {
+        var t = new byte[BytesPerTile];
+        const float Centre = (Size - 1) / 2f;
+
+        for (var y = 2; y < Size - 2; y++)
+        for (var x = 1; x < Size - 1; x++)
+        {
+            // Wider than it is tall, and wobbling, so it reads as something cut off an animal
+            // rather than as a rounded rectangle.
+            var dx = (x - Centre) / 6.6f;
+            var dy = (y - Centre) / 5.4f;
+            var wobble = 1f + (Noise(x >> 1, y >> 1, seed) * 2f - 1f) * 0.22f;
+            if (dx * dx + dy * dy > wobble) continue;
+
+            var edge = dx * dx + dy * dy > wobble * 0.62f;
+            var crease = (x + y * 2) % 7 == 0 && !edge ? -12 : 0;
+
+            var d = (edge ? -26 : 0) + crease
+                  + (int)((Centre - y) * 1.5f)
+                  + (int)((Noise(x, y, seed + 13) * 2f - 1f) * 8f);
+
+            Put(t, x, y, Clamp(r + d), Clamp(g + d), Clamp(b + d), 255);
+        }
+
+        return t;
+    }
+
+    /// <summary>A quill lying corner to corner: a shaft with barbs down both sides.</summary>
+    /// <remarks>
+    /// ⚠ <b>The barbs shorten toward both ends</b>, which is the whole silhouette of a feather. Drawn
+    /// as a constant width it is a leaf, and drawn as a taper from one end it is a knife.
+    /// </remarks>
+    public static byte[] IconFeather(int seed, byte r, byte g, byte b)
+    {
+        var t = new byte[BytesPerTile];
+
+        for (var i = 0; i < 13; i++)
+        {
+            var x = 2 + i;
+            var y = 13 - i;
+
+            // Fattest a third of the way up from the quill end, tapering to nothing at the tip.
+            var along = i / 12f;
+            var span = (int)MathF.Round(3.4f * MathF.Sin(along * MathF.PI) * (0.45f + along * 0.75f));
+
+            for (var w = -span; w <= span; w++)
+            {
+                var px = x + w;
+                var py = y + w;
+                if (px is < 0 or >= Size || py is < 0 or >= Size) continue;
+
+                // ⚠ Barbs, not a solid vane. Every third step across is left out toward the edge, so
+                // the outline breaks up the way a feather's does rather than reading as a blade.
+                if (MathF.Abs(w) > 1 && (px + py + i) % 3 == 0) continue;
+
+                var d = (int)((Noise(px, py, seed) * 2f - 1f) * 9f) - Math.Abs(w) * 5;
+                Put(t, px, py, Clamp(r + d), Clamp(g + d), Clamp(b + d), 255);
+            }
+        }
+
+        // The shaft, laid over the barbs and a shade darker, so the two halves of the vane read as
+        // two halves rather than as one blob.
+        for (var i = 0; i < 14; i++)
+        {
+            var x = 2 + i;
+            var y = 13 - i;
+            if (x >= Size || y < 0) continue;
+            Put(t, x, y, Clamp(r - 34), Clamp(g - 32), Clamp(b - 28), 255);
+        }
+
+        return t;
+    }
+
+    /// <summary>An egg: an ovoid, narrower at the top, freckled.</summary>
+    public static byte[] IconEgg(int seed, byte r, byte g, byte b)
+    {
+        var t = new byte[BytesPerTile];
+        const float Centre = (Size - 1) / 2f;
+
+        for (var y = 2; y < Size - 2; y++)
+        for (var x = 3; x < Size - 3; x++)
+        {
+            // ⚠ The horizontal radius grows down the egg, which is what makes it an egg rather than
+            // an ellipse. Symmetric top to bottom it is a pill, and every pack draws it pointed.
+            var down = (y - 2) / 11f;
+            var radius = 3.1f + down * 1.5f;
+
+            var dx = (x - Centre) / radius;
+            var dy = (y - Centre) / 6.2f;
+            if (dx * dx + dy * dy > 1f) continue;
+
+            var freckle = Noise(x, y, seed + 5) < 0.16f ? -30 : 0;
+            var d = (int)((Centre - x) * 1.4f + (Centre - y) * 1.8f) + freckle
+                  + (int)((Noise(x, y, seed) * 2f - 1f) * 5f);
+
+            Put(t, x, y, Clamp(r + d), Clamp(g + d), Clamp(b + d), 255);
+        }
+
+        return t;
+    }
+
+    /// <summary>
+    /// Shears: two blades crossed on a pivot, the one tool that takes something off a live animal.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>An X, and it has to be.</b> Every other tool in the game hangs off a diagonal haft, so a
+    /// pair of shears drawn as one more diagonal would be a fifth thing in a row of four that all
+    /// look alike. Two strokes crossing is the one silhouette nothing else here has.
+    /// </remarks>
+    public static byte[] IconShears(int seed, byte r, byte g, byte b)
+    {
+        var t = new byte[BytesPerTile];
+
+        void Blade(int x0, int y0, int dx, int dy, int steps, bool metal)
+        {
+            for (var i = 0; i < steps; i++)
+            for (var w = 0; w < 2; w++)
+            {
+                var x = x0 + dx * i + (dy == 0 ? 0 : w);
+                var y = y0 + dy * i + (dx == 0 ? 0 : w);
+                if (x is < 0 or >= Size || y is < 0 or >= Size) continue;
+
+                var (br, bg, bb) = metal ? (r, g, b) : ((byte)108, (byte)70, (byte)52);
+                var d = (int)((Noise(x, y, seed) * 2f - 1f) * 8f) - w * 22 + (metal ? i : 0);
+                Put(t, x, y, Clamp(br + d), Clamp(bg + d), Clamp(bb + d), 255);
+            }
+        }
+
+        // Blades from the pivot outward and upward, handles from the pivot downward: an X with its
+        // crossing point low, which is where a pair of shears actually pivots.
+        Blade(9, 8, -1, -1, 7, metal: true);
+        Blade(6, 8, 1, -1, 7, metal: true);
+        Blade(8, 9, -1, 1, 5, metal: false);
+        Blade(7, 9, 1, 1, 5, metal: false);
+
+        // The pivot itself, so the two blades are visibly joined rather than merely touching.
+        Put(t, 7, 8, Clamp(r - 46), Clamp(g - 44), Clamp(b - 40), 255);
+        Put(t, 8, 8, Clamp(r - 46), Clamp(g - 44), Clamp(b - 40), 255);
+
+        return t;
+    }
+
+    /// <summary>Which drawing a meat wears. Three, so eight meats are told apart in a slot.</summary>
+    public enum MeatShape
+    {
+        /// <summary>A slab off the flank — beef and mutton.</summary>
+        Cut,
+
+        /// <summary>A cut with the bone along its top edge — pork.</summary>
+        Chop,
+
+        /// <summary>A drumstick: a bulb on a bone — poultry.</summary>
+        Leg,
+    }
+
+    /// <summary>
+    /// One piece of meat, raw or cooked.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ <b>Cooked is not the raw palette darkened.</b> Meat browns from the outside in, so what
+    /// changes is the <em>rim</em> and the sear across it, and the middle stays close to what it was.
+    /// A whole tile shifted brown reads as a different, dirtier animal rather than as the same one
+    /// off a fire — which is the failure that made the first pass of these unreadable side by side.
+    /// </remarks>
+    public static byte[] IconMeat(int seed, byte r, byte g, byte b, MeatShape shape, bool cooked)
+    {
+        var t = new byte[BytesPerTile];
+        const float Centre = (Size - 1) / 2f;
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            bool inside;
+            var bone = false;
+
+            switch (shape)
+            {
+                case MeatShape.Leg:
+                {
+                    // A bulb low and left, and a bone running up to the right out of it.
+                    var dx = (x - 6.2f) / 4.6f;
+                    var dy = (y - 10.0f) / 4.4f;
+                    var wobble = 1f + (Noise(x >> 1, y >> 1, seed) * 2f - 1f) * 0.16f;
+                    inside = dx * dx + dy * dy <= wobble;
+
+                    bone = !inside && MathF.Abs((x - 6) - (5 - y)) <= 1 && x is >= 6 and <= 13;
+                    break;
+                }
+
+                case MeatShape.Chop:
+                {
+                    var dx = (x - Centre) / 6.2f;
+                    var dy = (y - 9.2f) / 4.2f;
+                    var wobble = 1f + (Noise(x >> 1, y >> 1, seed) * 2f - 1f) * 0.20f;
+                    inside = dx * dx + dy * dy <= wobble;
+
+                    // The bone along the top edge, which is the whole of what tells a chop from a cut.
+                    bone = !inside && y is >= 3 and <= 5 && x is >= 3 and <= 12
+                           && (x - Centre) * (x - Centre) / 44f + (y - 4f) * (y - 4f) / 2.2f <= 1f;
+                    break;
+                }
+
+                default:
+                {
+                    var dx = (x - Centre) / 6.0f;
+                    var dy = (y - Centre) / 4.6f;
+                    var wobble = 1f + (Noise(x >> 1, y >> 1, seed) * 2f - 1f) * 0.24f;
+                    inside = dx * dx + dy * dy <= wobble;
+                    break;
+                }
+            }
+
+            if (bone)
+            {
+                var grain = (int)((Noise(x, y, seed + 3) * 2f - 1f) * 7f);
+                Put(t, x, y, Clamp(228 + grain), Clamp(222 + grain), Clamp(202 + grain), 255);
+                continue;
+            }
+
+            if (!inside) continue;
+
+            // How near the edge, taken from whether the neighbours are inside too — one measure that
+            // works for all three shapes rather than three copies of a distance formula.
+            var rim = Rim(x, y, shape, seed);
+
+            var (pr, pg, pb) = (r, g, b);
+
+            if (cooked && rim)
+            {
+                pr = (byte)Math.Clamp(r * 0.52f + 44f, 0, 255);
+                pg = (byte)Math.Clamp(g * 0.44f + 26f, 0, 255);
+                pb = (byte)Math.Clamp(b * 0.40f + 14f, 0, 255);
+            }
+
+            // Marbling: a few pale streaks through the middle, which is what says meat rather than
+            // clay at this size.
+            var marble = !rim && Noise(x, y * 2, seed + 29) > 0.80f ? 34 : 0;
+
+            // A sear stripe or two once it has been on a fire.
+            var sear = cooked && !rim && (x + y) % 5 == 0 ? -28 : 0;
+
+            var lift = (int)((Centre - x) * 1.1f + (Centre - y) * 1.6f);
+            var d = lift + marble + sear + (int)((Noise(x, y, seed + 17) * 2f - 1f) * 9f);
+
+            Put(t, x, y, Clamp(pr + d), Clamp(pg + d), Clamp(pb + d), 255);
+        }
+
+        return t;
+    }
+
+    /// <summary>True when this pixel of a meat shape has a neighbour outside it.</summary>
+    private static bool Rim(int x, int y, MeatShape shape, int seed)
+    {
+        for (var i = 0; i < 4; i++)
+        {
+            var nx = x + (i == 0 ? -1 : i == 1 ? 1 : 0);
+            var ny = y + (i == 2 ? -1 : i == 3 ? 1 : 0);
+            if (nx is < 0 or >= Size || ny is < 0 or >= Size) return true;
+            if (!MeatInside(nx, ny, shape, seed)) return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>The shape test on its own, so the rim can ask it of a neighbour.</summary>
+    private static bool MeatInside(int x, int y, MeatShape shape, int seed)
+    {
+        const float Centre = (Size - 1) / 2f;
+        var wobble = 1f + (Noise(x >> 1, y >> 1, seed) * 2f - 1f) * (shape == MeatShape.Cut ? 0.24f : shape == MeatShape.Chop ? 0.20f : 0.16f);
+
+        return shape switch
+        {
+            MeatShape.Leg => Sq((x - 6.2f) / 4.6f) + Sq((y - 10.0f) / 4.4f) <= wobble,
+            MeatShape.Chop => Sq((x - Centre) / 6.2f) + Sq((y - 9.2f) / 4.2f) <= wobble,
+            _ => Sq((x - Centre) / 6.0f) + Sq((y - Centre) / 4.6f) <= wobble,
+        };
+    }
+
+    private static float Sq(float v) => v * v;
+
     /// <summary>One fired brick, held rather than laid.</summary>
     public static byte[] IconBrick(int seed, byte r, byte g, byte b)
     {

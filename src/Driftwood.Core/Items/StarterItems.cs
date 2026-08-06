@@ -1,5 +1,6 @@
 using Driftwood.Core.Blocks;
 using Driftwood.Core.Entities;
+using Driftwood.Core.Textures;
 
 namespace Driftwood.Core.Items;
 
@@ -60,6 +61,31 @@ public static class StarterItems
     /// <summary>Seconds of burn one piece of timber is worth — one and a half smelts.</summary>
     public const float Timber = 15f;
 
+    /// <summary>
+    /// One meat: which animal it comes off, what it is called, how it is drawn, and its colour.
+    /// </summary>
+    /// <param name="Raw">Half-hearts eating it raw puts back.</param>
+    /// <param name="Cooked">And cooked, which is always more — that is the whole reason to cook it.</param>
+    public readonly record struct Meat(
+        string Animal, string Name, TileGen.MeatShape Shape,
+        byte R, byte G, byte B, int Raw, int Cooked);
+
+    /// <summary>
+    /// The four, in the order their icon layers run.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>Real names, per the naming rule.</b> Beef, pork, mutton and chicken are words nobody
+    /// owns and renaming them would cost legibility for nothing — the same call that left copper,
+    /// iron and clay alone while coining coralstone and stormglass.
+    /// </remarks>
+    public static readonly Meat[] Meats =
+    [
+        new("cow", "beef", TileGen.MeatShape.Cut, 188, 66, 60, 2, 6),
+        new("pig", "pork", TileGen.MeatShape.Chop, 226, 140, 132, 2, 6),
+        new("sheep", "mutton", TileGen.MeatShape.Cut, 170, 56, 54, 2, 6),
+        new("chicken", "chicken", TileGen.MeatShape.Leg, 232, 176, 148, 1, 5),
+    ];
+
     public static ItemRegistry Register(BlockRegistry blocks)
     {
         var items = new ItemRegistry();
@@ -86,6 +112,7 @@ public static class StarterItems
         Block(items, blocks, "emberstone", "emberstone", StarterBlocks.LayerEmberstone);
         Block(items, blocks, "glass", "glass", StarterBlocks.LayerGlass);
         Block(items, blocks, "bricks", "bricks", StarterBlocks.LayerBricks);
+        Block(items, blocks, "wool", "wool", StarterBlocks.LayerWool);
         Block(items, blocks, "bench", "bench", StarterBlocks.LayerBenchTop, Timber);
         Block(items, blocks, "stonecutter", "stonecutter", StarterBlocks.LayerStonecutterTop);
 
@@ -284,9 +311,55 @@ public static class StarterItems
         Loose(items, "clay_lump", "clay lump", StarterBlocks.LayerClayLump);
         Loose(items, "brick", "brick", StarterBlocks.LayerBrick);
 
+        // What an animal leaves. ⚠ Leather and feather are components with nothing yet to spend
+        // them on, and that is honest rather than an oversight — armour and arrows are the two
+        // things they are for, and both are their own work. They are obtainable, which is what the
+        // reachability walk asks of an item; being consumed is a different claim.
+        Loose(items, "leather", "leather", StarterBlocks.LayerLeather);
+        Loose(items, "feather", "feather", StarterBlocks.LayerFeather);
+        Loose(items, "egg", "egg", StarterBlocks.LayerEgg);
+
+        RegisterMeats(items);
         RegisterTools(items);
 
+        // ⛳ The one tool whose work is not mining. It takes a fleece off a live sheep, which is why
+        // it carries no tier: there is no block it is the right answer for, and giving it one would
+        // make it a shovel with a strange picture.
+        items.Register(new ItemType
+        {
+            Name = "shears", Label = "shears", IconLayer = StarterBlocks.LayerShears,
+            MaxStack = 1, Tool = ToolClass.Shears, Durability = 238,
+        });
+
         return items.Seal(blocks);
+    }
+
+    /// <summary>Every meat, raw and cooked, off the one table.</summary>
+    /// <remarks>
+    /// ⚠ <b>Raw is not fuel and neither is cooked.</b> Everything else loose in this file that burns
+    /// says so; meat says nothing, which is the table declining to let a player heat a furnace with
+    /// the dinner. Two rows per animal and the layer pair falls out of the index — the same shape the
+    /// tools use, and the reason a fifth animal is one row here rather than a chapter.
+    /// </remarks>
+    private static void RegisterMeats(ItemRegistry items)
+    {
+        for (var i = 0; i < Meats.Length; i++)
+        {
+            var meat = Meats[i];
+            var layer = (ushort)(StarterBlocks.LayerFirstMeat + i * 2);
+
+            items.Register(new ItemType
+            {
+                Name = $"raw_{meat.Name}", Label = $"raw {meat.Name}",
+                IconLayer = layer, Feeds = meat.Raw,
+            });
+
+            items.Register(new ItemType
+            {
+                Name = $"cooked_{meat.Name}", Label = $"cooked {meat.Name}",
+                IconLayer = (ushort)(layer + 1), Feeds = meat.Cooked,
+            });
+        }
     }
 
     private static void RegisterTools(ItemRegistry items)
@@ -341,6 +414,36 @@ public static class StarterItems
 
         return new BlockDrops(blocks, items, [.. rules]);
     }
+
+    /// <summary>
+    /// What each animal leaves, and what had to happen for it to leave it.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛔ <b>Every kind gives at least one thing the recipe tree wants and one thing to eat.</b>
+    /// That was the whole point of the animals, in the user's own framing — a drop that feeds the
+    /// recipe set rather than being decoration. Leather, wool and feather are the components; the
+    /// meat is what makes killing one worth doing on the day you have no use for the component.</para>
+    /// <para>⚠ <b>A sheep is the kind with rows under two triggers</b>, and it is the reason the
+    /// trigger is a column rather than three tables. Shorn, it gives wool and keeps walking; killed,
+    /// it gives its wool <em>and</em> its mutton — unless it was sheared this afternoon, which is
+    /// what <c>NeedsFleece</c> says on both rows at once.</para>
+    /// </remarks>
+    public static CreatureDrops Creatures(ItemRegistry items) => new(
+        items,
+        new CreatureDrops.Rule("cow", DropTrigger.Killed, "leather", 1, 3),
+        new CreatureDrops.Rule("cow", DropTrigger.Killed, "raw_beef", 1, 3),
+
+        new CreatureDrops.Rule("pig", DropTrigger.Killed, "raw_pork", 1, 3),
+
+        new CreatureDrops.Rule("sheep", DropTrigger.Killed, "raw_mutton", 1, 2),
+        new CreatureDrops.Rule("sheep", DropTrigger.Killed, "wool", 1, 1, NeedsFleece: true),
+        new CreatureDrops.Rule(
+            "sheep", DropTrigger.Harvested, "wool", 1, 3,
+            Tool: ToolClass.Shears, NeedsFleece: true),
+
+        new CreatureDrops.Rule("chicken", DropTrigger.Killed, "feather", 0, 2),
+        new CreatureDrops.Rule("chicken", DropTrigger.Killed, "raw_chicken", 1, 1),
+        new CreatureDrops.Rule("chicken", DropTrigger.Shed, "egg", 1, 1));
 
     private static BlockDrops.Rule[] Written(BlockRegistry blocks, ItemRegistry items) =>
     [

@@ -271,6 +271,12 @@ public static class StarterRecipes
         Shaped("brick block", "bricks", 1, ["BB", "BB"]);
         Shaped("clay block", "clay", 1, ["LL", "LL"]);
 
+        // ⛳ Two blades on a pivot, drawn as a diagonal because that is what a pair of shears is.
+        // ⚠ At a bench rather than in the hands, though it would fit in a player's two-by-two: every
+        // other piece of metalwork in the game is made at one, and an iron tool that could be run up
+        // on the walk back from the mine would be the one exception with nothing to justify it.
+        Shaped("shears", "shears", 1, [" I", "I "], station: CraftStation.Bench);
+
         // Every tool, off the two tables. The material is a tag for the tiers that have more than
         // one source — any plank, any rough stone — and a plain item for the metals.
         foreach (var tier in StarterItems.Tiers)
@@ -297,6 +303,12 @@ public static class StarterRecipes
         Smelt("raw_copper", "copper_ingot", work: SmeltWork.Ore);
         Smelt("raw_iron", "iron_ingot", work: SmeltWork.Ore);
         Smelt("raw_gold", "gold_ingot", work: SmeltWork.Ore);
+
+        // ⛳ Cooking, which is the first thing the fire does that is not about rocks. Every meat
+        // triples what it puts back once it has been over a flame, and that is the whole argument
+        // for carrying it home rather than eating it where the animal fell.
+        foreach (var meat in StarterItems.Meats)
+            Smelt($"raw_{meat.Name}", $"cooked_{meat.Name}", work: SmeltWork.Food);
 
         return book;
     }

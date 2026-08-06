@@ -47,6 +47,7 @@ public static class WorldAudit
         // same tables is a check that both were written the same way, not that either is right.
         var items = StarterItems.Register(registry);
         var drops = StarterItems.Drops(registry, items);
+        var creatureDrops = StarterItems.Creatures(items);
 
         var generator = new TerrainGenerator(seed, ids, oceanCoverage);
         var world = new VoxelWorld(registry);
@@ -391,7 +392,7 @@ public static class WorldAudit
                   + "into a grid and found again, none duplicated, none bigger than a bench"
                 : $"{recipeFaults.Count} faults: {recipeFaults[0]}");
 
-        var reach = ReachabilitySelfTest(registry, items, drops, book, counts, out var reachDetail);
+        var reach = ReachabilitySelfTest(registry, items, drops, creatureDrops, book, counts, out var reachDetail);
         Check("everything is reachable from bare hands", reach.Count == 0,
             reach.Count == 0 ? reachDetail : $"{reach.Count} faults: {reach[0]}");
 
@@ -832,6 +833,15 @@ public static class WorldAudit
             ourCreatures.Count == 0
                 ? $"{StarterCreatures.All.Count} models, nets sound, assembled, feet on the ground"
                 : $"{ourCreatures.Count} faults: {ourCreatures[0]}");
+
+        // And what they leave, which is the half the reachability walk cannot check on its own:
+        // wool comes off a dead sheep as well as a live one, so a shear gate that had been forgotten
+        // entirely would still leave wool reachable. Asked directly, with three things in hand.
+        var creatureDropFaults = CreatureDrops.Validate(items, creatureDrops);
+        Check("an animal gives up what it should, and only how it should", creatureDropFaults.Count == 0,
+            creatureDropFaults.Count == 0
+                ? string.Join("; ", creatureDrops.Describe())
+                : $"{creatureDropFaults.Count} faults: {creatureDropFaults[0]}");
 
         var artFaults = CreatureArt.Validate();
         Check("our own creatures are painted", artFaults.Count == 0,
@@ -1714,6 +1724,7 @@ public static class WorldAudit
         BlockRegistry registry,
         ItemRegistry items,
         BlockDrops drops,
+        CreatureDrops creatures,
         RecipeBook book,
         long[] counts,
         out string detail)
@@ -1755,6 +1766,19 @@ public static class WorldAudit
 
                 var left = drops.Of(block.Id);
                 if (!left.IsEmpty) changed |= Gain(left.Item);
+            }
+
+            // Hunt. ⛔ A creature is a source exactly as a block is, and the gate has the same two
+            // halves: it has to actually be in the world, and whatever takes the drop off it has to
+            // be in hand. The world half is "do we ship a model for it" — a kind that only appears on
+            // a machine with somebody else's install is not something a walk may assume, which is why
+            // the hostiles' bone and string stay unreachable until they are placed rather than
+            // quietly making every recipe that needs them look fine.
+            foreach (var (kind, item, tool, most) in creatures.Walk())
+            {
+                if (most <= 0 || StarterCreatures.ByName(kind) is null) continue;
+                if (tool != ToolClass.None && reach[(int)tool] < 0) continue;
+                changed |= Gain(item);
             }
 
             // Craft. ⚠ A recipe worked at a station cannot be made until the station itself has been

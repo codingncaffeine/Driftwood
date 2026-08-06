@@ -163,6 +163,17 @@ public static class CreatureSounds
     /// <summary>What taking a fleece off sounds like — the one shear-like noise in the set.</summary>
     public const string Shear = "swipe";
 
+    /// <summary>
+    /// And what eating what one left sounds like.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ <b>Here rather than in a table of its own, because <see cref="All"/> is what the audio check
+    /// walks.</b> A clip named anywhere else is a clip nobody proves is on disk, and a table pointing
+    /// at a missing sound is silent in exactly the way a working game is silent. This class stopped
+    /// being only voices the moment it gained the impacts: it is the sounds around a creature.
+    /// </remarks>
+    public static readonly string[] Meals = ["squelching_1", "squelching_2", "crunch_quick"];
+
     /// <summary>The clip a creature makes when it has nothing else to say, or empty for none.</summary>
     public static string IdleFor(string kind) => Idle.GetValueOrDefault(kind, "");
 
@@ -172,7 +183,7 @@ public static class CreatureSounds
 
     /// <summary>Every clip named here, for the check that they all resolve.</summary>
     public static IEnumerable<string> All =>
-        Idle.Values.Concat(Angry.Values).Concat(Blows).Concat(Deaths).Append(Shear);
+        Idle.Values.Concat(Angry.Values).Concat(Blows).Concat(Deaths).Concat(Meals).Append(Shear);
 }
 
 /// <summary>

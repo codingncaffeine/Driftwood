@@ -117,6 +117,9 @@ public static class StarterBlocks
     public const ushort LayerBlastFront = 67;
     public const ushort LayerBlastFrontLit = 68;
 
+    /// <summary>A fleece laid as a block. The first thing in the game made out of an animal.</summary>
+    public const ushort LayerWool = 69;
+
     /// <summary>The first layer that is an item icon rather than a block face.</summary>
     /// <remarks>
     /// <para>Items share the block texture array rather than taking one of their own. They are the
@@ -127,24 +130,42 @@ public static class StarterBlocks
     /// number below it. That is a search and replace and the audit's "every icon is painted" check
     /// is what catches one missed.</para>
     /// </remarks>
-    public const ushort LayerFirstIcon = 69;
+    public const ushort LayerFirstIcon = 70;
 
-    public const ushort LayerStick = 69;
-    public const ushort LayerCoal = 70;
-    public const ushort LayerCharcoal = 71;
-    public const ushort LayerRawCopper = 72;
-    public const ushort LayerRawIron = 73;
-    public const ushort LayerRawGold = 74;
-    public const ushort LayerCopperIngot = 75;
-    public const ushort LayerIronIngot = 76;
-    public const ushort LayerGoldIngot = 77;
-    public const ushort LayerStormglass = 78;
-    public const ushort LayerAzurite = 79;
-    public const ushort LayerClayLump = 80;
-    public const ushort LayerBrick = 81;
+    public const ushort LayerStick = 70;
+    public const ushort LayerCoal = 71;
+    public const ushort LayerCharcoal = 72;
+    public const ushort LayerRawCopper = 73;
+    public const ushort LayerRawIron = 74;
+    public const ushort LayerRawGold = 75;
+    public const ushort LayerCopperIngot = 76;
+    public const ushort LayerIronIngot = 77;
+    public const ushort LayerGoldIngot = 78;
+    public const ushort LayerStormglass = 79;
+    public const ushort LayerAzurite = 80;
+    public const ushort LayerClayLump = 81;
+    public const ushort LayerBrick = 82;
+
+    // What an animal leaves, and the one tool that takes something off a live one.
+    public const ushort LayerLeather = 83;
+    public const ushort LayerFeather = 84;
+    public const ushort LayerEgg = 85;
+    public const ushort LayerShears = 86;
+
+    /// <summary>
+    /// The meats: raw and cooked, in the <see cref="Meats"/> order.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>Eight layers, three drawings.</b> A cut, a chop with the bone along one edge, and a leg —
+    /// and each animal's palette on top of that, raw and cooked. Eight pictures of a lump of meat
+    /// would be eight things nobody could tell apart in a slot the size of a fingernail, which is the
+    /// same argument that made the four tool heads four different silhouettes rather than four
+    /// colours of the same one.
+    /// </remarks>
+    public const ushort LayerFirstMeat = 87;
 
     /// <summary>The tool icons: one palette per tier, four heads each, tier-major.</summary>
-    public const ushort LayerFirstTool = 82;
+    public const ushort LayerFirstTool = 95;
 
     /// <summary>Head shapes a tier comes in — pickaxe, axe, shovel, sword.</summary>
     public const int ToolShapeCount = 4;
@@ -473,6 +494,16 @@ public static class StarterBlocks
             Name = "bricks", Hardness = 2f, Crafted = true,
             HarvestClass = ToolClass.Pickaxe, HarvestTier = 1,
             TopLayer = LayerBricks, SideLayer = LayerBricks, BottomLayer = LayerBricks,
+        });
+
+        // ⛳ The first block in the game made out of an animal. Soft enough to take by hand — a
+        // fleece that wanted a tool would be a wall a player could not knock down after building it
+        // — and it names no harvest class at all, which is what lets a bare hand keep it.
+        registry.Register(new BlockType
+        {
+            Name = "wool", Hardness = 0.8f, Crafted = true,
+            Sounds = SoundMaterial.Cloth,
+            TopLayer = LayerWool, SideLayer = LayerWool, BottomLayer = LayerWool,
         });
 
         // Cut stone: every rock worked, and the harder ones bonded after that. One loop, because

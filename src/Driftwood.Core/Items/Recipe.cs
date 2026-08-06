@@ -244,6 +244,16 @@ public enum SmeltWork
 
     /// <summary>Reducing a raw lump to metal, which is what a blast furnace is for.</summary>
     Ore,
+
+    /// <summary>
+    /// Cooking something to eat, which is what a smoker will be for.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ Named the day there was food to cook. The smoker was the one station in the workstation
+    /// plan that was blocked on content rather than on a system — a smoker with nothing edible in
+    /// the game is a block that opens an empty screen — and this is the column it will read.
+    /// </remarks>
+    Food,
 }
 
 /// <summary>Which sort of smelting block this is.</summary>

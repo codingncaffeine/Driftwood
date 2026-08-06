@@ -124,6 +124,24 @@ public sealed class PlayerVitals
     }
 
     /// <summary>
+    /// Puts health back directly, and says how much actually landed.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ <b>It answers with what it took, not with what it was offered.</b> Eating at full health has
+    /// to be refusable, and the caller cannot work that out for itself without a second copy of the
+    /// clamp — which is how a player ends up spending a cooked steak on nothing. A dead one heals
+    /// nothing: coming back is what a respawn is for.
+    /// </remarks>
+    public int Heal(int halfHearts)
+    {
+        if (halfHearts <= 0 || !Alive) return 0;
+
+        var before = Health;
+        Health = Math.Min(MaxHealth, Health + halfHearts);
+        return Health - before;
+    }
+
+    /// <summary>
     /// Advances one frame against a body and the world its head is in.
     /// </summary>
     /// <remarks>

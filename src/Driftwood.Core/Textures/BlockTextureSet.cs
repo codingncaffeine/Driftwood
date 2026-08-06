@@ -1,4 +1,5 @@
 using Driftwood.Core.Blocks;
+using Driftwood.Core.Items;
 
 namespace Driftwood.Core.Textures;
 
@@ -169,6 +170,10 @@ public static class BlockTextureSet
         new("blast_front", "textures/block/blast_furnace_front.png", false),
         new("blast_front_lit", "textures/block/blast_furnace_front_on.png", false),
 
+        // ⚠ White wool, and only white. A pack keeps each dyed colour in its own file, so the day
+        // the other fifteen land they are fifteen more rows here and not a tint applied to this one.
+        new("wool",        "textures/block/white_wool.png",       false, "textures/block/wool_colored_white.png"),
+
         // Items, from here to the end. They live in the same array as the block faces because they
         // are the same sixteen-pixel tiles drawn by the same two places — a slot on the bar and a
         // thing spinning on the floor — and a pack that reskins the world should reskin the pockets
@@ -189,6 +194,23 @@ public static class BlockTextureSet
         new("azurite",     "textures/item/lapis_lazuli.png",      true),
         new("clay_lump",   "textures/item/clay_ball.png",         true),
         new("brick",       "textures/item/brick.png",             true),
+
+        // What an animal leaves, and the tool that takes one thing off a live one.
+        new("leather",     "textures/item/leather.png",           true),
+        new("feather",     "textures/item/feather.png",           true),
+        new("egg",         "textures/item/egg.png",               true),
+        new("shears",      "textures/item/shears.png",            true),
+
+        // The meats, raw then cooked, in StarterItems.Meats order. ⚠ Their names are the genre's
+        // own on both sides of the table, which is unusual here and correct: beef is beef.
+        new("raw_beef",    "textures/item/beef.png",              true, "textures/item/raw_beef.png"),
+        new("cooked_beef", "textures/item/cooked_beef.png",       true),
+        new("raw_pork",    "textures/item/porkchop.png",          true, "textures/item/raw_porkchop.png"),
+        new("cooked_pork", "textures/item/cooked_porkchop.png",   true),
+        new("raw_mutton",  "textures/item/mutton.png",            true, "textures/item/raw_mutton.png"),
+        new("cooked_mutton", "textures/item/cooked_mutton.png",   true),
+        new("raw_chicken", "textures/item/chicken.png",           true, "textures/item/raw_chicken.png"),
+        new("cooked_chicken", "textures/item/cooked_chicken.png", true),
 
         // Six tiers of four heads, tier-major. Copper tooling has no counterpart to look up, so
         // those four keep our own art rather than being pointed at somebody else's nearest thing —
@@ -657,8 +679,32 @@ public static class BlockTextureSet
             StarterBlocks.LayerClayLump => TileGen.IconLump(1054, 164, 170, 180),
             StarterBlocks.LayerBrick => TileGen.IconBrick(1055, 158, 94, 78),
 
-            _ => Tool(layer),
+            // A fleece, and what comes off the animals with it. ⚠ The wool is not pure white: a
+            // white block against a snowfield is invisible, and 236 against snow's 243 is enough.
+            StarterBlocks.LayerWool => TileGen.Wool(1084, 236, 234, 228),
+            StarterBlocks.LayerLeather => TileGen.IconLeather(1085, 166, 116, 70),
+            StarterBlocks.LayerFeather => TileGen.IconFeather(1086, 238, 240, 244),
+            StarterBlocks.LayerEgg => TileGen.IconEgg(1087, 232, 220, 198),
+            StarterBlocks.LayerShears => TileGen.IconShears(1088, 206, 208, 214),
+
+            _ => Meat(layer) ?? Tool(layer),
         };
+    }
+
+    /// <summary>
+    /// One meat icon, or null when this layer is not one.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ Null rather than the magenta, because a layer past the meats is a tool and the two ranges
+    /// meet — a "no art here" answer given by the first of two handlers would swallow every tool.
+    /// </remarks>
+    private static byte[]? Meat(int layer)
+    {
+        var index = layer - StarterBlocks.LayerFirstMeat;
+        if (index < 0 || index >= StarterItems.Meats.Length * 2) return null;
+
+        var meat = StarterItems.Meats[index / 2];
+        return TileGen.IconMeat(1090 + index, meat.R, meat.G, meat.B, meat.Shape, cooked: index % 2 == 1);
     }
 
     /// <summary>The head colour of each tool tier, in the order the layers run.</summary>

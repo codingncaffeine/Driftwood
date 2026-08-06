@@ -414,6 +414,9 @@ public sealed class ClientHost : IDisposable
     private ItemRegistry _items = null!;
     private BlockDrops _dropTable = null!;
 
+    /// <summary>And what each animal leaves, and what had to happen for it to leave it.</summary>
+    private CreatureDrops _creatureDropTable = null!;
+
     /// <summary>Everything that can be made, and every furnace and chest in the world.</summary>
     private RecipeBook _book = null!;
     private FurnaceBank _furnaces = null!;
@@ -1057,6 +1060,7 @@ public sealed class ClientHost : IDisposable
         // already handed out.
         _items = StarterItems.Register(registry);
         _dropTable = StarterItems.Drops(registry, _items);
+        _creatureDropTable = StarterItems.Creatures(_items);
         _book = StarterRecipes.Build(_items);
         _furnaces = new FurnaceBank(_items, _book);
         _chests = new ChestBank(_items);
@@ -3544,6 +3548,17 @@ public sealed class ClientHost : IDisposable
 
         foreach (var creature in _herd.All)
         {
+            if (creature.Shed)
+            {
+                // ⛳ Laid where it stands rather than thrown out of it, and with no scatter — a hen
+                // that walks off leaving an egg rolling across a field is a comedy, not a farm.
+                foreach (var laid in _creatureDropTable.Roll(
+                             creature.Kind, DropTrigger.Shed, null, creature.Shorn, Random.Shared))
+                {
+                    _drops.Drop(laid, creature.Position + new Vector3(0f, 0.2f, 0f), 0.15f);
+                }
+            }
+
             if (!creature.Spoke) continue;
 
             var clip = CreatureSounds.IdleFor(creature.Kind);
@@ -3559,13 +3574,76 @@ public sealed class ClientHost : IDisposable
 
         foreach (var death in _herd.TakeDead())
         {
-            _audio?.Play(Pick(CreatureSounds.Deaths), death.Position, 0.85f, Wobble());
+            _audio?.Play(Pick(CreatureSounds.Deaths), death.Position, 0.68f, Wobble());
 
             // ⚠ Its own voice, one last time and pitched down. The impact says a blow landed; what
             // says which animal it was is the recording it has been lowing with all afternoon.
             var voice = CreatureSounds.IdleFor(death.Kind);
             if (voice.Length > 0) _audio?.Play(voice, death.Position, 0.9f, 0.72f);
+
+            // ⛳ What it leaves. ⚠ The kill roll is asked with nothing in hand: what a blow was
+            // struck with is already spent — it decided how many blows it took — and a table that
+            // read the tool here would hand out more leather to whoever happened to be holding a
+            // sword when the last one landed.
+            foreach (var left in _creatureDropTable.Roll(
+                         death.Kind, DropTrigger.Killed, null, death.Shorn, Random.Shared))
+            {
+                _drops.Drop(left, death.Position);
+            }
         }
+    }
+
+    /// <summary>
+    /// Takes what a live animal will give up, if what is in hand is the thing that takes it.
+    /// </summary>
+    /// <returns>True when the click was spent on the animal, so nothing else may answer it.</returns>
+    /// <remarks>
+    /// ⚠ <b>Whether it can be sheared is asked before the roll, not after it.</b> A shearing that
+    /// rolls nothing still has to consume the click, make its noise and mark the animal — otherwise
+    /// a player who shears a sheep on an unlucky frame is told nothing happened at all, and clicks
+    /// again, and the sheep they already sheared refuses them.
+    /// </remarks>
+    private bool HarvestCreature(Creature quarry)
+    {
+        var held = _inventory.HeldType;
+        if (!_creatureDropTable.CanHarvest(quarry.Kind, held, quarry.Shorn)) return false;
+
+        foreach (var taken in _creatureDropTable.Roll(
+                     quarry.Kind, DropTrigger.Harvested, held, quarry.Shorn, Random.Shared))
+        {
+            _drops.Drop(taken, quarry.Middle);
+        }
+
+        quarry.Shorn = true;
+        quarry.Regrows = CreatureVitals.RegrowSeconds;
+
+        _audio?.Play(CreatureSounds.Shear, quarry.Middle, 0.55f, Wobble());
+
+        var voice = CreatureSounds.IdleFor(quarry.Kind);
+        if (voice.Length > 0) _audio?.Play(voice, quarry.Middle, 0.6f, 1.14f);
+
+        if (held is { IsTool: true } && _inventory.WearHeld())
+            PlaySound(SoundMaterial.Wood, SoundEvent.Break, _viewPosition, 0.7f);
+
+        return true;
+    }
+
+    /// <summary>
+    /// Eats what is in hand, and says whether any of it landed.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ <b>Refused at full health rather than swallowed.</b> <see cref="PlayerVitals.Heal"/> answers
+    /// with what it actually took, so this is one question rather than a second copy of the clamp —
+    /// and the food stays in the pocket instead of being spent on nothing.
+    /// </remarks>
+    private bool EatHeld()
+    {
+        if (_inventory.HeldType is not { IsFood: true } food) return false;
+        if (_vitals.Heal(food.Feeds) == 0) return false;
+
+        _inventory.SpendHeld();
+        _audio?.Play(Pick(CreatureSounds.Meals), _viewPosition, 0.45f, Wobble());
+        return true;
     }
 
     /// <summary>Lands one blow on an animal, with whatever is in hand behind it.</summary>
@@ -3586,7 +3664,12 @@ public sealed class ClientHost : IDisposable
         // Still ringing from the last blow, so nothing happened and nothing should be heard.
         if (quarry.Health == before) return;
 
-        _audio?.Play(Pick(CreatureSounds.Blows), quarry.Middle, 0.8f, Wobble());
+        // The gains here are levelled against the VOICES rather than picked. The user's animal
+        // recordings were normalised to about 0.84 and play at 0.7, so a voice lands near 0.59; the
+        // pack's impacts all peak at a flat 1.00, so the same loudness is a lower gain. Measured
+        // with --audio-check, which prints every peak: a punch at 0.8 was a third louder than the
+        // cow it was landing on.
+        _audio?.Play(Pick(CreatureSounds.Blows), quarry.Middle, 0.62f, Wobble());
 
         // Its voice, raised. ⚠ The angry clip where a creature has one and its ordinary one where it
         // does not, which is most of them — a table with a hole in it is quieter than a wrong entry.
@@ -3981,7 +4064,7 @@ public sealed class ClientHost : IDisposable
 
         for (; strikes > 0 && placing; strikes--)
         {
-            PlaceOnTarget();
+            UseOrPlace();
             UpdateTarget();
         }
 
@@ -4348,6 +4431,31 @@ public sealed class ClientHost : IDisposable
     /// into their own feet, which leaves them inside solid geometry with the collision resolver
     /// having no free direction to push them out of — the classic way to get stuck in a voxel game.
     /// </remarks>
+    /// <summary>
+    /// What the right button means, in the order the three answers claim it.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>Three things want this button and the order between them is the whole of the rule.</b>
+    /// An animal under the crosshair takes it first, because it is what is being aimed at and
+    /// shearing is a use. Then the world, which is where a bench opening beats a plank being laid.
+    /// Eating is last and only when nothing else wanted it — right-clicking a chest with a chicken
+    /// leg in hand opens the chest, which is the behaviour anybody would expect and is not what a
+    /// flat "food is eaten on right click" gives you.
+    /// </remarks>
+    private void UseOrPlace()
+    {
+        if (_creatureTarget is { } quarry && HarvestCreature(quarry)) return;
+
+        // Whether anything under the crosshair answers the button itself. Asked of the block rather
+        // than worked out from its name — the same field PlaceOnTarget switches on below.
+        var wanted = _target is { } aimed
+                     && _registry[_streamer.World.GetBlock(aimed.X, aimed.Y, aimed.Z)].Use != BlockUse.None;
+
+        if (!wanted && _inventory.HeldType is { IsFood: true } && EatHeld()) return;
+
+        PlaceOnTarget();
+    }
+
     private void PlaceOnTarget()
     {
         if (_target is not { } hit) return;

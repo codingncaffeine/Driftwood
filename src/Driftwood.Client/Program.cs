@@ -273,15 +273,24 @@ public static class Program
                 continue;
             }
 
+            // ⛔ MEASURED AFTER THE DOWNMIX, WHICH IS WHAT ACTUALLY PLAYS. The engine folds every
+            // clip to one channel on its way into a buffer (AudioEngine.BufferFor), so a stereo file
+            // on disk is positional exactly like a mono one — this check used to call two channels a
+            // fault and would have failed a correct build the moment any of the pack's own stereo
+            // recordings were used. What a fold genuinely risks is the opposite: two channels out of
+            // phase cancel, and a clip that was loud on disk arrives silent. So the peak that is
+            // gated is the played one, and the file's own channel count is reported rather than
+            // judged.
+            var played = clip.ToMono();
+
             Console.WriteLine(
-                $"  {name,-32} {clip.Seconds,6:F2}s  {clip.Channels}ch {clip.SampleRate}Hz  peak {clip.Peak:F2}");
+                $"  {name,-32} {clip.Seconds,6:F2}s  {clip.Channels}ch {clip.SampleRate}Hz  "
+                + $"peak {clip.Peak:F2}" + (clip.Channels > 1 ? $" -> {played.Peak:F2} mono" : ""));
 
-            if (clip.Peak < 0.02f) faults.Add($"{name} decodes to near silence (peak {clip.Peak:F3})");
+            if (played.Peak < 0.02f)
+                faults.Add($"{name} plays as near silence (peak {played.Peak:F3} after the fold to mono)");
+
             if (clip.Seconds > 8f) faults.Add($"{name} is {clip.Seconds:F1}s, which is a loop not a one-shot");
-
-            // ⚠ Stereo is not positional. OpenAL plays a two-channel buffer flat, at the listener,
-            // whatever position is asked for — so a stereo cow is a cow that follows you about.
-            if (clip.Channels != 1) faults.Add($"{name} is {clip.Channels}-channel, so it cannot come from where the animal is");
         }
 
         Console.WriteLine();
