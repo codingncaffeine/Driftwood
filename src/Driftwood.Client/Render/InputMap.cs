@@ -40,9 +40,9 @@ public sealed class InputMap
     }
 
     /// <summary>True while either of an action's keys is down.</summary>
-    public bool Held(IKeyboard keyboard, GameAction action) =>
-        (_primary[(int)action] != Key.Unknown && keyboard.IsKeyPressed(_primary[(int)action]))
-        || (_secondary[(int)action] != Key.Unknown && keyboard.IsKeyPressed(_secondary[(int)action]));
+    public bool Held(RawInput input, GameAction action) =>
+        (_primary[(int)action] != Key.Unknown && input.IsKeyPressed(_primary[(int)action]))
+        || (_secondary[(int)action] != Key.Unknown && input.IsKeyPressed(_secondary[(int)action]));
 
     /// <summary>What a key press means, or null when nothing is bound to it.</summary>
     public GameAction? ActionFor(Key key) => _byKey.TryGetValue(key, out var action) ? action : null;

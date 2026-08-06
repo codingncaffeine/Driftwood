@@ -190,9 +190,11 @@ public sealed class ClientHost : IDisposable
     private readonly IWindow _window;
 
     private GL _gl = null!;
-    private IInputContext _input = null!;
-    private IKeyboard _keyboard = null!;
-    private IMouse _mouse = null!;
+    /// <summary>
+    /// Keyboard and mouse. ⛔ <b>Not the input library's context</b> — see <see cref="RawInput"/>
+    /// for the ten seconds that cost.
+    /// </summary>
+    private RawInput _input = null!;
 
     private Shader _chunkShader = null!;
     private SkyRenderer _sky = null!;
@@ -248,6 +250,9 @@ public sealed class ClientHost : IDisposable
 
     /// <summary>True while the menu is showing the list of worlds rather than its four choices.</summary>
     private bool _startListing;
+
+    /// <summary>The row that leaves the settings when they were opened from the menu.</summary>
+    private const string BackToMenu = "back to the menu";
 
     /// <summary>What went wrong the last time the world was written, if anything.</summary>
     private string? _saveFault;
@@ -699,46 +704,22 @@ public sealed class ClientHost : IDisposable
 
         Console.WriteLine($"settings    {GameSettings.Path}");
 
-        // ⛔ ON ITS OWN LINE, AND MEASURED, BECAUSE IT IS THE MOST EXPENSIVE THING IN DRIFTWOOD'S
-        // STARTUP AND IT IS NOT DRIFTWOOD'S.
-        //
-        // Creating the input context builds thirty two joystick and gamepad wrappers, and the first
-        // one of them makes GLFW initialise the Windows joystick stack — DirectInput, XInput and a
-        // device enumeration. Measured on the machine this was written on: 10.3 seconds, against
-        // twelve milliseconds to build every texture in the game. It was 97% of the whole startup,
-        // and the guess written down beforehand had been the texture build.
-        //
-        // The cause is a device rather than a quantity of work: a Bluetooth controller that is
-        // paired and not switched on, which the enumeration waits on until it gives up. Three runs
-        // came to 10341, 10323 and 10339 ms — a spread of eighteen milliseconds on ten seconds is a
-        // timeout, not work. So it is measured and named rather than engineered around, because on
-        // a machine with no such device it is a few milliseconds and there would be nothing to fix.
-        // Fully qualified rather than imported: Silk.NET.GLFW and Silk.NET.Input both define
-        // MouseButton, and bringing the whole namespace in for one call makes every mouse handler
-        // in this file ambiguous.
-        var before = _startup.ElapsedMs;
-        Silk.NET.GLFW.Glfw.GetApi().JoystickPresent(0);
-        var joystickMs = _startup.ElapsedMs - before;
-        _startup.Mark("looking for controllers");
+        // ⛔ NOT _window.CreateInput(). That built thirty two joystick and gamepad wrappers, and the
+        // first of them made the platform initialise its whole joystick stack — measured at 10.3
+        // seconds here, ninety seven percent of the entire startup, against twelve milliseconds to
+        // build every texture in the game. Nothing in Driftwood reads a controller yet, so nothing
+        // needed to be paid. See RawInput for the whole measurement and for the rule P8 has to
+        // follow when controller support does land.
+        _input = new RawInput(_window);
 
-        if (joystickMs > SlowControllerScanMs)
-            Console.WriteLine(
-                $"controllers {joystickMs / 1000:F1}s to enumerate — this is Windows waiting on a "
-                + "controller that is paired but not switched on, not Driftwood loading. Unpairing "
-                + "it, or turning it on, takes this off the startup entirely.");
+        if (_input.Failed)
+            Console.Error.WriteLine("driftwood: could not attach to the window, so there is no keyboard or mouse");
 
-        // Fast now: the stack above is initialised once, and this is what was paying for it.
-        _input = _window.CreateInput();
-        _startup.Mark("input context");
-
-        _keyboard = _input.Keyboards[0];
-        _mouse = _input.Mice[0];
-
-        _keyboard.KeyDown += OnKeyDown;
-        _mouse.MouseMove += OnMouseMove;
-        _mouse.MouseDown += OnMouseDown;
-        _mouse.MouseUp += OnMouseUp;
-        _mouse.Scroll += OnScroll;
+        _input.KeyDown += OnKeyDown;
+        _input.MouseMove += OnMouseMove;
+        _input.MouseDown += OnMouseDown;
+        _input.MouseUp += OnMouseUp;
+        _input.Scroll += OnScroll;
         _startup.Mark("settings and input");
 
         // The benchmark flies itself, so it leaves the cursor alone; stealing the mouse for a
@@ -1382,7 +1363,7 @@ public sealed class ClientHost : IDisposable
         }
     }
 
-    private void OnKeyDown(IKeyboard keyboard, Key key, int _)
+    private void OnKeyDown(Key key)
     {
         // The controls tab is listening. It takes the key raw — before it is looked up — because
         // the whole point is to bind whatever was pressed, including the key that already does
@@ -1489,7 +1470,7 @@ public sealed class ClientHost : IDisposable
     /// </remarks>
     private bool ScreenKey(Key key)
     {
-        var many = _keyboard.IsKeyPressed(Key.ShiftLeft) || _keyboard.IsKeyPressed(Key.ShiftRight);
+        var many = _input.IsKeyPressed(Key.ShiftLeft) || _input.IsKeyPressed(Key.ShiftRight);
         // The menu is a list of rows exactly as a settings tab is, so it wants the same keys —
         // up and down to pick, enter to act. It simply has no tabs to walk.
         var tabbed = _hudScreen.Kind is HudScreenKind.Player or HudScreenKind.Game or HudScreenKind.Start;
@@ -1613,7 +1594,7 @@ public sealed class ClientHost : IDisposable
     /// </remarks>
     private void ScreenClick(MouseButton button)
     {
-        var many = _keyboard.IsKeyPressed(Key.ShiftLeft) || _keyboard.IsKeyPressed(Key.ShiftRight);
+        var many = _input.IsKeyPressed(Key.ShiftLeft) || _input.IsKeyPressed(Key.ShiftRight);
         var at = _layout.At(_hudScreen.Pointer.X, _hudScreen.Pointer.Y);
 
         // The layout is a frame behind, so on the one frame after a screen changes it still
@@ -2136,7 +2117,7 @@ public sealed class ClientHost : IDisposable
         // The window's own pointer goes with it, so picking a square with the arrows and then
         // reaching for the mouse does not teleport the cursor back to where it was left.
         var scale = HudRenderer.ScaleFor(_window.Size.Y);
-        _mouse.Position = _hudScreen.Pointer * scale;
+        _input.MoveTo(_hudScreen.Pointer * scale);
     }
 
     /// <summary>How many recipes a row of the book holds. The same number the overlay lays out.</summary>
@@ -2213,7 +2194,7 @@ public sealed class ClientHost : IDisposable
     private void TakeThePointer()
     {
         var middle = new Vector2(_window.Size.X * 0.5f, _window.Size.Y * 0.5f);
-        _mouse.Position = middle;
+        _input.MoveTo(middle);
         _hudScreen.Pointer = middle / HudRenderer.ScaleFor(_window.Size.Y);
         _hudScreen.Hovered = null;
         ApplyCursorMode();
@@ -2492,6 +2473,9 @@ public sealed class ClientHost : IDisposable
         {
             // No "closes" — there is nothing behind it to go back to yet.
             HudScreenKind.Start => $"up and down pick, enter chooses{wheel}",
+            HudScreenKind.Game when _atStartScreen =>
+                $"up and down pick, left and right change it, tab changes tab{wheel}, "
+                + $"{close} goes back to the menu",
             HudScreenKind.Player =>
                 $"arrows pick, enter makes one, shift and enter makes as many as it can, {close} closes",
             _ when OnTab(GameTab.Controls) =>
@@ -2559,6 +2543,13 @@ public sealed class ClientHost : IDisposable
             BuildStartRows();
             return;
         }
+
+        // ⛔ A visible way out, because escape is not one. It works, and the user's verdict on that
+        // was "if hitting the esc key is the only way to get out of the settings area that's not
+        // intuitive enough for most users" — which is right: a settings screen reached from a menu
+        // is somewhere people look for a Back, not somewhere they think to press escape. It is the
+        // first row on every tab so it is in the same place whichever one they wandered into.
+        if (_atStartScreen) _hudScreen.Rows.Add(new MenuRow(BackToMenu, "", Note: "or press escape"));
 
         switch ((GameTab)_hudScreen.Tab)
         {
@@ -2787,6 +2778,16 @@ public sealed class ClientHost : IDisposable
         if (_hudScreen.Kind == HudScreenKind.Start)
         {
             ChooseOnStartScreen();
+            return;
+        }
+
+        // Before the tab dispatch, because it is on every tab and none of them owns it.
+        if (_atStartScreen
+            && _hudScreen.Selected >= 0
+            && _hudScreen.Selected < _hudScreen.Rows.Count
+            && _hudScreen.Rows[_hudScreen.Selected].Label == BackToMenu)
+        {
+            CloseScreen();
             return;
         }
 
@@ -3084,19 +3085,19 @@ public sealed class ClientHost : IDisposable
 
     private void SelectHandSlot(int slot) => _inventory.Select(slot);
 
-    private void OnScroll(IMouse mouse, ScrollWheel wheel)
+    private void OnScroll(float wheelY)
     {
-        if (wheel.Y == 0f) return;
+        if (wheelY == 0f) return;
 
         // Over a list, the wheel is the list's. Three lines a notch, which is what a wheel means
         // everywhere else on the machine.
         if (_hudScreen.Kind == HudScreenKind.Game)
         {
-            ScrollRows(_hudScreen.Scroll - Math.Sign(wheel.Y) * 3);
+            ScrollRows(_hudScreen.Scroll - Math.Sign(wheelY) * 3);
             return;
         }
 
-        _inventory.Scroll(-Math.Sign(wheel.Y));
+        _inventory.Scroll(-Math.Sign(wheelY));
     }
 
     /// <summary>Moves the settings list's window, held inside what there is to look at.</summary>
@@ -3137,7 +3138,7 @@ public sealed class ClientHost : IDisposable
     /// the button did nothing at all. Now the arm comes down and the block goes with it, at the
     /// animation's pace, for as long as the button is held.
     /// </remarks>
-    private void OnMouseDown(IMouse mouse, MouseButton button)
+    private void OnMouseDown(MouseButton button)
     {
         if (_bench is not null) return;
 
@@ -3174,7 +3175,7 @@ public sealed class ClientHost : IDisposable
         }
     }
 
-    private void OnMouseUp(IMouse mouse, MouseButton button)
+    private void OnMouseUp(MouseButton button)
     {
         switch (button)
         {
@@ -3207,15 +3208,15 @@ public sealed class ClientHost : IDisposable
     /// </remarks>
     private void ApplyCursorMode()
     {
-        _mouse.Cursor.CursorMode =
+        _input.SetCursor(
             _hudScreen.IsOpen ? CursorMode.Hidden
             : _mouseCaptured ? CursorMode.Raw
-            : CursorMode.Normal;
+            : CursorMode.Normal);
 
         _haveMouseAnchor = false;
     }
 
-    private void OnMouseMove(IMouse mouse, Vector2 position)
+    private void OnMouseMove(Vector2 position)
     {
         // Under a screen the position is real window coordinates, so the pointer is simply where
         // the mouse is, divided down into layout units. No accumulation, nothing to drift, and
@@ -3309,7 +3310,7 @@ public sealed class ClientHost : IDisposable
         }
         else
         {
-            _camera.Update((float)dt, _keyboard);
+            _camera.Update((float)dt, _input);
         }
 
         _elapsed += dt;
@@ -3928,14 +3929,14 @@ public sealed class ClientHost : IDisposable
         }
 
         var wish = Vector3.Zero;
-        if (_keys.Held(_keyboard, GameAction.MoveForward)) wish += forward;
-        if (_keys.Held(_keyboard, GameAction.MoveBack)) wish -= forward;
-        if (_keys.Held(_keyboard, GameAction.MoveRight)) wish += right;
-        if (_keys.Held(_keyboard, GameAction.MoveLeft)) wish -= right;
+        if (_keys.Held(_input, GameAction.MoveForward)) wish += forward;
+        if (_keys.Held(_input, GameAction.MoveBack)) wish -= forward;
+        if (_keys.Held(_input, GameAction.MoveRight)) wish += right;
+        if (_keys.Held(_input, GameAction.MoveLeft)) wish -= right;
 
-        var jump = _keys.Held(_keyboard, GameAction.Jump);
-        var sneak = _keys.Held(_keyboard, GameAction.Sneak);
-        var sprint = _keys.Held(_keyboard, GameAction.Sprint) && !sneak;
+        var jump = _keys.Held(_input, GameAction.Jump);
+        var sneak = _keys.Held(_input, GameAction.Sneak);
+        var sprint = _keys.Held(_input, GameAction.Sprint) && !sneak;
 
         _player.Step(_streamer.World, dt, wish, jump, sneak, sprint);
 
@@ -4648,6 +4649,11 @@ public sealed class ClientHost : IDisposable
             faults.Add($"the title reads {timber.R} {timber.G} {timber.B}, which is not wood");
 
         foreach (var fault in TitleArt.Validate()) faults.Add(fault);
+
+        // ⛔ The one assumption RawInput rests on, checked rather than believed. If the two
+        // libraries' key numbers ever stop agreeing, every key in the game silently becomes a
+        // different key — not a crash, a game where W walks left.
+        foreach (var fault in RawInput.KeyNumbersMatch()) faults.Add(fault);
 
         // The station IS the list. Two wells and no offers is a stonecutter nothing comes out of,
         // and it draws exactly the same as one that works.

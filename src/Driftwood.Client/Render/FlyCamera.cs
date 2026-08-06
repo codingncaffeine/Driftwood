@@ -50,7 +50,7 @@ public sealed class FlyCamera
         Pitch = Math.Clamp(Pitch, -PitchLimit, PitchLimit);
     }
 
-    public void Update(float dt, IKeyboard keyboard)
+    public void Update(float dt, RawInput keyboard)
     {
         var speed = MoveSpeed * dt;
         if (keyboard.IsKeyPressed(Key.ShiftLeft)) speed *= BoostMultiplier;
