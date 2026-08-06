@@ -217,31 +217,76 @@ public static class WorldSave
         }
     }
 
+    /// <summary>A file in the saves folder that is not a world anybody can be shown.</summary>
+    /// <param name="File">Its name, which is what somebody looking in the folder would see.</param>
+    /// <param name="Why">What went wrong reading it, in words.</param>
+    public readonly record struct UnreadableSave(string File, string Why);
+
     /// <summary>Every save on disk, newest first, without reading any of them past the header.</summary>
-    public static List<SaveHeader> List()
+    public static List<SaveHeader> List() => List(out _);
+
+    /// <summary>
+    /// Every save on disk, and every file that looked like one and could not be read.
+    /// </summary>
+    /// <param name="unreadable">
+    /// ⛔ <b>Filled rather than swallowed, and that is the whole point of the overload.</b> This
+    /// returned a short list silently: a world whose header would not read was simply not added, so
+    /// a player with a file sitting in the folder was told "none saved yet" and there was nowhere —
+    /// not the screen, not the console — that said otherwise. "There are no worlds" and "there is a
+    /// world I cannot open" are opposite problems and looked identical from the front.
+    /// </param>
+    public static List<SaveHeader> List(out List<UnreadableSave> unreadable)
     {
         var found = new List<SaveHeader>();
+        unreadable = [];
         if (!Directory.Exists(Folder)) return found;
 
         foreach (var path in Directory.EnumerateFiles(Folder, "*.dws"))
-            if (TryReadHeader(path, out var header)) found.Add(header);
+        {
+            if (TryReadHeader(path, out var header, out var why)) found.Add(header);
+            else unreadable.Add(new UnreadableSave(Path.GetFileName(path), why ?? "unreadable"));
+        }
+
+        // ⚠ The other way a world can be sitting in the folder and not be in the list. A write goes
+        // to a temporary file and is moved over the real one, so one of these left behind means a
+        // save was interrupted between the two — which is the moment the player most needs telling,
+        // because the file with their last hour in it is right there under a name nothing reads.
+        foreach (var path in Directory.EnumerateFiles(Folder, "*.dws.writing"))
+            unreadable.Add(new UnreadableSave(
+                Path.GetFileName(path), "a save that did not finish being written"));
 
         found.Sort((a, b) => b.Saved.CompareTo(a.Saved));
+        unreadable.Sort((a, b) => string.CompareOrdinal(a.File, b.File));
         return found;
     }
 
     /// <summary>Reads only the first section, which is all a list needs.</summary>
-    public static bool TryReadHeader(string path, out SaveHeader header)
+    public static bool TryReadHeader(string path, out SaveHeader header) =>
+        TryReadHeader(path, out header, out _);
+
+    /// <summary>Reads only the first section, and says why if it could not.</summary>
+    /// <param name="why">Null when it read, otherwise what stopped it.</param>
+    public static bool TryReadHeader(string path, out SaveHeader header, out string? why)
     {
         header = default;
+        why = null;
 
         try
         {
             using var file = File.OpenRead(path);
             using var from = new BinaryReader(file);
 
-            if (!Opens(from)) return false;
-            if (!SaveSection.TryRead(from, out var tag, out var payload) || tag != "HEAD") return false;
+            if (!Opens(from, out var reason))
+            {
+                why = reason;
+                return false;
+            }
+
+            if (!SaveSection.TryRead(from, out var tag, out var payload) || tag != "HEAD")
+            {
+                why = "it does not begin with a header";
+                return false;
+            }
 
             using var head = new BinaryReader(new MemoryStream(payload));
             header = new SaveHeader(
@@ -251,8 +296,9 @@ public static class WorldSave
 
             return true;
         }
-        catch (Exception)
+        catch (Exception fault)
         {
+            why = fault.Message;
             return false;
         }
     }
@@ -342,13 +388,41 @@ public static class WorldSave
         }
     }
 
-    private static bool Opens(BinaryReader from)
+    private static bool Opens(BinaryReader from) => Opens(from, out _);
+
+    private static bool Opens(BinaryReader from, out string? why)
     {
+        why = null;
+
         var magic = from.ReadBytes(4);
-        if (magic.Length < 4 || !magic.AsSpan().SequenceEqual(SaveSection.Magic)) return false;
+        if (magic.Length < 4)
+        {
+            why = "it is too short to be a world";
+            return false;
+        }
+
+        if (!magic.AsSpan().SequenceEqual(SaveSection.Magic))
+        {
+            why = "it is not a Driftwood world";
+            return false;
+        }
 
         var version = from.ReadInt32();
-        return version is > 0 and <= SaveSection.Version;
+        if (version <= 0)
+        {
+            why = $"its version reads {version}";
+            return false;
+        }
+
+        // ⚠ Newer than this build, which is a different thing from broken and is the one case where
+        // saying so matters most: the file is fine and the player needs the newer build back.
+        if (version > SaveSection.Version)
+        {
+            why = $"it was written by a newer build (version {version}, this one reads {SaveSection.Version})";
+            return false;
+        }
+
+        return true;
     }
 
     private static BinaryReader Reader(byte[] payload) => new(new MemoryStream(payload));

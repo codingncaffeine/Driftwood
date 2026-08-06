@@ -283,6 +283,26 @@ public sealed class ClientHost : IDisposable
     /// </remarks>
     private List<SaveHeader> _saved = [];
 
+    /// <summary>
+    /// Files in that folder that are not worlds this build can show, read at the same moment.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>Kept beside the list because an empty list has two causes and they need different
+    /// answers.</b> "There is nothing saved" is a new installation; "there is a file here I cannot
+    /// read" is somebody's world and a build that will not open it. They read identically on screen
+    /// and the second used to say nothing anywhere at all.
+    /// </remarks>
+    private List<WorldSave.UnreadableSave> _unreadable = [];
+
+    /// <summary>
+    /// Walks the saves folder into <see cref="_saved"/> and <see cref="_unreadable"/> together.
+    /// </summary>
+    /// <remarks>
+    /// One way in, because there are six places that want the list and the day one of them fills
+    /// only half of it is the day the screen contradicts itself.
+    /// </remarks>
+    private void ReadSavesFolder() => _saved = WorldSave.List(out _unreadable);
+
     /// <summary>Where the worlds are, which is the answer to most questions about them.</summary>
     private static readonly string SavesFolderNote = $"they live in {WorldSave.Folder}";
     private readonly Dictionary<ChunkPos, ChunkMeshGpu> _meshes = [];
@@ -1118,7 +1138,7 @@ public sealed class ClientHost : IDisposable
             + $"played {Spoken(state.Played)}");
 
         // The list is on screen while a save-by-hand happens, so it has to follow.
-        if (OnTab(GameTab.Saves)) _saved = WorldSave.List();
+        if (OnTab(GameTab.Saves)) ReadSavesFolder();
 
         return true;
     }
@@ -1183,6 +1203,13 @@ public sealed class ClientHost : IDisposable
         // causes. One line settles which, and the folder is on it because that is the next question.
         Console.WriteLine(
             $"menu        {_saved.Count} world{(_saved.Count == 1 ? "" : "s")} in {WorldSave.Folder}");
+
+        // ⛔ Named one by one, because this is the case the line above cannot express: a folder with
+        // files in it that the menu is about to describe as empty. One line each, with the reason,
+        // so "there is nothing saved" and "there is something saved I cannot open" are never again
+        // the same sentence.
+        foreach (var bad in _unreadable)
+            Console.Error.WriteLine($"menu        cannot read '{bad.File}' - {bad.Why}");
     }
 
     /// <summary>
@@ -1200,7 +1227,7 @@ public sealed class ClientHost : IDisposable
         // "none saved yet" to somebody who had saved and closed the game a minute earlier. Their
         // world was there and had loaded — the row above even said so — but the one line they were
         // reading was a field nothing had filled in.
-        _saved = WorldSave.List();
+        ReadSavesFolder();
 
         _hudScreen.Kind = HudScreenKind.Start;
         _hudScreen.TabNames = [];
@@ -1544,7 +1571,7 @@ public sealed class ClientHost : IDisposable
                 // Arriving at the list is when it is worth walking the folder, and the only other
                 // way in is OpenGame. Missing this is how a tab shows an empty list until it is
                 // opened a second time.
-                if (OnTab(GameTab.Saves)) _saved = WorldSave.List();
+                if (OnTab(GameTab.Saves)) ReadSavesFolder();
 
                 RefreshScreen();
                 ShowSelectedRow();
@@ -1635,7 +1662,7 @@ public sealed class ClientHost : IDisposable
                 _hudScreen.Tab = at.Value.Index;
                 if (_hudScreen.Kind == HudScreenKind.Game) _hudScreen.Selected = _tabRow[_hudScreen.Tab];
                 _hudScreen.Scroll = 0;
-                if (OnTab(GameTab.Saves)) _saved = WorldSave.List();
+                if (OnTab(GameTab.Saves)) ReadSavesFolder();
                 _shown.Clear();
                 RefreshScreen();
                 ShowSelectedRow();
@@ -2233,7 +2260,7 @@ public sealed class ClientHost : IDisposable
         _hudScreen.Payable.Clear();
 
         // Once, here, rather than in the row builder that runs every frame the screen is up.
-        if (tab == GameTab.Saves) _saved = WorldSave.List();
+        if (tab == GameTab.Saves) ReadSavesFolder();
 
         StopHands();
         TakeThePointer();
@@ -2505,9 +2532,11 @@ public sealed class ClientHost : IDisposable
         if (_startListing)
         {
             _hudScreen.Rows.Add(new MenuRow(
-                _saved.Count == 1 ? "1 world" : $"{_saved.Count} worlds", Heading: true));
+                (_saved.Count == 1 ? "1 world" : $"{_saved.Count} worlds")
+                + (_unreadable.Count > 0 ? $", {_unreadable.Count} unreadable" : ""),
+                Heading: true));
 
-            if (_saved.Count == 0)
+            if (_saved.Count == 0 && _unreadable.Count == 0)
                 _hudScreen.Rows.Add(new MenuRow("none yet", "", Note: SavesFolderNote));
 
             foreach (var world in _saved)
@@ -2520,6 +2549,13 @@ public sealed class ClientHost : IDisposable
                         ? "this is the one that is open — enter plays it"
                         : $"{world.Edits} changes, seed {world.Seed}. Enter opens it"));
             }
+
+            // ⛔ On the screen, not only in a log. A file that will not read is somebody's world and
+            // the folder is where they will go looking for it, so the row carries the file's own
+            // name and what stopped it rather than quietly leaving the list one shorter.
+            foreach (var bad in _unreadable)
+                _hudScreen.Rows.Add(new MenuRow(
+                    bad.File, "cannot read", Note: $"{bad.Why}. {SavesFolderNote}"));
 
             _hudScreen.Rows.Add(new MenuRow("back", "", Note: "enter returns to the menu"));
             return;
@@ -2535,8 +2571,15 @@ public sealed class ClientHost : IDisposable
         _hudScreen.Rows.Add(new MenuRow(
             "make another world", NextWorldName(),
             Note: "a fresh seed, kept under its own name — this one stays where it is"));
+        // ⛔ "none saved yet" is the sentence the user read when their world was on disk all along,
+        // so it now only appears when the folder really is empty — and when it is not empty but
+        // nothing in it opened, the row says that instead of the same four words.
         _hudScreen.Rows.Add(new MenuRow(
-            "open a world", _saved.Count == 0 ? "none saved yet" : $"{_saved.Count} saved"));
+            "open a world",
+            _saved.Count > 0 ? $"{_saved.Count} saved"
+            : _unreadable.Count > 0 ? $"{_unreadable.Count} cannot be read"
+            : "none saved yet",
+            Note: _saved.Count == 0 && _unreadable.Count == 0 ? SavesFolderNote : ""));
         _hudScreen.Rows.Add(new MenuRow("options", "", Note: "keys, picture, sound"));
         _hudScreen.Rows.Add(new MenuRow("quit", ""));
     }
@@ -2636,14 +2679,21 @@ public sealed class ClientHost : IDisposable
                         + $"The {WorldSave.Backups} states before this one are kept beside it"));
 
                 _hudScreen.Rows.Add(new MenuRow(
-                    _saved.Count == 1 ? "1 world on this machine" : $"{_saved.Count} worlds on this machine",
+                    (_saved.Count == 1 ? "1 world on this machine" : $"{_saved.Count} worlds on this machine")
+                    + (_unreadable.Count > 0 ? $", {_unreadable.Count} unreadable" : ""),
                     Heading: true));
 
-                if (_saved.Count == 0)
+                if (_saved.Count == 0 && _unreadable.Count == 0)
                 {
                     _hudScreen.Rows.Add(new MenuRow("none yet", "", Note: SavesFolderNote));
                     break;
                 }
+
+                // Same as the menu's list: a file that will not open is said out loud here rather
+                // than leaving the count one short with nothing to explain it.
+                foreach (var bad in _unreadable)
+                    _hudScreen.Rows.Add(new MenuRow(
+                        bad.File, "cannot read", Note: $"{bad.Why}. {SavesFolderNote}"));
 
                 foreach (var world in _saved)
                 {
@@ -2838,6 +2888,17 @@ public sealed class ClientHost : IDisposable
 
             // The mark the open world's row carries is not part of its name.
             var chosen = row.Label.Replace("  (open)", "");
+
+            // ⛔ Asked of the list, not of the row's words. The rows for files that would not open
+            // carry a file name rather than a world name, and enter on one of those used to reach
+            // OpenAnotherWorld — which would relaunch the game pointed at a world of that name and
+            // quietly make a new one. A row is openable when there is a header behind it.
+            if (chosen != _worldName && !_saved.Any(w => w.Name == chosen))
+            {
+                ShowSelectedRow();
+                return;
+            }
+
             if (chosen == _worldName) StartPlaying();
             else OpenAnotherWorld(chosen);
             return;
@@ -2857,7 +2918,7 @@ public sealed class ClientHost : IDisposable
                 return;
 
             case "open a world":
-                _saved = WorldSave.List();
+                ReadSavesFolder();
                 _startListing = true;
                 _hudScreen.Selected = 0;
                 _hudScreen.Scroll = 0;
@@ -4162,6 +4223,23 @@ public sealed class ClientHost : IDisposable
     private bool _foundPlanted;
 
     /// <summary>
+    /// A file that is not a world, written beside them on purpose.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ <b>Named so it sorts BEFORE the two good ones</b>, and that is not cosmetic. The failure
+    /// this guards against is a reader that gives up at the first file it cannot open; with the bad
+    /// file last, such a reader still returns both worlds and the check passes while being unable to
+    /// reproduce the bug at all. It has to come first for the control to mean anything.
+    /// </remarks>
+    private const string BrokenWorld = "ui-check-0-broken";
+
+    /// <summary>True once the menu has said out loud that it could not read that one.</summary>
+    private bool _reportedBroken;
+
+    /// <summary>True if the two good worlds survived being listed beside a file that will not read.</summary>
+    private bool _goodSurvivedTheBad;
+
+    /// <summary>
     /// Writes two worlds, so opening the menu has a folder to read rather than a field to trust.
     /// </summary>
     /// <remarks>
@@ -4183,11 +4261,21 @@ public sealed class ClientHost : IDisposable
             if (WorldSave.Write(name, state) is { } fault)
                 Console.Error.WriteLine($"ui-check    could not plant '{name}': {fault}");
         }
+
+        // ⛔ AND ONE THAT IS NOT A WORLD, WHICH IS THE HALF NOTHING WAS ASKING. A file the header
+        // reader cannot open used to be dropped from the list without a word — the exact shape of
+        // "there is a world here and the game says there is nothing". Two things have to hold with
+        // this sitting in the folder: the good ones are still listed, and the bad one is named.
+        try { File.WriteAllBytes(WorldSave.PathFor(BrokenWorld), "not a world at all"u8.ToArray()); }
+        catch (Exception fault)
+        {
+            Console.Error.WriteLine($"ui-check    could not plant the broken file: {fault.Message}");
+        }
     }
 
     private static void RemovePlantedWorlds()
     {
-        foreach (var name in CheckWorlds)
+        foreach (var name in CheckWorlds.Append(BrokenWorld))
         {
             try { File.Delete(WorldSave.PathFor(name)); } catch (Exception) { }
             for (var slot = 1; slot <= WorldSave.Backups; slot++)
@@ -4298,6 +4386,7 @@ public sealed class ClientHost : IDisposable
                 CloseScreen();
                 PlantWorldsForCheck();
                 _saved = [];
+                _unreadable = [];
                 ShowStartMenu();
                 break;
 
@@ -4307,6 +4396,23 @@ public sealed class ClientHost : IDisposable
             case 310:
                 ProbeRows("start list");
                 _foundPlanted = CheckWorlds.All(name => _saved.Any(w => w.Name == name));
+
+                // The row carrying the broken file's own name, off the rows that were built —
+                // asking _unreadable would only prove the reader filled a list, not that anybody
+                // reading the screen is told.
+                _reportedBroken = _hudScreen.Rows.Any(r => r.Label == $"{BrokenWorld}.dws");
+
+                // ⛔ The other half, and the one a "does it report the bad file" check on its own
+                // would miss entirely: a folder with one unreadable file in it must still list the
+                // worlds that are fine. A reader that gave up at the first fault would pass the
+                // line above and lose somebody's worlds.
+                _goodSurvivedTheBad = _saved.Count >= CheckWorlds.Length;
+
+                Console.WriteLine(
+                    $"ui-check    saves folder {_saved.Count} readable, {_unreadable.Count} not"
+                    + (_unreadable.Count > 0 ? $" ({string.Join(", ", _unreadable.Select(u => u.File))})" : ""));
+                Console.Out.Flush();
+
                 RemovePlantedWorlds();
                 break;
 
@@ -4337,6 +4443,7 @@ public sealed class ClientHost : IDisposable
         }
 
         _uiRows[where] = (seen, lowest, highest, _hudScreen.Rows.Count);
+        _uiRowLabels[where] = [.. _hudScreen.Rows.Select(r => r.Label)];
 
         Console.WriteLine(
             $"ui-check    rows {where,-6} {seen} of {_hudScreen.Rows.Count} on screen, "
@@ -4346,6 +4453,19 @@ public sealed class ClientHost : IDisposable
 
     /// <summary>What the capped list showed, at the top and at the bottom.</summary>
     private readonly Dictionary<string, (int Seen, int Lowest, int Highest, int Total)> _uiRows = [];
+
+    /// <summary>
+    /// The labels each measured screen was actually carrying.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>Because a row count is not a claim about what is on the row.</b> "Folding the world list
+    /// out replaces the menu rather than adding to it" was checked as <c>listRows != menuRows</c>,
+    /// which is true of the wrong screen as often as the right one — it went red the day a machine
+    /// happened to have a number of worlds that made the two counts equal, while the screen was
+    /// perfectly correct. What the claim actually is: the list has worlds on it and does not still
+    /// have "quit" on it.
+    /// </remarks>
+    private readonly Dictionary<string, List<string>> _uiRowLabels = [];
 
     /// <summary>
     /// Reads the pixel where the recipe book's page sits, whether or not it is out.
@@ -4859,6 +4979,19 @@ public sealed class ClientHost : IDisposable
                 "the menu did not find the worlds that are on disk — it is showing whatever was "
                 + "last left in its list rather than reading the folder when it opens");
 
+        // ⛔ THE SILENT HALF. A file that will not read was dropped from the list with no word on
+        // the screen, in the log, or anywhere else — so "there are no saved worlds" and "there is a
+        // saved world I cannot open" were the same four words. The list has to name it.
+        if (!_reportedBroken)
+            faults.Add(
+                $"a file in the saves folder that is not a world ('{BrokenWorld}.dws') was left out "
+                + "of the list without a word — an unreadable world reads to a player as no world");
+
+        if (!_goodSurvivedTheBad)
+            faults.Add(
+                "a file in the saves folder that is not a world took the readable worlds with it — "
+                + "one bad file must cost its own row and nothing else");
+
         if (_uiRows.TryGetValue("start list", out var folded))
         {
             // A heading, at least the two planted, and the way back. At least, because the machine
@@ -4870,8 +5003,25 @@ public sealed class ClientHost : IDisposable
                     $"the menu's list of worlds built {folded.Total} rows where a heading, the two "
                     + $"worlds put on disk for it and a way back is at least {Least}");
 
-            if (folded.Total == menu.Total)
-                faults.Add("folding the list out left the same number of rows, so it added rather than replaced");
+            // ⛔ What is on the rows, not how many there are. A count comparison said "it replaced
+            // rather than added" and went red on a machine whose own worlds happened to make the two
+            // totals equal — a number that varies with the folder is not a claim about the screen.
+            var listed = _uiRowLabels.GetValueOrDefault("start list", []);
+            var buttons = _uiRowLabels.GetValueOrDefault("start", []);
+
+            // The control. Without it "the list does not offer quit" passes on a list of nothing.
+            if (!buttons.Contains("quit"))
+                faults.Add("the menu itself was not carrying 'quit', so the pair below compares nothing");
+
+            foreach (var button in new[] { "quit", "options", "make another world" })
+                if (listed.Contains(button))
+                    faults.Add(
+                        $"the menu's list of worlds still has '{button}' on it — folding the list "
+                        + "out added to the menu instead of replacing it, and enter on that row acts");
+
+            foreach (var name in CheckWorlds)
+                if (!listed.Contains(name))
+                    faults.Add($"'{name}' is on disk and the menu's list of worlds does not name it");
         }
         else
         {
