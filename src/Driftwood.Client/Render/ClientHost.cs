@@ -4511,12 +4511,33 @@ public sealed class ClientHost : IDisposable
         switch (_uiCheckFrame)
         {
             case 60: SampleUi(size, "no screen"); break;
-            case 61: OpenPlayer(PlayerTab.Items, atBench: false, default); break;
+
+            case 61:
+                OpenPlayer(PlayerTab.Items, atBench: false, default);
+
+                // ⛳ A block and the slab cut from it, in two pockets. They wear the SAME tile — a
+                // slab's icon layer is its own particle layer, which is the rock — so the only thing
+                // that can tell them apart in a square is the shape being drawn. That is why it is a
+                // pair and not a slab on its own: "a slab drew something" is true of the flat tile
+                // it used to draw, and was, for every shaped block in the game.
+                _inventory.Add(new ItemStack(_items.ByName("stone").Id, 1));
+                _inventory.Add(new ItemStack(_items.ByName("stone_slab").Id, 1));
+                RefreshScreen();
+                break;
+
             case 90:
                 SampleUi(size, "items");
                 ProbeSquares();
                 SampleFigure(size);
                 SampleWell(size, "book well before");
+                SampleHeldIcon(size, "stone", "icon block");
+                SampleHeldIcon(size, "stone_slab", "icon slab");
+
+                // The top fifth of each square: where a block's own solid reaches and a slab's,
+                // being half a block high, cannot.
+                SampleHeldIcon(size, "stone", "icon block top", 0f, 0.2f);
+                SampleHeldIcon(size, "stone_slab", "icon slab top", 0f, 0.2f);
+                _inventory.Clear();
                 break;
 
             case 91: _hudScreen.BookOut = true; RefreshScreen(); break;
@@ -4668,6 +4689,70 @@ public sealed class ClientHost : IDisposable
 
     /// <summary>What the box was holding after the check typed into it.</summary>
     private string _typedSeed = "";
+
+    /// <summary>
+    /// Reads the square a named item is sitting in, averaged over the whole of it.
+    /// </summary>
+    /// <param name="fromY">Top of the strip to read, as a fraction of the square.</param>
+    /// <param name="toY">Bottom of it.</param>
+    /// <remarks>
+    /// <para>The pocket is found by looking for the item rather than by assuming which slot
+    /// <see cref="Inventory.Add"/> chose, and the square comes off the layout the renderer laid
+    /// down — the two ways this could quietly measure the wrong place.</para>
+    /// <para>⛔ <b>A strip rather than the whole square, and the control is what forced it.</b> The
+    /// first version compared a stone block's square against a stone slab's and asked that they
+    /// differ — which they did, and which they <em>also did</em> in a build with the shape put back
+    /// to a flat tile: a flat tile fills the square evenly and reads bright, three shaded faces read
+    /// darker. The check passed the broken build for a reason that had nothing to do with the claim.
+    /// The top of the square is the discriminating place: a slab drawn as a solid has nothing up
+    /// there at all, and a slab drawn as a flat tile has rock.</para>
+    /// </remarks>
+    private unsafe void SampleHeldIcon(
+        Vector2D<int> size, string item, string what, float fromY = 0f, float toY = 1f)
+    {
+        var wanted = _items.ByName(item).Id;
+
+        var slot = -1;
+        for (var i = 0; i < Inventory.Slots; i++)
+            if (_inventory[i].Item.Value == wanted.Value) { slot = i; break; }
+
+        if (slot < 0 || _layout.Find(SlotRole.Pocket, slot) is not { } zone)
+        {
+            Console.Error.WriteLine($"ui-check    {what}: '{item}' is in no square that was drawn");
+            return;
+        }
+
+        var scale = HudRenderer.ScaleFor(size.Y);
+        long r = 0, g = 0, b = 0;
+        var taken = 0;
+
+        var tall = (int)(zone.H * scale);
+        var top = (int)(tall * fromY);
+        var bottom = (int)(tall * toY);
+
+        Span<byte> px = stackalloc byte[4];
+        for (var dy = top; dy < bottom; dy++)
+        for (var dx = 0; dx < (int)(zone.W * scale); dx++)
+        {
+            var x = (int)(zone.X * scale) + dx;
+            var y = (int)(zone.Y * scale) + dy;
+            if (x < 0 || y < 0 || x >= size.X || y >= size.Y) continue;
+
+            fixed (byte* p = px)
+                _gl.ReadPixels(x, size.Y - 1 - y, 1, 1, PixelFormat.Rgba, PixelType.UnsignedByte, p);
+
+            r += px[0];
+            g += px[1];
+            b += px[2];
+            taken++;
+        }
+
+        if (taken == 0) return;
+
+        _uiSamples[what] = ((byte)(r / taken), (byte)(g / taken), (byte)(b / taken));
+        Console.WriteLine($"ui-check    {what,-17} rgb {r / taken,3} {g / taken,3} {b / taken,3} over {taken} pixels");
+        Console.Out.Flush();
+    }
 
     /// <summary>
     /// Reads the pixels inside the seed box, off the zone the renderer actually laid down.
@@ -5334,6 +5419,30 @@ public sealed class ClientHost : IDisposable
                 "a file in the saves folder that is not a world took the readable worlds with it — "
                 + "one bad file must cost its own row and nothing else");
 
+        // ⛳ A SLAB IS HALF AS TALL AS THE BLOCK IT IS CUT FROM, SO IT REACHES LESS FAR UP ITS
+        // SQUARE. Both wear the same tile, so nothing but the shape can move this number, and the
+        // block beside it is the control — it is a cube either way, so it reads the same in every
+        // build and any change here is the slab's.
+        //
+        // ⛔ THE FIRST VERSION OF THIS CHECK PASSED THE BROKEN BUILD. It compared the two whole
+        // squares and asked that they differ, which they did — a flat tile fills a square evenly and
+        // reads 112, three shaded faces read 85 — for a reason with nothing to do with the claim.
+        // Measured: with the shape drawn the slab's top strip is 62 against the block's 73; with it
+        // put back to a flat tile it is 102, which is brighter than the block rather than darker.
+        if (_uiSamples.TryGetValue("icon block top", out var blockTop)
+            && _uiSamples.TryGetValue("icon slab top", out var slabTop))
+        {
+            if (slabTop.G >= blockTop.G)
+                faults.Add(
+                    $"the top of a stone slab's square reads {slabTop.G} against a whole block's "
+                    + $"{blockTop.G} — a slab is half as tall and cannot reach as far up it, so a "
+                    + "shaped block is being drawn as one flat tile of the rock it is made of");
+        }
+        else
+        {
+            faults.Add("the block-against-slab pair was never sampled");
+        }
+
         // ⛔ THE PAIR, AND WITHOUT IT NEITHER HALF MEANS ANYTHING. An empty box and a box with a
         // word in it are the same sunken frame in the same place, so a check that only asked
         // whether pixels arrived would pass a box that refuses every character. What is being
@@ -5525,7 +5634,7 @@ public sealed class ClientHost : IDisposable
     /// </remarks>
     private void DrawHeldItem(Matrix4x4 projection, EntityLight light, ItemType held)
     {
-        var flat = !held.DrawsAsCube;
+        var flat = !held.DrawsAsBlock;
         var size = flat ? 0.62f : 0.40f;
 
         _blockTextures.Bind();

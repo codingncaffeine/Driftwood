@@ -186,6 +186,31 @@ public sealed class BlockModel
     /// </remarks>
     public (Vector3 Min, Vector3 Max)[] Collision { get; private set; }
 
+    /// <summary>One box of a block, and the three faces of it a slot icon can see.</summary>
+    /// <param name="Top">The layer on its +y face, or <see cref="NoLayer"/>.</param>
+    /// <param name="Left">Its +z face — the one drawn to the lower left.</param>
+    /// <param name="Right">Its +x face — the one drawn to the lower right.</param>
+    public readonly record struct IconBox(
+        Vector3 Min, Vector3 Max, ushort Top, ushort Left, ushort Right);
+
+    /// <summary>
+    /// The boxes a slot draws this block as, nearest last.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛔ <b>Because a block drawn as one of its faces is not recognisable, and that was only
+    /// half fixed.</b> A slot could already draw a <em>cube</em> as three shaded faces — which is
+    /// why a bench reads as a bench — but every shaped block fell straight back to a single flat
+    /// tile. A stone block, a stone slab and stone stairs were the same grey square, and that is
+    /// forty of the hundred and ten things in the game.</para>
+    /// <para>Sorted by how near the viewer each box is, so a slot can draw them in order and let
+    /// later ones cover earlier ones. With three faces per box and no depth buffer on the overlay,
+    /// painter's order is the whole of the hidden-surface problem.</para>
+    /// <para>Planes are dropped and boxes are clamped into the cell for the same reasons
+    /// <see cref="Collision"/> is — a crossed tuft has no volume to shade, and a torch's planes
+    /// reach outside the block they draw.</para>
+    /// </remarks>
+    public IconBox[] Icon { get; private set; }
+
     /// <summary>
     /// The tile debris off this block wears.
     /// </summary>
@@ -219,6 +244,7 @@ public sealed class BlockModel
             : (Vector3.Zero, Vector3.One);
 
         Collision = BuildCollision(elements, Outline);
+        Icon = BuildIcon(elements);
 
         ParticleLayer = Quads.Length > 0 ? Quads[0].Layer : (ushort)0;
 
@@ -659,6 +685,51 @@ public sealed class BlockModel
 
         var only = Clamped(outline);
         return Flat(only) ? [] : [only];
+    }
+
+    /// <summary>
+    /// The boxes a slot draws, each carrying the three faces of it that are seen, nearest last.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ <b>A face that this element does not draw falls back to one that it does</b> rather than
+    /// being left blank. A slab has no side texture declared separately from its top on most of our
+    /// materials, and an icon with a hole where a face should be reads as a modelling fault; the
+    /// same tile on two faces at two shades reads as a block.
+    /// </remarks>
+    private static IconBox[] BuildIcon(IReadOnlyList<ModelElement> elements)
+    {
+        var boxes = new List<IconBox>(elements.Count);
+
+        foreach (var element in elements)
+        {
+            var box = Clamped(Bounds(element));
+            if (Flat(box)) continue;
+
+            var top = element.Faces[Blocks.Faces.PosY]?.Layer ?? NoLayer;
+            var left = element.Faces[Blocks.Faces.PosZ]?.Layer ?? NoLayer;
+            var right = element.Faces[Blocks.Faces.PosX]?.Layer ?? NoLayer;
+
+            // Whatever this element does draw, for the faces it does not.
+            var any = NoLayer;
+            foreach (var face in element.Faces)
+                if (face is not null) { any = face.Layer; break; }
+
+            if (any == NoLayer) continue;
+
+            boxes.Add(new IconBox(
+                box.Min, box.Max,
+                top == NoLayer ? any : top,
+                left == NoLayer ? any : left,
+                right == NoLayer ? any : right));
+        }
+
+        // Nearest last. The viewer is off the +x +y +z corner, so a box is nearer the further its
+        // own near corner is along all three — and the three faces drawn are the three facing that
+        // corner, which is what makes a straight painter's sort correct here.
+        boxes.Sort((a, b) =>
+            (a.Min.X + a.Min.Y + a.Min.Z).CompareTo(b.Min.X + b.Min.Y + b.Min.Z));
+
+        return [.. boxes];
     }
 
     private static (Vector3 Min, Vector3 Max) Clamped((Vector3 Min, Vector3 Max) box) =>

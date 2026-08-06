@@ -101,7 +101,7 @@ public static class StarterItems
             items.Register(new ItemType
             {
                 Name = $"{material}_slab", Label = $"{material} slab", IconLayer = layer,
-                DrawsAsCube = true,
+                DrawsAsBlock = true,
                 Places = new Placeable
                 {
                     Label = $"{material} slab",
@@ -113,7 +113,7 @@ public static class StarterItems
             items.Register(new ItemType
             {
                 Name = $"{material}_stairs", Label = $"{material} stairs", IconLayer = layer,
-                DrawsAsCube = true,
+                DrawsAsBlock = true,
                 Places = new Placeable
                 {
                     Label = $"{material} stairs",
@@ -135,6 +135,7 @@ public static class StarterItems
                 Name = material,
                 Label = material.Replace('_', ' '),
                 IconLayer = bare.Model.ParticleLayer,
+                DrawsAsBlock = true,
                 Places = new Placeable
                 {
                     Label = material.Replace('_', ' '),
@@ -144,8 +145,11 @@ public static class StarterItems
             });
         }
 
-        // A torch is flat art on crossed planes, so a cube of it is a cube of black. Declared
+        // ⚠ A torch is flat art on crossed planes, so a solid of it is a solid of black. Declared
         // rather than derived from "does it place a block", because it places one and is not one.
+        // The same goes for a ladder below: both are a cut-out on a sheet, and a sheet drawn as a
+        // block is three copies of a shape with holes in it. Everything else that puts a block down
+        // is drawn as one.
         // Five forms out of one item: on the floor, or leaning off whichever wall was aimed at.
         items.Register(new ItemType
         {
@@ -162,6 +166,7 @@ public static class StarterItems
         items.Register(new ItemType
         {
             Name = "lantern", Label = "lantern", IconLayer = StarterBlocks.LayerLantern,
+            DrawsAsBlock = true,
             Places = new Placeable
             {
                 Label = "lantern",
@@ -175,6 +180,7 @@ public static class StarterItems
         items.Register(new ItemType
         {
             Name = "campfire", Label = "campfire", IconLayer = StarterBlocks.LayerCampfireFire,
+            DrawsAsBlock = true,
             Places = new Placeable
             {
                 Label = "campfire",
@@ -205,7 +211,7 @@ public static class StarterItems
         items.Register(new ItemType
         {
             Name = "trapdoor", Label = "trapdoor", IconLayer = StarterBlocks.LayerTrapdoor,
-            BurnSeconds = Timber,
+            BurnSeconds = Timber, DrawsAsBlock = true,
             Places = new Placeable
             {
                 Label = "trapdoor",
@@ -217,7 +223,7 @@ public static class StarterItems
         items.Register(new ItemType
         {
             Name = "door", Label = "door", IconLayer = StarterBlocks.LayerDoorUpper,
-            BurnSeconds = Timber,
+            BurnSeconds = Timber, DrawsAsBlock = true,
             Places = new Placeable
             {
                 Label = "door",
@@ -229,7 +235,7 @@ public static class StarterItems
         items.Register(new ItemType
         {
             Name = "chest", Label = "chest", IconLayer = StarterBlocks.LayerChestFront,
-            BurnSeconds = Timber,
+            BurnSeconds = Timber, DrawsAsBlock = true,
             Places = new Placeable
             {
                 Label = "chest",
@@ -241,7 +247,7 @@ public static class StarterItems
         items.Register(new ItemType
         {
             Name = "furnace", Label = "furnace", IconLayer = StarterBlocks.LayerFurnaceFront,
-            DrawsAsCube = true,
+            DrawsAsBlock = true,
             Places = new Placeable
             {
                 Label = "furnace",
@@ -253,7 +259,7 @@ public static class StarterItems
         items.Register(new ItemType
         {
             Name = "blast_furnace", Label = "blast furnace", IconLayer = StarterBlocks.LayerBlastFront,
-            DrawsAsCube = true,
+            DrawsAsBlock = true,
             Places = new Placeable
             {
                 Label = "blast furnace",
@@ -379,7 +385,7 @@ public static class StarterItems
             Name = name,
             Label = label,
             IconLayer = icon,
-            DrawsAsCube = true,
+            DrawsAsBlock = true,
             BurnSeconds = burn,
             Places = new Placeable
             {

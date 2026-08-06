@@ -162,7 +162,7 @@ public sealed class ItemRenderer : IDisposable
             var scale = Size * (1f - item.Collecting * 0.8f);
             var bob = MathF.Sin(item.Age * 2.6f) * 0.045f;
 
-            var thickness = type.DrawsAsCube ? 1f : CardThickness;
+            var thickness = type.DrawsAsBlock ? 1f : CardThickness;
 
             var model = Matrix4x4.CreateScale(scale, scale, scale * thickness)
                       * Matrix4x4.CreateRotationY(item.Age * 1.5f)
@@ -210,7 +210,7 @@ public sealed class ItemRenderer : IDisposable
     /// </summary>
     private void SetLayers(ItemType type, BlockRegistry registry)
     {
-        if (!type.DrawsAsCube)
+        if (!type.DrawsAsBlock)
         {
             _shader.SetVec3("uLayers", new Vector3(type.IconLayer));
             return;

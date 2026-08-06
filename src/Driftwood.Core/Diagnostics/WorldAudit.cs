@@ -3865,7 +3865,7 @@ public static class WorldAudit
                 faults.Add($"'{item.Name}' places nothing");
 
             // A thing drawn as a cube has to have a cube to be drawn as.
-            if (item.DrawsAsCube && item.PlainBlock.IsAir)
+            if (item.DrawsAsBlock && item.PlainBlock.IsAir)
                 faults.Add($"'{item.Name}' draws as a cube and puts no block down");
         }
 
@@ -3933,7 +3933,7 @@ public static class WorldAudit
 
         foreach (var item in items.All)
         {
-            if (!item.DrawsAsCube || item.Places is null) continue;
+            if (!item.DrawsAsBlock || item.Places is null) continue;
 
             if (item.IconModel is null)
             {

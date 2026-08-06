@@ -59,7 +59,7 @@ public sealed class ItemType
     /// Not the same question as <see cref="Places"/>. A torch is placeable and is drawn flat, because
     /// a cube of torch texture is a cube of black. Declared rather than derived for exactly that.
     /// </remarks>
-    public bool DrawsAsCube { get; init; }
+    public bool DrawsAsBlock { get; init; }
 
     /// <summary>Which class of work this does, if any.</summary>
     public ToolClass Tool { get; init; }

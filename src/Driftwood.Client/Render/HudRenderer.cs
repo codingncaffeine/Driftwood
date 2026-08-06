@@ -1817,54 +1817,87 @@ public sealed class HudRenderer : IDisposable
     /// angle, which is why a crafting table is recognisable there: you see its top and two sides at
     /// once. So this draws three faces rather than one, and the difference between a bench and a
     /// plank becomes the front face with the tools on it.</para>
-    /// <para>Only for blocks that actually fill their cell. A torch is flat art on crossed planes
-    /// and a chest is a box standing clear of its cell — neither has three cube faces to show, and
-    /// both already have a distinctive tile of their own.</para>
+    /// <para>⛳ <b>Every box of the model, not only a full cube.</b> Drawing just the cube case left
+    /// every shaped block — slabs, stairs, fences, chests, doors, lanterns, campfires — falling back
+    /// to one flat tile, so a stone block, a stone slab and stone stairs were the same grey square.
+    /// That is forty of the hundred and ten things in the game, and it is the same complaint the
+    /// bench produced, unfixed for a third of it.</para>
+    /// <para>Flat is still right for a few, and they say so by not setting
+    /// <see cref="ItemType.DrawsAsBlock"/>: a torch is art on crossed planes, so a solid of it is a
+    /// solid of black, and a tool is not a box at all.</para>
     /// </remarks>
     private void SlotIcon(ItemRegistry catalogue, ItemStack stack, float x, float y, float size, Vector4 tint)
     {
         if (stack.IsEmpty) return;
 
         var type = catalogue[stack.Item];
-        var model = type.IconModel;
 
-        if (!type.DrawsAsCube || model is not { IsFullCube: true })
+        if (!type.DrawsAsBlock || type.IconModel is not { Icon.Length: > 0 } model)
         {
             Rect(_blocks, x, y, size, size, tint, type.IconLayer);
             return;
         }
 
-        var half = size * 0.5f;
-        var quarter = size * 0.25f;
+        foreach (var box in model.Icon) IconBox(box, x, y, size, tint);
+    }
 
-        // The three faces a cube shows from the south-east, and the shade that tells them apart.
-        // Without the shading the three parallelograms read as one flat hexagon.
-        var top = model.PassLayer(0, Faces.PosY);
-        var left = model.PassLayer(0, Faces.PosZ);
-        var right = model.PassLayer(0, Faces.PosX);
+    /// <summary>The three faces one box of a block shows, seen from off its +x +y +z corner.</summary>
+    /// <remarks>
+    /// <para>⛳ <b>One projection, applied to a box, rather than a cube written out as nine
+    /// numbers.</b> A point of the block maps to the slot as
+    /// <c>sx = ox + (bx - bz) * h</c> and <c>sy = oy - h + (bx + bz) * h/2 + (1 - by) * h</c>, with
+    /// <c>h</c> half the square. It is the standard two-to-one isometric, and it is worth writing
+    /// down because it is what makes a unit cube fill the square exactly — every derived number
+    /// below used to be a separate literal, and a slab could not have been expressed at all.</para>
+    /// <para>The shading is what tells the three faces apart. Without it they read as one flat
+    /// hexagon, whatever is drawn on them.</para>
+    /// </remarks>
+    private void IconBox(BlockModel.IconBox box, float x, float y, float size, Vector4 tint)
+    {
+        var h = size * 0.5f;
+        var ox = x + h;
+        var oy = y + h;
 
-        if (top == BlockModel.NoLayer) top = type.IconLayer;
-        if (left == BlockModel.NoLayer) left = type.IconLayer;
-        if (right == BlockModel.NoLayer) right = type.IconLayer;
+        (float X, float Y) At(float bx, float by, float bz) =>
+            (ox + (bx - bz) * h, oy - h + (bx + bz) * (h * 0.5f) + (1f - by) * h);
 
-        // Top: a diamond, its texture turned a quarter turn onto the corners.
-        Quad(_blocks, top, tint,
-            x, y + quarter, 0f, 0f,
-            x + half, y, 1f, 0f,
-            x + size, y + quarter, 1f, 1f,
-            x + half, y + half, 0f, 1f);
+        var (lo, hi) = (box.Min, box.Max);
 
-        Quad(_blocks, left, tint * new Vector4(0.80f, 0.80f, 0.80f, 1f),
-            x, y + quarter, 0f, 0f,
-            x + half, y + half, 1f, 0f,
-            x + half, y + size, 1f, 1f,
-            x, y + quarter * 3f, 0f, 1f);
+        // The top, seen as a diamond. Its four corners are the box's own footprint at its top.
+        var tBack = At(lo.X, hi.Y, lo.Z);
+        var tRight = At(hi.X, hi.Y, lo.Z);
+        var tFront = At(hi.X, hi.Y, hi.Z);
+        var tLeft = At(lo.X, hi.Y, hi.Z);
 
-        Quad(_blocks, right, tint * new Vector4(0.62f, 0.62f, 0.62f, 1f),
-            x + half, y + half, 0f, 0f,
-            x + size, y + quarter, 1f, 0f,
-            x + size, y + quarter * 3f, 1f, 1f,
-            x + half, y + size, 0f, 1f);
+        Quad(_blocks, box.Top, tint,
+            tLeft.X, tLeft.Y, lo.X, hi.Z,
+            tBack.X, tBack.Y, lo.X, lo.Z,
+            tRight.X, tRight.Y, hi.X, lo.Z,
+            tFront.X, tFront.Y, hi.X, hi.Z);
+
+        // The +z face, to the lower left. Texture runs across x and down from the top of the box.
+        var lTop = At(lo.X, hi.Y, hi.Z);
+        var lTopIn = At(hi.X, hi.Y, hi.Z);
+        var lBottomIn = At(hi.X, lo.Y, hi.Z);
+        var lBottom = At(lo.X, lo.Y, hi.Z);
+
+        Quad(_blocks, box.Left, tint * new Vector4(0.80f, 0.80f, 0.80f, 1f),
+            lTop.X, lTop.Y, lo.X, 1f - hi.Y,
+            lTopIn.X, lTopIn.Y, hi.X, 1f - hi.Y,
+            lBottomIn.X, lBottomIn.Y, hi.X, 1f - lo.Y,
+            lBottom.X, lBottom.Y, lo.X, 1f - lo.Y);
+
+        // The +x face, to the lower right. Texture runs across z the other way.
+        var rTopIn = At(hi.X, hi.Y, hi.Z);
+        var rTop = At(hi.X, hi.Y, lo.Z);
+        var rBottom = At(hi.X, lo.Y, lo.Z);
+        var rBottomIn = At(hi.X, lo.Y, hi.Z);
+
+        Quad(_blocks, box.Right, tint * new Vector4(0.62f, 0.62f, 0.62f, 1f),
+            rTopIn.X, rTopIn.Y, 1f - hi.Z, 1f - hi.Y,
+            rTop.X, rTop.Y, 1f - lo.Z, 1f - hi.Y,
+            rBottom.X, rBottom.Y, 1f - lo.Z, 1f - lo.Y,
+            rBottomIn.X, rBottomIn.Y, 1f - hi.Z, 1f - lo.Y);
     }
 
     /// <summary>
