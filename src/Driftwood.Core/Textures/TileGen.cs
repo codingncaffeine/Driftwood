@@ -265,6 +265,82 @@ public static class TileGen
         return t;
     }
 
+    /// <summary>
+    /// A tongue of fire: bright at the base, yellow through orange to a dark tip, and ragged.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ <b>Drawn as a teardrop with a torn edge, not a blob.</b> What reads as fire at a
+    /// dozen paces is the <em>silhouette</em> — wide and hot at the bottom, narrowing and cooling,
+    /// with the top broken up rather than rounded. A soft round gradient reads as a light bulb.</para>
+    /// <para>The tile is a cut-out, so most of it is nothing. It is drawn once and thrown a few
+    /// hundred times a second at random crops of itself, which is why the ragged edge matters more
+    /// than the interior: every particle shows a quarter of this and the quarters have to differ.</para>
+    /// </remarks>
+    public static byte[] Flame(int seed)
+    {
+        var t = new byte[BytesPerTile];
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            // 0 at the bottom of the tile, 1 at the top — fire is drawn rising.
+            var up = 1f - y / (float)(Size - 1);
+
+            // A teardrop: widest a third of the way up, pinched at both ends.
+            var width = MathF.Sin(MathF.Pow(up, 0.7f) * MathF.PI) * 6.6f + 0.6f;
+            var dx = MathF.Abs(x - 7.5f);
+
+            // Torn, and torn differently at every height, so two crops never look like each other.
+            var tear = (Noise(x, y, seed) * 2f - 1f) * 1.9f;
+            if (dx > width + tear) continue;
+
+            // Hot core to cool edge, and cooler the further up it has got.
+            var heat = Math.Clamp((1f - dx / MathF.Max(width, 0.5f)) * (1f - up * 0.55f), 0f, 1f);
+
+            var (r, g, b) = heat > 0.62f
+                ? (255, (int)float.Lerp(210, 248, (heat - 0.62f) / 0.38f), (int)float.Lerp(90, 190, (heat - 0.62f) / 0.38f))
+                : ((int)float.Lerp(168, 255, heat / 0.62f), (int)float.Lerp(48, 210, heat / 0.62f), (int)float.Lerp(16, 90, heat / 0.62f));
+
+            Put(t, x, y, Clamp(r), Clamp(g), Clamp(b), 255);
+        }
+
+        return t;
+    }
+
+    /// <summary>
+    /// A wisp of smoke: a soft grey clump with holes in it.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ <b>Holes, not a gradient.</b> A smoke particle is drawn a hundred times over itself as a
+    /// plume, so a solid disc stacks into an opaque grey ball; a clump with gaps in it stacks into
+    /// something you can see through, which is what smoke is. The colour is deliberately near enough
+    /// to neutral that the world's light does the work — a plume in a cave should be lit by the fire
+    /// under it, not by a value written here.
+    /// </remarks>
+    public static byte[] Smoke(int seed)
+    {
+        var t = new byte[BytesPerTile];
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var dx = (x - 7.5f) / 7.0f;
+            var dy = (y - 7.5f) / 7.0f;
+            var r2 = dx * dx + dy * dy;
+            if (r2 > 1f) continue;
+
+            // Ragged rather than round, and holed through the middle.
+            var n = Noise(x, y, seed);
+            if (r2 > 0.30f + n * 0.62f) continue;
+            if (Noise(x, y, seed + 41) > 0.80f) continue;
+
+            var v = Clamp(150 + (int)((n * 2f - 1f) * 26f));
+            Put(t, x, y, v, v, Clamp(v + 4), 255);
+        }
+
+        return t;
+    }
+
     /// <summary>Speckle plus scattered blobs of a second colour, for ore in rock.</summary>
     public static byte[] Ore(int seed, byte[] baseTile, byte r, byte g, byte b, int blobs)
     {

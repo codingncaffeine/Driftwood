@@ -23,7 +23,7 @@ public sealed class ParticleRenderer : IDisposable
         #version 330 core
         layout(location = 0) in vec3 aPos;
         layout(location = 1) in vec3 aUvw;
-        layout(location = 2) in vec3 aLight;
+        layout(location = 2) in vec4 aLight;   // rgb, and how much of it is left
 
         uniform mat4 uViewProj;
         uniform vec3 uCameraPos;
@@ -31,7 +31,7 @@ public sealed class ParticleRenderer : IDisposable
         uniform float uFogEnd;
 
         out vec3 vUvw;
-        out vec3 vLight;
+        out vec4 vLight;
         out float vFog;
 
         void main()
@@ -46,24 +46,31 @@ public sealed class ParticleRenderer : IDisposable
     private const string FragmentSource = """
         #version 330 core
         in vec3 vUvw;
-        in vec3 vLight;
+        in vec4 vLight;
         in float vFog;
 
         uniform sampler2DArray uBlocks;
         uniform vec3 uFogColor;
+        uniform float uCutout;
 
         out vec4 FragColor;
 
         void main()
         {
             vec4 texel = texture(uBlocks, vUvw);
-            if (texel.a < 0.5) discard;
-            FragColor = vec4(mix(texel.rgb * vLight, uFogColor, vFog), 1.0);
+            // ⛳ The cutout is what keeps a chip in the opaque pass, where it writes depth and needs
+            // no sorting. A flame has no edge to cut out — its own tile is already a shape, and what
+            // varies is how much of it is left — so the blended pass turns the discard off and lets
+            // the alpha carry it instead. One shader, one uniform, two behaviours.
+            if (uCutout > 0.5 && texel.a < 0.5) discard;
+            if (texel.a < 0.02) discard;
+
+            FragColor = vec4(mix(texel.rgb * vLight.rgb, uFogColor, vFog), vLight.a * texel.a);
         }
         """;
 
-    /// <summary>Floats per vertex: position, texture coordinate with layer, and light.</summary>
-    private const int Stride = 9;
+    /// <summary>Floats per vertex: position, texture coordinate with layer, light, and alpha.</summary>
+    private const int Stride = 10;
 
     private readonly GL _gl;
     private readonly Shader _shader;
@@ -117,7 +124,7 @@ public sealed class ParticleRenderer : IDisposable
         _gl.EnableVertexAttribArray(1);
         _gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, (uint)stride, (void*)(3 * sizeof(float)));
         _gl.EnableVertexAttribArray(2);
-        _gl.VertexAttribPointer(2, 3, VertexAttribPointerType.Float, false, (uint)stride, (void*)(6 * sizeof(float)));
+        _gl.VertexAttribPointer(2, 4, VertexAttribPointerType.Float, false, (uint)stride, (void*)(6 * sizeof(float)));
 
         _gl.BindVertexArray(0);
     }
@@ -144,20 +151,27 @@ public sealed class ParticleRenderer : IDisposable
         const float crop = 1f / ParticleSystem.CropsPerAxis;
         var at = 0;
 
+        // ⛳ TWO PASSES OUT OF ONE BUFFER, the debris first and everything that blends after it, so
+        // a chip still writes depth and a flame still shows through the smoke in front of it. The
+        // second group is written after the first and drawn as a range, exactly the way the chunk
+        // mesher hands water to its own pass.
+        var solid = 0;
         foreach (var p in live)
         {
-            var light = lightAt(p.Position);
-            var u = p.CropX * crop;
-            var v = p.CropY * crop;
-
-            // Corners counter-clockwise seen from the camera, with the texture crop laid over them.
-            Write(p.Position - right * p.Size - up * p.Size, u, v + crop, p.Layer, light);
-            Write(p.Position + right * p.Size - up * p.Size, u + crop, v + crop, p.Layer, light);
-            Write(p.Position + right * p.Size + up * p.Size, u + crop, v, p.Layer, light);
-            Write(p.Position - right * p.Size + up * p.Size, u, v, p.Layer, light);
-
-            DrawnParticles++;
+            if (p.Look != ParticleLook.Debris) continue;
+            Quad(p);
+            solid++;
         }
+
+        var blended = 0;
+        foreach (var p in live)
+        {
+            if (p.Look == ParticleLook.Debris) continue;
+            Quad(p);
+            blended++;
+        }
+
+        DrawnParticles = solid + blended;
 
         _shader.Use();
         _shader.SetMatrix4("uViewProj", viewProj);
@@ -172,11 +186,62 @@ public sealed class ParticleRenderer : IDisposable
         fixed (float* p = _vertices)
             _gl.BufferSubData(BufferTargetARB.ArrayBuffer, 0, (nuint)(at * sizeof(float)), p);
 
-        _gl.DrawElements(
-            PrimitiveType.Triangles, (uint)(DrawnParticles * 6), DrawElementsType.UnsignedInt, (void*)0);
+        if (solid > 0)
+        {
+            _shader.SetFloat("uCutout", 1f);
+            _gl.DrawElements(
+                PrimitiveType.Triangles, (uint)(solid * 6), DrawElementsType.UnsignedInt, (void*)0);
+        }
+
+        if (blended > 0)
+        {
+            // ⛔ Depth-tested and not depth-written. A hundred smoke quads in a plume all sit at
+            // nearly the same depth, so writing it means the first one drawn hides the rest and a
+            // column of smoke reads as a single flat card. And the state goes back afterwards —
+            // everything else in this frame is drawn expecting depth writes on.
+            _shader.SetFloat("uCutout", 0f);
+            _gl.Enable(EnableCap.Blend);
+            _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+            _gl.DepthMask(false);
+
+            _gl.DrawElements(
+                PrimitiveType.Triangles, (uint)(blended * 6), DrawElementsType.UnsignedInt,
+                (void*)(nint)(solid * 6 * sizeof(uint)));
+
+            _gl.DepthMask(true);
+            _gl.Disable(EnableCap.Blend);
+        }
+
         _gl.BindVertexArray(0);
 
-        void Write(Vector3 position, float u, float v, ushort layer, Vector3 light)
+        void Quad(in Particle p)
+        {
+            // ⛳ Fire makes its own light and must not be dimmed by the cave it is in — it is the
+            // thing lighting the cave. Smoke and debris take the light where they stand.
+            var light = p.Look == ParticleLook.Flame ? Vector3.One : lightAt(p.Position);
+
+            // Thinning rather than switching off, which is the whole difference between smoke
+            // dissipating and smoke being deleted. Flame goes faster than linear so a tongue is
+            // bright for most of its life and then gone, rather than fading the whole way.
+            var life = p.Life <= 0f ? 1f : Math.Clamp(1f - p.Age / p.Life, 0f, 1f);
+            var alpha = p.Look switch
+            {
+                ParticleLook.Flame => MathF.Sqrt(life),
+                ParticleLook.Smoke => life * life * 0.75f,
+                _ => 1f,
+            };
+
+            var u = p.CropX * crop;
+            var v = p.CropY * crop;
+
+            // Corners counter-clockwise seen from the camera, with the texture crop laid over them.
+            Write(p.Position - right * p.Size - up * p.Size, u, v + crop, p.Layer, light, alpha);
+            Write(p.Position + right * p.Size - up * p.Size, u + crop, v + crop, p.Layer, light, alpha);
+            Write(p.Position + right * p.Size + up * p.Size, u + crop, v, p.Layer, light, alpha);
+            Write(p.Position - right * p.Size + up * p.Size, u, v, p.Layer, light, alpha);
+        }
+
+        void Write(Vector3 position, float u, float v, ushort layer, Vector3 light, float alpha)
         {
             _vertices[at++] = position.X;
             _vertices[at++] = position.Y;
@@ -187,6 +252,7 @@ public sealed class ParticleRenderer : IDisposable
             _vertices[at++] = light.X;
             _vertices[at++] = light.Y;
             _vertices[at++] = light.Z;
+            _vertices[at++] = alpha;
         }
     }
 

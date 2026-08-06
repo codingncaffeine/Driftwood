@@ -272,7 +272,19 @@ public static class StarterBlocks
     /// <summary>Nine coal packed into a block — and what quenching a lava source leaves.</summary>
     public const ushort LayerCoalBlock = LayerFirstFluid + 6;
 
-    public const int LayerCount = LayerFirstFluid + 7;
+    /// <summary>
+    /// The two tiles nothing in the world is made of: a tongue of fire, and a wisp of smoke.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>The first layers here that no block wears.</b> Every particle until now was a crop of
+    /// whatever it came off — which is exactly right for a chip of stone and useless for a flame,
+    /// because fire is not made of anything. Packs paint both of these as their own files, so the
+    /// mapping is the same shape as every other row in the table.
+    /// </remarks>
+    public const ushort LayerFlame = LayerFirstFluid + 7;
+    public const ushort LayerSmoke = LayerFirstFluid + 8;
+
+    public const int LayerCount = LayerFirstFluid + 9;
 
     public sealed record Ids(
         BlockId Stone,
@@ -700,6 +712,10 @@ public static class StarterBlocks
             Name = "torch", Hardness = 0.05f, Solid = false, Opaque = false, Crafted = true,
             Sounds = SoundMaterial.Wood, SupportFace = Faces.NegY,
             LightEmission = LightValue.PackBlock(14, 10, 5),
+
+            // ⛳ At the TIP of the stick, which the model draws ten units up. A flame at the middle
+            // of the cell burns out of the middle of the handle.
+            FlameScale = 0.34f, FlameHeight = 0.66f,
             Model = BlockModel.Torch(LayerTorch),
         });
 
@@ -756,6 +772,11 @@ public static class StarterBlocks
                 Hardness = 3.5f, Crafted = true, Use = BlockUse.Furnace,
                 HarvestClass = ToolClass.Pickaxe, HarvestTier = 1,
                 LightEmission = lit ? LightValue.PackBlock(13, 9, 4) : (ushort)0,
+
+                // ⛳ SMOKE AND NO FLAME, which is what a furnace actually looks like: the fire is
+                // shut inside it and what a room sees is the chimney. Off the TOP of the cell, so a
+                // furnace built into a wall still shows it.
+                SmokeScale = lit ? 0.55f : 0f, SmokeHeight = 1.05f,
                 Model = BlockModel.CubeFacing(
                     LayerFurnaceTop, LayerFurnaceSide, LayerFurnaceTop,
                     lit ? LayerFurnaceFrontLit : LayerFurnaceFront,
@@ -780,6 +801,10 @@ public static class StarterBlocks
                 // Whiter and fiercer than a hearth, and a little dimmer: the mouth is a slot rather
                 // than an open arch, so less of it is showing.
                 LightEmission = lit ? LightValue.PackBlock(11, 9, 7) : (ushort)0,
+
+                // Twice the furnace's rate of work and a harder draught with it, so the column is
+                // thinner and faster rather than bigger.
+                SmokeScale = lit ? 0.42f : 0f, SmokeHeight = 1.05f,
                 Model = BlockModel.CubeFacing(
                     LayerBlastTop, LayerBlastSide, LayerBlastTop,
                     lit ? LayerBlastFrontLit : LayerBlastFront,
@@ -887,6 +912,11 @@ public static class StarterBlocks
                 Sounds = SoundMaterial.Wood,
                 SupportFace = Placeable.Opposite(Placeable.Facings[i]),
                 LightEmission = LightValue.PackBlock(14, 10, 5),
+
+                // ⚠ Higher and nearer the middle than a standing torch's, because a wall torch
+                // leans out of the wall — the flame ends up over the cell rather than over the
+                // stick's own base. A shared height would burn out of the masonry.
+                FlameScale = 0.32f, FlameHeight = 0.74f,
                 Model = BlockModel.WallTorch(LayerTorch, Placeable.Facings[i]),
             });
 
@@ -901,6 +931,10 @@ public static class StarterBlocks
                 HarvestClass = ToolClass.Pickaxe,
                 SupportFace = hanging ? Faces.PosY : Faces.NegY,
                 LightEmission = LightValue.PackBlock(15, 13, 10),
+
+                // The smallest fire in the game: it is caged, and what shows is a bead of it.
+                // Following the body of the lantern, which hangs six units lower than it stands.
+                FlameScale = 0.20f, FlameHeight = hanging ? 0.58f : 0.22f,
                 Model = BlockModel.Lantern(LayerLantern, hanging),
             });
 
@@ -917,6 +951,12 @@ public static class StarterBlocks
                 HarvestClass = ToolClass.Axe,
                 SupportFace = Faces.NegY,
                 LightEmission = lit ? LightValue.PackBlock(15, 11, 6) : (ushort)0,
+
+                // ⛳ THE REFERENCE FIRE, and every other scale in the game is a fraction of it. It
+                // is the only thing a player builds whose whole purpose is to be a fire, so it gets
+                // both halves: tongues out of the logs and a real column of smoke off the top.
+                FlameScale = lit ? 0.95f : 0f, FlameHeight = 0.42f,
+                SmokeScale = lit ? 0.85f : 0f, SmokeHeight = 0.85f,
                 Model = BlockModel.Campfire(LayerLogSide, LayerLogTop, LayerCampfireFire, axis, lit),
             });
 

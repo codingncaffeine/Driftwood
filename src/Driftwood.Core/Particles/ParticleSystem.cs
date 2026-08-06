@@ -5,11 +5,42 @@ using Driftwood.Core.World;
 
 namespace Driftwood.Core.Particles;
 
+/// <summary>How a particle is drawn, which is a different question from what it is doing.</summary>
+/// <remarks>
+/// ⛳ <b>Three looks rather than a flag per effect.</b> Every particle in the game until now was a
+/// crop of a block's own tile, discarded where it was clear and lit by the cell it stood in — which
+/// is exactly right for a chip of stone and cannot express a flame at all. Fire makes its own light
+/// and has no edges to cut out; smoke has no colour of its own and has to thin rather than vanish.
+/// Naming the three lets one pool hold all of them and the renderer sort them into two passes.
+/// </remarks>
+public enum ParticleLook
+{
+    /// <summary>A chip of something: cut out, lit by the world, gone the instant its time is up.</summary>
+    Debris = 0,
+
+    /// <summary>Fire: blended, full bright whatever the hour, thinning as it rises.</summary>
+    Flame,
+
+    /// <summary>Smoke: blended, lit by the world, thinning and spreading as it goes.</summary>
+    Smoke,
+}
+
 /// <summary>One live particle: a crop of a block's texture, thrown and falling.</summary>
 public struct Particle
 {
     public Vector3 Position;
     public Vector3 Velocity;
+
+    /// <summary>How it is drawn. Not what it is doing — a flame and a chip move by the same code.</summary>
+    public ParticleLook Look;
+
+    /// <summary>Blocks a second the half-width grows by. Negative shrinks; zero holds.</summary>
+    /// <remarks>
+    /// ⚠ <b>What makes smoke read as smoke.</b> A puff that keeps its size and fades out reads as a
+    /// picture being turned down; one that spreads while it thins reads as air taking it. It is one
+    /// float and it is most of the difference.
+    /// </remarks>
+    public float Grow;
 
     /// <summary>Seconds since it was spawned.</summary>
     public float Age;
@@ -129,6 +160,8 @@ public sealed class ParticleSystem
             p.Velocity.Y -= Gravity * p.Fall * dt;
             p.Velocity -= p.Velocity * MathF.Min(Drag * dt, 1f);
 
+            if (p.Grow != 0f) p.Size = MathF.Max(0.004f, p.Size + p.Grow * dt);
+
             Move(world, ref p, dt);
             i++;
         }
@@ -196,9 +229,105 @@ public sealed class ParticleSystem
             sway: 0.55f + Unit() * 0.5f);
     }
 
+    /// <summary>
+    /// A live fire: tongues rising out of a cell, sized to whatever is burning.
+    /// </summary>
+    /// <param name="scale">
+    /// How big a fire this is. A torch is about 0.35, a campfire 1, a furnace mouth 0.5 — so one
+    /// emitter serves everything that burns and the block says how much it burns by.
+    /// </param>
+    /// <remarks>
+    /// <para>⛳ <b>Rising, shrinking, and short-lived.</b> A flame is not debris that happens to be
+    /// orange: it goes up rather than falling, it narrows as it goes rather than holding its size,
+    /// and it lasts under a second — a long-lived flame particle reads as a floating ember. Negative
+    /// <see cref="Particle.Fall"/> is what carries it up, so the existing integrator needs nothing
+    /// added to it.</para>
+    /// <para>⚠ The spread is a <em>disc</em> rather than a cube: fire comes off the top of a thing,
+    /// and scattering it through the volume of the cell puts half the tongues inside the log.</para>
+    /// </remarks>
+    public void Flame(Vector3 at, float scale, ushort layer, int count = 1)
+    {
+        for (var i = 0; i < count; i++)
+        {
+            var spread = 0.16f * scale;
+            var position = at + new Vector3(Signed() * spread, Unit() * 0.06f * scale, Signed() * spread);
+            var velocity = new Vector3(Signed() * 0.12f, 0.5f + Unit() * 0.5f, Signed() * 0.12f) * scale;
+
+            Spawn(
+                layer, position, velocity,
+                size: (0.055f + Unit() * 0.045f) * scale,
+                life: 0.32f + Unit() * 0.30f,
+                fall: -0.09f,
+                look: ParticleLook.Flame,
+                grow: -0.10f * scale);
+        }
+    }
+
+    /// <summary>
+    /// Smoke: goes up, spreads, thins out, and is gone.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>It lasts several times as long as a flame and grows the whole time.</b> That is the
+    /// difference between a puff dissipating and a puff being switched off — air takes smoke apart
+    /// rather than turning it down, and the eye reads spreading as the thing that happened.
+    /// </remarks>
+    public void Smoke(Vector3 at, float scale, ushort layer, int count = 1, float rise = 1f)
+    {
+        for (var i = 0; i < count; i++)
+        {
+            var spread = 0.20f * scale;
+            var position = at + new Vector3(Signed() * spread, Unit() * 0.1f * scale, Signed() * spread);
+            var velocity = new Vector3(Signed() * 0.18f, (0.35f + Unit() * 0.35f) * rise, Signed() * 0.18f);
+
+            Spawn(
+                layer, position, velocity,
+                size: (0.05f + Unit() * 0.05f) * scale,
+                life: 1.4f + Unit() * 1.6f,
+                fall: -0.02f,
+                sway: 0.12f + Unit() * 0.16f,
+                look: ParticleLook.Smoke,
+                grow: 0.09f * scale);
+        }
+    }
+
+    /// <summary>
+    /// The puff something leaves when it dies: a burst of smoke that spreads and is gone.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ <b>Thrown outward as well as up</b>, unlike a chimney's. A column rising from a corpse
+    /// reads as the corpse being on fire; a ball that expands and lifts reads as the thing having
+    /// gone. Sized off the creature so a chicken and a cow do not leave the same cloud.
+    /// </remarks>
+    public void DeathPuff(Vector3 at, float scale, ushort layer, int count = 14)
+    {
+        for (var i = 0; i < count; i++)
+        {
+            var direction = new Vector3(Signed(), Unit() * 0.7f, Signed());
+            var position = at + direction * 0.28f * scale;
+
+            Spawn(
+                layer,
+                position,
+                direction * (0.8f + Unit() * 0.8f) + new Vector3(0f, 0.5f, 0f),
+                size: (0.07f + Unit() * 0.06f) * scale,
+                life: 0.75f + Unit() * 0.7f,
+                fall: -0.03f,
+                look: ParticleLook.Smoke,
+                grow: 0.16f * scale);
+        }
+    }
+
     private void Spawn(
         BlockType type, Vector3 position, Vector3 velocity, float size, float life,
-        float fall = 1f, float sway = 0f)
+        float fall = 1f, float sway = 0f) =>
+        Spawn(
+            type.Model.ParticleLayer, position, velocity, size, life, fall, sway,
+            ParticleLook.Debris, 0f);
+
+    private void Spawn(
+        ushort layer, Vector3 position, Vector3 velocity, float size, float life,
+        float fall = 1f, float sway = 0f,
+        ParticleLook look = ParticleLook.Debris, float grow = 0f)
     {
         if (Count >= Capacity)
         {
@@ -213,11 +342,13 @@ public sealed class ParticleSystem
             Age = 0f,
             Life = life,
             Size = size,
-            Layer = type.Model.ParticleLayer,
+            Layer = layer,
             CropX = (byte)(NextBits() % CropsPerAxis),
             CropY = (byte)(NextBits() % CropsPerAxis),
             Fall = fall,
             Sway = sway,
+            Look = look,
+            Grow = grow,
         };
     }
 
@@ -234,6 +365,23 @@ public sealed class ParticleSystem
     {
         var step = p.Velocity * dt;
         p.Grounded = false;
+
+        // ⛔ Fire and smoke pass through everything, and they have to. A campfire's collision box is
+        // the whole cell — it has to be, or a body would stand in the fire — so a flame born in the
+        // middle of one starts inside a solid, and a collider would pin it there for its whole life.
+        // Nothing that is not a solid object should be asking a solidity table anything.
+        if (p.Look != ParticleLook.Debris)
+        {
+            if (p.Sway > 0f)
+            {
+                var drift = (p.Age + p.Position.X * 1.7f + p.Position.Z * 2.3f) * 2.2f;
+                step.X += MathF.Sin(drift) * p.Sway * dt;
+                step.Z += MathF.Cos(drift * 0.8f) * p.Sway * dt;
+            }
+
+            p.Position += step;
+            return;
+        }
 
         // The wander, for anything that has one. Phase comes off the spawn position rather than
         // from a stored angle, so a hundred leaves coming off one canopy are not all leaning the

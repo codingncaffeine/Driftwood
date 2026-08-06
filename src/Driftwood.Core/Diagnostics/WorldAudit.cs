@@ -352,6 +352,10 @@ public static class WorldAudit
         Check("where a thing lives takes two questions", spawnFaults.Count == 0,
             spawnFaults.Count == 0 ? spawnDetail : string.Join("; ", spawnFaults));
 
+        var fireFaults = FireFaults(registry, ids, out var fireDetail);
+        Check("things that burn put fire and smoke in the air", fireFaults.Count == 0,
+            fireFaults.Count == 0 ? fireDetail : string.Join("; ", fireFaults));
+
         var passFaults = TranslucentPassFaults(registry, ids, out var passDetail);
         Check("water is meshed into a pass of its own", passFaults.Count == 0,
             passFaults.Count == 0 ? passDetail : string.Join("; ", passFaults));
@@ -5383,7 +5387,9 @@ public static class WorldAudit
         (StarterBlocks.LayerLavaFlow, "lava_flow"),
         (StarterBlocks.LayerBucket, "bucket"),
         (StarterBlocks.LayerLavaBucket, "lava_bucket"),
-        ((ushort)(StarterBlocks.LayerCount - 1), "coal_block"),
+        (StarterBlocks.LayerCoalBlock, "coal_block"),
+        (StarterBlocks.LayerFlame, "flame"),
+        ((ushort)(StarterBlocks.LayerCount - 1), "smoke"),
     ];
 
     private static List<string> TextureSelfTest()
@@ -6843,6 +6849,158 @@ public static class WorldAudit
                + $"{SpawnRules.NextAttempt(0.0):F0}-{SpawnRules.NextAttempt(1.0):F0}s, places at "
                + $"most {SpawnRules.HostileBatch} of {SpawnRules.HostileCap} at "
                + $"{SpawnRules.HostileMinRadius:F0} blocks, and stops pushing as it fills";
+
+        return faults;
+    }
+
+    /// <summary>
+    /// Lights a fire in a bare world and asks what it puts in the air.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>Every claim here needs its unlit twin, because a particle system that emits constantly
+    /// satisfies all of them.</b> "The campfire made flames" is true of a build that makes flames
+    /// everywhere; "the fire is a fire" is true of one that makes a torch and a campfire the same
+    /// size. What each row actually asserts is a <em>difference</em> — lit against unlit, campfire
+    /// against torch, flame against smoke — and a difference cannot be faked by emitting more.
+    /// </remarks>
+    private static List<string> FireFaults(
+        BlockRegistry registry, StarterBlocks.Ids ids, out string detail)
+    {
+        var faults = new List<string>();
+        var fires = new Fires(registry);
+
+        // ── The table says what burns, and what does not ─────────────────────────────────────────
+        var lit = registry.ByName("campfire_x_lit");
+        var cold = registry.ByName("campfire_x");
+        var torch = registry.ByName("torch");
+        var furnace = registry.ByName("furnace_east_lit");
+        var lamp = registry.ByName("stormglass_lamp");
+
+        if (lit.FlameScale <= 0f) faults.Add("a lit campfire has no flame");
+        if (cold.FlameScale > 0f || cold.SmokeScale > 0f) faults.Add("an unlit campfire burns");
+        if (torch.FlameScale <= 0f) faults.Add("a torch has no flame");
+
+        // ⛳ THE SIZE IS THE POINT. One emitter serves everything that burns, so the only thing
+        // saying a campfire is a bonfire and a torch is a wick is this pair of numbers.
+        if (torch.FlameScale >= lit.FlameScale)
+            faults.Add($"a torch burns {torch.FlameScale:F2} against a campfire's {lit.FlameScale:F2}");
+
+        // A furnace shows smoke and no fire; a lamp is cold light and shows neither.
+        if (furnace.SmokeScale <= 0f) faults.Add("a lit furnace gives off no smoke");
+        if (furnace.FlameScale > 0f) faults.Add("a furnace shows open flame, which a closed box does not");
+        if (lamp.Smoulders) faults.Add("the stormglass lamp burns, and it is a cold light");
+
+        // ── The sweep finds what is there, and only what is there ────────────────────────────────
+        var world = new VoxelWorld(registry);
+        world.GetOrCreateChunk(new ChunkPos(0, 0, 0));
+
+        for (var z = 0; z < 8; z++)
+        for (var x = 0; x < 8; x++)
+            Put(world, x, 4, z, ids.Stone);
+
+        var eye = new Vector3(4.5f, 6f, 4.5f);
+
+        // The control first: nothing burning, nothing found. Without it "it found the campfire" is
+        // satisfied by a sweep that returns everything it walks past.
+        fires.Sweep(world, eye);
+        if (fires.Count != 0) faults.Add($"a world with nothing alight reported {fires.Count} fires");
+
+        Put(world, 4, 5, 4, lit.Id);
+        Put(world, 6, 5, 6, torch.Id);
+        fires.Sweep(world, eye);
+
+        if (fires.Count != 2)
+            faults.Add($"a campfire and a torch swept as {fires.Count} fires, not 2");
+
+        // ── What it emits, and at a RATE rather than a count ─────────────────────────────────────
+        //
+        // ⛔ THE SHARPEST ONE. A per-frame count makes a fire whose size is the machine's: the same
+        // campfire is four times bigger on a fast computer. Half a second of wall clock has to place
+        // the same number of particles whether it arrives as 15 frames or as 100.
+        var slow = new ParticleSystem(registry);
+        var fast = new ParticleSystem(registry);
+
+        var slowFires = new Fires(registry);
+        var fastFires = new Fires(registry);
+        slowFires.Sweep(world, eye);
+        fastFires.Sweep(world, eye);
+
+        for (var i = 0; i < 15; i++)
+            slowFires.Emit(slow, StarterBlocks.LayerFlame, StarterBlocks.LayerSmoke, 1f / 30f);
+
+        for (var i = 0; i < 100; i++)
+            fastFires.Emit(fast, StarterBlocks.LayerFlame, StarterBlocks.LayerSmoke, 1f / 200f);
+
+        var slowCount = slow.Count;
+        var fastCount = fast.Count;
+
+        if (slowCount == 0) faults.Add("half a second of a lit campfire put nothing in the air");
+
+        // Within a tenth: the leftover fraction of a particle is carried between frames, so the two
+        // can differ by a couple at the ends, and by nothing like a factor.
+        var drift = Math.Abs(slowCount - fastCount) / (double)Math.Max(slowCount, 1);
+        if (drift > 0.1)
+            faults.Add($"the same half second placed {slowCount} at 30fps and {fastCount} at 200fps");
+
+        // ── A flame rises and narrows; smoke rises, spreads, and goes ────────────────────────────
+        var pool = new ParticleSystem(registry);
+        pool.Flame(new Vector3(4.5f, 5.5f, 4.5f), 1f, StarterBlocks.LayerFlame, 40);
+        pool.Smoke(new Vector3(4.5f, 6.5f, 4.5f), 1f, StarterBlocks.LayerSmoke, 40);
+
+        var flameUp = 0;
+        var smokeSize = 0f;
+        var smokeAt = 0;
+
+        foreach (var p in pool.Live)
+        {
+            if (p.Look == ParticleLook.Flame && p.Velocity.Y > 0f) flameUp++;
+            if (p.Look != ParticleLook.Smoke) continue;
+
+            smokeSize += p.Size;
+            smokeAt++;
+        }
+
+        if (flameUp < 40) faults.Add($"{40 - flameUp} of 40 flames were not rising");
+
+        var before = smokeAt == 0 ? 0f : smokeSize / smokeAt;
+
+        // Half a second on. ⚠ Stepped against the same bare world, so nothing is colliding: fire and
+        // smoke pass through everything, which is what stops a flame born inside a campfire's own
+        // collision box from being pinned there for its whole life.
+        for (var i = 0; i < 30; i++) pool.Update(world, 1f / 60f);
+
+        float after = 0f, rose = 0f;
+        var stillThere = 0;
+
+        foreach (var p in pool.Live)
+        {
+            if (p.Look != ParticleLook.Smoke) continue;
+            after += p.Size;
+            rose += p.Position.Y;
+            stillThere++;
+        }
+
+        if (stillThere == 0)
+        {
+            faults.Add("every wisp of smoke was gone within half a second");
+        }
+        else
+        {
+            after /= stillThere;
+            rose /= stillThere;
+
+            if (after <= before) faults.Add($"smoke went from {before:F3} to {after:F3} — it does not spread");
+            if (rose <= 6.5f) faults.Add($"smoke was at y {rose:F2} after half a second, so it is not rising");
+        }
+
+        // And it is gone by its own life rather than hanging about.
+        for (var i = 0; i < 60 * 5; i++) pool.Update(world, 1f / 60f);
+        if (pool.Count != 0) faults.Add($"{pool.Count} particles outlived five seconds of a three-second life");
+
+        detail = $"a campfire burns at {lit.FlameScale:F2} against a torch's {torch.FlameScale:F2}, "
+               + $"a furnace smokes and shows no flame, a lamp does neither; half a second placed "
+               + $"{slowCount} at 30fps and {fastCount} at 200; smoke spread {before:F3} to {after:F3} "
+               + $"and cleared";
 
         return faults;
     }

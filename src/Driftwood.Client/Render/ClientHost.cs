@@ -1599,6 +1599,25 @@ public sealed class ClientHost : IDisposable
     /// player picks things up. Making the world dirty is the useful half of that trigger, and the
     /// period is what stops it being churn.</para>
     /// </remarks>
+    /// <summary>Everything burning near the player, found slowly and fed every frame.</summary>
+    /// <remarks>
+    /// ⛳ <b>Two rates on purpose.</b> A flame lasts a third of a second, so it has to be fed every
+    /// frame or it reads as a stutter — but <em>finding</em> the fires means sweeping the cells round
+    /// the player, and doing that sixty times a second to place four particles is the wrong shape.
+    /// Sweeping twice a second and emitting from what the sweep found is the same picture for a
+    /// fortieth of the cost.
+    /// </remarks>
+    private void StepFires(float dt)
+    {
+        if (!_spawned) return;
+
+        _fires ??= new Fires(_registry);
+        _fires.Update(_streamer.World, _viewPosition, dt);
+        _fires.Emit(_particles, StarterBlocks.LayerFlame, StarterBlocks.LayerSmoke, dt);
+    }
+
+    private Fires? _fires;
+
     /// <summary>Ticks a second of the flow, and no more than a frame can pay for.</summary>
     /// <remarks>
     /// <para>⛳ <b>Five times a second, not sixty.</b> A fluid that settles the instant a wall comes
@@ -3831,6 +3850,19 @@ public sealed class ClientHost : IDisposable
             var voice = CreatureSounds.IdleFor(death.Kind);
             if (voice.Length > 0) _audio?.Play(voice, death.Position, 0.9f, 0.72f);
 
+            // ⛳ And a puff where it was, sized off the animal's own model rather than a constant —
+            // a chicken and a cow should not leave the same cloud. Half a body up, because a corpse
+            // is on the ground and the cloud is the thing that was standing there.
+            var body = _creatureRenderer is not null
+                    && _creatureRenderer.TryMeasure(death.Kind, out var measured)
+                ? MathF.Max(measured.Y, 0.4f)
+                : 1f;
+
+            _particles.DeathPuff(
+                death.Position + new Vector3(0f, body * 0.5f, 0f),
+                MathF.Min(body, 2.2f),
+                StarterBlocks.LayerSmoke);
+
             // ⛳ What it leaves. ⚠ The kill roll is asked with nothing in hand: what a blow was
             // struck with is already spent — it decided how many blows it took — and a table that
             // read the tool here would hand out more leather to whoever happened to be holding a
@@ -4222,6 +4254,7 @@ public sealed class ClientHost : IDisposable
         StepToasts((float)dt);
         StepAutosave(dt);
         _particles.Update(_streamer.World, (float)dt);
+        StepFires((float)dt);
 
         // What a screen can afford changes as the world hands things over, so it is recomputed
         // rather than only rebuilt on a keypress: a stack flying into the bar while the book is

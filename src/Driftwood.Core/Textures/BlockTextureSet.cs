@@ -277,6 +277,11 @@ public static class BlockTextureSet
         new("water_bucket", "textures/item/water_bucket.png",     true),
         new("lava_bucket", "textures/item/lava_bucket.png",       true),
         new("coal_block",  "textures/block/coal_block.png",       false),
+
+        // ⛳ The two nothing is made of. Every particle before these was a crop of whatever it came
+        // off; fire is not made of anything, and smoke is not made of the thing it came out of.
+        new("flame",       "textures/particle/flame.png",         true),
+        new("smoke",       "textures/particle/generic_0.png",     true, "textures/particle/smoke.png"),
     ];
 
     /// <summary>One row per colour of wool, off the colour table rather than written out.</summary>
@@ -824,6 +829,9 @@ public static class BlockTextureSet
             // Darker and shinier than the ore it is made of, so a wall of it does not read as a
             // seam of coal in stone — a storage block and its ore are seen side by side constantly.
             StarterBlocks.LayerCoalBlock => TileGen.Speckle(1101, 30, 30, 34, 22, 0.75f),
+
+            StarterBlocks.LayerFlame => TileGen.Flame(1102),
+            StarterBlocks.LayerSmoke => TileGen.Smoke(1103),
 
             _ => Wool(layer) ?? Meat(layer) ?? Dye(layer) ?? Tool(layer),
         };

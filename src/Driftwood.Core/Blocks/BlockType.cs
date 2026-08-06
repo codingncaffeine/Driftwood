@@ -171,6 +171,36 @@ public sealed class BlockType
     /// <summary>True when a player standing in this cell can go up and down it.</summary>
     public bool Climbable { get; init; }
 
+    /// <summary>
+    /// How big a live fire this block shows, and how far up its own cell it sits. Zero for none.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ <b>The block says what it burns like, rather than an emitter holding a list of names.</b>
+    /// Same rule as <see cref="Use"/> and <see cref="PartnerFace"/>: the moment there were three
+    /// things on fire, "which blocks have flames" stopped being a question the caller should answer.
+    /// A torch, a lantern and a campfire want the same emitter at three sizes, and a fourth thing
+    /// that burns is a number rather than a branch.</para>
+    /// <para>A scale of 1 is a campfire — a fire you could cook on. A torch is about a third of that
+    /// and a lantern's caged flame less again.</para>
+    /// </remarks>
+    public float FlameScale { get; init; }
+
+    /// <summary>Where the fire sits in the cell, 0 at the floor and 1 at the ceiling.</summary>
+    public float FlameHeight { get; init; } = 0.5f;
+
+    /// <summary>How big a plume this block gives off, and from what height. Zero for none.</summary>
+    /// <remarks>
+    /// Separate from the flame because the two are not the same thing and rarely the same size: a
+    /// furnace shows no fire at all from outside and a great deal of smoke, and a torch is the other
+    /// way round.
+    /// </remarks>
+    public float SmokeScale { get; init; }
+
+    public float SmokeHeight { get; init; } = 1f;
+
+    /// <summary>True when this block puts anything into the air at all.</summary>
+    public bool Smoulders => FlameScale > 0f || SmokeScale > 0f;
+
     /// <summary>Which fluid this block is, or <see cref="FluidKind.None"/>.</summary>
     public FluidKind Fluid { get; init; }
 

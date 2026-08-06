@@ -171,10 +171,15 @@ public static class Program
 
         Console.WriteLine(
             $"icons       {tiles.Count} layers at {Zoom}x, {Across} across, written to {path}");
+        // ⚠ Four groups now, not three. The fluids, the buckets and the two particle tiles were
+        // appended past the tools — because this array's order IS the layer numbering and inserting
+        // one beside water would move eighty-five constants — so a report that stopped at "tools"
+        // was calling a wisp of smoke a pickaxe.
         Console.WriteLine(
             $"            faces 0-{StarterBlocks.LayerFirstIcon - 1}, "
             + $"items {StarterBlocks.LayerFirstIcon}-{StarterBlocks.LayerFirstTool - 1}, "
-            + $"tools {StarterBlocks.LayerFirstTool}-{StarterBlocks.LayerCount - 1}");
+            + $"tools {StarterBlocks.LayerFirstTool}-{StarterBlocks.LayerFirstFluid - 1}, "
+            + $"fluids and fire {StarterBlocks.LayerFirstFluid}-{StarterBlocks.LayerCount - 1}");
 
         return 0;
     }
