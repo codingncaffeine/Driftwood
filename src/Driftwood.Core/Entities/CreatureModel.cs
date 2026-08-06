@@ -16,12 +16,24 @@ public readonly record struct CreatureCube(
 /// <param name="Parent">The bone this hangs from, or empty for a root.</param>
 /// <param name="Pivot">Where it turns, in model units measured from between the feet.</param>
 /// <param name="Rotation">
-/// Degrees the bone is laid at before any animation. A quadruped's torso is modelled upright and
-/// then tipped ninety degrees onto its side, so this is not decoration — a reader that drops it
-/// builds every four-legged animal standing on its tail.
+/// Degrees this bone is turned by, <b>and everything hanging off it with it</b>. A hoglin's head is
+/// turned fifty degrees down and its ears are children of the head; ears that did not come with it
+/// would float beside a head that had left.
+/// </param>
+/// <param name="BindPose">
+/// Degrees this bone's own boxes are laid at, <b>reaching nothing below it</b>. A quadruped's torso
+/// is modelled upright and then tipped ninety degrees onto its side, so this is not decoration — a
+/// reader that drops it builds every four-legged animal standing on its tail.
+/// <para>⛔ <b>The two are different fields and they are not interchangeable.</b> Measured against a
+/// real install: the cow's head and its four legs are children of the torso and are authored where
+/// they finally stand, so carrying the torso's ninety degrees down to them puts the head under the
+/// belly and below the ground. Sixteen models in that install lay a torso down this way and every
+/// one of them is a quadruped, so collapsing the two fields into one breaks all of them at once.
+/// The newer files spell the propagating one <c>rotation</c> and the older ones spell the other
+/// <c>bind_pose_rotation</c>; a bone may carry both.</para>
 /// </param>
 public readonly record struct CreatureBone(
-    string Name, string Parent, Vector3 Pivot, Vector3 Rotation, CreatureCube[] Cubes);
+    string Name, string Parent, Vector3 Pivot, Vector3 Rotation, Vector3 BindPose, CreatureCube[] Cubes);
 
 /// <summary>
 /// A creature's skeleton: the boxes it is made of and the sheet they are cut from.
@@ -139,6 +151,30 @@ public sealed record CreatureModel(
             if (bone.Parent.Length == 0) continue;
             if (Array.Exists(Bones, b => b.Name == bone.Parent)) continue;
             faults.Add($"{Name}/{bone.Name} hangs off '{bone.Parent}', which is not in the file");
+        }
+
+        // ⚠ And a parent chain that comes back round to where it started is a skeleton with no root
+        // at all. Nothing in the install does it, which is exactly why it is worth saying out loud:
+        // the walk that puts parents before children has to do *something* with such a bone, and
+        // whatever it picks is arbitrary. Named here rather than discovered as a creature that draws
+        // in a heap at the origin.
+        foreach (var bone in Bones)
+        {
+            var seen = new HashSet<string>(StringComparer.Ordinal) { bone.Name };
+            var at = bone.Parent;
+
+            while (at.Length > 0)
+            {
+                if (!seen.Add(at))
+                {
+                    faults.Add($"{Name}/{bone.Name} hangs off itself, through '{at}'");
+                    break;
+                }
+
+                var parent = Array.Find(Bones, b => b.Name == at);
+                if (parent.Name is null || parent.Name.Length == 0) break;
+                at = parent.Parent;
+            }
         }
 
         return faults;

@@ -162,16 +162,25 @@ public static class BedrockGeometry
 
             // ⛔ bind_pose_rotation is where a four-legged animal comes from. A cow's torso is drawn
             // upright and then laid ninety degrees onto its side; drop this and every quadruped in
-            // the game stands on its tail. `rotation` is the newer spelling of the same field.
-            var rotation = bone.TryGetProperty("bind_pose_rotation", out _)
-                ? Vec(bone, "bind_pose_rotation")
-                : Vec(bone, "rotation");
-
+            // the game stands on its tail.
+            //
+            // ⛔⛔ AND IT IS NOT THE OLDER SPELLING OF `rotation`, which is what this reader first
+            // assumed. They are two fields that do different things and the difference is who else
+            // moves. `rotation` turns the bone and everything hanging off it — a hoglin's ears are
+            // children of its head and have to come with it. `bind_pose_rotation` lays out this
+            // bone's own boxes and reaches nothing below it — measured against a real install, the
+            // cow's head and four legs are children of the torso and are authored where they finally
+            // stand, so carrying the torso's ninety degrees down to them puts the head under the
+            // belly. Sixteen models in that install lay a torso down this way and every one of them
+            // is a quadruped, so reading them as one field breaks all sixteen at once.
+            //
+            // A bone may carry both, and a few do, so both are read rather than one winning.
             read.Add(new CreatureBone(
                 bone.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "",
                 bone.TryGetProperty("parent", out var p) ? p.GetString() ?? "" : "",
                 Vec(bone, "pivot"),
-                rotation,
+                Vec(bone, "rotation"),
+                Vec(bone, "bind_pose_rotation"),
                 [.. cubes]));
         }
 
@@ -238,8 +247,14 @@ public static class BedrockGeometry
         if (beast.SheetWidth != 64)
             faults.Add($"a sheet width written 64.0 came back {beast.SheetWidth}");
 
-        if (beast.Bones.Length != 1 || beast.Bones[0].Rotation.X != 90f)
+        if (beast.Bones.Length != 1 || beast.Bones[0].BindPose.X != 90f)
             faults.Add("bind_pose_rotation was dropped, which lays every quadruped on its tail");
+
+        // ⛔ And it landed in the field that reaches nothing below it, rather than in the one that
+        // takes the whole skeleton with it. Read into the wrong slot it is not dropped, it is worse:
+        // every quadruped's head and legs come round with the torso and end up under the ground.
+        if (beast.Bones.Length == 1 && beast.Bones[0].Rotation != Vector3.Zero)
+            faults.Add("a bind pose was read as a bone rotation, which carries it down to the children");
 
         if (beast.CubeCount != 1 || beast.Bones[0].Cubes[0].U != 18)
             faults.Add("the cube's net offset did not survive the read");

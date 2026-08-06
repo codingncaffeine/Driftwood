@@ -799,6 +799,15 @@ public static class WorldAudit
                 ? "both formats, inheritance across files, bind pose kept, anything else ignored quietly"
                 : $"{geometryFaults.Count} faults: {geometryFaults[0]}");
 
+        // ⛔ And then it has to stand up. None of what this asks would throw, come back empty or show
+        // in a count of bones — a skeleton meshed wrong is an animal in a heap, which reads as a
+        // rendering problem long after it stopped being one.
+        var meshFaults = CreatureMesh.Validate();
+        Check("a creature stands up from its skeleton", meshFaults.Count == 0,
+            meshFaults.Count == 0
+                ? "torso on its legs and behind its head, bind pose not carried down, a ring facing one way"
+                : $"{meshFaults.Count} faults: {meshFaults[0]}");
+
         var mipFaults = MipChain.Validate();
         Check("a cut-out keeps its colour as it shrinks", mipFaults.Count == 0,
             mipFaults.Count == 0

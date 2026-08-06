@@ -142,7 +142,9 @@ public static class CreatureLibrary
         var text = new StringBuilder();
         text.AppendLine($"{models.Count} skeletons read");
         text.AppendLine();
-        text.AppendLine($"{"ours",-11} {"skeleton",-18} {"sheet",-9} {"bones",5} {"cubes",5}  {"size in blocks",-16} skin");
+        text.AppendLine(
+            $"{"ours",-11} {"skeleton",-18} {"sheet",-9} {"bones",5} {"cubes",5} {"tris",6}  "
+            + $"{"size in blocks",-16} skin");
 
         var withSkeleton = 0;
         var withSkin = 0;
@@ -159,18 +161,36 @@ public static class CreatureLibrary
             withSkeleton++;
             if (entry.SkinFrom.Length > 0) withSkin++;
 
-            var (min, max) = model.Bounds();
-            var extent = (max - min) / 16f;
+            // ⚠ Measured POSED. A quadruped's torso is drawn upright and laid down by its bind pose,
+            // so the extent of the boxes where they were authored is a cow standing on its hind
+            // legs — too tall, too short front to back, and wrong in exactly the direction anybody
+            // would size a collision box from. Sixteen of the skeletons in a real install are like
+            // that, so this column was wrong for most of the table until the mesh existed to ask.
+            var mesh = CreatureMesh.Build(model, entry.SkinWidth, entry.SkinHeight);
+            var (min, max) = mesh.PosedBounds();
+            var extent = (max - min);
             var faults = model.Validate();
             if (faults.Count > 0) faulted++;
 
             text.AppendLine(
                 $"{entry.Kind.Name,-11} {entry.SkeletonFrom,-18} "
-                + $"{model.SheetWidth,3}x{model.SheetHeight,-5} {model.Bones.Length,5} {model.CubeCount,5}  "
+                + $"{model.SheetWidth,3}x{model.SheetHeight,-5} {model.Bones.Length,5} {model.CubeCount,5} "
+                + $"{mesh.TriangleCount,6}  "
                 + $"{extent.X,4:F2} x {extent.Y,4:F2} x {extent.Z,4:F2}  "
                 + (entry.SkinFrom.Length > 0
                     ? $"{entry.SkinWidth}x{entry.SkinHeight} {entry.SkinFrom}"
                     : "— no skin —"));
+
+            // ⛳ A padded square is not a fault and is not a warning — it is the ordinary case for at
+            // least one real pack, and the answer is to read the net off the top of it. Said out loud
+            // anyway, because "the sheet is twice the height the skeleton asked for" and "the whole
+            // net has been stretched down over the padding" look identical from any other angle.
+            if (mesh.NetTexels > mesh.DeclaredHeight + 0.01f)
+            {
+                text.AppendLine(
+                    $"            · the sheet is padded: its net is read as {model.SheetWidth}x"
+                    + $"{mesh.NetTexels:F0}, art in the top {mesh.DeclaredHeight / mesh.NetTexels:P0}");
+            }
 
             // ⛔ The sheet has to be the shape the skeleton says it is, or every patch on it is in
             // the wrong place. A 256-pixel pack paints a cow at 256x128 — the same 2:1 — so this

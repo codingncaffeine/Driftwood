@@ -253,16 +253,49 @@ public static class PlayerModel
     /// </summary>
     public static void Emit(in ModelBox box, List<ModelVertex> vertices, List<uint> indices)
     {
-        var min = box.Offset - new Vector3(box.Inflate);
-        var max = box.Offset + new Vector3(box.Width, box.Height, box.Depth) + new Vector3(box.Inflate);
+        var size = new Vector3(box.Width, box.Height, box.Depth);
+        var inflate = new Vector3(box.Inflate);
 
+        EmitBox(box.Offset - inflate, box.Offset + size + inflate, size,
+                box.U, box.V, box.Mirror, Unit, new Vector2(SheetSize, SheetSize),
+                vertices, indices);
+    }
+
+    /// <summary>
+    /// Writes any box wrapped in a net, for a caller whose boxes did not come from this table.
+    /// </summary>
+    /// <param name="net">
+    /// The box's size <em>before</em> inflating, which is what the net was cut for. An overlay grows
+    /// on every side and still reads the same patches.
+    /// </param>
+    /// <param name="unit">Blocks per model unit.</param>
+    /// <param name="sheet">
+    /// Texels across and down the sheet the net is addressed in. ⚠ Not always the sheet's own pixel
+    /// size — see <see cref="CreatureMesh.NetHeight"/>, where a padded square is read as a net with
+    /// spare room under it.
+    /// </param>
+    /// <remarks>
+    /// ⛳ <b>Shared with the creatures on purpose.</b> The face arrangement, the two texture axes and
+    /// the winding are the <em>format's</em>, not the player's — every creature's boxes are cut out
+    /// the same way — and a second transcription of a table where the underside runs backwards is a
+    /// second chance to get it subtly wrong. <see cref="FaceRect"/> was already shared for the same
+    /// reason; this is the other half of it.
+    /// </remarks>
+    public static void EmitBox(
+        Vector3 min, Vector3 max, Vector3 net, int u, int v, bool mirror,
+        float unit, Vector2 sheet, List<ModelVertex> vertices, List<uint> indices)
+    {
         var centre = (min + max) * 0.5f;
         var size = max - min;
+
+        var nw = (int)MathF.Round(net.X);
+        var nh = (int)MathF.Round(net.Y);
+        var nd = (int)MathF.Round(net.Z);
 
         for (var face = 0; face < 6; face++)
         {
             var n = Normals[face];
-            var uAxis = box.Mirror ? -UAxes[face] : UAxes[face];
+            var uAxis = mirror ? -UAxes[face] : UAxes[face];
             var vAxis = VAxes[face];
 
             // Only the component along the face's own axis matters; the other two are zero.
@@ -270,7 +303,13 @@ public static class PlayerModel
             var acrossU = Vector3.Dot(size, Vector3.Abs(uAxis));
             var acrossV = Vector3.Dot(size, Vector3.Abs(vAxis));
 
-            var (rx, ry, rw, rh) = FaceRect(box, face);
+            // A box with no extent along one axis is how the format draws a flat plane — a fish's
+            // fin, a warden's ribbon — and four of its six faces come out as nothing at all. The
+            // two that remain are the plane, back to back, which is what makes it visible from
+            // either side. Emitting the other four costs eight triangles of zero area apiece.
+            if (acrossU <= 0f || acrossV <= 0f) continue;
+
+            var (rx, ry, rw, rh) = FaceRect(u, v, nw, nh, nd, mirror, face);
 
             var first = (uint)vertices.Count;
 
@@ -284,14 +323,14 @@ public static class PlayerModel
                              + uAxis * ((s - 0.5f) * acrossU)
                              + vAxis * ((t - 0.5f) * acrossV);
 
-                var uv = new Vector2((rx + s * rw) / SheetSize, (ry + t * rh) / SheetSize);
-                vertices.Add(new ModelVertex(position * Unit, n, uv));
+                var uv = new Vector2((rx + s * rw) / sheet.X, (ry + t * rh) / sheet.Y);
+                vertices.Add(new ModelVertex(position * unit, n, uv));
             }
 
             // Mirroring reverses the u axis, which reverses the order the corners come out in and
             // with it the winding. Both orders are spelled out rather than one being derived, so
             // the validator below has something independent to disagree with.
-            if (box.Mirror)
+            if (mirror)
             {
                 indices.AddRange([first, first + 1, first + 2, first, first + 2, first + 3]);
             }
