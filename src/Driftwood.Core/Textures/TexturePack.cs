@@ -131,6 +131,20 @@ public sealed class TexturePack : IDisposable
     /// layout is tried for every texture regardless, so a pack that is half one thing and half
     /// another — and merged packs exist — resolves per texture rather than per pack.</para>
     /// </remarks>
+    /// <summary>True when the pack holds a file at exactly this path, whatever shape it is.</summary>
+    /// <remarks>
+    /// ⛳ Asked so a layout we do <em>not</em> read can still be named. A pack with a
+    /// <c>terrain.png</c> at its root is a 2012 atlas pack rather than a broken download, and being
+    /// told which it is turns a dead end into something a player can go and look up.
+    /// </remarks>
+    public bool Has(string path)
+    {
+        foreach (var entry in RawEntries())
+            if (string.Equals(entry, path, StringComparison.OrdinalIgnoreCase)) return true;
+
+        return false;
+    }
+
     private PackDialect FindDialect()
     {
         bool java = false, plural = false, textures = false, assets = false;

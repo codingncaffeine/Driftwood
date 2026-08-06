@@ -54,6 +54,31 @@ public static class Program
             // Which of our own layers a pack actually supplied, and which kept ours. The count in
             // the startup line says how many and never which, and "is the thing I am looking at one
             // of them" is the only question anybody has when a pack looks like it did nothing.
+            // ⛳ The shelf, without opening a window. Every other feature in this project has a way
+            // to be exercised headlessly and the importer had none — which matters more here than
+            // most, because what it is actually being asked to do is read files somebody else made
+            // in formats nobody documented. Real packs are the only test that means anything.
+            if (args.Contains("--packs"))
+            {
+                if (!string.IsNullOrWhiteSpace(options.PackPath))
+                {
+                    var added = PackLibrary.Install(options.PackPath, out var why);
+                    Console.WriteLine(added is { } entry
+                        ? $"added       {entry.Name}  ({entry.Kind})"
+                        : $"refused     {options.PackPath}  ({why})");
+                }
+
+                var shelf = PackLibrary.List();
+                Console.WriteLine($"shelf       {PackLibrary.Folder}");
+                Console.WriteLine(
+                    shelf.Count == 0 ? "            nothing on it" : $"            {shelf.Count} installed");
+
+                foreach (var pack in shelf)
+                    Console.WriteLine($"  {(pack.Readable ? " " : "!")} {pack.Name,-44} {pack.Kind}");
+
+                return shelf.Any(p => !p.Readable) ? 1 : 0;
+            }
+
             if (args.Contains("--pack-report"))
             {
                 Console.WriteLine(
@@ -463,6 +488,7 @@ public static class Program
                 case "--audio-check":
                 case "--pack-coverage":
                 case "--pack-report":
+                case "--packs":
                     break;   // handled in Main; listed here so they are not unknown arguments
                 default:
                     throw new ArgumentException($"unknown argument '{args[i]}' (try --help)");

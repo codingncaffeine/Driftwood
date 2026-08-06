@@ -40,7 +40,7 @@ public static class PackCoverage
         // Items first. A material prefix is stronger than a material rule — copper_axe is a tool,
         // not a copper mechanic, and putting the metal rule first quietly files every tool it
         // makes under the wrong heading.
-        new("armour and tools", "no items that are not blocks yet",
+        new("armour and tools", "tools and shears exist; armour is the whole of what is missing",
             n => n.EndsWith("_helmet") || n.EndsWith("_chestplate") || n.EndsWith("_leggings")
               || n.EndsWith("_boots") || n.EndsWith("_sword") || n.EndsWith("_pickaxe")
               || n.EndsWith("_axe") || n.EndsWith("_shovel") || n.EndsWith("_hoe")
@@ -78,7 +78,7 @@ public static class PackCoverage
             n => n.Contains("sign") || n.Contains("boat") || n.Contains("ladder")
               || n.Contains("bookshelf") || n.Contains("sapling") || n.EndsWith("_leaves")),
 
-        new("ores and raw metal", "six ores today; smelting turns them into something",
+        new("ores and raw metal", "seven ores and their ingots; the deep bands are new",
             n => n.EndsWith("_ore") || n.StartsWith("raw_") || n.EndsWith("_ingot")
               || n.EndsWith("_nugget") || n.EndsWith("_block")),
 
@@ -92,7 +92,7 @@ public static class PackCoverage
               || n.Contains("gravel") || n.Contains("clay") || n.Contains("mud")
               || n.Contains("podzol") || n.Contains("mycelium") || n.Contains("farmland")),
 
-        new("plants and crops", "three plants today; farming is a system on its own",
+        new("plants and crops", "five blooms and a tuft; farming and growth are still a system on their own",
             n => n.Contains("flower") || n.Contains("_bush") || n.Contains("wheat")
               || n.Contains("carrot") || n.Contains("potato") || n.Contains("beetroot")
               || n.Contains("melon") || n.Contains("pumpkin") || n.Contains("mushroom")
@@ -100,12 +100,12 @@ public static class PackCoverage
               || n.Contains("seagrass") || n.Contains("kelp") || n.Contains("cactus")
               || n.Contains("bamboo") || n.Contains("sugar_cane")),
 
-        new("wool, dye and cloth", "sheep, dyes, carpets, beds, banners — nothing yet",
+        new("wool, dye and cloth", "wool, carpet and dye in sixteen colours; beds and banners are not started",
             n => n.Contains("wool") || n.Contains("carpet") || n.Contains("_dye")
               || n.Contains("bed") || n.Contains("banner") || n.Contains("terracotta")
               || n.Contains("concrete") || n.Contains("glazed")),
 
-        new("glass and light", "no glass, no placeable light but a torch",
+        new("glass and light", "glass, smokeglass, lanterns, campfires and a lamp; no stained glass",
             n => n.Contains("glass") || n.Contains("torch") || n.Contains("lantern")
               || n.Contains("lamp") || n.Contains("candle") || n.Contains("glowstone")
               || n.Contains("campfire") || n.Contains("fire")),
@@ -117,7 +117,7 @@ public static class PackCoverage
               || n.Contains("loom") || n.Contains("smoker") || n.Contains("grindstone")
               || n.Contains("stonecutter") || n.Contains("composter") || n.Contains("shulker")),
 
-        new("water, ice and the sea", "water exists and does not flow; no ice, no coral",
+        new("water, ice and the sea", "water and lava both flow now; no ice, no coral",
             n => n.Contains("water") || n.Contains("ice") || n.Contains("coral")
               || n.Contains("prismarine") || n.Contains("sponge") || n.Contains("conduit")
               || n.Contains("bubble")),
@@ -140,6 +140,91 @@ public static class PackCoverage
             n => n.Contains("potion") || n.Contains("enchant") || n.Contains("experience")
               || n.Contains("book") || n.Contains("blaze") || n.Contains("ghast")),
     ];
+
+    /// <summary>One family of art a pack carries, and how much of it we have anything to put on.</summary>
+    public readonly record struct Gap(string Label, int Files, int Covered);
+
+    /// <summary>What a pack carries, in numbers rather than in prose.</summary>
+    /// <param name="Art">Block and item pictures in the pack, companion maps excluded.</param>
+    /// <param name="Covered">How many of those we actually consume.</param>
+    /// <param name="Biggest">The families with the most art we have nothing for, largest first.</param>
+    public readonly record struct Summary(int Art, int Covered, IReadOnlyList<Gap> Biggest);
+
+    /// <summary>
+    /// The same walk as <see cref="Report"/>, answered as numbers so a screen can say it.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ <b>The user asked for it in these words:</b> <i>"if there's things that the pack
+    /// provides textures for that we don't have yet, we should have a tally of that stuff
+    /// somewhere"</i>. The walk existed and was a command-line flag — which is to say it existed for
+    /// me and not for them. This is the same answer with the prose taken off it.</para>
+    /// <para>⚠ <b>Paths only, never pixels.</b> It reads the archive's index and nothing else, so a
+    /// six-hundred-megabyte pack costs about what a small one does and a screen can ask on the way
+    /// in rather than making somebody wait for it.</para>
+    /// <para>⛔ Off the same <see cref="Families"/> table <see cref="Report"/> uses. A second list of
+    /// rules would agree with it until the day one of them was edited, and the symptom would be two
+    /// instruments quietly disagreeing about what the game is missing.</para>
+    /// </remarks>
+    public static Summary Tally(string packPath)
+    {
+        using var pack = TexturePack.Open(packPath);
+        if (pack is null) return new Summary(0, 0, []);
+
+        var consumed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var layer in BlockTextureSet.Layers)
+        {
+            if (layer.PackPath.Length > 0)
+                foreach (var stem in PackLayouts.AllStems(layer.PackPath)) consumed.Add(stem);
+
+            if (layer.PackPathAlt.Length > 0)
+                foreach (var stem in PackLayouts.AllStems(layer.PackPathAlt)) consumed.Add(stem);
+        }
+
+        var byFamily = new Dictionary<string, (int Files, int Covered)>(StringComparer.Ordinal);
+        int art = 0, covered = 0;
+
+        foreach (var entry in pack.Entries())
+        {
+            if (!entry.EndsWith(".png", StringComparison.OrdinalIgnoreCase)) continue;
+            if (entry.Contains("/models/") || entry.Contains("/blockstates/")) continue;
+            if (PackLayouts.IsCompanionMap(entry)) continue;
+
+            // Both spellings and both roots, for the reason Report gives: one layout reaches the
+            // folder through assets/ and a namespace, the other has it at the pack's own root.
+            var wanted = Folder(entry, "block") || Folder(entry, "blocks")
+                      || Folder(entry, "item") || Folder(entry, "items");
+
+            if (!wanted) continue;
+
+            art++;
+
+            var stem = Path.GetFileNameWithoutExtension(entry);
+            var mine = consumed.Contains(stem) ? 1 : 0;
+            covered += mine;
+
+            foreach (var family in Families)
+            {
+                if (!family.Matches(stem)) continue;
+
+                byFamily.TryGetValue(family.Label, out var run);
+                byFamily[family.Label] = (run.Files + 1, run.Covered + mine);
+                break;
+            }
+        }
+
+        var gaps = byFamily
+            .Select(f => new Gap(f.Key, f.Value.Files, f.Value.Covered))
+            .Where(g => g.Covered < g.Files)
+            .OrderByDescending(g => g.Files - g.Covered)
+            .Take(6)
+            .ToArray();
+
+        return new Summary(art, covered, gaps);
+
+        static bool Folder(string path, string folder) =>
+            path.Contains($"/textures/{folder}/", StringComparison.OrdinalIgnoreCase)
+            || path.StartsWith($"textures/{folder}/", StringComparison.OrdinalIgnoreCase);
+    }
 
     /// <summary>Reads a pack and returns the report.</summary>
     public static string Report(string packPath)

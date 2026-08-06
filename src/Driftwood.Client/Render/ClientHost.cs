@@ -3531,9 +3531,28 @@ public sealed class ClientHost : IDisposable
     private IReadOnlyList<PackLibrary.Entry> _packs = [];
     private string _packNote = "";
 
+    /// <summary>What the pack being worn carries that we have nothing to put it on.</summary>
+    private PackCoverage.Summary? _packTally;
+
     private void ReadPacksFolder()
     {
         _packs = PackLibrary.List();
+
+        // ⛳ Only for the pack actually WORN, and only when the tab is opened. It reads the
+        // archive's index rather than any pixels, so a six-hundred-megabyte pack costs about what a
+        // small one does — but doing it for every pack on the shelf on every refresh would not.
+        _packTally = null;
+        if (_packPath is not { } worn) return;
+
+        try
+        {
+            _packTally = PackCoverage.Tally(worn);
+        }
+        catch (Exception error) when (
+            error is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            _packTally = null;
+        }
     }
 
     /// <summary>
@@ -3573,6 +3592,28 @@ public sealed class ClientHost : IDisposable
                 Note: pack.Readable
                     ? $"{pack.Kind}. Enter wears it — the game restarts to build the textures"
                     : $"{pack.Kind}. Enter takes it off the shelf"));
+        }
+
+        // ⛳ WHAT IT CARRIES THAT WE HAVE NOTHING FOR, which the user asked for by name. The walk
+        // has existed since the material pass as --pack-coverage, which is to say it existed for me
+        // and not for anybody playing. Only for the pack being worn: it is a content-planning
+        // question about the art in front of you, not a survey of the shelf.
+        if (_packTally is { } tally && tally.Art > 0)
+        {
+            var share = tally.Covered * 100.0 / tally.Art;
+
+            _hudScreen.Rows.Add(new MenuRow("what it covers", Heading: true));
+            _hudScreen.Rows.Add(new MenuRow(
+                "art in this pack", $"{tally.Art:N0} pictures",
+                Note: $"{tally.Covered} of them land on something in the game ({share:F0}%). "
+                    + "The rest is art for things we have not built yet"));
+
+            foreach (var gap in tally.Biggest)
+                _hudScreen.Rows.Add(new MenuRow(
+                    gap.Label, $"{gap.Files - gap.Covered} unused",
+                    Note: gap.Covered == 0
+                        ? $"{gap.Files} files and nothing in the game wears any of them"
+                        : $"{gap.Files} files, {gap.Covered} of them used"));
         }
 
         _hudScreen.Rows.Add(new MenuRow("add one", Heading: true));

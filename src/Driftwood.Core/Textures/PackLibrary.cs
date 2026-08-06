@@ -182,13 +182,20 @@ public static class PackLibrary
             using var pack = TexturePack.Open(path);
             if (pack is null) return new Entry(name, path, "not a texture pack", false);
 
+            // ⛔ AN UNRECOGNISED LAYOUT IS NOT READABLE, and this was found on a real file rather
+            // than reasoned about. Picture-perfect-pack-128X128 opens perfectly, reports no dialect,
+            // and yields nothing — so the shelf called it fine, and a player would have worn it,
+            // relaunched, and seen exactly no change with nothing anywhere saying why. Opening
+            // without exploding is not the same as being usable.
+            if (pack.Dialect is not (PackDialect.Java or PackDialect.JavaLegacy or PackDialect.Bedrock))
+                return new Entry(name, path, Unrecognised(pack), false);
+
             var size = pack.DetectResolution();
             var dialect = pack.Dialect switch
             {
                 PackDialect.Java => "Java",
                 PackDialect.JavaLegacy => "Java, pre-flattening",
-                PackDialect.Bedrock => "Bedrock",
-                _ => "unknown layout",
+                _ => "Bedrock",
             };
 
             return new Entry(name, path, $"{dialect}, {size}px", true);
@@ -201,6 +208,21 @@ public static class PackLibrary
             return new Entry(name, path, error.Message, false);
         }
     }
+
+    /// <summary>
+    /// Names the shape a pack turned out to be when it is one we do not read.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>"We do not read this yet" is a far better answer than "cannot read this".</b> The 2012
+    /// atlas format is a real, enormous body of packs — one <c>terrain.png</c> holding every block
+    /// on a grid, with <c>pack.txt</c> beside it — and somebody holding one has not done anything
+    /// wrong. Telling them which format it is turns a dead end into a thing they can look up, and
+    /// tells us which format to add next.
+    /// </remarks>
+    private static string Unrecognised(TexturePack pack) =>
+        pack.Has("terrain.png")
+            ? "a pre-2013 terrain.png pack — that layout is not read yet"
+            : "the layout is not one we know: no assets/, no textures/, no terrain.png";
 
     private static void CopyFolder(string from, string to)
     {
