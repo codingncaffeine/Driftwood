@@ -138,6 +138,7 @@ public static class ChunkShaders
 
         uniform sampler2DArray uBlocks;
         uniform vec3 uFogColor;
+        uniform float uAlpha;
 
         out vec4 FragColor;
 
@@ -149,7 +150,11 @@ public static class ChunkShaders
             // keeps them in the opaque pass, where they need no sorting and still write depth.
             if (texel.a < 0.5) discard;
 
-            FragColor = vec4(mix(texel.rgb * vLight, uFogColor, vFog), 1.0);
+            // ⛳ Alpha belongs to the PASS, not to the tile. Water's own texture is fully opaque and
+            // has to stay that way — the cutout discard above and the whole mip chain are built on
+            // every block texture being one or the other — so what makes a lake see-through is which
+            // pass drew it. The opaque pass sets this to one and pays nothing.
+            FragColor = vec4(mix(texel.rgb * vLight, uFogColor, vFog), uAlpha);
         }
         """;
 }

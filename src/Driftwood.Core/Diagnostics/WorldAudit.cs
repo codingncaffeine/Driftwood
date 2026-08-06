@@ -352,6 +352,10 @@ public static class WorldAudit
         Check("where a thing lives takes two questions", spawnFaults.Count == 0,
             spawnFaults.Count == 0 ? spawnDetail : string.Join("; ", spawnFaults));
 
+        var passFaults = TranslucentPassFaults(registry, ids, out var passDetail);
+        Check("water is meshed into a pass of its own", passFaults.Count == 0,
+            passFaults.Count == 0 ? passDetail : string.Join("; ", passFaults));
+
         var frustumFaults = Frustum.SelfTest();
         Check("frustum culls correctly", frustumFaults.Count == 0,
             frustumFaults.Count == 0
@@ -6450,6 +6454,77 @@ public static class WorldAudit
     }
 
     private static BlockId At(VoxelWorld world, int x, int y, int z) => world.GetBlock(x, y, z);
+
+    /// <summary>
+    /// Meshes three chunks — stone, stone with water in it, and stone with lava in it — and asks
+    /// which pass each one's geometry landed in.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛔ <b>Three worlds because one proves nothing.</b> "The water chunk has translucent
+    /// geometry" is satisfied by a mesher that puts <em>everything</em> in the second pass, which
+    /// would draw the whole world see-through; the stone chunk is what refuses that. And the lava
+    /// chunk is the other control: lava is a fluid too and belongs in the FIRST pass, so a rule
+    /// written on "is it a fluid" rather than "is it water" fails here and nowhere else.</para>
+    /// <para>Whether a lake <em>looks</em> right is the user's eyes and always was. This is the half
+    /// that can be settled without them: that the geometry exists, that it is separated, and that
+    /// the split is where it was meant to be.</para>
+    /// </remarks>
+    private static List<string> TranslucentPassFaults(
+        BlockRegistry registry, StarterBlocks.Ids ids, out string detail)
+    {
+        var faults = new List<string>();
+
+        var dry = MeshOne(BlockId.Air);
+        var wet = MeshOne(ids.Water);
+        var hot = MeshOne(ids.Lava);
+
+        if (dry is null || wet is null || hot is null)
+        {
+            detail = "one of the three test chunks meshed to nothing";
+            faults.Add(detail);
+            return faults;
+        }
+
+        if (dry.HasTranslucent)
+            faults.Add($"a chunk of plain stone put {dry.IndexCount - dry.OpaqueIndexCount} indices in the water pass");
+
+        if (!wet.HasTranslucent)
+            faults.Add("a chunk with a pool in it drew no water at all in the second pass");
+
+        if (wet.OpaqueIndexCount == 0)
+            faults.Add("a chunk with a pool in it put ALL of its geometry in the water pass");
+
+        if (hot.HasTranslucent)
+            faults.Add("lava was meshed into the water pass — it is opaque and emissive and belongs in the first");
+
+        if (hot.OpaqueIndexCount != hot.IndexCount)
+            faults.Add("the lava chunk's two halves do not add up");
+
+        detail = $"stone {dry.OpaqueIndexCount}/0 indices, a pool {wet.OpaqueIndexCount}/"
+               + $"{wet.IndexCount - wet.OpaqueIndexCount}, lava {hot.OpaqueIndexCount}/0";
+
+        return faults;
+
+        ChunkMeshData? MeshOne(BlockId fill)
+        {
+            var world = new VoxelWorld(registry);
+            world.GetOrCreateChunk(new ChunkPos(0, 0, 0));
+
+            for (var z = 0; z < Chunk.Size; z++)
+            for (var x = 0; x < Chunk.Size; x++)
+            for (var y = 0; y < 8; y++)
+                Put(world, x, y, z, ids.Stone);
+
+            // A square hollow in the top of it, filled or left as air.
+            if (!fill.IsAir)
+                for (var z = 8; z < 24; z++)
+                for (var x = 8; x < 24; x++)
+                    Put(world, x, 7, z, fill);
+
+            new LightEngine(registry).LightAll(world);
+            return new ChunkMesher(registry).Build(world, new ChunkPos(0, 0, 0));
+        }
+    }
 
     /// <summary>
     /// The four cells that matter, put through both spawn questions.

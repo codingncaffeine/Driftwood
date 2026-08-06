@@ -5050,8 +5050,12 @@ public sealed class ClientHost : IDisposable
         _chunkShader.SetFloat("uFogStart", _fogStart);
         _chunkShader.SetFloat("uFogEnd", _fogEnd);
 
+        _chunkShader.SetFloat("uAlpha", 1f);
+
         var drawn = 0;
         var triangles = 0;
+        _wetChunks.Clear();
+
         foreach (var mesh in _meshes.Values)
         {
             if (!_frustumCulling) { }
@@ -5062,7 +5066,11 @@ public sealed class ClientHost : IDisposable
             mesh.Draw();
             drawn++;
             triangles += mesh.IndexCount / 3;
+
+            if (mesh.HasTranslucent) _wetChunks.Add(mesh);
         }
+
+        DrawWater();
 
         _drawnChunks = drawn;
         _drawnTriangles = triangles;
@@ -7115,6 +7123,63 @@ public sealed class ClientHost : IDisposable
     /// <summary>
     /// Draws whichever part of the player this view mode can see: all of them, or just the arm.
     /// </summary>
+    /// <summary>Chunks with water in them, collected as the opaque pass walks them.</summary>
+    private readonly List<ChunkMeshGpu> _wetChunks = [];
+
+    /// <summary>How much of what is behind it a lake keeps. Deep enough to read, clear enough to see through.</summary>
+    private const float WaterAlpha = 0.72f;
+
+    /// <summary>
+    /// The second pass: water, sorted back to front, tested against depth but not writing it.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛔ <b>Carried since the first spike and it came due the moment water flowed.</b> A flat
+    /// lake gets away with being drawn in the opaque pass; a river at half a dozen depths, seen
+    /// through itself, does not — that is exactly the case an unsorted opaque pass gets visibly
+    /// wrong.</para>
+    /// <para><b>Per chunk, not per quad.</b> A sort of every water face every frame is correct and
+    /// costs a sort every frame; a chunk is 32 blocks across, so the only case it gets wrong is two
+    /// water surfaces in one chunk seen through each other at a shallow angle. Measure before paying
+    /// for the other one.</para>
+    /// <para>⛔ <b>Depth-tested and not depth-written</b>, or the near surface of a lake hides the far
+    /// one and the whole point is lost. Culling comes off too: from under the water you are looking
+    /// at the back of every quad above you.</para>
+    /// <para>⚠ <b>And every bit of state is put back.</b> Every pass in this renderer restores what
+    /// it changed, and this one runs in the middle of the frame with the outline, the cracks, the
+    /// particles and the clouds still to come.</para>
+    /// </remarks>
+    private void DrawWater()
+    {
+        if (_wetChunks.Count == 0) return;
+
+        var eye = _viewPosition;
+        _wetChunks.Sort((a, b) =>
+            Vector3.DistanceSquared(b.BoundsMin + HalfChunk, eye)
+                .CompareTo(Vector3.DistanceSquared(a.BoundsMin + HalfChunk, eye)));
+
+        _gl.Enable(EnableCap.Blend);
+        _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+        _gl.DepthMask(false);
+        _gl.Disable(EnableCap.CullFace);
+
+        _chunkShader.SetFloat("uAlpha", WaterAlpha);
+
+        foreach (var mesh in _wetChunks)
+        {
+            _chunkShader.SetVec3("uChunkOrigin", mesh.Origin);
+            _chunkShader.SetVec3Array("uTint", mesh.TintPalette);
+            mesh.DrawTranslucent();
+        }
+
+        _chunkShader.SetFloat("uAlpha", 1f);
+
+        _gl.Enable(EnableCap.CullFace);
+        _gl.DepthMask(true);
+        _gl.Disable(EnableCap.Blend);
+    }
+
+    private static readonly Vector3 HalfChunk = new(Chunk.Size * 0.5f);
+
     private void DrawPlayer(Matrix4x4 viewProj, Matrix4x4 projection, Matrix4x4 view)
     {
         // Neither the benchmark nor the menu has anybody in the world. ⚠ The menu matters for a

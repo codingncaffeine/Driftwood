@@ -77,6 +77,28 @@ public sealed class ChunkMesher
     private int _vertexCount;
     private int _indexCount;
 
+    /// <summary>
+    /// Indices for the see-through pass, held aside and appended after the opaque ones.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ Collected rather than emitted in place, because the two passes have to be contiguous for a
+    /// draw call to be an offset and a count — and the mesher visits faces by direction, so wet and
+    /// dry quads arrive interleaved. Both halves index the same vertex buffer.
+    /// </remarks>
+    private uint[] _late = new uint[4 * 1024];
+    private int _lateCount;
+
+    /// <summary>
+    /// Which texture layers belong in the second pass, by layer id.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>Keyed on the layer rather than on the block, because that is what a quad carries by the
+    /// time it is emitted</b> — the greedy path has merged a whole rectangle by then and the block id
+    /// is gone. It is exact: nothing but water draws water's tiles, and the table is built from the
+    /// registry rather than from a list of layer numbers somebody has to keep up to date.
+    /// </remarks>
+    private readonly bool[] _lateLayer;
+
     /// <summary>Coplanar cube passes any block in the chunk being meshed actually draws.</summary>
     private int _passesPresent;
 
@@ -110,6 +132,17 @@ public sealed class ChunkMesher
         _tintSource = new TintSource[registry.Count];
         for (var id = 0; id < registry.Count; id++)
             _tintSource[id] = registry[(ushort)id].Tint;
+
+        // Every layer any water block draws, off the registry. Lava is deliberately not here: it is
+        // opaque and emissive and belongs in the first pass, which is what let it ship before this.
+        _lateLayer = new bool[ushort.MaxValue];
+        for (var id = 1; id < registry.Count; id++)
+        {
+            var type = registry[(ushort)id];
+            if (type.Fluid != FluidKind.Water) continue;
+
+            foreach (var quad in type.Model.Quads) _lateLayer[quad.Layer] = true;
+        }
     }
 
     /// <summary>
@@ -157,6 +190,8 @@ public sealed class ChunkMesher
         SurveyShapes(chunk);
         _vertexCount = 0;
         _indexCount = 0;
+        _lateCount = 0;
+        _lateNow = false;
 
         // Index 0 is white so an untinted face needs no special case in the shader.
         _tintPalette.Clear();
@@ -167,7 +202,18 @@ public sealed class ChunkMesher
 
         if (_modelsPresent) MeshModels();
 
-        if (_indexCount == 0) return null;
+        if (_indexCount + _lateCount == 0) return null;
+
+        // The see-through half, appended so the two passes are contiguous ranges of one buffer.
+        var opaqueIndices = _indexCount;
+        if (_lateCount > 0)
+        {
+            while (_indexCount + _lateCount > _indices.Length)
+                Array.Resize(ref _indices, _indices.Length * 2);
+
+            Array.Copy(_late, 0, _indices, _indexCount, _lateCount);
+            _indexCount += _lateCount;
+        }
 
         var palette = new float[_tintPalette.Count * 3];
         for (var i = 0; i < _tintPalette.Count; i++)
@@ -182,6 +228,7 @@ public sealed class ChunkMesher
             Position = pos,
             Vertices = _vertices.AsSpan(0, _vertexCount).ToArray(),
             Indices = _indices.AsSpan(0, _indexCount).ToArray(),
+            OpaqueIndexCount = opaqueIndices,
             TintPalette = palette,
         };
     }
@@ -444,6 +491,8 @@ public sealed class ChunkMesher
         var tint = (key >> 8) & 0x3F;
         var corners = Faces.Corners[face];
 
+        _lateNow = _lateLayer[layer];
+
         Span<int> ao = stackalloc int[4];
         for (var c = 0; c < 4; c++) ao[c] = (key >> (c * 2)) & 0x3;
 
@@ -519,6 +568,8 @@ public sealed class ChunkMesher
         var tint = quad.Tinted ? TintIndexFor(block, ox + x, oy + y, oz + z) : 0;
         var face = quad.Shade ? quad.Face : ChunkVertex.UnshadedFace;
 
+        _lateNow = _lateLayer[quad.Layer];
+
         Span<int> ao = stackalloc int[4];
         Span<ushort> light = stackalloc ushort[4];
 
@@ -574,25 +625,40 @@ public sealed class ChunkMesher
     /// </remarks>
     private void EmitIndices(uint baseIndex, bool flip)
     {
-        if (flip)
+        if (_lateNow)
         {
-            _indices[_indexCount++] = baseIndex + 1;
-            _indices[_indexCount++] = baseIndex + 2;
-            _indices[_indexCount++] = baseIndex + 3;
-            _indices[_indexCount++] = baseIndex + 1;
-            _indices[_indexCount++] = baseIndex + 3;
-            _indices[_indexCount++] = baseIndex + 0;
+            if (_lateCount + 6 > _late.Length) Array.Resize(ref _late, _late.Length * 2);
+            Wind(_late, ref _lateCount);
+            return;
         }
-        else
+
+        Wind(_indices, ref _indexCount);
+
+        void Wind(uint[] into, ref int at)
         {
-            _indices[_indexCount++] = baseIndex + 0;
-            _indices[_indexCount++] = baseIndex + 1;
-            _indices[_indexCount++] = baseIndex + 2;
-            _indices[_indexCount++] = baseIndex + 0;
-            _indices[_indexCount++] = baseIndex + 2;
-            _indices[_indexCount++] = baseIndex + 3;
+            if (flip)
+            {
+                into[at++] = baseIndex + 1;
+                into[at++] = baseIndex + 2;
+                into[at++] = baseIndex + 3;
+                into[at++] = baseIndex + 1;
+                into[at++] = baseIndex + 3;
+                into[at++] = baseIndex + 0;
+            }
+            else
+            {
+                into[at++] = baseIndex + 0;
+                into[at++] = baseIndex + 1;
+                into[at++] = baseIndex + 2;
+                into[at++] = baseIndex + 0;
+                into[at++] = baseIndex + 2;
+                into[at++] = baseIndex + 3;
+            }
         }
     }
+
+    /// <summary>Set by whichever emitter is about to wind a quad. Read once, immediately.</summary>
+    private bool _lateNow;
 
     /// <summary>Maps slice/u/v on an axis triple back to block coordinates.</summary>
     private static (int X, int Y, int Z) Compose(int axis, int au, int av, int slice, int u, int v)

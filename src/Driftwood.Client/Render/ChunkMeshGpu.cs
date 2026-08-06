@@ -18,6 +18,9 @@ public sealed class ChunkMeshGpu : IDisposable
     public int IndexCount { get; }
     public int VertexCount { get; }
 
+    /// <summary>How many indices belong to the first pass. The rest are see-through.</summary>
+    public int OpaqueIndexCount { get; }
+
     /// <summary>Climate colours this chunk's vertices index into, as rgb triplets.</summary>
     public float[] TintPalette { get; }
 
@@ -30,6 +33,7 @@ public sealed class ChunkMeshGpu : IDisposable
         _gl = gl;
         Position = data.Position;
         IndexCount = data.IndexCount;
+        OpaqueIndexCount = data.OpaqueIndexCount;
         VertexCount = data.VertexCount;
         TintPalette = data.TintPalette;
 
@@ -77,11 +81,36 @@ public sealed class ChunkMeshGpu : IDisposable
         _gl.BindVertexArray(0);
     }
 
+    /// <summary>Everything that writes depth: the world, and lava with it.</summary>
     public unsafe void Draw()
     {
+        if (OpaqueIndexCount == 0) return;
+
         _gl.BindVertexArray(_vao);
-        _gl.DrawElements(PrimitiveType.Triangles, (uint)IndexCount, DrawElementsType.UnsignedInt, (void*)0);
+        _gl.DrawElements(
+            PrimitiveType.Triangles, (uint)OpaqueIndexCount, DrawElementsType.UnsignedInt, (void*)0);
     }
+
+    /// <summary>
+    /// The see-through half, which is water: the same buffer, from an offset.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ The offset is in <b>bytes</b> and an index is four of them — the sort of mistake that draws
+    /// the wrong triangles rather than failing.
+    /// </remarks>
+    public unsafe void DrawTranslucent()
+    {
+        var count = IndexCount - OpaqueIndexCount;
+        if (count <= 0) return;
+
+        _gl.BindVertexArray(_vao);
+        _gl.DrawElements(
+            PrimitiveType.Triangles, (uint)count, DrawElementsType.UnsignedInt,
+            (void*)(nint)(OpaqueIndexCount * sizeof(uint)));
+    }
+
+    /// <summary>True when this chunk draws anything in the second pass.</summary>
+    public bool HasTranslucent => IndexCount > OpaqueIndexCount;
 
     public void Dispose()
     {

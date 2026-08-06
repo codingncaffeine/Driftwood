@@ -24,7 +24,24 @@ public sealed class ChunkMeshData
     /// </remarks>
     public required float[] TintPalette { get; init; }
 
+    /// <summary>
+    /// How many of <see cref="Indices"/> belong to the opaque pass. The rest are see-through.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ <b>One buffer with a split point rather than two meshes</b>, because both halves index
+    /// the same vertices and a second buffer would duplicate every one of them. The mesher collects
+    /// see-through quads into a list of their own and appends it, so drawing either half is an offset
+    /// and a count.</para>
+    /// <para>⛔ <b>Water, not "fluid".</b> Lava is opaque and emissive and stays in the first pass —
+    /// which is the whole reason it was built first, since it dodges sorting entirely. Sorting is the
+    /// debt this pays, and it comes due for water alone.</para>
+    /// </remarks>
+    public required int OpaqueIndexCount { get; init; }
+
     public int VertexCount => Vertices.Length;
     public int IndexCount => Indices.Length;
     public int TriangleCount => Indices.Length / 3;
+
+    /// <summary>True when this chunk draws anything in the second pass.</summary>
+    public bool HasTranslucent => Indices.Length > OpaqueIndexCount;
 }
