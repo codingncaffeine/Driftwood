@@ -198,8 +198,7 @@ public static class Program
         if (pack is not null)
             Console.WriteLine($"pack        {pack.Name} ({pack.Dialect.ToString().ToLowerInvariant()})");
 
-        var size = pack?.DetectResolution() ?? TileGen.Size;
-        var resolved = CreatureLibrary.Resolve(models, pack, size);
+        var resolved = CreatureLibrary.Resolve(models, pack);
 
         Console.WriteLine();
         Console.WriteLine(CreatureLibrary.Report(models, resolved));

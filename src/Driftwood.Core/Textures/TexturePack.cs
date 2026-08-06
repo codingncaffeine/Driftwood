@@ -371,6 +371,40 @@ public sealed class TexturePack : IDisposable
     public byte[]? TryLoadTile(string assetPath, int size) => TryLoadTile(assetPath, size, out _);
 
     /// <summary>
+    /// Loads one texture at whatever shape it was painted, without squaring it.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>A creature's skin is not a tile and must not go through <see cref="TryLoadTile"/>.</b>
+    /// Every path in this class until now led to a square: a block face is square, so the tile
+    /// loader resamples to size×size and that is right for all of it. An entity sheet is a NET —
+    /// 64×32 for a cow, 64×64 for a sheep — and squaring one moves every patch on it, so the model
+    /// would wear the correct texture with every face reading from the wrong place. The player's own
+    /// skin already avoids this by going through <c>PlayerSkin</c> rather than through here; a
+    /// creature has no such door, and this is it.
+    /// <para>Handed back at the pack's own resolution rather than scaled to anything. A net is
+    /// addressed in texels of a 64-wide sheet whatever it is stored at, so the reader scales the
+    /// coordinates and never the image — which is also how a 256-pixel pack keeps its detail.</para>
+    /// </remarks>
+    public Image? TryLoadSheet(string assetPath, out string from)
+    {
+        var raw = ReadAsset(assetPath, out from);
+        if (raw is null)
+        {
+            Missing++;
+            return null;
+        }
+
+        if (!Png.TryDecode(raw, out var image, out var error))
+        {
+            Faults.Add($"{from}: {error}");
+            return null;
+        }
+
+        Loaded++;
+        return image;
+    }
+
+    /// <summary>
     /// One texture's frames, ready to play.
     /// </summary>
     /// <param name="Seconds">How long each frame in <paramref name="Frames"/> is held.</param>

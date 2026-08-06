@@ -109,8 +109,15 @@ public static class CreatureSet
     ];
 
     /// <summary>What a creature resolved to, or why it did not.</summary>
+    /// <param name="SkinWidth">
+    /// The sheet's own width, and <paramref name="SkinHeight"/> its own height. ⛔ <b>Not squared.</b>
+    /// A creature's skin is a net, not a tile — a cow's is 64×32 — and putting one through the tile
+    /// loader moves every patch on it, so the model wears the right texture with every face reading
+    /// from the wrong place. See <c>TexturePack.TryLoadSheet</c>.
+    /// </param>
     public readonly record struct Resolved(
-        CreatureKind Kind, CreatureModel? Skeleton, string SkeletonFrom, string SkinFrom, int SkinSize);
+        CreatureKind Kind, CreatureModel? Skeleton, string SkeletonFrom, string SkinFrom,
+        int SkinWidth, int SkinHeight);
 
     /// <summary>
     /// Matches one of our creatures to a skeleton among everything that was read.

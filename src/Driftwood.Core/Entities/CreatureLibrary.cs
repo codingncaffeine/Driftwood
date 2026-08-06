@@ -96,8 +96,14 @@ public static class CreatureLibrary
     /// <summary>
     /// Resolves every creature in <see cref="CreatureSet.All"/> against a geometry folder and a pack.
     /// </summary>
-    public static List<CreatureSet.Resolved> Resolve(
-        IReadOnlyList<CreatureModel> models, TexturePack? pack, int skinSize)
+    /// <remarks>
+    /// ⛔ The skin comes back through <c>TryLoadSheet</c>, at the shape it was painted. It went
+    /// through the tile loader first, which squares everything — right for a block face and wrong
+    /// for every creature, because a net addressed in texels of a 64×32 sheet lands on different
+    /// pixels the moment the sheet is stretched to 64×64. Nothing would have thrown; every animal
+    /// would simply have worn its own texture inside out.
+    /// </remarks>
+    public static List<CreatureSet.Resolved> Resolve(IReadOnlyList<CreatureModel> models, TexturePack? pack)
     {
         var resolved = new List<CreatureSet.Resolved>(CreatureSet.All.Length);
 
@@ -106,23 +112,25 @@ public static class CreatureLibrary
             var skeleton = CreatureSet.Match(models, kind.Skeleton);
 
             var from = "";
-            var size = 0;
+            var width = 0;
+            var height = 0;
 
             if (pack is not null)
             {
                 foreach (var path in kind.Skins)
                 {
-                    var tile = pack.TryLoadTile(path, skinSize, out var where);
-                    if (tile is null) continue;
+                    var sheet = pack.TryLoadSheet(path, out var where);
+                    if (sheet is null) continue;
 
                     from = where;
-                    size = skinSize;
+                    width = sheet.Width;
+                    height = sheet.Height;
                     break;
                 }
             }
 
             resolved.Add(new CreatureSet.Resolved(
-                kind, skeleton, skeleton?.Name ?? "", from, size));
+                kind, skeleton, skeleton?.Name ?? "", from, width, height));
         }
 
         return resolved;
@@ -160,7 +168,28 @@ public static class CreatureLibrary
                 $"{entry.Kind.Name,-11} {entry.SkeletonFrom,-18} "
                 + $"{model.SheetWidth,3}x{model.SheetHeight,-5} {model.Bones.Length,5} {model.CubeCount,5}  "
                 + $"{extent.X,4:F2} x {extent.Y,4:F2} x {extent.Z,4:F2}  "
-                + (entry.SkinFrom.Length > 0 ? entry.SkinFrom : "— no skin —"));
+                + (entry.SkinFrom.Length > 0
+                    ? $"{entry.SkinWidth}x{entry.SkinHeight} {entry.SkinFrom}"
+                    : "— no skin —"));
+
+            // ⛔ The sheet has to be the shape the skeleton says it is, or every patch on it is in
+            // the wrong place. A 256-pixel pack paints a cow at 256x128 — the same 2:1 — so this
+            // compares the RATIO, not the size.
+            //
+            // ⛳ It found two real cases on the first run, and they are different problems. Some of
+            // Intermacgod's sheets are PADDED SQUARE (a cow at 1024x1024 where the net is 2:1), and
+            // the answer there is to scale by the WIDTH alone and ignore the spare height — the art
+            // is in the top of the image where the net says it is. Others are a genuine version
+            // mismatch (its spider is 2:1 against a skeleton cut for 1:1), and no scaling fixes
+            // that; it wants the older skeleton. Both look identical on screen — an animal wearing
+            // its own texture inside out — which is why it is a line in a report and not a guess.
+            if (entry.SkinWidth > 0
+                && entry.SkinWidth * model.SheetHeight != entry.SkinHeight * model.SheetWidth)
+            {
+                text.AppendLine(
+                    $"            ⚠ the sheet is {entry.SkinWidth}x{entry.SkinHeight}, which is not the "
+                    + $"{model.SheetWidth}x{model.SheetHeight} shape the skeleton is cut for");
+            }
 
             foreach (var fault in faults) text.AppendLine($"            ⚠ {fault}");
         }
