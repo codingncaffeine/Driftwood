@@ -739,6 +739,12 @@ public static class WorldAudit
                 ? shapeDetail
                 : $"{shapeFaults.Count} faults: {string.Join("; ", shapeFaults)}");
 
+        var toolShapeFaults = ToolShapeAudit(out var toolShapeDetail);
+        Check("the four tools are four different drawings", toolShapeFaults.Count == 0,
+            toolShapeFaults.Count == 0
+                ? toolShapeDetail
+                : $"{toolShapeFaults.Count} faults: {string.Join("; ", toolShapeFaults)}");
+
         var iconFaults = IconStyleAudit(items, out var iconDetail);
         Check("every item is drawn the way it should be", iconFaults.Count == 0,
             iconFaults.Count == 0
@@ -5450,6 +5456,136 @@ public static class WorldAudit
             $"{asBlock} drawn as the block they put down, {declared} flat on purpose "
             + $"({string.Join(", ", FlatOnPurpose.Select(f => f.Item))}), "
             + $"{noBlock} that put no block down at all";
+
+        return faults;
+    }
+
+    /// <summary>
+    /// That the four tool silhouettes are actually four different shapes.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛔ <b>Written because they were not.</b> The user opened the pockets and said the axe
+    /// and the shovel were the same picture. They were: slid one column across, the two differed by
+    /// a <em>single character</em> — a head-shade pixel. Four tools, three shapes, and every check
+    /// in the project was perfectly happy because nothing had ever been asked to compare two
+    /// drawings with each other.</para>
+    /// <para>⛳ <b>Compared at every offset, not in place</b>, and that is the whole of why this
+    /// catches what the eye caught. Two shapes one pixel apart are the same drawing to anybody
+    /// looking at a square the size of a fingernail, and a straight cell-for-cell comparison calls
+    /// them different. Sliding one over the other and keeping the <em>best</em> agreement is what a
+    /// person does without noticing.</para>
+    /// <para>The ink, not the shading: a silhouette is what is recognised at this size, and two
+    /// tools that differ only in which pixels are lit are two tools nobody can tell apart.</para>
+    /// </remarks>
+    private static List<string> ToolShapeAudit(out string detail)
+    {
+        var faults = new List<string>();
+        string[] named = ["pickaxe", "axe", "shovel", "sword"];
+
+        var shapes = TileGen.ToolShapes;
+        if (shapes.Length != named.Length)
+        {
+            detail = "";
+            faults.Add($"{shapes.Length} tool silhouettes against {named.Length} names for them");
+            return faults;
+        }
+
+        // Every row of every shape has to be the tile's own width, or a drawing that looks right
+        // in the source is cropped or ragged on screen.
+        for (var s = 0; s < shapes.Length; s++)
+        {
+            if (shapes[s].Length != TileGen.Size)
+                faults.Add($"the {named[s]} is {shapes[s].Length} rows where a tile is {TileGen.Size}");
+
+            foreach (var row in shapes[s])
+                if (row.Length != TileGen.Size)
+                {
+                    faults.Add($"the {named[s]} has a row {row.Length} wide where a tile is {TileGen.Size}");
+                    break;
+                }
+        }
+
+        if (faults.Count > 0)
+        {
+            detail = "";
+            return faults;
+        }
+
+        bool Ink(int shape, int x, int y) =>
+            x >= 0 && y >= 0 && x < TileGen.Size && y < TileGen.Size && shapes[shape][y][x] != '.';
+
+        // How many cells two shapes disagree on at their best alignment, sliding one over the other.
+        int Apart(int a, int b)
+        {
+            var best = int.MaxValue;
+
+            for (var dy = -3; dy <= 3; dy++)
+            for (var dx = -3; dx <= 3; dx++)
+            {
+                var differ = 0;
+                for (var y = 0; y < TileGen.Size; y++)
+                for (var x = 0; x < TileGen.Size; x++)
+                    if (Ink(a, x, y) != Ink(b, x + dx, y + dy)) differ++;
+
+                best = Math.Min(best, differ);
+            }
+
+            return best;
+        }
+
+        // ⚠ Measured, not picked. The pair that shipped as one drawing came to 6 cells apart at its
+        // best offset; the closest pair now is well past 30. Twenty sits clear of both.
+        const int Least = 20;
+        var closest = int.MaxValue;
+        var closestPair = "";
+
+        for (var a = 0; a < shapes.Length; a++)
+        for (var b = a + 1; b < shapes.Length; b++)
+        {
+            var apart = Apart(a, b);
+            if (apart >= closest) continue;
+
+            closest = apart;
+            closestPair = $"{named[a]} and {named[b]}";
+        }
+
+        if (closest < Least)
+            faults.Add(
+                $"the {closestPair} are the same drawing — {closest} cells apart at their best "
+                + $"alignment, where {Least} is the least two tools may differ by and still be told "
+                + "apart in a square the size of a fingernail");
+
+        // And that a tool uses its tile. One drawn in a corner reads as a small tool rather than a
+        // tool, and every one of these used to stop three columns short of the right-hand edge.
+        for (var s = 0; s < shapes.Length; s++)
+        {
+            int minX = TileGen.Size, maxX = -1, minY = TileGen.Size, maxY = -1;
+
+            for (var y = 0; y < TileGen.Size; y++)
+            for (var x = 0; x < TileGen.Size; x++)
+            {
+                if (!Ink(s, x, y)) continue;
+                minX = Math.Min(minX, x);
+                maxX = Math.Max(maxX, x);
+                minY = Math.Min(minY, y);
+                maxY = Math.Max(maxY, y);
+            }
+
+            // ⚠ The span, counted inclusively. Written as a difference this refused a tool exactly
+            // twelve wide — the narrowest a real pack draws one — for being eleven.
+            var across = maxX - minX + 1;
+            var down = maxY - minY + 1;
+
+            const int Fills = 12;   // 75% of the tile, which is the narrowest of the pack's four
+            if (across < Fills || down < Fills)
+                faults.Add(
+                    $"the {named[s]} covers {across} by {down} of a {TileGen.Size} tile, "
+                    + $"where a real pack's narrowest fills {Fills} — it is drawn small rather than drawn");
+        }
+
+        detail =
+            $"{shapes.Length} silhouettes, the closest pair ({closestPair}) {closest} cells apart at "
+            + "their best alignment, each filling its tile corner to corner";
 
         return faults;
     }

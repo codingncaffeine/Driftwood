@@ -1530,87 +1530,110 @@ public static class TileGen
     /// <para>Four shapes and a palette a tier hands in is what keeps this a template rather than
     /// twenty pictures — every tier that is ever added is a row of colours, not a new drawing.</para>
     /// <para><c>h</c> handle, <c>H</c> handle in shadow, <c>m</c> head, <c>M</c> head in shadow,
-    /// <c>l</c> the highlight along its lit edge, <c>.</c> nothing.</para>
+    /// <c>l</c> the highlight along its lit edge, <c>o</c> the dark line round the outside,
+    /// <c>.</c> nothing.</para>
+    /// <para>⛔ <b>REDRAWN 2026-08-05, and the reason is worth keeping.</b> The user asked whether
+    /// these had been modelled on a real pack's tools. They had not — every other visual decision in
+    /// this project was measured against one (the panel grid off <c>inventory.png</c> pixel by
+    /// pixel, the six texture projections face for face against the format's own defaults) and these
+    /// were drawn from imagination. Then they spotted the proof: <b>the axe and the shovel were the
+    /// same shape.</b> Shifted one column, the two silhouettes differed by a single character.</para>
+    /// <para>What a real pack does, measured off four of its wooden tools rather than remembered:
+    /// <b>ten shades</b> where we had three, a <b>one-pixel dark line all the way round</b>, the
+    /// <b>whole tile used corner to corner</b> where ours sat in the left twelve columns, and — the
+    /// one that matters — <b>three head shapes that are nothing like each other</b>: a pickaxe is a
+    /// wide swept bar with its tips turned down, an axe is a tall wedge hanging off one side of the
+    /// haft, and a shovel is a small scoop, visibly smaller than either. The shapes below are ours;
+    /// the conventions are the genre's.</para>
     /// </remarks>
     public static readonly string[][] ToolShapes =
     [
-        // Pickaxe: a swept head across the top, the haft falling away to the left.
+        // Pickaxe: one bar socketed at its middle, both tips sweeping down — which is what a real
+        // one is, and what tells it from an axe at a glance. The widest head of the four.
         [
-            "...m........m...",
-            "..mMmm....mmMm..",
-            "...mMMmmmmMMm...",
-            "....mmllhhmm....",
-            ".......hh.......",
-            "......hh........",
-            "......hh........",
-            ".....hh.........",
-            ".....hh.........",
-            "....hh..........",
-            "....hh..........",
-            "...hh...........",
-            "...hh...........",
-            "..hH............",
-            "..hH............",
+            "................",
+            "................",
+            "....oooooooooo..",
+            "...omMllllllMmo.",
+            "...omMoooooohho.",
+            "....oo.....ohho.",
+            "..........ohho..",
+            ".........ohho...",
+            "........ohho....",
+            ".......ohho.....",
+            "......ohho......",
+            ".....ohho.......",
+            "....ohho........",
+            "..ohhho.........",
+            "..oooo..........",
             "................",
         ],
 
-        // Axe: a bit with weight in it, biting to the left of the haft.
+        // Axe: taller than it is wide, and asymmetric — a blade flaring down one side with a blunt
+        // poll opposite, the haft through the eye. An axe bites one way and has to look like it.
         [
-            "....mmmm........",
-            "...mMlmMm.......",
-            "...mMlMMm.......",
-            "...mMMMMm.......",
-            "....mmMhh.......",
-            "......hh........",
-            "......hh........",
-            ".....hh.........",
-            ".....hh.........",
-            "....hh..........",
-            "....hh..........",
-            "...hh...........",
-            "...hh...........",
-            "..hH............",
-            "..hH............",
+            "................",
+            ".........ooo....",
+            "........omMlo...",
+            ".......omMlMo...",
+            "......omMlMMo...",
+            "......oMmlMMo...",
+            "......oMmlMhho..",
+            ".......oMMohho..",
+            "........oohho...",
+            ".......ohho.....",
+            "......ohho......",
+            ".....ohho.......",
+            "....ohho........",
+            "..ohhho.........",
+            "..oooo..........",
             "................",
         ],
 
-        // Shovel: a broad blade on a long haft.
+        // Shovel: a small symmetric scoop set high on a long shaft — six across where the axe is
+        // seven and the pickaxe ten, which is the proportion a real one has and the pack confirms.
         [
-            ".....mmmm.......",
-            "....mMlMMm......",
-            "....mMlMMm......",
-            "....mMMMMm......",
-            ".....mmMhh......",
-            "......hh........",
-            "......hh........",
-            ".....hh.........",
-            ".....hh.........",
-            "....hh..........",
-            "....hh..........",
-            "...hh...........",
-            "...hh...........",
-            "..hH............",
-            "..hH............",
+            "................",
+            "................",
+            "..........oooo..",
+            ".........omMMlo.",
+            ".........oMmMlo.",
+            "..........oMMo..",
+            ".........ohho...",
+            "........ohho....",
+            ".......ohho.....",
+            "......ohho......",
+            ".....ohho.......",
+            "....ohho........",
+            "...ohho.........",
+            "..ohhho.........",
+            "..oooo..........",
             "................",
         ],
 
-        // Sword: a blade up to the corner, a guard, a grip.
+        // Sword: a blade of even width running the whole diagonal into the corner, a SHORT
+        // SYMMETRIC crossguard, a short grip, and a pommel wider than the grip.
+        //
+        // ⛔ The pommel is not decoration. The user's word for the first attempt at this was "a
+        // gun", and they were right: it had a five-wide guard with the grip running on PAST it and
+        // tapering away, which is a stock. Short guard, short grip, and a blob on the end are the
+        // three things that make a silhouette read as a sword — no gun has a pommel.
         [
-            "..........mmm...",
-            ".........mMlm...",
-            "........mMlMm...",
-            ".......mMlMm....",
-            "......mMlMm.....",
-            ".....mMlMm......",
-            "....mMlMm.......",
-            "...mMlMm........",
-            "..mMMMm.........",
-            ".mHhhhHm........",
-            "..HhhH..........",
-            "...hh...........",
-            "...hh...........",
-            "..hHH...........",
-            "..HHH...........",
+            ".............ooo",
+            "............omlo",
+            "...........omlmo",
+            "..........omlmo.",
+            ".........omlmo..",
+            "........omlmo...",
+            ".......omlmo....",
+            "......omlmo.....",
+            ".....omlmo......",
+            "....oomoo.......",
+            "...oMMMMo.......",
+            "....ohho........",
+            "....ohho........",
+            "...oohhoo.......",
+            "...ooooo........",
             "................",
         ],
     ];
@@ -1633,6 +1656,15 @@ public static class TileGen
 
             var handle = c is 'h' or 'H';
             var (br, bg, bb) = handle ? (HandleR, HandleG, HandleB) : (r, g, b);
+
+            // ⚠ The outline takes no noise. It is the line that holds the shape together against
+            // whatever is behind it, and a line that varies pixel to pixel is a frayed edge rather
+            // than an outline — the one place a speckle actively hurts.
+            if (c == 'o')
+            {
+                Put(t, x, y, Clamp(br - 92), Clamp(bg - 74), Clamp(bb - 46), 255);
+                continue;
+            }
 
             var d = c switch
             {
