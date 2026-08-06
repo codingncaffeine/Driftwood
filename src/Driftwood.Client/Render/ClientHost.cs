@@ -303,6 +303,24 @@ public sealed class ClientHost : IDisposable
     /// </remarks>
     private void ReadSavesFolder() => _saved = WorldSave.List(out _unreadable);
 
+    /// <summary>
+    /// The seed the menu will start a new world on, or empty for one drawn at random.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>The first box in the game, and #60 left it out for want of one.</b> Typed as a word
+    /// rather than a number because that is what <c>--seed</c> already takes and what
+    /// <see cref="ClientOptions.SeedText"/> already keeps — the word is what names the world, and
+    /// telling somebody their world is 1,748,392,011 is not telling them anything.
+    /// </remarks>
+    private readonly TextField _seedBox =
+        new(32, TextAllows.FileSafe) { Placeholder = "a fresh one" };
+
+    /// <summary>What the box held when it took the keyboard, for escape to put back.</summary>
+    private string _typingWas = "";
+
+    /// <summary>What to do when the box gives the keyboard back, and whether it was accepted.</summary>
+    private Action<bool>? _typingDone;
+
     /// <summary>Where the worlds are, which is the answer to most questions about them.</summary>
     private static readonly string SavesFolderNote = $"they live in {WorldSave.Folder}";
     private readonly Dictionary<ChunkPos, ChunkMeshGpu> _meshes = [];
@@ -736,6 +754,7 @@ public sealed class ClientHost : IDisposable
             Console.Error.WriteLine("driftwood: could not attach to the window, so there is no keyboard or mouse");
 
         _input.KeyDown += OnKeyDown;
+        _input.CharTyped += OnCharTyped;
         _input.MouseMove += OnMouseMove;
         _input.MouseDown += OnMouseDown;
         _input.MouseUp += OnMouseUp;
@@ -1276,7 +1295,11 @@ public sealed class ClientHost : IDisposable
     /// on the way through the menu would read as the pack having been forgotten. <c>--seed</c> is
     /// dropped on purpose: the world being opened has its own.</para>
     /// </remarks>
-    private void OpenAnotherWorld(string name)
+    /// <param name="seed">
+    /// A seed typed into the menu's box, for a world being made rather than opened. ⚠ Never passed
+    /// for a world that already exists: the header carries its own and would refuse this one.
+    /// </param>
+    private void OpenAnotherWorld(string name, string seed = "")
     {
         var exe = Environment.ProcessPath;
         if (exe is null)
@@ -1299,6 +1322,12 @@ public sealed class ClientHost : IDisposable
 
         carried.Add("--world");
         carried.Add(name);
+
+        if (seed.Length > 0)
+        {
+            carried.Add("--seed");
+            carried.Add(seed);
+        }
 
         var start = new ProcessStartInfo(exe) { UseShellExecute = false };
         foreach (var argument in carried) start.ArgumentList.Add(argument);
@@ -1508,8 +1537,104 @@ public sealed class ClientHost : IDisposable
     /// while a screen is up nothing is moving. Enter acts, shift makes it act as many times as it
     /// can, and both E and escape close.
     /// </remarks>
+    /// <summary>
+    /// A character somebody typed, when there is a box for it to go into.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ <b>Separate from the key handler and it has to be.</b> A key is a place on a keyboard; a
+    /// character is what the platform decided that key produced, after the layout and the modifiers
+    /// and any dead key before it. Typing into a box from the key events would mean writing that
+    /// table out again, and getting it wrong for everybody whose keyboard is not this one.
+    /// </remarks>
+    /// <summary>Hands the keyboard to a box.</summary>
+    private void StartTyping(TextField field, Action<bool>? done = null)
+    {
+        _hudScreen.Typing = field;
+        _typingWas = field.Text;
+        _typingDone = done;
+        field.End();
+        RefreshScreen();
+    }
+
+    /// <summary>
+    /// Takes it back, either keeping what was typed or putting back what was there.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ <b>Escape puts the old text back rather than merely closing the box.</b> A box that keeps
+    /// what was typed whichever way it was left has no way out that undoes anything, and escape is
+    /// where everybody looks for that.
+    /// </remarks>
+    private void StopTyping(bool accept)
+    {
+        var field = _hudScreen.Typing;
+        var done = _typingDone;
+
+        if (!accept && field is not null) field.Text = _typingWas;
+
+        _hudScreen.Typing = null;
+        _typingDone = null;
+        _typingWas = "";
+
+        done?.Invoke(accept);
+        RefreshScreen();
+        ShowSelectedRow();
+    }
+
+    private void OnCharTyped(char typed)
+    {
+        if (_hudScreen.Typing is not { } field) return;
+        if (!field.Insert(typed)) return;
+
+        RefreshScreen();
+    }
+
+    /// <summary>
+    /// The keys a box takes while it has the keyboard, and the two that give it back.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>Everything else is swallowed.</b> A screen is full of single-letter shortcuts and the
+    /// letters are exactly what somebody is typing, so while a box is open the screen must not hear
+    /// any of them — B cannot fold out the recipe book in the middle of a word. Escape abandons and
+    /// enter accepts, which are the only two ways out and are the two every box in every program
+    /// has.
+    /// </remarks>
+    private bool TypingKey(TextField field, Key key)
+    {
+        switch (key)
+        {
+            case Key.Escape:
+                StopTyping(accept: false);
+                return true;
+
+            case Key.Enter or Key.KeypadEnter:
+                StopTyping(accept: true);
+                return true;
+
+            case Key.Backspace: field.Backspace(); break;
+            case Key.Delete: field.Delete(); break;
+            case Key.Left: field.Left(); break;
+            case Key.Right: field.Right(); break;
+            case Key.Home: field.Home(); break;
+            case Key.End: field.End(); break;
+
+            case Key.V when _input.IsKeyPressed(Key.ControlLeft) || _input.IsKeyPressed(Key.ControlRight):
+                // Through the field's own gate, so a pasted newline or slash is refused exactly as
+                // a typed one is. The first line only: this is one line of text.
+                var pasted = _input.Clipboard;
+                var stop = pasted.IndexOfAny(['\r', '\n']);
+                field.Insert(stop < 0 ? pasted : pasted[..stop]);
+                break;
+        }
+
+        RefreshScreen();
+        return true;
+    }
+
     private bool ScreenKey(Key key)
     {
+        // Before anything else. While a box has the keyboard it has all of it.
+        if (_hudScreen.Typing is { } typing) return TypingKey(typing, key);
+
         var many = _input.IsKeyPressed(Key.ShiftLeft) || _input.IsKeyPressed(Key.ShiftRight);
         // The menu is a list of rows exactly as a settings tab is, so it wants the same keys —
         // up and down to pick, enter to act. It simply has no tabs to walk.
@@ -1683,6 +1808,15 @@ public sealed class ClientHost : IDisposable
                 // which is what the left and right arrows already do to it.
                 if (button == MouseButton.Left) ActivateRow();
                 else if (button == MouseButton.Right) AdjustRow(-1);
+                RefreshScreen();
+                return;
+
+            // Clicking in a box is how everybody starts typing in one, and it is the same act as
+            // pressing enter on its row — so it goes through the same door.
+            case ZoneKind.Field:
+                if (button != MouseButton.Left) return;
+                _hudScreen.Selected = at.Value.Index;
+                ActivateRow();
                 RefreshScreen();
                 return;
 
@@ -2570,7 +2704,15 @@ public sealed class ClientHost : IDisposable
 
         _hudScreen.Rows.Add(new MenuRow(
             "make another world", NextWorldName(),
-            Note: "a fresh seed, kept under its own name — this one stays where it is"));
+            Note: _seedBox.Empty
+                ? "a fresh seed, kept under its own name — this one stays where it is"
+                : $"seed '{_seedBox.Text}', kept under its own name — this one stays where it is"));
+
+        // Under the row it belongs to, because a seed is a thing about the world being made and
+        // means nothing to any of the others.
+        _hudScreen.Rows.Add(new MenuRow(
+            "seed", Edits: _seedBox,
+            Note: "type a word to make the same world again — leave it empty for one nobody has seen"));
         // ⛔ "none saved yet" is the sentence the user read when their world was on disk all along,
         // so it now only appears when the folder really is empty — and when it is not empty but
         // nothing in it opened, the row says that instead of the same four words.
@@ -2833,6 +2975,15 @@ public sealed class ClientHost : IDisposable
     /// <summary>Enter, on a settings row. Toggles what toggles and listens for a key on a binding.</summary>
     private void ActivateRow()
     {
+        // A row with a box on it hands over the keyboard, whatever screen it is on and whatever
+        // else that row's label would otherwise have meant. One rule, in front of all of them.
+        if (_hudScreen.Selected >= 0 && _hudScreen.Selected < _hudScreen.Rows.Count
+            && _hudScreen.Rows[_hudScreen.Selected].Edits is { } box)
+        {
+            StartTyping(box);
+            return;
+        }
+
         if (_hudScreen.Kind == HudScreenKind.Start)
         {
             ChooseOnStartScreen();
@@ -2912,9 +3063,13 @@ public sealed class ClientHost : IDisposable
                 return;
 
             case "make another world":
-                // A name nothing is under yet, and no seed — so the new run draws its own random
-                // one, which is what starting a world has always meant.
-                OpenAnotherWorld(NextWorldName());
+                // A name nothing is under yet, and whatever was typed into the box beneath — or no
+                // seed at all, so the new run draws its own random one.
+                OpenAnotherWorld(NextWorldName(), _seedBox.Text);
+                return;
+
+            case "seed":
+                StartTyping(_seedBox);
                 return;
 
             case "open a world":
@@ -3343,6 +3498,10 @@ public sealed class ClientHost : IDisposable
         // otherwise sample a different frame of it every run.
         if (_options.UiCheck) _hudScreen.Drift = 0.8f;
         else _hudScreen.Drift += (float)dt;
+
+        // The caret's own clock. Held at a lit moment for the check, for the same reason the title
+        // is: a blink sampled off the framebuffer is a blink that is there half the time.
+        _hudScreen.Clock = _options.UiCheck ? 0.2f : _hudScreen.Clock + (float)dt;
 
         // A frame is measured from the top of one update to the top of the next, so the swap and
         // the driver's share of the wait are inside it. Timing only the callbacks would report a
@@ -4416,8 +4575,100 @@ public sealed class ClientHost : IDisposable
                 RemovePlantedWorlds();
                 break;
 
-            case 311: JudgeUi(); _window.Close(); break;
+            // The seed box: focused, sampled empty, typed into, sampled again.
+            //
+            // ⚠ A PAIR, and it has to be. A box draws a sunken frame whether or not one character
+            // ever reaches it, so "there are pixels where the box is" is true of a box that takes
+            // nothing at all. The two samples are the same point on the same screen with the only
+            // difference being that something was typed.
+            case 311:
+                // ⚠ Rebuilt BEFORE the row is looked for. The rows still held the list of worlds
+                // from the step above, so the box was hunted for on a screen that did not have one
+                // and the check reported that nothing was typed into it.
+                _startListing = false;
+                RefreshScreen();
+
+                _hudScreen.Selected = SeedRow();
+                ActivateRow();
+                RefreshScreen();
+                break;
+
+            case 320: SampleField(size, "seed empty"); break;
+
+            case 321:
+                foreach (var c in "driftwood") OnCharTyped(c);
+                break;
+
+            case 330:
+                SampleField(size, "seed typed");
+                _typedSeed = _seedBox.Text;
+                StopTyping(accept: false);
+                break;
+
+            case 331: JudgeUi(); _window.Close(); break;
         }
+    }
+
+    /// <summary>Which row of the menu carries the seed box, found by its label.</summary>
+    private int SeedRow()
+    {
+        for (var i = 0; i < _hudScreen.Rows.Count; i++)
+            if (_hudScreen.Rows[i].Edits is not null) return i;
+
+        return -1;
+    }
+
+    /// <summary>What the box was holding after the check typed into it.</summary>
+    private string _typedSeed = "";
+
+    /// <summary>
+    /// Reads the pixels inside the seed box, off the zone the renderer actually laid down.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>Off the layout, not off the same constants the box was drawn from.</b> A sample worked
+    /// out again from the panel width and the row height is a sample that agrees with the renderer
+    /// until either is edited, and then agrees with nothing. The zone is built as the box is drawn.
+    /// <para>Averaged over the box's left half rather than read at one point, because a single pixel
+    /// between two letters is background in a box that is drawing perfectly.</para>
+    /// </remarks>
+    private unsafe void SampleField(Vector2D<int> size, string what)
+    {
+        var zone = _layout.Zones.FirstOrDefault(z => z.Kind == ZoneKind.Field);
+        if (zone.Kind != ZoneKind.Field)
+        {
+            Console.Error.WriteLine($"ui-check    {what}: no box was laid out at all");
+            return;
+        }
+
+        var scale = HudRenderer.ScaleFor(size.Y);
+        var x0 = (int)(zone.X * scale);
+        var x1 = (int)((zone.X + zone.W * 0.5f) * scale);
+        var y0 = (int)(zone.Y * scale);
+        var y1 = (int)((zone.Y + zone.H) * scale);
+
+        long r = 0, g = 0, b = 0;
+        var taken = 0;
+
+        Span<byte> px = stackalloc byte[4];
+        for (var y = y0; y < y1; y++)
+        for (var x = x0; x < x1; x++)
+        {
+            if (x < 0 || y < 0 || x >= size.X || y >= size.Y) continue;
+
+            fixed (byte* p = px)
+                _gl.ReadPixels(x, size.Y - 1 - y, 1, 1, PixelFormat.Rgba, PixelType.UnsignedByte, p);
+
+            r += px[0];
+            g += px[1];
+            b += px[2];
+            taken++;
+        }
+
+        if (taken == 0) return;
+
+        _uiSamples[what] = ((byte)(r / taken), (byte)(g / taken), (byte)(b / taken));
+        Console.WriteLine($"ui-check    {what,-17} rgb {r / taken,3} {g / taken,3} {b / taken,3} over {taken} pixels");
+        Console.Out.Flush();
     }
 
     /// <summary>
@@ -4956,9 +5207,9 @@ public sealed class ClientHost : IDisposable
 
         if (_uiRows.TryGetValue("start", out var menu))
         {
-            // The name, then: carry on / make another world / open a world / options / quit.
-            const int Choices = 6;
-            const int Selectable = 5;
+            // The name, then: carry on / make another world / seed / open a world / options / quit.
+            const int Choices = 7;
+            const int Selectable = 6;
 
             if (menu.Total != Choices)
                 faults.Add($"the start menu built {menu.Total} rows where it offers {Choices}");
@@ -4991,6 +5242,29 @@ public sealed class ClientHost : IDisposable
             faults.Add(
                 "a file in the saves folder that is not a world took the readable worlds with it — "
                 + "one bad file must cost its own row and nothing else");
+
+        // ⛔ THE PAIR, AND WITHOUT IT NEITHER HALF MEANS ANYTHING. An empty box and a box with a
+        // word in it are the same sunken frame in the same place, so a check that only asked
+        // whether pixels arrived would pass a box that refuses every character. What is being
+        // asked is that typing CHANGED it — and the count is asked separately, because the same
+        // sample would also stay put if the typing went somewhere else entirely.
+        if (_typedSeed != "driftwood")
+            faults.Add(
+                $"typing 'driftwood' into the seed box left '{_typedSeed}' — the characters are not "
+                + "reaching the field the screen is showing");
+
+        if (_uiSamples.TryGetValue("seed empty", out var blank)
+            && _uiSamples.TryGetValue("seed typed", out var written))
+        {
+            if (blank == written)
+                faults.Add(
+                    "the seed box read the same before and after a word was typed into it, so what "
+                    + "is on screen is not what the field is holding");
+        }
+        else
+        {
+            faults.Add("the seed box was never sampled");
+        }
 
         if (_uiRows.TryGetValue("start list", out var folded))
         {

@@ -40,6 +40,7 @@ public sealed unsafe class RawInput : IDisposable
     // delegate nothing references is a delegate the collector is free to take away — after which
     // the first keypress calls into freed memory. It is not a leak; it is the lifetime.
     private readonly GlfwCallbacks.KeyCallback _onKey;
+    private readonly GlfwCallbacks.CharCallback _onChar;
     private readonly GlfwCallbacks.CursorPosCallback _onCursor;
     private readonly GlfwCallbacks.MouseButtonCallback _onButton;
     private readonly GlfwCallbacks.ScrollCallback _onScroll;
@@ -48,6 +49,18 @@ public sealed unsafe class RawInput : IDisposable
 
     /// <summary>A key going down, including the repeats a held key sends.</summary>
     public event Action<Key>? KeyDown;
+
+    /// <summary>
+    /// A character somebody typed, which is a different question from which key went down.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>A key is a place on a keyboard and a character is what it produced</b>, and the two are
+    /// only the same thing on one layout. Shift and the key give a capital, a dead key and a vowel
+    /// give an accented letter, and on a French keyboard the key at position <c>A</c> types a
+    /// <c>q</c>. The platform already knows all of that; asking it for the character is the whole of
+    /// what makes a text box work for somebody who does not have the keyboard this was written on.
+    /// </remarks>
+    public event Action<char>? CharTyped;
 
     public event Action<Silk.NET.Input.MouseButton>? MouseDown;
     public event Action<Silk.NET.Input.MouseButton>? MouseUp;
@@ -73,6 +86,7 @@ public sealed unsafe class RawInput : IDisposable
             // start because it could not find a window handle is worse than one that says so.
             _handle = null;
             _onKey = (_, _, _, _, _) => { };
+            _onChar = (_, _) => { };
             _onCursor = (_, _, _) => { };
             _onButton = (_, _, _, _) => { };
             _onScroll = (_, _, _) => { };
@@ -84,6 +98,13 @@ public sealed unsafe class RawInput : IDisposable
         _onKey = (_, key, _, action, _) =>
         {
             if (action is InputAction.Press or InputAction.Repeat) KeyDown?.Invoke((Key)key);
+        };
+
+        // Anything outside the basic plane arrives as a surrogate pair the font has no glyph for
+        // either way, so it is dropped here rather than truncated into a different letter.
+        _onChar = (_, codepoint) =>
+        {
+            if (codepoint <= char.MaxValue) CharTyped?.Invoke((char)codepoint);
         };
 
         _onCursor = (_, x, y) =>
@@ -102,6 +123,7 @@ public sealed unsafe class RawInput : IDisposable
         _onScroll = (_, _, dy) => Scroll?.Invoke((float)dy);
 
         _glfw.SetKeyCallback(_handle, _onKey);
+        _glfw.SetCharCallback(_handle, _onChar);
         _glfw.SetCursorPosCallback(_handle, _onCursor);
         _glfw.SetMouseButtonCallback(_handle, _onButton);
         _glfw.SetScrollCallback(_handle, _onScroll);
@@ -147,6 +169,22 @@ public sealed unsafe class RawInput : IDisposable
             _glfw.SetInputMode(_handle, CursorStateAttribute.RawMouseMotion, false);
     }
 
+    /// <summary>Whatever is on the system clipboard, or nothing at all.</summary>
+    /// <remarks>
+    /// Read when it is asked for rather than watched. Nothing wants to know what is on a clipboard
+    /// until somebody presses paste, and a platform call per frame for that would be absurd.
+    /// </remarks>
+    public string Clipboard
+    {
+        get
+        {
+            if (_handle is null) return "";
+
+            try { return _glfw.GetClipboardString(_handle) ?? ""; }
+            catch (Exception) { return ""; }
+        }
+    }
+
     /// <summary>Puts the pointer somewhere, in window coordinates.</summary>
     public void MoveTo(Vector2 position)
     {
@@ -163,6 +201,7 @@ public sealed unsafe class RawInput : IDisposable
 
         // Handed back before the window goes, so a callback cannot arrive into a torn-down host.
         _glfw.SetKeyCallback(_handle, null!);
+        _glfw.SetCharCallback(_handle, null!);
         _glfw.SetCursorPosCallback(_handle, null!);
         _glfw.SetMouseButtonCallback(_handle, null!);
         _glfw.SetScrollCallback(_handle, null!);

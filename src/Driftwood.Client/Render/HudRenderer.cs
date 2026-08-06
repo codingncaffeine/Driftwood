@@ -94,7 +94,17 @@ public enum GameTab
 /// </summary>
 /// <param name="Heading">True for a group title, which has no value and cannot be selected.</param>
 /// <param name="Note">A second, dimmer line under it — what a setting costs, or when it applies.</param>
-public readonly record struct MenuRow(string Label, string Value = "", bool Heading = false, string Note = "");
+/// <param name="Edits">
+/// A line of typed text this row is the box for, drawn where the value would be.
+/// </param>
+/// <remarks>
+/// ⛳ <b>A text field is a row, which is why it cost almost nothing.</b> Scrolling, hit testing, the
+/// note strip and the way the keyboard walks the list are all already here and all already right; a
+/// field of its own would have been a second one of each. It also means every screen that has rows
+/// can have a box to type in without learning anything new.
+/// </remarks>
+public readonly record struct MenuRow(
+    string Label, string Value = "", bool Heading = false, string Note = "", TextField? Edits = null);
 
 /// <summary>
 /// Everything the overlay needs to know about the screen the player has open.
@@ -147,6 +157,20 @@ public sealed class HudScreen
 
     /// <summary>The hint along the bottom — what the keys do here, right now.</summary>
     public string Footer = "";
+
+    /// <summary>
+    /// The field the keyboard is currently going into, or null when it is driving the screen.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>Typing has to be a mode, and there is no way around it.</b> Every letter on the keyboard
+    /// already means something on a screen — E closes the pockets, W would walk — so a screen with a
+    /// box on it cannot have both at once. While this is set, characters go into the box and the
+    /// only keys the screen still hears are escape and enter, which are how somebody gets out.
+    /// </remarks>
+    public TextField? Typing;
+
+    /// <summary>Seconds the screen has been up, for a caret that blinks.</summary>
+    public float Clock;
 
     public Furnace? Burning;
 
@@ -787,7 +811,9 @@ public sealed class HudRenderer : IDisposable
 
             Text(row.Label, left + 6f, y, 8f, lit ? Vector4.One : InkDim);
 
-            if (row.Value.Length > 0)
+            var boxWidth = 0f;
+            if (row.Edits is { } field) boxWidth = Box(screen, field, left, y, panel);
+            else if (row.Value.Length > 0)
             {
                 var width = TextWidth(row.Value, 8f);
                 Text(row.Value, left + panel - width - 4f, y, 8f,
@@ -797,9 +823,69 @@ public sealed class HudRenderer : IDisposable
             // A heading has no zone at all, so the pointer cannot land on something the keyboard
             // deliberately skips over. The row's whole width is clickable, not just its words.
             layout.Add(ZoneKind.Row, i, left - 2f, y - 2f, panel + 4f, Line);
+
+            // ⚠ After the row, never before: the later zone is the one on top, and a box that its
+            // own row covered would be a box a click can never land in.
+            if (boxWidth > 0f)
+                layout.Add(ZoneKind.Field, i, left + panel - boxWidth, y - 2f, boxWidth, Line);
         }
 
         Note(screen, left, top - 4f + shown * Line + 16f, panel, first, shown);
+    }
+
+    /// <summary>
+    /// A sunken box on the right of a row, holding what has been typed into it.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Sunken, where every other control here is raised.</b> That is the whole of what says
+    /// a box is somewhere to put something rather than something to press, and it is the same
+    /// <see cref="Bevel"/> with the lit pair swapped that a pressed button already uses.</para>
+    /// <para>⚠ <b>The window scrolls with the caret rather than the text being clipped.</b> A field
+    /// is a fixed width and a name can be longer than it, so what is drawn is the run of characters
+    /// around the caret — otherwise typing past the end writes over the panel beside it, which is
+    /// exactly the fault the note strip was moved out of a row for.</para>
+    /// <para>The caret blinks off the screen's own clock, not off a frame count, so it is the same
+    /// speed on every machine. Drawn only while this is the field being typed into: two boxes with
+    /// carets in them is two places to believe a letter is about to land.</para>
+    /// </remarks>
+    /// <returns>How wide it came out, so the row can give it a zone of its own.</returns>
+    private float Box(HudScreen screen, TextField field, float left, float y, float panel)
+    {
+        const float Glyph = 8f;
+
+        var width = MathF.Min(panel * 0.55f, 132f);
+        var x = left + panel - width;
+        var focused = ReferenceEquals(screen.Typing, field);
+
+        Bevel(x, y - 2f, width, ScreenLayout.MenuLine, raised: false,
+            new Vector4(0.13f, 0.13f, 0.14f, 0.98f));
+
+        var inside = width - 8f;
+        var text = field.Text.AsSpan();
+
+        // The first character drawn, chosen so the caret is always inside the box. Walked forward
+        // until what is left of the line fits, which is one loop and no measuring backwards. Spans
+        // throughout: this runs every frame a box is on screen, and slicing a string allocates.
+        var from = 0;
+        while (from < field.Caret && TextWidth(text[from..field.Caret], Glyph) > inside) from++;
+
+        var shown = text[from..];
+        while (shown.Length > 0 && TextWidth(shown, Glyph) > inside) shown = shown[..^1];
+
+        if (text.Length == 0 && !focused && field.Placeholder.Length > 0)
+            Text(field.Placeholder, x + 4f, y, Glyph, InkFaint);
+        else
+            Text(shown, x + 4f, y, Glyph, focused ? Vector4.One : Ink);
+
+        // Half a second lit, half dark. On its own pen position rather than at the end of the line,
+        // so it sits between the characters somebody is actually typing between.
+        if (focused && screen.Clock % 1f < 0.5f)
+        {
+            var at = x + 4f + TextWidth(text[from..field.Caret], Glyph);
+            Rect(_plain, at, y - 1f, 1f, Glyph + 2f, Highlight);
+        }
+
+        return width;
     }
 
     /// <summary>
@@ -1572,7 +1658,7 @@ public sealed class HudRenderer : IDisposable
     /// is what lets a variable-width font come out of an array where every layer is the same size,
     /// with no texture coordinates and no second batch format.
     /// </remarks>
-    private float Text(string line, float x, float y, float height, Vector4 colour, bool shadow = true)
+    private float Text(ReadOnlySpan<char> line, float x, float y, float height, Vector4 colour, bool shadow = true)
     {
         var pen = MathF.Round(x);
         var top = MathF.Round(y);

@@ -739,6 +739,12 @@ public static class WorldAudit
                 ? shapeDetail
                 : $"{shapeFaults.Count} faults: {string.Join("; ", shapeFaults)}");
 
+        var typingFaults = TextFieldSelfTest(out var typingDetail);
+        Check("a typed line takes what it should and refuses the rest", typingFaults.Count == 0,
+            typingFaults.Count == 0
+                ? typingDetail
+                : $"{typingFaults.Count} faults: {string.Join("; ", typingFaults)}");
+
         var climbFaults = ClimbSelfTest(registry, out var climbDetail);
         Check("a ladder is climbed, not walked past", climbFaults.Count == 0,
             climbFaults.Count == 0 ? climbDetail : $"{climbFaults.Count} faults: {climbFaults[0]}");
@@ -5228,6 +5234,96 @@ public static class WorldAudit
             + $"{throughShut:F1}; a one-block wall is jumped over (x {overStep:F1}) and a fence "
             + $"drawn the same height is not (x {overFence:F2}); a dropped stack rests at "
             + $"{itemOnSlab - floorY:F2} on a slab and {itemOnCube - floorY:F2} on a whole block";
+
+        return faults;
+    }
+
+    /// <summary>
+    /// That a box takes a typed line, a caret walks it, and what it refuses it really refuses.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ <b>Every refusal is paired with the same thing being accepted somewhere it should be.</b> A
+    /// field that took nothing at all would pass "it refuses a slash" and every other refusal here,
+    /// and would then be a seed box nobody can type in — which is a fault that looks like a keyboard
+    /// problem from the front and would be hunted for in the input layer.
+    /// </remarks>
+    private static List<string> TextFieldSelfTest(out string detail)
+    {
+        var faults = new List<string>();
+
+        var any = new TextField(8);
+        foreach (var c in "hello") any.Insert(c);
+
+        if (any.Text != "hello") faults.Add($"typing 'hello' left '{any.Text}'");
+        if (any.Caret != 5) faults.Add($"the caret is at {any.Caret} after five characters");
+
+        // Into the middle, which is the whole reason a caret exists rather than an append.
+        any.Left();
+        any.Left();
+        any.Insert('-');
+        if (any.Text != "hel-lo") faults.Add($"typing into the middle left '{any.Text}'");
+
+        any.Backspace();
+        if (any.Text != "hello") faults.Add($"backspace left '{any.Text}'");
+
+        any.Delete();
+        if (any.Text != "helo") faults.Add($"delete left '{any.Text}'");
+
+        // Full. The ninth character has nowhere to go and must not silently replace the eighth.
+        var full = new TextField(8);
+        full.Insert("123456789");
+        if (full.Text != "12345678") faults.Add($"a box of 8 took '{full.Text}'");
+
+        // Neither end may run off, and neither may throw.
+        var edges = new TextField(8);
+        edges.Backspace();
+        edges.Delete();
+        edges.Left();
+        if (edges.Caret != 0 || edges.Text.Length != 0) faults.Add("an empty box moved when it was pushed");
+
+        edges.Insert('a');
+        edges.Right();
+        edges.Right();
+        if (edges.Caret != 1) faults.Add($"the caret ran past the end to {edges.Caret}");
+
+        edges.Home();
+        if (edges.Caret != 0) faults.Add("home did not go to the start");
+        edges.End();
+        if (edges.Caret != 1) faults.Add("end did not go to the end");
+
+        // ⚠ The font is 95 glyphs and one texture layer each, so a character outside it has nothing
+        // to draw. Refused at the keyboard, where somebody can see it happen.
+        var drawable = new TextField(16);
+        drawable.Insert("a\tb\né—c");
+        if (drawable.Text != "abc")
+            faults.Add($"a line the font cannot draw came through as '{drawable.Text}'");
+
+        // And the pair for it: a full stop, a dash and a space are all drawable and all wanted.
+        var punctuation = new TextField(16);
+        punctuation.Insert("a b-c.d");
+        if (punctuation.Text != "a b-c.d")
+            faults.Add($"ordinary punctuation was refused, leaving '{punctuation.Text}'");
+
+        // A world name is a file name. Both halves: the slash goes, the rest stays.
+        var name = new TextField(32, TextAllows.FileSafe);
+        name.Insert("my/world:2");
+        if (name.Text != "myworld2") faults.Add($"a file-safe box took '{name.Text}'");
+
+        var digits = new TextField(8, TextAllows.Digits);
+        digits.Insert("12a3");
+        if (digits.Text != "123") faults.Add($"a digits box took '{digits.Text}'");
+
+        // Setting it from outside goes through the same gate — otherwise a name loaded from a file
+        // is a way past every rule above.
+        var set = new TextField(6, TextAllows.FileSafe) { Text = "a/b*cdefgh" };
+        if (set.Text != "abcdef") faults.Add($"setting the text outright left '{set.Text}'");
+        if (set.Caret != set.Text.Length) faults.Add("setting the text left the caret somewhere else");
+
+        detail =
+            $"typing, a caret in the middle, backspace and delete; a box of 8 holds '{full.Text}'; "
+            + $"the undrawable is dropped ('{drawable.Text}') where punctuation is not "
+            + $"('{punctuation.Text}'); a file-safe box makes 'my/world:2' into '{name.Text}' and a "
+            + $"digits box makes '12a3' into '{digits.Text}'";
 
         return faults;
     }

@@ -71,6 +71,17 @@ public enum ZoneKind
 
     /// <summary>Something that does one thing when pressed. The index says which.</summary>
     Button,
+
+    /// <summary>
+    /// A box to type into, sitting on a row. The index is that row's.
+    /// </summary>
+    /// <remarks>
+    /// Its own zone rather than leaving the whole row to answer, because clicking a box is how
+    /// everybody expects to start typing in one — and because it gives the check a rectangle built
+    /// from what was actually drawn rather than one worked out again from the same constants.
+    /// ⚠ Added after its row, since the later zone is the one on top.
+    /// </remarks>
+    Field,
 }
 
 /// <summary>Which button. The index of a <see cref="ZoneKind.Button"/> zone.</summary>
