@@ -837,8 +837,12 @@ public sealed class ClientHost : IDisposable
         _textures = BlockTextureSet.Build(_options.PackPath, _options.TextureSize, ceiling);
         _startup.Mark("block textures");
 
-        _blockTextures = new BlockTextureArray(_gl, _textures.Tiles, _textures.Size);
-        Console.WriteLine($"textures    {_textures.Summary}");
+        _blockTextures = new BlockTextureArray(_gl, _textures.Tiles, _textures.Size, BlockTextureSet.Cutouts());
+        Console.WriteLine(
+            $"textures    {_textures.Summary}"
+            + (_blockTextures.Reweighted > 0
+                ? $", {_blockTextures.Reweighted} cut-outs re-mipped"
+                : ""));
 
         _animatedTextures = new TextureAnimator(_blockTextures, _textures.Animations);
         if (_animatedTextures.Count > 0)

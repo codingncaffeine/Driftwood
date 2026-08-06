@@ -1,3 +1,4 @@
+using Driftwood.Core.Textures;
 using Silk.NET.OpenGL;
 
 namespace Driftwood.Client.Render;
@@ -27,7 +28,14 @@ public sealed class BlockTextureArray : IDisposable
     public int Size { get; }
     public int LayerCount { get; }
 
-    public unsafe BlockTextureArray(GL gl, byte[][] tiles, int size)
+    /// <summary>How many layers had their mip chain rebuilt for a cut-out edge.</summary>
+    public int Reweighted { get; }
+
+    /// <param name="cutout">
+    /// Per layer, whether it has fully transparent pixels the shader discards rather than blends.
+    /// Those layers get their mip chain rebuilt here; see the remark below.
+    /// </param>
+    public unsafe BlockTextureArray(GL gl, byte[][] tiles, int size, bool[]? cutout = null)
     {
         _gl = gl;
         Size = size;
@@ -54,6 +62,27 @@ public sealed class BlockTextureArray : IDisposable
         }
 
         _gl.GenerateMipmap(TextureTarget.Texture2DArray);
+
+        // ⛔ AND THEN THE CUT-OUT LAYERS AGAIN, BY HAND. The driver averages rgba flat, so at every
+        // mip level a leaf's edge texel is mixed with the fully transparent ones beside it — and a
+        // transparent pixel's colour is whatever happened to be stored under an alpha of zero, which
+        // in almost every pack is black. The result is a dark halo round foliage, glass and every
+        // other cut-out, worse the further away it is. It is a known enough problem that the format
+        // grew a `mipmap_strategy` field for it and the reference's own leaves ask for `dark_cutout`.
+        //
+        // WriteLayer's chain is weighted by alpha, so a transparent neighbour contributes nothing to
+        // the colour and only to the coverage. Done for the cut-outs alone rather than for all of
+        // them: it is a CPU pass over a whole tile chain per layer, and an opaque layer has nothing
+        // to gain from it because there is no transparent neighbour to poison the average.
+        if (cutout is not null)
+        {
+            for (var layer = 0; layer < tiles.Length && layer < cutout.Length; layer++)
+            {
+                if (!cutout[layer]) continue;
+                WriteLayer(layer, tiles[layer]);
+                Reweighted++;
+            }
+        }
 
         _gl.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMinFilter,
             (int)TextureMinFilter.NearestMipmapLinear);
@@ -109,55 +138,10 @@ public sealed class BlockTextureArray : IDisposable
 
             if (size == 1) break;
 
-            pixels = Halve(pixels, size);
+            pixels = MipChain.Halve(pixels, size);
             size /= 2;
             level++;
         }
-    }
-
-    /// <summary>
-    /// One mip level down: each output texel the average of the four under it.
-    /// </summary>
-    /// <remarks>
-    /// ⚠ Averaged in the alpha's own weight, so a cut-out's transparent margin does not drag the
-    /// colour of its edge toward whatever happens to be stored in pixels nobody can see. A plain
-    /// average over rgba is how alpha-cut foliage grows a dark fringe at distance.
-    /// </remarks>
-    private static byte[] Halve(byte[] tile, int size)
-    {
-        var half = size / 2;
-        var next = new byte[half * half * 4];
-
-        for (var y = 0; y < half; y++)
-        for (var x = 0; x < half; x++)
-        {
-            int r = 0, g = 0, b = 0, a = 0, weight = 0;
-
-            for (var dy = 0; dy < 2; dy++)
-            for (var dx = 0; dx < 2; dx++)
-            {
-                var src = ((y * 2 + dy) * size + x * 2 + dx) * 4;
-                var alpha = tile[src + 3];
-
-                r += tile[src] * alpha;
-                g += tile[src + 1] * alpha;
-                b += tile[src + 2] * alpha;
-                a += alpha;
-                weight += alpha;
-            }
-
-            var dst = (y * half + x) * 4;
-            if (weight > 0)
-            {
-                next[dst] = (byte)(r / weight);
-                next[dst + 1] = (byte)(g / weight);
-                next[dst + 2] = (byte)(b / weight);
-            }
-
-            next[dst + 3] = (byte)(a / 4);
-        }
-
-        return next;
     }
 
     /// <summary>

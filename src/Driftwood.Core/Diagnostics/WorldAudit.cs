@@ -791,6 +791,12 @@ public static class WorldAudit
                 ? $"{TileGen.ToolShapes.Length + 1} silhouettes walked, walls counted against edges"
                 : $"{spriteFaults.Count} faults: {spriteFaults[0]}");
 
+        var mipFaults = MipChain.Validate();
+        Check("a cut-out keeps its colour as it shrinks", mipFaults.Count == 0,
+            mipFaults.Count == 0
+                ? "weighted halving is brighter than flat on foliage and identical on rock"
+                : $"{mipFaults.Count} faults: {mipFaults[0]}");
+
         var gripFaults = HeldGrip.Validate();
         Check("what is held stays in the fist", gripFaults.Count == 0,
             gripFaults.Count == 0

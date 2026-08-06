@@ -440,6 +440,20 @@ public static class BlockTextureSet
         return scaled;
     }
 
+    /// <summary>
+    /// Per layer, whether it is a cut-out — one the shader discards texels of rather than blending.
+    /// </summary>
+    /// <remarks>
+    /// Read straight off the layer table, which has carried the flag since the first import, so
+    /// nothing new has to be decided and a layer added tomorrow answers for itself.
+    /// </remarks>
+    public static bool[] Cutouts()
+    {
+        var flags = new bool[Layers.Length];
+        for (var i = 0; i < Layers.Length; i++) flags[i] = Layers[i].Cutout;
+        return flags;
+    }
+
     /// <summary>Every layer, all of them ours. What a run with no pack reports.</summary>
     private static List<LayerOutcome> Untouched()
     {
