@@ -4554,11 +4554,20 @@ public sealed class ClientHost : IDisposable
             // ⛳ The same square of the same page, twice, with the clock moved between them. A block
             // turning is the one thing here no still frame can show, and a page that had quietly
             // stopped turning would look exactly like one that never did.
-            case 121: _turnBefore = CaptureRecipe(size); break;
-            case 122: _uiDrift = TurnedDrift; break;
-            case 123: JudgeTurn(size); _uiDrift = StillDrift; break;
+            // ⛔ THREE POINTS ROUND A WHOLE TURN, NOT TWO, and a narrow sprite is why. How much a
+            // square changes between two angles depends on where in the turn those two angles fall:
+            // a solid filling its square moves a lot from anywhere, but a torch — an upright stick
+            // on a transparent tile — barely moves at all between two angles that happen to face
+            // much the same way, and read 3% while turning perfectly well. A third of a turn apart,
+            // three times, and the largest of the three is the answer: no starting angle can hide
+            // in all of them.
+            case 121: _turns.Add(CaptureRecipes(size)); break;
+            case 122: _uiDrift = StillDrift + TurnStep; break;
+            case 123: _turns.Add(CaptureRecipes(size)); break;
+            case 124: _uiDrift = StillDrift + TurnStep * 2f; break;
+            case 125: _turns.Add(CaptureRecipes(size)); JudgeTurn(); _uiDrift = StillDrift; break;
 
-            case 124: CloseScreen(); OpenBench(0, 0, 0); break;
+            case 126: CloseScreen(); OpenBench(0, 0, 0); break;
             case 150: SampleUi(size, "bench"); ProbeSquares(); break;
 
             // A chest with something in it, because an empty one draws the same twenty seven wells
@@ -4703,9 +4712,6 @@ public sealed class ClientHost : IDisposable
     /// <summary>Where the check holds the drifting clock, so every run samples the same frame.</summary>
     private const float StillDrift = 0.8f;
 
-    /// <summary>And where it moves it to, once, to see whether the page turns. About a radian on.</summary>
-    private const float TurnedDrift = 2.6f;
-
     private float _uiDrift = StillDrift;
 
     /// <summary>The middle of the first recipe square, pixel for pixel.</summary>
@@ -4717,19 +4723,21 @@ public sealed class ClientHost : IDisposable
     /// however far round it is: the mean is blind to exactly the thing being measured. Counting the
     /// pixels that actually differ is not.
     /// </remarks>
-    private unsafe byte[] CaptureRecipe(Vector2D<int> size)
+    private unsafe List<byte[]> CaptureRecipes(Vector2D<int> size)
     {
+        var patches = new List<byte[]>();
+        var scale = HudRenderer.ScaleFor(size.Y);
+
         foreach (var zone in _layout.Zones)
         {
             if (zone.Kind != ZoneKind.Recipe) continue;
 
-            var scale = HudRenderer.ScaleFor(size.Y);
             var w = Math.Max(1, (int)(zone.W * scale * 0.6f));
             var h = Math.Max(1, (int)(zone.H * scale * 0.6f));
             var x = (int)((zone.X + zone.W * 0.2f) * scale);
             var y = (int)((zone.Y + zone.H * 0.2f) * scale);
 
-            if (x < 0 || y < 0 || x + w > size.X || y + h > size.Y) return [];
+            if (x < 0 || y < 0 || x + w > size.X || y + h > size.Y) { patches.Add([]); continue; }
 
             var patch = new byte[w * h * 4];
             fixed (byte* p = patch)
@@ -4737,43 +4745,85 @@ public sealed class ClientHost : IDisposable
                     x, size.Y - 1 - (y + h), (uint)w, (uint)h,
                     (GLEnum)PixelFormat.Rgba, (GLEnum)PixelType.UnsignedByte, p);
 
-            return patch;
+            patches.Add(patch);
         }
 
-        Console.Error.WriteLine("ui-check    the page laid out no recipe squares at all");
-        return [];
+        return patches;
     }
 
-    /// <summary>The middle of a recipe square before the clock was moved on.</summary>
-    private byte[] _turnBefore = [];
+    /// <summary>Every recipe square of the page, once per third of a turn.</summary>
+    private readonly List<List<byte[]>> _turns = [];
 
-    /// <summary>How many of its pixels changed once it had, as a share of the patch.</summary>
+    /// <summary>Seconds of drift that turn a block by a third of a revolution.</summary>
+    private const float TurnStep = 2f * MathF.PI / 3f / 0.55f;
+
+    /// <summary>The share of the least-changed square. Below zero when it was never measured.</summary>
     private float _turnMoved = -1f;
 
-    /// <summary>Compares the patch against the one taken before the clock moved.</summary>
-    private void JudgeTurn(Vector2D<int> size)
+    /// <summary>
+    /// Compares every square of the page against itself before the clock moved.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>EVERY square, and the worst of them is the answer.</b> The first version watched one,
+    /// which is fine for "does the page turn" and useless for the thing the user actually caught —
+    /// that <em>some</em> of it turned. A torch and a ladder sat still among the turning blocks and
+    /// the check was perfectly happy, because it was looking at a block. What is claimed is that
+    /// nothing on the page is standing still, so the quietest square is the one that has to answer.
+    /// </remarks>
+    private void JudgeTurn()
     {
-        var after = CaptureRecipe(size);
-        if (_turnBefore.Length == 0 || after.Length != _turnBefore.Length) return;
+        if (_turns.Count < 2) return;
+
+        var squares = _turns[0].Count;
+        foreach (var round in _turns) if (round.Count != squares) return;
+
+        var worst = 1f;
+        var said = new List<string>();
+
+        for (var slot = 0; slot < squares; slot++)
+        {
+            var most = 0f;
+
+            // The largest change between any two of the three, so a slot cannot pass by standing
+            // still and cannot fail by being sampled twice at the same-looking angle.
+            for (var i = 0; i < _turns.Count; i++)
+            for (var j = i + 1; j < _turns.Count; j++)
+                most = MathF.Max(most, Moved(_turns[i][slot], _turns[j][slot]));
+
+            worst = MathF.Min(worst, most);
+
+            // ⚠ Every one of them named, not only the quietest. The zones and the recipes are two
+            // lists, and a check that reads a name out of one by an index into the other is a check
+            // that can send somebody to look at the wrong square.
+            var name = slot < _hudScreen.Recipes.Count
+                ? _items[_hudScreen.Recipes[slot].Result.Item].Name
+                : "?";
+
+            said.Add($"{name} {most * 100f:F0}%");
+        }
+
+        _turnMoved = squares == 0 ? -1f : worst;
+
+        Console.WriteLine($"ui-check    book turn  round a whole turn: {string.Join(", ", said)}");
+        Console.Out.Flush();
+    }
+
+    /// <summary>The share of two patches whose pixels differ enough to be a different picture.</summary>
+    private static float Moved(byte[] a, byte[] b)
+    {
+        if (a.Length == 0 || a.Length != b.Length) return 0f;
 
         var moved = 0;
-        var pixels = after.Length / 4;
-
-        for (var i = 0; i < after.Length; i += 4)
+        for (var i = 0; i < b.Length; i += 4)
         {
             // Eight levels, so a rounding difference in one channel is not a moving block.
-            if (Math.Abs(after[i] - _turnBefore[i]) > 8
-                || Math.Abs(after[i + 1] - _turnBefore[i + 1]) > 8
-                || Math.Abs(after[i + 2] - _turnBefore[i + 2]) > 8)
+            if (Math.Abs(b[i] - a[i]) > 8
+                || Math.Abs(b[i + 1] - a[i + 1]) > 8
+                || Math.Abs(b[i + 2] - a[i + 2]) > 8)
                 moved++;
         }
 
-        _turnMoved = (float)moved / pixels;
-
-        Console.WriteLine(
-            $"ui-check    book turn  {moved} of {pixels} pixels moved ({_turnMoved * 100f:F0}%) "
-            + $"over {(TurnedDrift - StillDrift) * 0.55f:F2} radians");
-        Console.Out.Flush();
+        return (float)moved / (b.Length / 4);
     }
 
     /// <summary>
@@ -5528,14 +5578,17 @@ public sealed class ClientHost : IDisposable
         // pixel for pixel — the only way a still frame can say anything about a moving one, and a
         // page that had quietly stopped turning looks exactly like one that never did.
         //
-        // A fifth of the patch is a low bar on purpose: how much of it moves depends on which block
-        // the first recipe happens to make, and that changes whenever the recipe set does. What is
-        // being asked is whether it moved at all, and the mean could not answer that.
-        if (_turnMoved < 0f) faults.Add("the turning page was never compared at two moments");
-        else if (_turnMoved < 0.2f)
+        // ⛳ THE BAR IS SET FROM BOTH ENDS, MEASURED, rather than picked. A square whose block is
+        // held at one angle reads 0% — the threshold is eight levels, so nothing at all moves. The
+        // quietest square that genuinely IS turning is a torch at 12%: its picture is a narrow
+        // upright stick on a transparent tile, so most of the patch is well and stays well however
+        // far round it goes. A full cube reads 37 to 46. Five per cent is clear of one end and a
+        // long way under the other.
+        if (_turnMoved < 0f) faults.Add("the turning page was never compared at three moments");
+        else if (_turnMoved < 0.05f)
             faults.Add(
-                $"only {_turnMoved * 100f:F0}% of a recipe square changed across a radian of turn, "
-                + "so the block in it is not turning");
+                $"the stillest square on the page changed by only {_turnMoved * 100f:F0}% anywhere in a "
+                + "whole turn, so something on it is not turning - the line above says which");
 
         // ⛳ A SLAB IS HALF AS TALL AS THE BLOCK IT IS CUT FROM, SO IT REACHES LESS FAR UP ITS
         // SQUARE. Both wear the same tile, so nothing but the shape can move this number, and the

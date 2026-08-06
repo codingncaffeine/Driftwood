@@ -739,6 +739,12 @@ public static class WorldAudit
                 ? shapeDetail
                 : $"{shapeFaults.Count} faults: {string.Join("; ", shapeFaults)}");
 
+        var iconFaults = IconStyleAudit(items, out var iconDetail);
+        Check("every item is drawn the way it should be", iconFaults.Count == 0,
+            iconFaults.Count == 0
+                ? iconDetail
+                : $"{iconFaults.Count} faults: {string.Join("; ", iconFaults)}");
+
         var typingFaults = TextFieldSelfTest(out var typingDetail);
         Check("a typed line takes what it should and refuses the rest", typingFaults.Count == 0,
             typingFaults.Count == 0
@@ -5366,6 +5372,84 @@ public static class WorldAudit
             + $"the undrawable is dropped ('{drawable.Text}') where punctuation is not "
             + $"('{punctuation.Text}'); a file-safe box makes 'my/world:2' into '{name.Text}' and a "
             + $"digits box makes '12a3' into '{digits.Text}'";
+
+        return faults;
+    }
+
+    /// <summary>
+    /// Items that put a block down and are still drawn flat, on purpose, with the reason.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>A named list rather than a flag somebody remembers to set.</b> "Flat" used to be the
+    /// default, so an item was drawn flat both when that was the intention and when nobody had
+    /// thought about it, and the two are indistinguishable from the outside — which is exactly how
+    /// the torch and the ladder came to be reported as missing from a pass they were deliberately
+    /// left out of. Anything not on this list that puts a block down has to be drawn as one.
+    /// </remarks>
+    private static readonly (string Item, string Why)[] FlatOnPurpose =
+    [
+        ("torch", "a cut-out on crossed planes: a solid of it is a solid of black"),
+        ("ladder", "a cut-out on one sheet, with nothing behind it to shade"),
+    ];
+
+    /// <summary>
+    /// Every item, and whether it is drawn as the block it puts down or as a flat picture.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>Written because the user counted them before the game did.</b> They opened the recipe
+    /// book, saw a torch and a ladder sitting still among the turning blocks, and asked for an
+    /// audit. Nothing anywhere could have answered that question — the property was a bool nobody
+    /// listed — so this is the list, and it fails rather than merely printing: an item that puts a
+    /// block down and is drawn flat is now a decision somebody has to have written down.
+    /// </remarks>
+    private static List<string> IconStyleAudit(ItemRegistry items, out string detail)
+    {
+        var faults = new List<string>();
+
+        int asBlock = 0, flat = 0, declared = 0, noBlock = 0;
+        var quiet = new List<string>();
+
+        for (ushort id = 1; id < items.Count; id++)
+        {
+            var item = items[id];
+            var puts = !item.PlainBlock.IsAir;
+
+            if (item.DrawsAsBlock)
+            {
+                asBlock++;
+
+                // ⚠ Drawn as a block, but with no boxes to draw. A model that is all planes leaves
+                // nothing behind once they are dropped, so this falls back to a flat picture with
+                // nobody saying it did — the silent half of the same problem.
+                if (item.IconModel is not { Icon.Length: > 0 })
+                    faults.Add($"'{item.Name}' is meant to draw as a block and its model has no solid to draw");
+
+                continue;
+            }
+
+            flat++;
+            if (!puts) { noBlock++; continue; }
+
+            var reason = Array.FindIndex(FlatOnPurpose, f => f.Item == item.Name);
+            if (reason >= 0) declared++;
+            else quiet.Add(item.Name);
+        }
+
+        foreach (var name in quiet)
+            faults.Add(
+                $"'{name}' puts a block down and is drawn as a flat picture, and nothing says why — "
+                + "either draw it as a block or put it in FlatOnPurpose with the reason");
+
+        // Every declared exception must still be a real item, or the list rots into a set of names
+        // that excuse nothing and hide the next one that goes quiet.
+        foreach (var (name, _) in FlatOnPurpose)
+            if (!items.TryByName(name, out _))
+                faults.Add($"'{name}' is excused from drawing as a block and is not an item any more");
+
+        detail =
+            $"{asBlock} drawn as the block they put down, {declared} flat on purpose "
+            + $"({string.Join(", ", FlatOnPurpose.Select(f => f.Item))}), "
+            + $"{noBlock} that put no block down at all";
 
         return faults;
     }

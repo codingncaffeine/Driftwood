@@ -1834,7 +1834,8 @@ public sealed class HudRenderer : IDisposable
     /// bench produced, unfixed for a third of it.</para>
     /// <para>Flat is still right for a few, and they say so by not setting
     /// <see cref="ItemType.DrawsAsBlock"/>: a torch is art on crossed planes, so a solid of it is a
-    /// solid of black, and a tool is not a box at all.</para>
+    /// solid of black, and a tool is not a box at all. ⛳ <b>Those still turn</b> — as a card rather
+    /// than as a solid. See <see cref="TurningCard"/>.</para>
     /// </remarks>
     /// <param name="spin">
     /// Radians about the block's own upright axis, or 0 for the fixed three-quarter view.
@@ -1849,12 +1850,61 @@ public sealed class HudRenderer : IDisposable
 
         if (!type.DrawsAsBlock || type.IconModel is not { Icon.Length: > 0 } model)
         {
-            Rect(_blocks, x, y, size, size, tint, type.IconLayer);
+            if (spin != 0f) TurningCard(type.IconLayer, x, y, size, tint, spin);
+            else Rect(_blocks, x, y, size, size, tint, type.IconLayer);
             return;
         }
 
         if (spin != 0f) TurningIcon(model, x, y, size, tint, spin);
         else foreach (var box in model.Icon) IconBox(box, x, y, size, tint);
+    }
+
+    /// <summary>How thick a flat thing is made so it can be turned, in sixteenths.</summary>
+    /// <remarks>
+    /// Two, which is what the format gives an extruded item sprite and what the dropped ones already
+    /// use. ⚠ <b>Thickness is not decoration here</b> — a plane with none is invisible exactly
+    /// edge-on, twice a turn, which on a page somebody is reading is a torch that blinks out rather
+    /// than one that is turning.
+    /// </remarks>
+    private const float CardThick = 2f;
+
+    /// <summary>
+    /// A flat thing turning: its own picture on a slab thin enough to still read as a picture.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ <b>From the user, who counted:</b> <i>"there's a couple of things like the torch and
+    /// ladder aren't spinning"</i>. They had been left out on purpose — a torch is a cut-out on
+    /// crossed planes and a ladder is one sheet, so drawing either as a <em>solid</em> is three
+    /// shaded copies of a shape with holes in it — but <b>"left out on purpose" and "forgotten" look
+    /// identical from the front</b>, and the call was wrong anyway.</para>
+    /// <para>⛔ <b>The first answer was to squash the picture as it turned, and the check caught it
+    /// doing almost nothing.</b> A torch's sprite is a narrow upright stick in the middle of a
+    /// transparent tile, so narrowing it by a tenth moves no pixels at all — measured at 0% where a
+    /// block moved 35%. Squashing is a fine impression of turning for something that fills its tile
+    /// and no impression whatever for something that does not.</para>
+    /// <para>So a card is a <b>real slab two sixteenths thick</b> wearing its picture on every face,
+    /// put through exactly the same turn, sort and shading as a block. It leans and shifts rather
+    /// than merely narrowing, the cut-out keeps the silhouette the artist drew on every face — so a
+    /// torch is torch-shaped edge-on too — and there is one code path for turning rather than two.
+    /// </para>
+    /// </remarks>
+    private void TurningCard(ushort layer, float x, float y, float size, Vector4 tint, float spin)
+    {
+        var cos = MathF.Cos(spin);
+        var wide = MathF.Max(CardThick / 16f, MathF.Abs(cos)) * size;
+        var left = x + (size - wide) * 0.5f;
+
+        // Mirrored once it has turned past edge-on, so the far side of a card is its far side.
+        var (u0, u1) = cos >= 0f ? (0f, 1f) : (1f, 0f);
+
+        // Darker as it turns away, the way a face of a block is. Square-on is full brightness.
+        var shade = 0.70f + 0.30f * MathF.Abs(cos);
+
+        Quad(_blocks, layer, tint * new Vector4(shade, shade, shade, 1f),
+            left, y, u0, 0f,
+            left + wide, y, u1, 0f,
+            left + wide, y + size, u1, 1f,
+            left, y + size, u0, 1f);
     }
 
     /// <summary>
