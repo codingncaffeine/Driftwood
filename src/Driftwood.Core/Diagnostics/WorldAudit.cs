@@ -5025,9 +5025,70 @@ public static class WorldAudit
             var cutout = BlockTextureSet.Layers[layer].Cutout;
             if (cutout && transparent == 0) faults.Add($"{name} is marked cutout but has no holes");
             if (!cutout && transparent > 0) faults.Add($"{name} is opaque but has {transparent} clear pixels");
+
+            // ⛔ AN ICON HAS TO BE A DRAWING RATHER THAN A SPRAY, and this is what a real fault
+            // looked like: the feather's vane was walked along one diagonal and filled along another,
+            // which only ever reaches one parity class of the grid, so it rendered as a dither field.
+            // Every check above passed it — it had colours, it had holes, it was not the placeholder.
+            // What it did not have was a SHAPE. Counting the connected islands of ink separates the
+            // two: a picture is one island and a few specks, a lattice is dozens.
+            if (layer < StarterBlocks.LayerFirstIcon) continue;
+
+            // What the band cannot catch, measured: the widest correct drawing in the set is 3 (the
+            // shears, whose blades meet the handles only at the pivot), and the fault that motivated
+            // this read 23. Anything between 7 and 22 passes — a drawing that fragments only mildly
+            // is exactly what this is blind to, and the icon sheet is what catches those.
+            var islands = InkIslands(tile, built.Size);
+            if (islands > 6) faults.Add($"{name} is {islands} disconnected pieces of ink, which is a spray not a drawing");
         }
 
         return faults;
+    }
+
+    /// <summary>How many connected islands of opaque pixels a tile has.</summary>
+    /// <remarks>
+    /// Four-connected on purpose. Eight-connectivity joins a checkerboard into one blob — which is
+    /// the exact thing this exists to catch — so a diagonal touch does not count as touching.
+    /// </remarks>
+    private static int InkIslands(byte[] tile, int size)
+    {
+        var seen = new bool[size * size];
+        var stack = new Stack<int>();
+        var islands = 0;
+
+        bool Ink(int i) => tile[i * 4 + 3] >= 128;
+
+        for (var start = 0; start < seen.Length; start++)
+        {
+            if (seen[start] || !Ink(start)) continue;
+
+            islands++;
+            stack.Push(start);
+            seen[start] = true;
+
+            while (stack.Count > 0)
+            {
+                var at = stack.Pop();
+                var x = at % size;
+                var y = at / size;
+
+                for (var side = 0; side < 4; side++)
+                {
+                    var nx = x + (side == 0 ? -1 : side == 1 ? 1 : 0);
+                    var ny = y + (side == 2 ? -1 : side == 3 ? 1 : 0);
+
+                    if (nx < 0 || ny < 0 || nx >= size || ny >= size) continue;
+
+                    var next = ny * size + nx;
+                    if (seen[next] || !Ink(next)) continue;
+
+                    seen[next] = true;
+                    stack.Push(next);
+                }
+            }
+        }
+
+        return islands;
     }
 
     /// <summary>

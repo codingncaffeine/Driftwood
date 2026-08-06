@@ -117,18 +117,30 @@ public static class Program
     /// be the eye every time. Nearest-neighbour, so a pixel stays a pixel and what comes out is the
     /// drawing rather than a blur of it.
     /// </remarks>
+    /// <summary>
+    /// Every tile the game ships, blown up and laid out in a grid, for somebody to look at.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>It was four tool shapes and is now the whole array.</b> Four was enough while the only
+    /// question anybody had was whether an axe and a shovel were the same drawing; a content phase
+    /// adds a dozen tiles at a time and the question becomes whether any two of a hundred and twenty
+    /// can be told apart in a slot. Ours rather than a pack's on purpose — this is the picture of what
+    /// is in the box, which is the only art most players will ever see.
+    /// </remarks>
     private static int IconSheet(string path)
     {
-        const int Zoom = 12;
+        const int Zoom = 6;
         const int Gap = 2;
+        const int Across = 16;
 
         var tiles = new List<byte[]>();
-        for (var shape = 0; shape < TileGen.ToolShapes.Length; shape++)
-            tiles.Add(TileGen.IconTool(4000 + shape, shape, 150, 120, 90));
+        for (var layer = 0; layer < StarterBlocks.LayerCount; layer++)
+            tiles.Add(BlockTextureSet.OwnTile(layer));
 
         var cell = TileGen.Size * Zoom + Gap;
-        var width = cell * tiles.Count;
-        var height = cell;
+        var down = (tiles.Count + Across - 1) / Across;
+        var width = cell * Across;
+        var height = cell * down;
         var pixels = new byte[width * height * 4];
 
         // A mid grey behind them: a tool drawn on nothing cannot be told from a tool with a hole in
@@ -148,7 +160,7 @@ public static class Program
             var from = ((y / Zoom) * TileGen.Size + x / Zoom) * 4;
             if (tiles[t][from + 3] < 128) continue;
 
-            var to = ((y * width) + t * cell + x) * 4;
+            var to = ((t / Across * cell + y) * width + t % Across * cell + x) * 4;
             pixels[to] = tiles[t][from];
             pixels[to + 1] = tiles[t][from + 1];
             pixels[to + 2] = tiles[t][from + 2];
@@ -156,7 +168,14 @@ public static class Program
         }
 
         File.WriteAllBytes(path, Png.Encode(new Image(width, height, pixels)));
-        Console.WriteLine($"icons       {tiles.Count} tools at {Zoom}x written to {path}");
+
+        Console.WriteLine(
+            $"icons       {tiles.Count} layers at {Zoom}x, {Across} across, written to {path}");
+        Console.WriteLine(
+            $"            faces 0-{StarterBlocks.LayerFirstIcon - 1}, "
+            + $"items {StarterBlocks.LayerFirstIcon}-{StarterBlocks.LayerFirstTool - 1}, "
+            + $"tools {StarterBlocks.LayerFirstTool}-{StarterBlocks.LayerCount - 1}");
+
         return 0;
     }
 

@@ -544,6 +544,16 @@ public static class BlockTextureSet
         static byte Clamp(double v) => (byte)Math.Clamp(v, 0.0, 255.0);
     }
 
+    /// <summary>
+    /// Driftwood's own tile for one layer, at the native sixteen, for an instrument to look at.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ The one way in from outside. Everything else here builds a whole array against a pack, which
+    /// is the wrong shape for a sheet that wants to show what we ship — and a second copy of the
+    /// layer-to-drawing table written for the instrument would be a copy that drifts.
+    /// </remarks>
+    public static byte[] OwnTile(int layer) => Draw(layer);
+
     /// <summary>Driftwood's own art for one layer.</summary>
     private static byte[] Own(int layer, int size)
     {

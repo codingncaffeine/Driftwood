@@ -1585,12 +1585,18 @@ public static class TileGen
     /// A fleece laid as a block: soft, clumped, and lit from nowhere in particular.
     /// </summary>
     /// <remarks>
-    /// ⚠ <b>Two scales of noise and almost no contrast.</b> Wool is the one material here with no
-    /// edges in it at all — no grain, no facets, no mortar — so everything that makes a rock read as
-    /// a rock makes wool read as a rock painted white. What it does have is <em>clumping</em>: a
+    /// <para>⚠ <b>Two scales of noise and almost no contrast.</b> Wool is the one material here with
+    /// no edges in it at all — no grain, no facets, no mortar — so everything that makes a rock read
+    /// as a rock makes wool read as a rock painted white. What it does have is <em>clumping</em>: a
     /// coarse field that gathers the fleece into tufts and a fine one that gives each tuft its fibre.
-    /// The coarse field is the whole tell, and it is why one call to <see cref="Speckle"/> is not
-    /// enough however the spread is tuned.
+    /// </para>
+    /// <para>⛔ <b>AND THE CURLS, WITHOUT WHICH THIS TILE IS SNOW.</b> The first pass was exactly the
+    /// paragraph above and nothing else, and the icon sheet showed what that comes out as: a flat
+    /// near-white square, two rows away from snow's own flat near-white square and indistinguishable
+    /// from it. Noise cannot fix that at any amplitude, because the difference between wool and
+    /// drift is not how rough it is — it is that wool is made of <em>strands</em>. A short dark arc
+    /// stamped through each tuft is what finally separates them, and it is one line of code that a
+    /// week of tuning the spread would never have found.</para>
     /// </remarks>
     public static byte[] Wool(int seed, byte r, byte g, byte b)
     {
@@ -1601,15 +1607,22 @@ public static class TileGen
         {
             // Tufts, on a lattice a quarter the size of the tile, so a clump spans about four
             // pixels — big enough to see against a wall and small enough not to read as a pattern.
-            var clump = (Noise(x >> 2, y >> 2, seed) * 2f - 1f) * 13f;
-            var fibre = (Noise(x, y, seed + 47) * 2f - 1f) * 7f;
+            var clump = (Noise(x >> 2, y >> 2, seed) * 2f - 1f) * 18f;
+            var fibre = (Noise(x, y, seed + 47) * 2f - 1f) * 8f;
 
             // ⚠ A fleece has no lit side, so the only shading is the hollows between the tufts —
             // taken from the clump field itself rather than from a direction, which is what stops a
             // wall of it looking like a wall of stone that has been recoloured.
-            var hollow = Noise((x + 2) >> 2, (y + 2) >> 2, seed + 91) < 0.28f ? -9 : 0;
+            var hollow = Noise((x + 2) >> 2, (y + 2) >> 2, seed + 91) < 0.34f ? -16 : 0;
 
-            var d = (int)(clump + fibre) + hollow;
+            // One curl per tuft, turned one way or the other so a wall of it has no direction in it.
+            var cx = (x >> 2) * 4 + 2;
+            var cy = (y >> 2) * 4 + 2;
+            var mirrored = Noise(x >> 2, y >> 2, seed + 131) > 0.5f;
+            var onCurl = mirrored ? x - cx == y - cy : x - cx == cy - y;
+            var curl = onCurl && Math.Abs(x - cx) <= 1 ? -30 : 0;
+
+            var d = (int)(clump + fibre) + hollow + curl;
             Put(t, x, y, Clamp(r + d), Clamp(g + d), Clamp(b + d), 255);
         }
 
@@ -1645,47 +1658,69 @@ public static class TileGen
         return t;
     }
 
-    /// <summary>A quill lying corner to corner: a shaft with barbs down both sides.</summary>
+    /// <summary>A quill lying corner to corner: a shaft with a vane either side of it.</summary>
     /// <remarks>
-    /// ⚠ <b>The barbs shorten toward both ends</b>, which is the whole silhouette of a feather. Drawn
-    /// as a constant width it is a leaf, and drawn as a taper from one end it is a knife.
+    /// <para>⚠ <b>The vane widens from the quill and tapers to the tip</b>, which is the whole
+    /// silhouette. Drawn at a constant width it is a leaf; tapered from one end only it is a knife.
+    /// </para>
+    /// <para>⛔ <b>IT CAME OUT A CHECKERBOARD, AND THE CAUSE IS GEOMETRY, NOT SHADING.</b> The first
+    /// two passes walked the shaft in steps of <c>(+1, −1)</c> and filled across it in steps of
+    /// <c>(+1, +1)</c> — genuinely perpendicular, and the reason it fails anyway is worth keeping.
+    /// Every cell those two reach has <c>x + y = 15 + 2w</c>, which is <em>always odd</em>: the two
+    /// diagonals together only ever address one parity class of the grid, so half the pixels of the
+    /// vane can never be painted whatever the widths say. It rendered as a dither field with no
+    /// feather in it. The first diagnosis blamed the barb rule and was wrong — <b>a shape walked
+    /// along one diagonal and filled along another covers half a grid, and no amount of adjusting
+    /// what is drawn at each step can reach the other half.</b> It is filled per pixel now: every
+    /// cell in the tile works out where it falls along the shaft and how far across, which is the
+    /// same shape as the shape test in <see cref="IconMeat"/> and cannot skip anything.</para>
     /// </remarks>
     public static byte[] IconFeather(int seed, byte r, byte g, byte b)
     {
         var t = new byte[BytesPerTile];
 
-        for (var i = 0; i < 13; i++)
+        // The quill end, and the length and direction of the shaft from it.
+        const float OriginX = 2f, OriginY = 13f;
+        const float Length = 12f;
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
         {
-            var x = 2 + i;
-            var y = 13 - i;
+            // Where this pixel falls in the shaft's own frame: how far up it, and how far across.
+            // The two axes are (1,−1) and (1,1) over root two, and the halves are that root two
+            // squared — written out rather than normalised, because the numbers below are in pixels.
+            var dx = x - OriginX;
+            var dy = y - OriginY;
 
-            // Fattest a third of the way up from the quill end, tapering to nothing at the tip.
-            var along = i / 12f;
-            var span = (int)MathF.Round(3.4f * MathF.Sin(along * MathF.PI) * (0.45f + along * 0.75f));
+            var along = (dx - dy) * 0.5f;
+            var across = (dx + dy) * 0.5f;
 
-            for (var w = -span; w <= span; w++)
+            if (along is < -1f or > Length) continue;
+
+            var t01 = Math.Clamp(along / Length, 0f, 1f);
+
+            // Fattest a third of the way up from the quill, tapering to nothing at the tip. Below
+            // zero along is the bare stub, which carries no vane at all.
+            var span = along < 0f ? 0f : 3.4f * MathF.Sin(t01 * MathF.PI) * (0.5f + t01 * 0.7f);
+
+            // ⚠ Barbs: the outermost half-pixel of alternate rungs, on one side only. Alternating
+            // and one-sided, so the edge reads as separated barbs rather than as a serrated blade.
+            var rung = (int)MathF.Round(along);
+            if (span > 1.2f && rung % 2 == 1 && across > 0f) span -= 0.9f;
+
+            var reach = MathF.Abs(across);
+            if (reach > span && !(along >= -1f && reach < 0.6f)) continue;
+
+            // The shaft itself, a shade darker, so the two halves of the vane read as two halves
+            // rather than as one blob.
+            if (reach < 0.6f)
             {
-                var px = x + w;
-                var py = y + w;
-                if (px is < 0 or >= Size || py is < 0 or >= Size) continue;
-
-                // ⚠ Barbs, not a solid vane. Every third step across is left out toward the edge, so
-                // the outline breaks up the way a feather's does rather than reading as a blade.
-                if (MathF.Abs(w) > 1 && (px + py + i) % 3 == 0) continue;
-
-                var d = (int)((Noise(px, py, seed) * 2f - 1f) * 9f) - Math.Abs(w) * 5;
-                Put(t, px, py, Clamp(r + d), Clamp(g + d), Clamp(b + d), 255);
+                Put(t, x, y, Clamp(r - 46), Clamp(g - 42), Clamp(b - 34), 255);
+                continue;
             }
-        }
 
-        // The shaft, laid over the barbs and a shade darker, so the two halves of the vane read as
-        // two halves rather than as one blob.
-        for (var i = 0; i < 14; i++)
-        {
-            var x = 2 + i;
-            var y = 13 - i;
-            if (x >= Size || y < 0) continue;
-            Put(t, x, y, Clamp(r - 34), Clamp(g - 32), Clamp(b - 28), 255);
+            var shade = (int)((Noise(x, y, seed) * 2f - 1f) * 6f) - (int)(reach * 7f);
+            Put(t, x, y, Clamp(r + shade), Clamp(g + shade), Clamp(b + shade), 255);
         }
 
         return t;
@@ -1727,37 +1762,78 @@ public static class TileGen
     /// pair of shears drawn as one more diagonal would be a fifth thing in a row of four that all
     /// look alike. Two strokes crossing is the one silhouette nothing else here has.
     /// </remarks>
+    /// <remarks>
+    /// ⛔ <b>Drawn per pixel against four line segments, and the first pass was not.</b> Stepping a
+    /// diagonal and thickening it by a second offset in the same direction gives a line one pixel
+    /// wide with a gap at every step — the audit counted <b>23 disconnected pieces of ink</b> where a
+    /// drawing should be one or two. The same fault the feather had, found by the same check, and it
+    /// is why that check now runs over every icon: a 45° line is not four-connected however many
+    /// pixels are written along it, so the width has to be a <em>distance</em> rather than a step.
+    /// </remarks>
     public static byte[] IconShears(int seed, byte r, byte g, byte b)
     {
         var t = new byte[BytesPerTile];
 
-        void Blade(int x0, int y0, int dx, int dy, int steps, bool metal)
-        {
-            for (var i = 0; i < steps; i++)
-            for (var w = 0; w < 2; w++)
-            {
-                var x = x0 + dx * i + (dy == 0 ? 0 : w);
-                var y = y0 + dy * i + (dx == 0 ? 0 : w);
-                if (x is < 0 or >= Size || y is < 0 or >= Size) continue;
+        // Blades in a narrow V up from the pivot, handles in a wider V down from it: which is what
+        // a pair of shears is, and the one silhouette nothing else in the set has.
+        (float X0, float Y0, float X1, float Y1, float Width, bool Metal)[] strokes =
+        [
+            (8.0f, 9.0f, 3.2f, 2.2f, 1.5f, true),
+            (8.0f, 9.0f, 12.8f, 2.2f, 1.5f, true),
+            (8.0f, 9.0f, 4.4f, 14.2f, 1.2f, false),
+            (8.0f, 9.0f, 11.6f, 14.2f, 1.2f, false),
+        ];
 
-                var (br, bg, bb) = metal ? (r, g, b) : ((byte)108, (byte)70, (byte)52);
-                var d = (int)((Noise(x, y, seed) * 2f - 1f) * 8f) - w * 22 + (metal ? i : 0);
-                Put(t, x, y, Clamp(br + d), Clamp(bg + d), Clamp(bb + d), 255);
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var nearest = float.MaxValue;
+            var metal = true;
+
+            foreach (var (x0, y0, x1, y1, width, isMetal) in strokes)
+            {
+                var reach = ToSegment(x, y, x0, y0, x1, y1) - width * 0.5f;
+                if (reach >= nearest) continue;
+
+                nearest = reach;
+                metal = isMetal;
             }
+
+            if (nearest > 0f) continue;
+
+            var (br, bg, bb) = metal ? (r, g, b) : ((byte)118, (byte)78, (byte)56);
+
+            // Lit along the middle of each stroke and shaded at its edges, so two crossing bars read
+            // as two bars rather than as a solid X.
+            var lift = (int)(nearest * 26f);
+            var d = lift + (int)((Noise(x, y, seed) * 2f - 1f) * 7f);
+
+            Put(t, x, y, Clamp(br + d), Clamp(bg + d), Clamp(bb + d), 255);
         }
 
-        // Blades from the pivot outward and upward, handles from the pivot downward: an X with its
-        // crossing point low, which is where a pair of shears actually pivots.
-        Blade(9, 8, -1, -1, 7, metal: true);
-        Blade(6, 8, 1, -1, 7, metal: true);
-        Blade(8, 9, -1, 1, 5, metal: false);
-        Blade(7, 9, 1, 1, 5, metal: false);
-
-        // The pivot itself, so the two blades are visibly joined rather than merely touching.
-        Put(t, 7, 8, Clamp(r - 46), Clamp(g - 44), Clamp(b - 40), 255);
-        Put(t, 8, 8, Clamp(r - 46), Clamp(g - 44), Clamp(b - 40), 255);
+        // The pivot, dark, so the four strokes visibly hinge rather than merely overlap.
+        for (var y = 8; y <= 9; y++)
+        for (var x = 7; x <= 8; x++)
+            Put(t, x, y, Clamp(r - 62), Clamp(g - 58), Clamp(b - 52), 255);
 
         return t;
+    }
+
+    /// <summary>How far a point is from a line segment. The one primitive a stroke needs.</summary>
+    private static float ToSegment(float px, float py, float x0, float y0, float x1, float y1)
+    {
+        var dx = x1 - x0;
+        var dy = y1 - y0;
+
+        var lengthSquared = dx * dx + dy * dy;
+        var along = lengthSquared > 1e-6f
+            ? Math.Clamp(((px - x0) * dx + (py - y0) * dy) / lengthSquared, 0f, 1f)
+            : 0f;
+
+        var ax = px - (x0 + dx * along);
+        var ay = py - (y0 + dy * along);
+
+        return MathF.Sqrt(ax * ax + ay * ay);
     }
 
     /// <summary>Which drawing a meat wears. Three, so eight meats are told apart in a slot.</summary>
@@ -1814,9 +1890,12 @@ public static class TileGen
                     var wobble = 1f + (Noise(x >> 1, y >> 1, seed) * 2f - 1f) * 0.20f;
                     inside = dx * dx + dy * dy <= wobble;
 
-                    // The bone along the top edge, which is the whole of what tells a chop from a cut.
-                    bone = !inside && y is >= 3 and <= 5 && x is >= 3 and <= 12
-                           && (x - Centre) * (x - Centre) / 44f + (y - 4f) * (y - 4f) / 2.2f <= 1f;
+                    // ⛔ The bone along the top edge, ATTACHED to the cut rather than floating over
+                    // it. Drawn as its own ellipse two rows clear, it came out on the icon sheet as a
+                    // white bar sitting above the meat — which reads as a lid on a pot, not as a
+                    // chop. It sits ON the meat's own upper edge now and takes the pixels there.
+                    bone = inside && y <= 6.2f - 3.4f * MathF.Abs(x - Centre) / 7f;
+                    if (bone) inside = false;
                     break;
                 }
 
@@ -1845,11 +1924,18 @@ public static class TileGen
 
             var (pr, pg, pb) = (r, g, b);
 
-            if (cooked && rim)
+            // ⛔ COOKED BROWNS THROUGHOUT, NOT ONLY AT THE RIM — and the first pass had it the other
+            // way round on a theory about how meat actually cooks. It does brown from the outside in,
+            // but a rim on a sixteen-pixel icon is one pixel wide: on the icon sheet raw beef and
+            // cooked beef were the same red blob, side by side, and nobody could have told them
+            // apart in a slot. The rim still browns hardest, which keeps the from-the-outside
+            // reading; the middle goes most of the way with it, which is what makes them two things.
+            if (cooked)
             {
-                pr = (byte)Math.Clamp(r * 0.52f + 44f, 0, 255);
-                pg = (byte)Math.Clamp(g * 0.44f + 26f, 0, 255);
-                pb = (byte)Math.Clamp(b * 0.40f + 14f, 0, 255);
+                var deep = rim ? 1f : 0.62f;
+                pr = (byte)Math.Clamp(r + (126 - r) * deep, 0, 255);
+                pg = (byte)Math.Clamp(g + (74 - g) * deep, 0, 255);
+                pb = (byte)Math.Clamp(b + (40 - b) * deep, 0, 255);
             }
 
             // Marbling: a few pale streaks through the middle, which is what says meat rather than
@@ -1857,7 +1943,7 @@ public static class TileGen
             var marble = !rim && Noise(x, y * 2, seed + 29) > 0.80f ? 34 : 0;
 
             // A sear stripe or two once it has been on a fire.
-            var sear = cooked && !rim && (x + y) % 5 == 0 ? -28 : 0;
+            var sear = cooked && !rim && (x + y) % 5 == 0 ? -30 : 0;
 
             var lift = (int)((Centre - x) * 1.1f + (Centre - y) * 1.6f);
             var d = lift + marble + sear + (int)((Noise(x, y, seed + 17) * 2f - 1f) * 9f);
