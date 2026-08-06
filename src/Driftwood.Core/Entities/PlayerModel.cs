@@ -191,6 +191,18 @@ public static class PlayerModel
         return [.. boxes];
     }
 
+    /// <summary>
+    /// Which way one face of a box points, and which way its texture runs across it.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ Handed out so a <em>painter</em> can walk the same surface the mesher walks. Painting a net
+    /// from a second copy of these axes is how a marking meant to wrap round an animal comes out
+    /// mirrored down one side: the seam is exactly where the two copies disagree, and it is the one
+    /// place nobody looks.
+    /// </remarks>
+    public static (Vector3 Normal, Vector3 UAxis, Vector3 VAxis) FaceAxes(int face, bool mirror) =>
+        (Normals[face], mirror ? -UAxes[face] : UAxes[face], VAxes[face]);
+
     /// <summary>Face order used everywhere below: front, back, right, left, top, bottom.</summary>
     private static readonly Vector3[] Normals =
     [

@@ -51,15 +51,20 @@ public sealed class CreatureRenderer : IDisposable
         var skinned = 0;
         var triangles = 0;
         var bare = 0;
+        var ours = 0;
 
         foreach (var entry in resolved)
         {
             if (entry.Skeleton is not { } model) continue;
 
+            // ⚠ Our own models are cut for their own declared net, so a pack's sheet dimensions are
+            // only allowed to decide the scaling when the sheet is actually going to be worn.
             var mesh = CreatureMesh.Build(model, entry.SkinWidth, entry.SkinHeight);
             if (mesh.Indices.Length == 0) continue;
 
             var skin = 0u;
+
+            // A pack's art first, at the shape it was painted.
             if (pack is not null && entry.SkinFrom.Length > 0)
             {
                 foreach (var path in entry.Kind.Skins)
@@ -67,10 +72,27 @@ public sealed class CreatureRenderer : IDisposable
                     var sheet = pack.TryLoadSheet(path, out _);
                     if (sheet is null) continue;
 
+                    // ⚠ Only if it fits the net this skeleton is cut for. A sheet of the wrong shape
+                    // puts every patch somewhere else on the animal, and ours — which fits by
+                    // construction — is better than theirs worn inside out.
+                    if (sheet.Width * model.SheetHeight != sheet.Height * model.SheetWidth
+                        && sheet.Height * model.SheetWidth < model.SheetHeight * sheet.Width)
+                    {
+                        break;
+                    }
+
                     skin = UploadSheet(gl, sheet);
                     skinned++;
                     break;
                 }
+            }
+
+            // ⛔ Then ours, which is what ships. Painted in code the way our block tiles are, so a
+            // machine with no pack at all still has animals rather than black cut-outs of them.
+            if (skin == 0 && CreatureArt.Has(model.Name))
+            {
+                skin = UploadSheet(gl, CreatureArt.Paint(model));
+                ours++;
             }
 
             // ⛔ NO SKIN MEANS NOT DRAWN, and the alternative was worse than nothing. A creature
@@ -87,9 +109,9 @@ public sealed class CreatureRenderer : IDisposable
 
         Summary = _kinds.Count == 0
             ? bare > 0
-                ? $"none drawn: {bare} have a skeleton and no art in this pack"
+                ? $"none drawn: {bare} have a skeleton and no art anywhere"
                 : "no creatures: no skeletons were found"
-            : $"{_kinds.Count} kinds, {triangles} triangles"
+            : $"{_kinds.Count} kinds, {triangles} triangles, {ours} painted here, {skinned} from the pack"
                 + (bare > 0 ? $", {bare} skipped for want of art" : "");
     }
 

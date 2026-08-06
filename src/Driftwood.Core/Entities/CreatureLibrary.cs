@@ -127,11 +127,17 @@ public static class CreatureLibrary
                 }
             }
 
-            // ⛳ The skin is looked for FIRST, because it gets a vote on which skeleton to wear. One
-            // creature is modelled several times over in an install and the versions are cut for
-            // sheets of different shapes; the pack's own art is the only thing on the machine that
-            // says which of them the paint was mixed for. See CreatureSet.Match.
-            var skeleton = CreatureSet.Match(models, kind.Skeleton, width, height);
+            // ⛔ OURS FIRST. A skeleton read off somebody's installed client is how a creature gets
+            // looked at; it is not how one ships. The models in StarterCreatures are ours, are cut
+            // for the same nets, and are there whether or not anybody has that client installed —
+            // exactly the arrangement the blocks have, where TileGen draws what ships and a pack
+            // replaces it. What is read off the disk fills in the creatures we have not drawn yet.
+            //
+            // ⛳ Otherwise the skin is looked for FIRST, because it gets a vote on which of their
+            // skeletons to wear: one creature is modelled several times over in an install and the
+            // versions are cut for sheets of different shapes. See CreatureSet.Match.
+            var skeleton = StarterCreatures.ByName(kind.Name)
+                        ?? CreatureSet.Match(models, kind.Skeleton, width, height);
 
             resolved.Add(new CreatureSet.Resolved(
                 kind, skeleton, skeleton?.Name ?? "", from, width, height));

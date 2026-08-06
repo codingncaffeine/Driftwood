@@ -949,12 +949,16 @@ public sealed class ClientHost : IDisposable
             folder = _settings.CreatureGeometry;
         }
 
-        if (string.IsNullOrWhiteSpace(folder) || !Directory.Exists(folder)) return;
-
         try
         {
+            // ⛔ NOT a reason to stop. Our own creatures are drawn from our own table and need no
+            // install at all — the folder only ever adds the ones we have not drawn yet. Returning
+            // early when there was no folder is what left a machine with no Bedrock client with no
+            // animals in the game, which is every machine that is not this one.
             var faults = new List<string>();
-            var models = CreatureLibrary.ReadFolder(folder, faults);
+            var models = string.IsNullOrWhiteSpace(folder) || !Directory.Exists(folder)
+                ? []
+                : CreatureLibrary.ReadFolder(folder, faults);
 
             using var pack = string.IsNullOrWhiteSpace(_options.PackPath)
                 ? null

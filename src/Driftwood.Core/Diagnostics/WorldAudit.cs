@@ -819,6 +819,20 @@ public static class WorldAudit
                 ? "6 placed on a plain, all still on it after 10s, and none crossed a wall in 15s"
                 : $"{herdFaults.Count} faults: {herdFaults[0]}");
 
+        // ⛔ The creatures that SHIP. Everything above tests what can be read off somebody else's
+        // disk; this tests what is in the box, which is the only art most players will ever see.
+        var ourCreatures = StarterCreatures.Validate();
+        Check("our own creatures stand up", ourCreatures.Count == 0,
+            ourCreatures.Count == 0
+                ? $"{StarterCreatures.All.Count} models, nets sound, assembled, feet on the ground"
+                : $"{ourCreatures.Count} faults: {ourCreatures[0]}");
+
+        var artFaults = CreatureArt.Validate();
+        Check("our own creatures are painted", artFaults.Count == 0,
+            artFaults.Count == 0
+                ? "every patch its net names, a face on the front of each head, no two the same colour"
+                : $"{artFaults.Count} faults: {artFaults[0]}");
+
         var matchFaults = CreatureSet.Validate();
         Check("a creature wears the skeleton its art was painted for", matchFaults.Count == 0,
             matchFaults.Count == 0
