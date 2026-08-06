@@ -1,3 +1,4 @@
+using System.Numerics;
 using Driftwood.Core.Lighting;
 
 namespace Driftwood.Core.Blocks;
@@ -82,6 +83,39 @@ public sealed class BlockRegistry
     {
         var table = new bool[_byId.Count];
         for (var i = 0; i < _byId.Count; i++) table[i] = _byId[i].Solid;
+        return table;
+    }
+
+    /// <summary>
+    /// The boxes each block is actually made of, keyed by raw id, for collision that follows a
+    /// shape rather than a cell.
+    /// </summary>
+    /// <param name="cellsBelow">
+    /// ⛔ <b>How many extra rows of cells a scan has to look <em>down</em> through, and it is not
+    /// optional.</b> Every box is inside its own cell but for one deliberate exception: a fence is
+    /// drawn a block high and collided with a block and a half high, so a body standing in the cell
+    /// above one would never see it if the scan only covered the cells its own box overlaps. This is
+    /// how far past a cell the tallest box in the whole registry reaches, rounded up — 0 when nothing
+    /// overhangs, and the scan costs nothing extra then.
+    /// </param>
+    /// <remarks>
+    /// A block that is not <see cref="BlockType.Solid"/> gets no boxes at all rather than an empty
+    /// shape, so the hot loop skips it on a length check and never asks a second question.
+    /// </remarks>
+    public (Vector3 Min, Vector3 Max)[][] BuildCollisionTable(out int cellsBelow)
+    {
+        var table = new (Vector3 Min, Vector3 Max)[_byId.Count][];
+        var over = 0f;
+
+        for (var i = 0; i < _byId.Count; i++)
+        {
+            var type = _byId[i];
+            table[i] = type.Solid ? type.Model.Collision : [];
+
+            foreach (var (_, max) in table[i]) over = MathF.Max(over, max.Y - 1f);
+        }
+
+        cellsBelow = over <= 0f ? 0 : (int)MathF.Ceiling(over);
         return table;
     }
 

@@ -68,7 +68,33 @@ public sealed class PlayerBody
     public const float ClimbSpeed = 2.8f;
     public const float SlideSpeed = 3.4f;
 
-    private readonly bool[] _solid;
+    /// <summary>
+    /// The boxes each block is made of, keyed by raw id. Empty for anything with no collision.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>This replaced a <c>bool[]</c>, and that was the whole of #57.</b> Every slab, stair,
+    /// fence, chest, campfire and shut trapdoor in the game was a full cube to a body — walking into
+    /// a slab was walking into a wall, and standing on one put the feet a whole block up. An open
+    /// door had to be registered not solid at all just so a doorway could be walked through.
+    /// </remarks>
+    private readonly (Vector3 Min, Vector3 Max)[][] _boxes;
+
+    /// <summary>How many rows of cells below the body's own box still have to be looked at.</summary>
+    /// <remarks>
+    /// A fence reaches half a block above its own cell so it cannot be hopped. Nothing else does,
+    /// and on a registry where nothing does this is zero and the scan is the size it always was.
+    /// </remarks>
+    private readonly int _cellsBelow;
+
+    /// <summary>
+    /// Slack on a face-to-face touch, in blocks.
+    /// </summary>
+    /// <remarks>
+    /// A body resting exactly on a surface has its foot plane and the surface at the same number, and
+    /// an overlap test with no slack would call that a collision — after which it could never sit
+    /// flush against anything and would be pushed out of every floor it landed on.
+    /// </remarks>
+    private const float Touch = 1e-4f;
 
     /// <summary>Which way the wall is behind each climbable block, or -1. Indexed by raw block id.</summary>
     private readonly int[] _climbTo;
@@ -88,7 +114,7 @@ public sealed class PlayerBody
 
     public PlayerBody(BlockRegistry registry)
     {
-        _solid = registry.BuildSolidTable();
+        _boxes = registry.BuildCollisionTable(out _cellsBelow);
 
         _climbTo = new int[registry.Count];
         Array.Fill(_climbTo, -1);
@@ -255,14 +281,26 @@ public sealed class PlayerBody
             {
                 // Landed or hit the ceiling. Sit exactly against the surface rather than a hair
                 // away, or the next frame starts fractionally inside it.
-                Position.Y = motion.Y < 0f
-                    ? MathF.Floor(Position.Y + motion.Y) + 1f
-                    : MathF.Ceiling(Position.Y + motion.Y + CurrentHeight) - 1f - CurrentHeight;
+                //
+                // ⛔ The surface, not the cell boundary. A slab's top is half way up its cell and a
+                // stair's lower step is too; snapping to floor(y)+1 put the feet inside them.
+                var target = Position.Y + motion.Y;
 
                 if (motion.Y < 0f)
                 {
+                    var top = FloorCrossed(world, Position, Position.Y, target);
+                    Position.Y = float.IsNaN(top) ? MathF.Floor(target) + 1f : top;
+
                     OnGround = true;
                     FallDistance = 0f;
+                }
+                else
+                {
+                    var head = Position.Y + CurrentHeight;
+                    var under = CeilingCrossed(world, Position, head, target + CurrentHeight);
+                    Position.Y = float.IsNaN(under)
+                        ? MathF.Ceiling(target + CurrentHeight) - 1f - CurrentHeight
+                        : under - CurrentHeight;
                 }
 
                 Velocity.Y = 0f;
@@ -340,49 +378,152 @@ public sealed class PlayerBody
         return false;
     }
 
-    /// <summary>True when any solid block overlaps the body's box at the given feet position.</summary>
+    /// <summary>True when any block's shape overlaps the body's box at the given feet position.</summary>
+    /// <remarks>
+    /// Half-open on every edge: a body standing exactly on a block boundary must not be considered
+    /// inside the block it is touching, or it can never be flush against anything.
+    /// </remarks>
     public bool Collides(VoxelWorld world, Vector3 feet)
     {
         var half = Width * 0.5f;
-        var height = CurrentHeight;
+        var lo = new Vector3(feet.X - half, feet.Y, feet.Z - half);
+        var hi = new Vector3(feet.X + half, feet.Y + CurrentHeight, feet.Z + half);
 
-        // Half-open on the maximum edge: a body standing exactly on a block boundary must not be
-        // considered inside the block it is touching, or it can never be flush against anything.
-        var minX = (int)MathF.Floor(feet.X - half);
-        var maxX = (int)MathF.Ceiling(feet.X + half) - 1;
-        var minY = (int)MathF.Floor(feet.Y);
-        var maxY = (int)MathF.Ceiling(feet.Y + height) - 1;
-        var minZ = (int)MathF.Floor(feet.Z - half);
-        var maxZ = (int)MathF.Ceiling(feet.Z + half) - 1;
+        return Overlaps(world, lo, hi);
+    }
+
+    /// <summary>True when something is directly under the body's footprint, close enough to stand on.</summary>
+    /// <remarks>
+    /// A thin slice under the feet rather than "is the block below solid". That is what makes a slab
+    /// something to stand on top of at half height, and what stops the cell under a chest counting
+    /// as floor when the chest itself is what is being stood on.
+    /// </remarks>
+    public bool StandingOnGround(VoxelWorld world, Vector3 feet)
+    {
+        const float Probe = 0.02f;
+        var half = Width * 0.5f;
+
+        var lo = new Vector3(feet.X - half, feet.Y - Probe, feet.Z - half);
+        var hi = new Vector3(feet.X + half, feet.Y, feet.Z + half);
+
+        return Overlaps(world, lo, hi);
+    }
+
+    /// <summary>True when any block's shape overlaps the given box.</summary>
+    private bool Overlaps(VoxelWorld world, Vector3 lo, Vector3 hi)
+    {
+        var minX = (int)MathF.Floor(lo.X);
+        var maxX = (int)MathF.Ceiling(hi.X) - 1;
+        var minY = (int)MathF.Floor(lo.Y) - _cellsBelow;
+        var maxY = (int)MathF.Ceiling(hi.Y) - 1;
+        var minZ = (int)MathF.Floor(lo.Z);
+        var maxZ = (int)MathF.Ceiling(hi.Z) - 1;
 
         for (var y = minY; y <= maxY; y++)
         for (var z = minZ; z <= maxZ; z++)
         for (var x = minX; x <= maxX; x++)
         {
-            if (_solid[world.GetBlock(x, y, z).Value]) return true;
+            var boxes = _boxes[world.GetBlock(x, y, z).Value];
+            if (boxes.Length == 0) continue;
+
+            foreach (var (min, max) in boxes)
+            {
+                if (lo.X < x + max.X - Touch && hi.X > x + min.X + Touch &&
+                    lo.Y < y + max.Y - Touch && hi.Y > y + min.Y + Touch &&
+                    lo.Z < z + max.Z - Touch && hi.Z > z + min.Z + Touch)
+                    return true;
+            }
         }
 
         return false;
     }
 
-    /// <summary>True when something solid is directly under the body's footprint.</summary>
-    public bool StandingOnGround(VoxelWorld world, Vector3 feet)
+    /// <summary>
+    /// The highest surface the feet would pass through on the way down, or <see cref="float.NaN"/>.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>The half of #57 that is not the overlap test.</b> Landing used to be
+    /// <c>floor(y) + 1</c> — the top of the cell, which is only the top of the block when the block
+    /// fills its cell. On a slab it put the feet half a block inside the slab, on a stair a whole
+    /// step out. What is wanted is the highest box top that the fall crossed, which is a real number
+    /// and not a cell boundary.
+    /// </remarks>
+    private float FloorCrossed(VoxelWorld world, Vector3 feet, float from, float to)
     {
-        var probe = feet - new Vector3(0f, 0.02f, 0f);
         var half = Width * 0.5f;
+        var loX = feet.X - half;
+        var hiX = feet.X + half;
+        var loZ = feet.Z - half;
+        var hiZ = feet.Z + half;
 
-        var y = (int)MathF.Floor(probe.Y);
-        var minX = (int)MathF.Floor(probe.X - half);
-        var maxX = (int)MathF.Ceiling(probe.X + half) - 1;
-        var minZ = (int)MathF.Floor(probe.Z - half);
-        var maxZ = (int)MathF.Ceiling(probe.Z + half) - 1;
+        var minX = (int)MathF.Floor(loX);
+        var maxX = (int)MathF.Ceiling(hiX) - 1;
+        var minZ = (int)MathF.Floor(loZ);
+        var maxZ = (int)MathF.Ceiling(hiZ) - 1;
+        var minY = (int)MathF.Floor(to) - _cellsBelow;
+        var maxY = (int)MathF.Ceiling(from);
 
+        var best = float.NaN;
+
+        for (var y = minY; y <= maxY; y++)
         for (var z = minZ; z <= maxZ; z++)
         for (var x = minX; x <= maxX; x++)
         {
-            if (_solid[world.GetBlock(x, y, z).Value]) return true;
+            var boxes = _boxes[world.GetBlock(x, y, z).Value];
+            if (boxes.Length == 0) continue;
+
+            foreach (var (min, max) in boxes)
+            {
+                if (loX >= x + max.X - Touch || hiX <= x + min.X + Touch) continue;
+                if (loZ >= z + max.Z - Touch || hiZ <= z + min.Z + Touch) continue;
+
+                // Only surfaces the feet actually crossed. One already above where they started is
+                // something the body was inside before this step and is not what stopped it.
+                var top = y + max.Y;
+                if (top > from + Touch || top <= to) continue;
+                if (float.IsNaN(best) || top > best) best = top;
+            }
         }
 
-        return false;
+        return best;
+    }
+
+    /// <summary>The lowest surface the head would pass through on the way up, or NaN.</summary>
+    private float CeilingCrossed(VoxelWorld world, Vector3 feet, float from, float to)
+    {
+        var half = Width * 0.5f;
+        var loX = feet.X - half;
+        var hiX = feet.X + half;
+        var loZ = feet.Z - half;
+        var hiZ = feet.Z + half;
+
+        var minX = (int)MathF.Floor(loX);
+        var maxX = (int)MathF.Ceiling(hiX) - 1;
+        var minZ = (int)MathF.Floor(loZ);
+        var maxZ = (int)MathF.Ceiling(hiZ) - 1;
+        var minY = (int)MathF.Floor(from) - _cellsBelow;
+        var maxY = (int)MathF.Ceiling(to);
+
+        var best = float.NaN;
+
+        for (var y = minY; y <= maxY; y++)
+        for (var z = minZ; z <= maxZ; z++)
+        for (var x = minX; x <= maxX; x++)
+        {
+            var boxes = _boxes[world.GetBlock(x, y, z).Value];
+            if (boxes.Length == 0) continue;
+
+            foreach (var (min, max) in boxes)
+            {
+                if (loX >= x + max.X - Touch || hiX <= x + min.X + Touch) continue;
+                if (loZ >= z + max.Z - Touch || hiZ <= z + min.Z + Touch) continue;
+
+                var under = y + min.Y;
+                if (under < from - Touch || under >= to) continue;
+                if (float.IsNaN(best) || under < best) best = under;
+            }
+        }
+
+        return best;
     }
 }

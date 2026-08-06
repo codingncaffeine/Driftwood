@@ -1,5 +1,6 @@
 using System.Numerics;
 using Driftwood.Core.Blocks;
+using Driftwood.Core.Physics;
 using Driftwood.Core.World;
 
 namespace Driftwood.Core.Items;
@@ -62,7 +63,7 @@ public sealed class DroppedItems
 
     private readonly DroppedItem[] _items = new DroppedItem[Capacity];
     private readonly ItemRegistry _catalogue;
-    private readonly bool[] _solid;
+    private readonly (Vector3 Min, Vector3 Max)[][] _shapes;
     private uint _rng;
 
     public int Count { get; private set; }
@@ -75,7 +76,7 @@ public sealed class DroppedItems
     public DroppedItems(BlockRegistry registry, ItemRegistry items, uint seed = 0x1D0BE17)
     {
         _catalogue = items;
-        _solid = registry.BuildSolidTable();
+        _shapes = registry.BuildCollisionTable(out _);
         _rng = seed | 1u;
     }
 
@@ -242,9 +243,7 @@ public sealed class DroppedItems
         item.Velocity.Z *= 0.55f;
     }
 
-    private bool Blocked(VoxelWorld world, Vector3 at) =>
-        _solid[world.GetBlock(
-            (int)MathF.Floor(at.X), (int)MathF.Floor(at.Y), (int)MathF.Floor(at.Z)).Value];
+    private bool Blocked(VoxelWorld world, Vector3 at) => BlockShapes.Inside(_shapes, world, at);
 
     private float Unit() => (NextBits() & 0xFFFFFF) / (float)0x1000000;
 

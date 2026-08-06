@@ -170,6 +170,23 @@ public sealed class BlockModel
     public (Vector3 Min, Vector3 Max) Outline { get; private set; }
 
     /// <summary>
+    /// The boxes a body actually walks into, in block units. Empty means nothing to collide with.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛔ <b>Separate from <see cref="Outline"/> on purpose, and separate from the drawn shape
+    /// too.</b> The outline is one box round everything so there is something to aim at; collision is
+    /// every box, so a stair is two steps rather than one block-sized lump that happens to enclose
+    /// them. And it is not simply the elements either: a fence is a metre of post that a body must
+    /// not be able to hop over, and a campfire is a ring of logs with a hole in the middle that
+    /// nobody should be able to stand in.</para>
+    /// <para>Built from the <em>baked</em> element boxes, so a turned shape collides where it ended
+    /// up. Planes are dropped — a crossed tuft has no volume — coplanar passes are one box, and
+    /// every box is clamped into its own cell, which is what lets a body scan only the cells its own
+    /// box overlaps and still be sure it has seen everything.</para>
+    /// </remarks>
+    public (Vector3 Min, Vector3 Max)[] Collision { get; private set; }
+
+    /// <summary>
     /// The tile debris off this block wears.
     /// </summary>
     /// <remarks>
@@ -200,6 +217,8 @@ public sealed class BlockModel
         Outline = Quads.Length > 0
             ? (min, max)
             : (Vector3.Zero, Vector3.One);
+
+        Collision = BuildCollision(elements, Outline);
 
         ParticleLayer = Quads.Length > 0 ? Quads[0].Layer : (ushort)0;
 
@@ -387,9 +406,14 @@ public sealed class BlockModel
     /// boxes are legal and invisible from outside, but they double the quads through the post and
     /// every fence in a line pays for it.</para>
     /// </remarks>
+    /// <param name="collideHigh">
+    /// How high a body finds this, in model units, when that is not how tall it is drawn — 0 to
+    /// collide with what is drawn.
+    /// </param>
     public static BlockModel Connected(
         ushort top, ushort side, ushort bottom,
-        float postHalf, float armHalf, (float Low, float High)[] bars, int mask, float height = 16f)
+        float postHalf, float armHalf, (float Low, float High)[] bars, int mask,
+        float height = 16f, float collideHigh = 0f)
     {
         var elements = new List<ModelElement>(1 + 4 * bars.Length)
         {
@@ -425,7 +449,22 @@ public sealed class BlockModel
             }
         }
 
-        return new BlockModel(elements);
+        var model = new BlockModel(elements);
+
+        // ⛳ A fence is a metre of timber you cannot hop over, and that is a rule about the game
+        // rather than about the shape — the reference draws one a block high and collides with it a
+        // block and a half high for exactly this reason. Written here as the boxes that are drawn,
+        // raised, so a fence still lets a body walk *through* the gap beside the post it always did.
+        if (collideHigh > 0f)
+        {
+            var raised = new List<(Vector3 Min, Vector3 Max)>(model.Collision.Length);
+            foreach (var (min, max) in model.Collision)
+                raised.Add((min, new Vector3(max.X, MathF.Max(max.Y, collideHigh / 16f), max.Z)));
+
+            model.Collision = [.. raised];
+        }
+
+        return model;
     }
 
     /// <summary>A thin sheet lying on the floor: a carpet, or the first fall of snow.</summary>
@@ -583,7 +622,54 @@ public sealed class BlockModel
         // The stick, not the planes that draw it — and the stick where it ends up, not where it
         // was written, or a leaning torch is outlined as if it were standing upright.
         model.Outline = Bounds(Turned(from, to, cap));
+
+        // Nothing to walk into. The planes that draw the stick are a cell wide and reach outside the
+        // block, so left to the elements a torch would be a wall — and a torch is a thing you walk
+        // through in every game that has one.
+        model.Collision = [];
         return model;
+    }
+
+    /// <summary>
+    /// The element boxes a body can walk into, cleaned up.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Clamped into the cell</b>, which is load bearing rather than tidy: a torch draws its
+    /// stick with planes that start seven units <em>before</em> the block, and a collision box
+    /// hanging outside its own cell is one that a scan over the cells a body overlaps would step
+    /// straight past.</para>
+    /// <para><b>Planes are dropped and duplicates collapse.</b> A tuft is two crossed sheets with no
+    /// volume; a grass block is the same cube written twice, once for the overlay.</para>
+    /// <para>The fallback is the outline rather than a full cube, so a shape made entirely of planes
+    /// that somebody marks solid gets the box it is drawn in rather than the whole cell.</para>
+    /// </remarks>
+    private static (Vector3 Min, Vector3 Max)[] BuildCollision(
+        IReadOnlyList<ModelElement> elements, (Vector3 Min, Vector3 Max) outline)
+    {
+        var boxes = new List<(Vector3 Min, Vector3 Max)>(elements.Count);
+
+        foreach (var element in elements)
+        {
+            var box = Clamped(Bounds(element));
+            if (Flat(box)) continue;
+            if (!boxes.Contains(box)) boxes.Add(box);
+        }
+
+        if (boxes.Count > 0) return [.. boxes];
+
+        var only = Clamped(outline);
+        return Flat(only) ? [] : [only];
+    }
+
+    private static (Vector3 Min, Vector3 Max) Clamped((Vector3 Min, Vector3 Max) box) =>
+        (Vector3.Clamp(box.Min, Vector3.Zero, Vector3.One),
+         Vector3.Clamp(box.Max, Vector3.Zero, Vector3.One));
+
+    /// <summary>True when a box has no thickness in some direction, so there is nothing to hit.</summary>
+    private static bool Flat((Vector3 Min, Vector3 Max) box)
+    {
+        var size = box.Max - box.Min;
+        return size.X < 1e-4f || size.Y < 1e-4f || size.Z < 1e-4f;
     }
 
     /// <summary>Where one element's box actually ends up, in block units.</summary>
@@ -723,6 +809,11 @@ public sealed class BlockModel
 
         // The logs, not the flame standing in them, so the outline is something to aim at.
         model.Outline = (Vector3.Zero, new Vector3(1f, 0.5f, 1f));
+
+        // ⚠ One box across the whole cell, not the four logs. The logs leave a square hole in the
+        // middle, and a body that fits through it would stand inside the fire with its feet on the
+        // floor — which is both wrong to look at and the one place a campfire must not be safe.
+        model.Collision = [(Vector3.Zero, new Vector3(1f, 0.5f, 1f))];
         return model;
     }
 

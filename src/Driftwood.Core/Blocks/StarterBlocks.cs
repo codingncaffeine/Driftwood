@@ -681,13 +681,17 @@ public static class StarterBlocks
         // Four facings, either half of the cell, shut or swung up. Nothing holds a trapdoor: it is
         // fixed to the frame around it, which is a thing the world has no way to express and which
         // it would be worse to guess at than to leave alone.
+        //
+        // ⛳ An open one is solid again. It was registered Solid = false purely because collision
+        // followed the cell, so a swung panel filled the whole doorway — the workaround #57 named
+        // and the first thing to undo now that a body collides with three units of panel.
         for (var i = 0; i < Placeable.Facings.Length; i++)
         foreach (var upper in (bool[])[false, true])
         foreach (var open in (bool[])[false, true])
             registry.Register(new BlockType
             {
                 Name = TrapdoorName(i, upper, open),
-                Hardness = 2f, Solid = !open, Opaque = false, Crafted = true,
+                Hardness = 2f, Opaque = false, Crafted = true,
                 Sounds = SoundMaterial.Wood, Use = BlockUse.Toggle,
                 HarvestClass = ToolClass.Axe,
                 Model = BlockModel.Trapdoor(LayerTrapdoor, Placeable.Facings[i], upper, open),
@@ -703,7 +707,7 @@ public static class StarterBlocks
             registry.Register(new BlockType
             {
                 Name = DoorName(i, hinge, upper, open),
-                Hardness = 3f, Solid = !open, Opaque = false, Crafted = true,
+                Hardness = 3f, Opaque = false, Crafted = true,
                 Sounds = SoundMaterial.Wood, Use = BlockUse.Toggle,
                 HarvestClass = ToolClass.Axe,
 
@@ -966,28 +970,42 @@ public static class StarterBlocks
     /// </summary>
     /// <param name="PostHalf">Half the centre post's width, in sixteenths.</param>
     /// <param name="Bars">The heights the arms run at — two for a fence's rails, one for a wall.</param>
+    /// <param name="CollideHigh">
+    /// How high a body finds it, in sixteenths, when that is not how tall it is drawn.
+    /// </param>
     public readonly record struct ConnectedMaterial(
         string Name, ushort Layer, SoundMaterial Sound, ToolClass Harvest, int Tier,
-        float PostHalf, float ArmHalf, (float Low, float High)[] Bars);
+        float PostHalf, float ArmHalf, (float Low, float High)[] Bars, float CollideHigh);
+
+    /// <summary>
+    /// A fence and a wall stop a body half a block higher than they are drawn.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>Named per material rather than derived as "everything except glass".</b> It is a rule
+    /// about the game — a fence you can hop is not a fence — and the day something else joins its
+    /// neighbours the question is what that thing is for, not which side of a negation it falls on.
+    /// A pane is a window and collides with exactly what it is drawn as.
+    /// </remarks>
+    private const float FenceCollideHigh = 24f;
 
     private static readonly ConnectedMaterial[] ConnectedMaterials =
     [
         new("driftoak_fence", LayerPlanks, SoundMaterial.Wood, ToolClass.Axe, 0,
-            2f, 1f, [(6f, 9f), (12f, 15f)]),
+            2f, 1f, [(6f, 9f), (12f, 15f)], FenceCollideHigh),
         new("rubble_wall", LayerRubble, SoundMaterial.Stone, ToolClass.Pickaxe, 1,
-            4f, 3f, [(0f, 14f)]),
+            4f, 3f, [(0f, 14f)], FenceCollideHigh),
         new("stone_brick_wall", LayerStoneBricks, SoundMaterial.Stone, ToolClass.Pickaxe, 1,
-            4f, 3f, [(0f, 14f)]),
+            4f, 3f, [(0f, 14f)], FenceCollideHigh),
         new("deepstone_brick_wall", LayerDeepstoneBricks, SoundMaterial.Stone, ToolClass.Pickaxe, 1,
-            4f, 3f, [(0f, 14f)]),
+            4f, 3f, [(0f, 14f)], FenceCollideHigh),
         new("sandstone_wall", LayerSandstone, SoundMaterial.Stone, ToolClass.Pickaxe, 0,
-            4f, 3f, [(0f, 14f)]),
+            4f, 3f, [(0f, 14f)], FenceCollideHigh),
         new("brick_wall", LayerBricks, SoundMaterial.Stone, ToolClass.Pickaxe, 1,
-            4f, 3f, [(0f, 14f)]),
+            4f, 3f, [(0f, 14f)], FenceCollideHigh),
         new("glass_pane", LayerGlass, SoundMaterial.Glass, ToolClass.None, 0,
-            1f, 1f, [(0f, 16f)]),
+            1f, 1f, [(0f, 16f)], 0f),
         new("smokeglass_pane", LayerSmokeglass, SoundMaterial.Glass, ToolClass.None, 0,
-            1f, 1f, [(0f, 16f)]),
+            1f, 1f, [(0f, 16f)], 0f),
     ];
 
     /// <summary>The names of the things that join up with their neighbours.</summary>
@@ -1015,7 +1033,8 @@ public static class StarterBlocks
                 Hardness = 2f, Opaque = false, Crafted = true, Sounds = m.Sound,
                 HarvestClass = m.Harvest, HarvestTier = m.Tier,
                 Model = BlockModel.Connected(
-                    m.Layer, m.Layer, m.Layer, m.PostHalf, m.ArmHalf, m.Bars, mask),
+                    m.Layer, m.Layer, m.Layer, m.PostHalf, m.ArmHalf, m.Bars, mask,
+                    collideHigh: m.CollideHigh),
             });
         }
     }

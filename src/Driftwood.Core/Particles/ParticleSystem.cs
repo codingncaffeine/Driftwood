@@ -1,5 +1,6 @@
 using System.Numerics;
 using Driftwood.Core.Blocks;
+using Driftwood.Core.Physics;
 using Driftwood.Core.World;
 
 namespace Driftwood.Core.Particles;
@@ -82,7 +83,7 @@ public sealed class ParticleSystem
     private const float Bounce = 0.22f;
 
     private readonly Particle[] _particles = new Particle[Capacity];
-    private readonly bool[] _solid;
+    private readonly (Vector3 Min, Vector3 Max)[][] _shapes;
     private uint _rng;
 
     /// <summary>Particles currently alive.</summary>
@@ -96,7 +97,7 @@ public sealed class ParticleSystem
 
     public ParticleSystem(BlockRegistry registry, uint seed = 0x9E3779B9)
     {
-        _solid = registry.BuildSolidTable();
+        _shapes = registry.BuildCollisionTable(out _);
         _rng = seed | 1u;
     }
 
@@ -270,9 +271,7 @@ public sealed class ParticleSystem
         p.Velocity.Z *= 0.55f;
     }
 
-    private bool Blocked(VoxelWorld world, Vector3 at) =>
-        _solid[world.GetBlock(
-            (int)MathF.Floor(at.X), (int)MathF.Floor(at.Y), (int)MathF.Floor(at.Z)).Value];
+    private bool Blocked(VoxelWorld world, Vector3 at) => BlockShapes.Inside(_shapes, world, at);
 
     /// <summary>0 to 1.</summary>
     private float Unit() => (NextBits() & 0xFFFFFF) / (float)0x1000000;

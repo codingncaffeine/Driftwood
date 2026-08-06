@@ -733,6 +733,12 @@ public static class WorldAudit
                 ? "falls, lands, walks, jumps, is stopped by walls, does not sneak off ledges"
                 : $"{physicsFaults.Count} faults: {string.Join("; ", physicsFaults)}");
 
+        var shapeFaults = ShapeCollisionSelfTest(registry, items, ids, out var shapeDetail);
+        Check("a body collides with the shape, not the cell", shapeFaults.Count == 0,
+            shapeFaults.Count == 0
+                ? shapeDetail
+                : $"{shapeFaults.Count} faults: {string.Join("; ", shapeFaults)}");
+
         var climbFaults = ClimbSelfTest(registry, out var climbDetail);
         Check("a ladder is climbed, not walked past", climbFaults.Count == 0,
             climbFaults.Count == 0 ? climbDetail : $"{climbFaults.Count} faults: {climbFaults[0]}");
@@ -5038,6 +5044,190 @@ public static class WorldAudit
             stroller.Step(world, dt, new Vector3(0f, 0f, 1f), jump: false, sneak: false, sprint: false);
         if (stroller.Position.Y >= top - 0.01f)
             faults.Add("walked off the ledge and did not fall — the crouch test proves nothing");
+
+        return faults;
+    }
+
+    /// <summary>
+    /// That a slab is half a block to walk into and a doorway is a doorway.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛔ <b>Every claim here has a full cube beside it as the control</b>, because the thing
+    /// being checked is a <em>difference</em>: collision used to read a <c>bool[]</c> keyed on the
+    /// block id, so every one of these shapes behaved exactly as a cube did. A test that only
+    /// measured the slab would pass the old build for half of these and read as a sensible number
+    /// for the rest — "the body settled at y 41" says nothing at all unless something else settled
+    /// at 40.5.</para>
+    /// <para>⚠ <b>The fence is the one that is not geometry.</b> It is drawn a block high and
+    /// collided with a block and a half high on purpose, so the pair is a body that gets onto a
+    /// one-block step and does not get over a fence — which is a claim about the game rather than
+    /// about the model, and would silently stop being true if the collision height were dropped.
+    /// </para>
+    /// </remarks>
+    private static List<string> ShapeCollisionSelfTest(
+        BlockRegistry registry, ItemRegistry catalogue, StarterBlocks.Ids ids, out string detail)
+    {
+        var faults = new List<string>();
+
+        const int floorY = 40;
+        const float dt = 1f / 60f;
+        var top = floorY + 1f;
+
+        var slab = registry.ByName("driftoak_slab_lower").Id;
+        var shutTrapdoor = registry.ByName("trapdoor_east_lower").Id;
+        var openDoorLower = registry.ByName("door_east_south_lower_open").Id;
+        var openDoorUpper = registry.ByName("door_east_south_upper_open").Id;
+        var shutDoorLower = registry.ByName("door_east_south_lower").Id;
+        var shutDoorUpper = registry.ByName("door_east_south_upper").Id;
+        var campfire = StarterBlocks.Campfires(registry, lit: false)[0];
+
+        // Joined north and south, so a line of them has no gap to squeeze through. The mask is a set
+        // over Placeable.Facings — +x, -x, +z, -z — and a fence running along z joins on the last two.
+        var fence = StarterBlocks.Connected(registry, "driftoak_fence")[0b1100];
+
+        var world = new VoxelWorld(registry);
+        for (var z = -6; z < 24; z++)
+        for (var x = -6; x < 24; x++)
+        {
+            world.SetBlock(x, floorY, z, ids.Stone);
+            world.SetBlock(x, floorY - 1, z, ids.Stone);
+        }
+
+        float Settle(BlockId under, float dropFrom = 6f)
+        {
+            var probe = new PlayerBody(registry);
+            world.SetBlock(2, floorY + 1, 2, under);
+            probe.Teleport(new Vector3(2.5f, floorY + 1 + dropFrom, 2.5f));
+            for (var i = 0; i < 240; i++) probe.Step(world, dt, Vector3.Zero, false, false, false);
+            world.SetBlock(2, floorY + 1, 2, BlockId.Air);
+            return probe.Position.Y;
+        }
+
+        // 1. A slab is half a block, and a whole block is a whole block. The pair is the check.
+        var onSlab = Settle(slab);
+        var onCube = Settle(ids.Stone);
+
+        if (MathF.Abs(onSlab - (top + 0.5f)) > 0.01f)
+            faults.Add($"settled at y {onSlab:F3} on a slab, expected {top + 0.5f:F3}");
+        if (MathF.Abs(onCube - (top + 1f)) > 0.01f)
+            faults.Add($"settled at y {onCube:F3} on a whole block, expected {top + 1f:F3} — the control is wrong");
+        if (onSlab >= onCube - 0.01f)
+            faults.Add($"a slab ({onSlab:F3}) is no lower to stand on than a whole block ({onCube:F3})");
+
+        // 2. A shut trapdoor is three units of panel lying on the floor, not a block in the way.
+        var onTrapdoor = Settle(shutTrapdoor);
+        if (MathF.Abs(onTrapdoor - (top + 3f / 16f)) > 0.01f)
+            faults.Add($"settled at y {onTrapdoor:F3} on a shut trapdoor, expected {top + 3f / 16f:F3}");
+
+        // 3. A campfire is half a block, and there is no standing in the middle of it. Dropped down
+        // the exact centre, which is where the ring of logs leaves a hole.
+        var onFire = Settle(campfire);
+        if (MathF.Abs(onFire - (top + 0.5f)) > 0.01f)
+            faults.Add($"settled at y {onFire:F3} in the middle of a campfire, expected {top + 0.5f:F3}");
+
+        // 4. And a dropped stack comes to rest on top of a slab, not inside it. The same table, the
+        // same fault, a third copy of it — an item read a bool keyed on the block id too.
+        float ItemRestsOn(BlockId under)
+        {
+            world.SetBlock(2, floorY + 1, 2, under);
+
+            var thrown = new DroppedItems(registry, catalogue, 0x5EED);
+            thrown.Drop(new ItemStack(catalogue.ByName("stone").Id, 1),
+                new Vector3(2.5f, floorY + 5f, 2.5f), scatter: 0f);
+            for (var i = 0; i < 300; i++) thrown.Update(world, dt, null, null);
+
+            var rest = thrown.Count > 0 ? thrown.Live[0].Position.Y : float.NaN;
+            world.SetBlock(2, floorY + 1, 2, BlockId.Air);
+            return rest;
+        }
+
+        var itemOnSlab = ItemRestsOn(slab);
+        var itemOnCube = ItemRestsOn(ids.Stone);
+
+        if (float.IsNaN(itemOnSlab) || float.IsNaN(itemOnCube))
+            faults.Add("a dropped stack vanished before it came to rest");
+        else if (itemOnSlab >= itemOnCube - 0.01f)
+            faults.Add(
+                $"a dropped stack rests at y {itemOnSlab:F2} on a slab and {itemOnCube:F2} on a "
+                + "whole block — an item is falling to the cell rather than to the shape");
+
+        // 5. A doorway is walked through when the door is open and not when it is shut. A wall along
+        // x = 8 with one cell of it a door, both halves.
+        float WalkThroughDoorway(BlockId lower, BlockId upper)
+        {
+            for (var y = 1; y <= 3; y++)
+            for (var z = -6; z < 24; z++)
+                world.SetBlock(8, floorY + y, z, z == 4 ? BlockId.Air : ids.Stone);
+
+            world.SetBlock(8, floorY + 1, 4, lower);
+            world.SetBlock(8, floorY + 2, 4, upper);
+
+            var walker = new PlayerBody(registry);
+            walker.Teleport(new Vector3(5.5f, top, 4.5f));
+            for (var i = 0; i < 300; i++)
+                walker.Step(world, dt, new Vector3(1f, 0f, 0f), false, false, false);
+
+            return walker.Position.X;
+        }
+
+        var throughOpen = WalkThroughDoorway(openDoorLower, openDoorUpper);
+        var throughShut = WalkThroughDoorway(shutDoorLower, shutDoorUpper);
+
+        // ⚠ Past the door's own cell, not past the wall's near face. A shut door's panel is three
+        // units thick at the far side of the cell, so a body correctly stopped by one has walked
+        // most of the way into the doorway — x 8.51 is a body against the panel, not through it.
+        if (throughOpen <= 9f)
+            faults.Add($"an open door stopped a body at x {throughOpen:F2} — it never got out of the doorway");
+        if (throughShut >= 9f)
+            faults.Add($"a shut door let a body reach x {throughShut:F2}, out the far side of its own cell");
+
+        for (var y = 1; y <= 3; y++)
+        for (var z = -6; z < 24; z++)
+            world.SetBlock(8, floorY + y, z, BlockId.Air);
+
+        // 5. A one-block wall can be jumped over; a fence, drawn exactly as tall, cannot.
+        //
+        // ⚠ The run stops the moment the body is clear rather than running for a fixed time. Left to
+        // run, the one that got over walked another forty blocks and off the end of the floor, and
+        // the check reported it at y -492 — which reads exactly like "the control never got up".
+        float JumpAt(BlockId barrier)
+        {
+            for (var z = -6; z < 24; z++)
+                world.SetBlock(12, floorY + 1, z, barrier);
+
+            var hopper = new PlayerBody(registry);
+            hopper.Teleport(new Vector3(9.5f, top, 4.5f));
+            for (var i = 0; i < 600 && hopper.Position.X < 13f; i++)
+                hopper.Step(world, dt, new Vector3(1f, 0f, 0f), jump: true, sneak: false, sprint: false);
+
+            var reached = hopper.Position.X;
+
+            for (var z = -6; z < 24; z++)
+                world.SetBlock(12, floorY + 1, z, BlockId.Air);
+
+            return reached;
+        }
+
+        var overStep = JumpAt(ids.Stone);
+        var overFence = JumpAt(fence);
+
+        if (overStep <= 13f)
+            faults.Add(
+                $"a body jumping at a one-block wall only reached x {overStep:F2} — the control "
+                + "never got over, so the fence beside it proves nothing");
+
+        // ⚠ 12.5, not 12. A fence post is four units wide in the middle of its cell, so a body
+        // correctly stopped by one still walks to x 12.08 — most of the way into the fence's cell.
+        if (overFence >= 12.5f)
+            faults.Add($"a body got over a fence and reached x {overFence:F2}");
+
+        detail =
+            $"a slab is stood on at {onSlab - floorY:F2} where a block is {onCube - floorY:F2}, "
+            + $"a shut trapdoor at {onTrapdoor - floorY:F2}, a campfire at {onFire - floorY:F2}; "
+            + $"an open doorway is walked out of to x {throughOpen:F1} and a shut one holds at "
+            + $"{throughShut:F1}; a one-block wall is jumped over (x {overStep:F1}) and a fence "
+            + $"drawn the same height is not (x {overFence:F2}); a dropped stack rests at "
+            + $"{itemOnSlab - floorY:F2} on a slab and {itemOnCube - floorY:F2} on a whole block";
 
         return faults;
     }
