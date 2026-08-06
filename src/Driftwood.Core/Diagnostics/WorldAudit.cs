@@ -6752,6 +6752,43 @@ public static class WorldAudit
         Want("a lit cave, dark", SpawnRules.Dark(lit, 1f), false);
         Want("a lit cave, buried", SpawnRules.Buried(lit), false);
 
+        // ── How hard the dark pushes, which was reported as "really aggressive at night" ─────────
+        //
+        // ⛔ The spawner was a set point with infinite gain: every second it refilled the entire
+        // deficit, so a night arrived complete instead of building and a kill was answered before
+        // the body faded. These are the three numbers that turn it into a rate.
+        if (SpawnRules.Pressure(0, SpawnRules.HostileCap) < 0.99f)
+            faults.Add("an empty night is not certain to place anything, so the dark never starts");
+
+        if (SpawnRules.Pressure(SpawnRules.HostileCap, SpawnRules.HostileCap) > 0f)
+            faults.Add("a full night still places more, so the cap is not a cap");
+
+        // ⛳ THE CONTROL, and it is the one that matters: pressure has to FALL. A build that always
+        // spawns reads 1 at every population — which is exactly what shipped — and satisfies both
+        // of the bounds above if they are written as "between 0 and 1".
+        var falling = true;
+        for (var n = 1; n <= SpawnRules.HostileCap; n++)
+            falling &= SpawnRules.Pressure(n, SpawnRules.HostileCap)
+                     < SpawnRules.Pressure(n - 1, SpawnRules.HostileCap);
+
+        if (!falling) faults.Add("spawn pressure does not fall as the night fills");
+
+        // One attempt may not fill the night. This is the whole of "scale it back" as a number.
+        if (SpawnRules.HostileBatch >= SpawnRules.HostileCap)
+            faults.Add($"one attempt may place {SpawnRules.HostileBatch} of a cap of "
+                     + $"{SpawnRules.HostileCap}, which is the deficit-refill it replaced");
+
+        // And they arrive at an irregular remove, not on a beat and not on your doorstep.
+        var soonest = SpawnRules.NextAttempt(0.0);
+        var latest = SpawnRules.NextAttempt(1.0);
+
+        if (soonest < 2f) faults.Add($"attempts come as often as every {soonest:F1}s");
+        if (latest <= soonest + 2f)
+            faults.Add($"attempts land between {soonest:F1}s and {latest:F1}s, which is a metronome");
+
+        if (SpawnRules.HostileMinRadius < 20f)
+            faults.Add($"things appear {SpawnRules.HostileMinRadius:F0} blocks away, close enough to be an ambush");
+
         // And the fault this was written for: a cave animal filed as a meadow animal.
         foreach (var kind in CreatureSet.All)
         {
@@ -6766,8 +6803,11 @@ public static class WorldAudit
         if (families.Count < 3)
             faults.Add($"only {families.Count} families exist, so a band check has nothing to separate");
 
-        detail = $"a field at midnight is dark and not buried, a cave at noon is both, "
-               + $"a torch clears either; {families.Count} families";
+        detail = $"a field at midnight is dark and not buried, a cave at noon is both, a torch "
+               + $"clears either; {families.Count} families; the dark tries every "
+               + $"{SpawnRules.NextAttempt(0.0):F0}-{SpawnRules.NextAttempt(1.0):F0}s, places at "
+               + $"most {SpawnRules.HostileBatch} of {SpawnRules.HostileCap} at "
+               + $"{SpawnRules.HostileMinRadius:F0} blocks, and stops pushing as it fills";
 
         return faults;
     }

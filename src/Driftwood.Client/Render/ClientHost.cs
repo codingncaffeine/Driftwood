@@ -1021,23 +1021,35 @@ public sealed class ClientHost : IDisposable
     /// fixed number of seconds instead would be a guess about a worker pool. Asking again while
     /// there is room is neither, and it is also the shape a real spawner wants.
     /// </remarks>
-    /// <summary>How many hostiles the dark is allowed to hold at once.</summary>
-    /// <remarks>
-    /// ⚠ <b>Well under the herd's twelve.</b> Each one is a thing that chases, and eight of them
-    /// converging is not a harder night, it is a night nobody survives to learn from. It is also the
-    /// number that keeps a torch worth lighting: clearing the ground round a house actually empties
-    /// it, which a cap of thirty never would.
-    /// </remarks>
-    private const int HostileCount = 6;
-
     /// <summary>Sky light at or below which something will spawn in a cell. The genre's own line.</summary>
-    private const int SpawnDarkness = 7;
+    private const int SpawnDarkness = SpawnRules.Darkness;
+
+    /// <summary>Seconds until the next attempt at putting something in the dark.</summary>
+    private float _hostileTry;
+
+    /// <summary>
+    /// The rolls the dark is made of, seeded off the world.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ <b>Seeded rather than <c>Random.Shared</c>, so a night is repeatable.</b> A spawner nobody
+    /// can reproduce is a spawner nobody can tune, and the whole point of this pass was that it was
+    /// tuned wrong.
+    /// </remarks>
+    private Random _spawnRoll = new(0);
 
     private void TopUpCreatures(float dt)
     {
         if (_creatureRenderer is null || _creatureRenderer.Count == 0 || !_spawned) return;
 
-        _herd ??= new CreatureHerd(_seed.Derive("creatures"));
+        if (_herd is null)
+        {
+            _herd = new CreatureHerd(_seed.Derive("creatures"));
+            _spawnRoll = new Random(_seed.Derive("spawn.hostiles"));
+        }
+
+        // ⛳ The hostiles keep their own clock, because theirs is the one that has to be irregular.
+        // A herd of cows appearing on a tidy cadence is nothing anybody notices; a spawner does.
+        TopUpHostiles(dt);
 
         _creatureTopUp -= dt;
         if (_creatureTopUp > 0f) return;
@@ -1045,7 +1057,6 @@ public sealed class ClientHost : IDisposable
         _creatureTopUp = 1f;
 
         TopUpBeasts();
-        TopUpHostiles();
         TopUpCaveLife();
     }
 
@@ -1125,20 +1136,37 @@ public sealed class ClientHost : IDisposable
     /// <para>⚠ <b>Never within twelve blocks.</b> Something appearing beside you is a jump scare
     /// rather than a threat, and it is also unfair — there is nothing to react to.</para>
     /// </remarks>
-    private void TopUpHostiles()
+    private void TopUpHostiles(float dt)
     {
         if (_creatureRenderer is null || _herd is null) return;
 
+        // ⛔ ON ITS OWN CLOCK, ROLLED FRESH, AND THAT IS THE FIX. This used to run every second and
+        // refill the whole deficit in one call — a set point with infinite gain — so a night arrived
+        // complete rather than building, kill one and it was back before the body had faded, and a
+        // player learned the beat within a minute. Reported as "really aggressive at night".
+        _hostileTry -= dt;
+        if (_hostileTry > 0f) return;
+
+        _hostileTry = SpawnRules.NextAttempt(_spawnRoll.NextDouble());
+
         var hostiles = 0;
         foreach (var creature in _herd.All) if (creature.Hostile) hostiles++;
-        if (hostiles >= HostileCount) return;
+        if (hostiles >= SpawnRules.HostileCap) return;
+
+        // And an attempt that fires does not always place anything. The chance falls to nothing as
+        // the night fills, so the first hour of dark is quiet and clearing your doorstep buys quiet
+        // back rather than being answered on the next tick.
+        if (_spawnRoll.NextDouble() > SpawnRules.Pressure(hostiles, SpawnRules.HostileCap)) return;
 
         var kinds = KindsOf(CreatureFamily.Hostile);
         if (kinds.Count == 0) return;
 
+        var room = Math.Min(SpawnRules.HostileCap - hostiles, SpawnRules.HostileBatch);
+        var want = 1 + _spawnRoll.Next(room);
+
         _herd.Spawn(
-            SolidForCreature, kinds, _player.Position, HostileCount - hostiles,
-            where: Dark, minRadius: 12f);
+            SolidForCreature, kinds, _player.Position, want,
+            where: Dark, minRadius: SpawnRules.HostileMinRadius);
     }
 
     /// <summary>True where a creature's feet would stand in the dark.</summary>
