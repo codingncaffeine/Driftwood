@@ -218,16 +218,24 @@ public static class PlayerModel
     /// above it are the top and the underside. Mirroring swaps the two side patches, which is the
     /// other half of what applying a net left-for-right means.
     /// </remarks>
-    public static (int X, int Y, int W, int H) FaceRect(in ModelBox box, int face)
-    {
-        int u = box.U, v = box.V;
-        var w = (int)MathF.Round(box.Width);
-        var h = (int)MathF.Round(box.Height);
-        var d = (int)MathF.Round(box.Depth);
+    public static (int X, int Y, int W, int H) FaceRect(in ModelBox box, int face) =>
+        FaceRect(box.U, box.V, (int)MathF.Round(box.Width), (int)MathF.Round(box.Height),
+                 (int)MathF.Round(box.Depth), box.Mirror, face);
 
+    /// <summary>
+    /// The same arithmetic against loose numbers, for a box that did not come from this table.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ The net layout is the format's, not the player's — every creature's boxes are cut from a
+    /// sheet the same way. Sharing this is what lets <see cref="CreatureModel.Validate"/> hold an
+    /// imported skeleton to the same claim without a second transcription of a rule that is already
+    /// easy to get subtly wrong.
+    /// </remarks>
+    public static (int X, int Y, int W, int H) FaceRect(int u, int v, int w, int h, int d, bool mirror, int face)
+    {
         var right = (u, v + d, d, h);
         var left = (u + d + w, v + d, d, h);
-        if (box.Mirror) (right, left) = (left, right);
+        if (mirror) (right, left) = (left, right);
 
         return face switch
         {

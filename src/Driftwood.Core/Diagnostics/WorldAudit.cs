@@ -791,6 +791,14 @@ public static class WorldAudit
                 ? $"{TileGen.ToolShapes.Length + 1} silhouettes walked, walls counted against edges"
                 : $"{spriteFaults.Count} faults: {spriteFaults[0]}");
 
+        // ⛳ The creature skeletons come off the user's own install and cannot be checked here — but
+        // the READER can, against one sample of each format it has already been wrong about.
+        var geometryFaults = BedrockGeometry.Validate();
+        Check("a creature skeleton reads back the way it was written", geometryFaults.Count == 0,
+            geometryFaults.Count == 0
+                ? "both formats, inheritance across files, bind pose kept, anything else ignored quietly"
+                : $"{geometryFaults.Count} faults: {geometryFaults[0]}");
+
         var mipFaults = MipChain.Validate();
         Check("a cut-out keeps its colour as it shrinks", mipFaults.Count == 0,
             mipFaults.Count == 0

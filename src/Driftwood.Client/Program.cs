@@ -61,6 +61,18 @@ public static class Program
                 return 0;
             }
 
+            // ⛔ THE ANSWER TO "CAN A PACK'S ANIMALS EVER WORK". A creature is two halves from two
+            // different places: the skeleton ships with the GAME (a resource pack only overrides
+            // shapes it changes, so a pack that repaints every mob carries no geometry at all) and
+            // the skin ships with the PACK. Either can be missing and the two failures look
+            // identical once something is on screen, so this asks for both, per creature, by name.
+            if (args.Contains("--creatures"))
+            {
+                var at = Array.IndexOf(args, "--creatures");
+                var given = at + 1 < args.Length && !args[at + 1].StartsWith('-') ? args[at + 1] : null;
+                return Creatures(given, options);
+            }
+
             if (args.Contains("--pack-coverage"))
             {
                 if (string.IsNullOrWhiteSpace(options.PackPath))
@@ -145,6 +157,62 @@ public static class Program
 
         File.WriteAllBytes(path, Png.Encode(new Image(width, height, pixels)));
         Console.WriteLine($"icons       {tiles.Count} tools at {Zoom}x written to {path}");
+        return 0;
+    }
+
+    /// <summary>
+    /// Reads creature skeletons off the user's own install and matches them to ours.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ The instrument #29 was blocked on, and the reason it was blocked is worth keeping: a
+    /// creature model cannot be recovered from a texture. A box of w×h×d unwraps to a net 2d+2w wide
+    /// and d+h tall — two equations, three unknowns — so one net is six different boxes, and on real
+    /// sheets the nets abut with no gutter anyway (a pig's and a creeper's are each a single
+    /// connected region). Nothing in the picture says where a head sits or where a leg pivots. The
+    /// numbers exist, in the game's own geometry files, and this is what reads them.
+    /// </remarks>
+    private static int Creatures(string? geometryPath, ClientOptions options)
+    {
+        var root = geometryPath ?? CreatureLibrary.FindInstalledGeometry();
+
+        if (root is null)
+        {
+            Console.Error.WriteLine(
+                "driftwood: no geometry found. Give a folder of .geo.json files after --creatures, "
+                + "or install the Bedrock client, which ships them."
+                + (CreatureLibrary.LastLookupNote.Length > 0
+                    ? $"{Environment.NewLine}            ({CreatureLibrary.LastLookupNote})"
+                    : ""));
+            return 1;
+        }
+
+        var faults = new List<string>();
+        var models = CreatureLibrary.ReadFolder(root, faults);
+
+        Console.WriteLine($"geometry    {root}");
+
+        using var pack = string.IsNullOrWhiteSpace(options.PackPath)
+            ? null
+            : TexturePack.Open(options.PackPath);
+
+        if (pack is not null)
+            Console.WriteLine($"pack        {pack.Name} ({pack.Dialect.ToString().ToLowerInvariant()})");
+
+        var size = pack?.DetectResolution() ?? TileGen.Size;
+        var resolved = CreatureLibrary.Resolve(models, pack, size);
+
+        Console.WriteLine();
+        Console.WriteLine(CreatureLibrary.Report(models, resolved));
+
+        // ⚠ Unreadable files are named rather than counted. One bad file among three hundred is
+        // normal and harmless; the same one bad file being the cow is not, and a count cannot tell
+        // those apart.
+        if (faults.Count > 0)
+        {
+            Console.WriteLine($"{faults.Count} files could not be read:");
+            foreach (var fault in faults.Take(8)) Console.WriteLine($"  {fault}");
+        }
+
         return 0;
     }
 
@@ -322,6 +390,10 @@ public static class Program
                 case "--icon-sheet":
                     i++;
                     break;
+                // Takes an optional path, so step over it only when one is actually there.
+                case "--creatures":
+                    if (i + 1 < args.Length && !args[i + 1].StartsWith('-')) i++;
+                    break;
                 case "--audit":
                 case "--audio-check":
                 case "--pack-coverage":
@@ -411,6 +483,11 @@ public static class Program
               --audit           generate and mesh headlessly, print a census and checks, then exit
               --audio-check     resolve every sound the block table names and report, silently
               --pack-coverage   with --pack, report what the pack has art for that we do not
+              --creatures [dir] read creature skeletons and say which of ours found one. The
+                                skeletons ship with the GAME, not with a texture pack — a pack only
+                                overrides shapes it changes — so this wants the folder of .geo.json
+                                files an installed Bedrock client keeps under
+                                data\resource_packs. Add --pack to check the skins as well.
               --pack-report     with --pack, report which of OUR layers the pack supplied and
                                 which kept our art — the answer to "is the pack even being used"
               --play <secs>     play normally for this long and then close the window the way a
