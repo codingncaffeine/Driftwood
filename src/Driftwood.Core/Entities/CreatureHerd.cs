@@ -45,13 +45,34 @@ public static class CreatureSounds
         ["sheep"] = "sheep",
         ["chicken"] = "chicken",
         ["frog"] = "frog",
+
+        // The hostiles. ⚠ A spider's is its walk rather than its bite: what a player needs to hear
+        // in the dark is that one is nearby, and the bite arrives with the damage anyway.
+        ["bat"] = "bat",
+        ["spider"] = "spider",
+        ["zombie"] = "zombie",
+
+        // ⛳ Ours by name and theirs by skeleton, so the sound follows the same rule as the art:
+        // the drowned and the husk are zombies as far as a recording is concerned.
+        ["drowned"] = "zombie",
+        ["husk"] = "zombie",
+    };
+
+    /// <summary>What one makes when it means it. Empty where there is only the one recording.</summary>
+    private static readonly Dictionary<string, string> Angry = new(StringComparer.Ordinal)
+    {
+        ["spider"] = "spider_attack",
     };
 
     /// <summary>The clip a creature makes when it has nothing else to say, or empty for none.</summary>
     public static string IdleFor(string kind) => Idle.GetValueOrDefault(kind, "");
 
+    /// <summary>The clip it makes when it goes for somebody, or its idle one if it has only one.</summary>
+    public static string AngryFor(string kind) =>
+        Angry.TryGetValue(kind, out var clip) ? clip : IdleFor(kind);
+
     /// <summary>Every clip named here, for the check that they all resolve.</summary>
-    public static IEnumerable<string> All => Idle.Values;
+    public static IEnumerable<string> All => Idle.Values.Concat(Angry.Values);
 }
 
 /// <summary>
