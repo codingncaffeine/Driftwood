@@ -371,6 +371,117 @@ public sealed class TexturePack : IDisposable
     public byte[]? TryLoadTile(string assetPath, int size) => TryLoadTile(assetPath, size, out _);
 
     /// <summary>
+    /// One texture's frames, ready to play.
+    /// </summary>
+    /// <param name="Seconds">How long each frame in <paramref name="Frames"/> is held.</param>
+    /// <param name="Interpolate">
+    /// Whether the pack asked for a fade between frames. Recorded and not yet acted on — a cross-fade
+    /// wants two layers live at once, which is a bigger change than the flag is worth on its own.
+    /// </param>
+    /// <param name="Strip">How many frames the file actually holds, before any ordering was applied.</param>
+    public readonly record struct TextureFrames(
+        byte[][] Frames, float[] Seconds, bool Interpolate, string From, int Strip);
+
+    /// <summary>
+    /// Every frame of an animated texture, in the order they are played, with how long each is held.
+    /// </summary>
+    /// <remarks>
+    /// <para>Returns null for a texture that is one frame, so the caller can keep the plain path. A
+    /// strip is detected the same way <see cref="Resample"/> detects it — a file taller than it is
+    /// wide by a whole multiple — because that is the only thing every pack agrees on. Water in a
+    /// real pack is 16x512: thirty-two frames, and every one of them is what makes it move.</para>
+    /// <para>⚠ <b>The sidecar is optional and its absence is not "no animation".</b> A pack that
+    /// ships <c>water_still.png</c> as a strip and no <c>.mcmeta</c> beside it still means it to
+    /// animate; the sidecar only changes the timing and the order. Treating a missing sidecar as
+    /// "still" is how a pack's water ends up frozen while the file plainly holds thirty-two
+    /// pictures of it moving.</para>
+    /// <para>⚠ <b>The sidecar's schema is not <c>pack.mcmeta</c>'s</b>, despite the extension. Same
+    /// name, unrelated contents — do not read one with the other's keys.</para>
+    /// </remarks>
+    public TextureFrames? TryLoadFrames(string assetPath, int size)
+    {
+        var raw = ReadAsset(assetPath, out var from);
+        if (raw is null) return null;
+        if (!Png.TryDecode(raw, out var image, out _)) return null;
+
+        if (image.Height <= image.Width || image.Height % image.Width != 0) return null;
+
+        var count = image.Height / image.Width;
+        if (count < 2) return null;
+
+        var frames = new byte[count][];
+        for (var f = 0; f < count; f++) frames[f] = Resample(image, size, f);
+
+        // The sidecar sits beside the picture under the same name plus .mcmeta, and it is read
+        // through the same candidate list so it is found in whichever layout the texture was.
+        var meta = ReadAsset($"{assetPath}.mcmeta", out _);
+        var frametime = 1;
+        var order = Enumerable.Range(0, count).ToArray();
+        var interpolate = false;
+
+        if (meta is not null)
+        {
+            var text = Encoding.UTF8.GetString(meta);
+            frametime = Math.Max(1, ReadInt(text, "frametime") ?? 1);
+            interpolate = ReadBool(text, "interpolate");
+
+            // ⚠ Only a plain list of indices is taken. The other form a pack may use is a list of
+            // objects carrying their own times, and half-reading that would produce a sequence in
+            // the right length and the wrong order — worse than not reading it. Anything else falls
+            // back to every frame in the order they are stacked, which is what the file already is.
+            if (ReadIntList(text, "frames") is { Length: > 0 } listed
+                && Array.TrueForAll(listed, i => i >= 0 && i < count))
+            {
+                order = listed;
+            }
+        }
+
+        // Twenty ticks a second is the clock every frametime in every pack is written against.
+        var seconds = new float[order.Length];
+        Array.Fill(seconds, frametime / 20f);
+
+        var played = new byte[order.Length][];
+        for (var i = 0; i < order.Length; i++) played[i] = frames[order[i]];
+
+        return new TextureFrames(played, seconds, interpolate, from, count);
+    }
+
+    private static bool ReadBool(string text, string key)
+    {
+        var at = text.IndexOf($"\"{key}\"", StringComparison.Ordinal);
+        if (at < 0) return false;
+
+        var colon = text.IndexOf(':', at);
+        if (colon < 0) return false;
+
+        return text.AsSpan(colon + 1).TrimStart().StartsWith("true", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static int[]? ReadIntList(string text, string key)
+    {
+        var at = text.IndexOf($"\"{key}\"", StringComparison.Ordinal);
+        if (at < 0) return null;
+
+        var open = text.IndexOf('[', at);
+        if (open < 0) return null;
+
+        var close = text.IndexOf(']', open);
+        if (close < 0) return null;
+
+        var body = text[(open + 1)..close];
+        if (body.Contains('{')) return null;   // objects with their own times; see the remark above
+
+        var values = new List<int>();
+        foreach (var part in body.Split(','))
+        {
+            if (!int.TryParse(part.Trim(), out var value)) return null;
+            values.Add(value);
+        }
+
+        return values.Count > 0 ? [.. values] : null;
+    }
+
+    /// <summary>
     /// What resolution this pack is actually painted at.
     /// </summary>
     /// <remarks>
@@ -473,22 +584,24 @@ public sealed class TexturePack : IDisposable
     /// pack into a blurred version of itself. Downscaling a 512x pack does lose detail this way,
     /// which is the honest trade for keeping every other pack crisp.</para>
     /// <para>Animated textures arrive as a vertical strip of frames — a 16x64 file is four frames,
-    /// not a tall texture. Only the first frame is taken until animation exists, because squashing
-    /// the strip into one tile is how water ends up looking like four wrong textures stacked.</para>
+    /// not a tall texture — so a frame index picks which one is taken, and squashing the whole strip
+    /// into one tile (which is what a naive scale does) is how water ends up looking like four wrong
+    /// textures stacked. See <see cref="TryLoadFrames"/> for reading all of them.</para>
     /// </remarks>
-    private static byte[] Resample(Image image, int size)
+    private static byte[] Resample(Image image, int size, int frame = 0)
     {
         var frameHeight = image.Height > image.Width && image.Height % image.Width == 0
             ? image.Width
             : image.Height;
 
+        var top = Math.Min(frame * frameHeight, image.Height - frameHeight);
         var tile = new byte[size * size * 4];
 
         for (var y = 0; y < size; y++)
         for (var x = 0; x < size; x++)
         {
             var sx = Math.Min(x * image.Width / size, image.Width - 1);
-            var sy = Math.Min(y * frameHeight / size, frameHeight - 1);
+            var sy = top + Math.Min(y * frameHeight / size, frameHeight - 1);
 
             var src = (sy * image.Width + sx) * 4;
             var dst = (y * size + x) * 4;

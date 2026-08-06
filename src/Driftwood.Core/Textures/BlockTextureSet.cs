@@ -225,9 +225,18 @@ public static class BlockTextureSet
     /// <param name="From">The path it came from, or empty when it kept Driftwood's own art.</param>
     public readonly record struct LayerOutcome(string Name, bool Replaced, string From, bool Neutralised);
 
+    /// <summary>
+    /// One layer that moves: which layer, its frames, and how long each is held.
+    /// </summary>
+    /// <remarks>
+    /// Frame 0 is already in <c>Tiles</c>, so a build that ignores this is a build with still water
+    /// rather than a build with no water — which is what every earlier one was.
+    /// </remarks>
+    public readonly record struct LayerAnimation(int Layer, byte[][] Frames, float[] Seconds);
+
     public sealed record Result(
         byte[][] Tiles, int Size, string Summary, byte[] GrassMap, byte[] FoliageMap,
-        IReadOnlyList<LayerOutcome> Outcomes)
+        IReadOnlyList<LayerOutcome> Outcomes, IReadOnlyList<LayerAnimation> Animations)
     {
         /// <summary>
         /// A line per layer: what we call it, whether the pack supplied it, and where from.
@@ -285,7 +294,10 @@ public static class BlockTextureSet
             var plain = new byte[Layers.Length][];
             for (var i = 0; i < Layers.Length; i++) plain[i] = Own(i, own);
 
-            return new Result(plain, own, $"{Layers.Length} built-in tiles at {own}x{own}", grass, foliage, Untouched());
+            var ownMoving = OwnAnimations(plain, own);
+            return new Result(
+                plain, own, $"{Layers.Length} built-in tiles at {own}x{own}, {ownMoving.Count} moving",
+                grass, foliage, Untouched(), ownMoving);
         }
 
         using var pack = TexturePack.Open(packPath);
@@ -295,7 +307,9 @@ public static class BlockTextureSet
             var plain = new byte[Layers.Length][];
             for (var i = 0; i < Layers.Length; i++) plain[i] = Own(i, own);
 
-            return new Result(plain, own, $"no pack at '{packPath}' — using built-in tiles", grass, foliage, Untouched());
+            return new Result(
+                plain, own, $"no pack at '{packPath}' — using built-in tiles",
+                grass, foliage, Untouched(), OwnAnimations(plain, own));
         }
 
         // The pack's own resolution unless somebody said otherwise, clamped to what the machine
@@ -310,6 +324,7 @@ public static class BlockTextureSet
         size = chosen;
         var neutralised = 0;
         var outcomes = new List<LayerOutcome>(Layers.Length);
+        var moving = OwnAnimations(tiles, size);
 
         for (var i = 0; i < Layers.Length; i++)
         {
@@ -334,6 +349,29 @@ public static class BlockTextureSet
             if (flattened) neutralised++;
 
             tiles[i] = replacement;
+
+            // ⚠ The pack's own strip beats ours, and it replaces it rather than adding to it — a
+            // layer running two animations at once would flicker between two authors' water. Read
+            // off the same path the tile came from, whichever of the candidates that turned out
+            // to be.
+            var animated = pack.TryLoadFrames(Layers[i].PackPath, size)
+                        ?? (Layers[i].PackPathAlt.Length > 0
+                            ? pack.TryLoadFrames(Layers[i].PackPathAlt, size)
+                            : null);
+
+            moving.RemoveAll(a => a.Layer == i);
+
+            if (animated is { } strip)
+            {
+                if (Layers[i].Tinted) foreach (var frame in strip.Frames) Neutralise(frame);
+
+                moving.Add(new LayerAnimation(i, strip.Frames, strip.Seconds));
+
+                // The tile that sits in the array until the clock moves has to be the first frame
+                // played, not the first frame stored — a pack whose `frames` list starts elsewhere
+                // would otherwise show one wrong picture until the first tick.
+                tiles[i] = strip.Frames[0];
+            }
 
             outcomes.Add(new LayerOutcome(Layers[i].Name, true, from, flattened));
         }
@@ -360,7 +398,46 @@ public static class BlockTextureSet
                     + (neutralised > 0 ? $", {neutralised} tinted layers flattened" : "")
                     + (pack.Faults.Count > 0 ? $", {pack.Faults.Count} unreadable: {pack.Faults[0]}" : "");
 
-        return new Result(tiles, size, summary, grass, foliage, outcomes);
+        return new Result(tiles, size, summary, grass, foliage, outcomes, moving);
+    }
+
+    /// <summary>
+    /// The layers of our own art that move, and their frames.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>Ours has to be a strip too, and that is not symmetry for its own sake.</b> Every pack in
+    /// the genre ships water as thirty-two pictures because still water reads as blue rock — so with
+    /// only the pack path animated, importing somebody else's art would be the only way to get a lake
+    /// that moves, in a game whose entire art set is drawn in code. Frame 0 is written back over the
+    /// still tile so a build that never ticks the clock is unchanged.
+    /// </remarks>
+    private static List<LayerAnimation> OwnAnimations(byte[][] tiles, int size)
+    {
+        var moving = new List<LayerAnimation>();
+
+        // Sixteen frames over two seconds. Fewer and the swell steps; more and it costs memory at a
+        // pack's resolution for motion nobody can see.
+        const int Frames = 16;
+        const float Seconds = 2f / Frames;
+
+        var water = Upscale(TileGen.WaterFrames(1006, Frames, 41, 92, 158), size);
+        var times = new float[Frames];
+        Array.Fill(times, Seconds);
+
+        moving.Add(new LayerAnimation(StarterBlocks.LayerWater, water, times));
+        tiles[StarterBlocks.LayerWater] = water[0];
+
+        return moving;
+    }
+
+    /// <summary>Nearest-neighbour, the same way <see cref="Own"/> takes a 16px tile to the pack's size.</summary>
+    private static byte[][] Upscale(byte[][] frames, int size)
+    {
+        if (size == TileGen.Size) return frames;
+
+        var scaled = new byte[frames.Length][];
+        for (var f = 0; f < frames.Length; f++) scaled[f] = TileGen.Upscale(frames[f], size);
+        return scaled;
     }
 
     /// <summary>Every layer, all of them ours. What a run with no pack reports.</summary>

@@ -60,6 +60,50 @@ public static class TileGen
         return t;
     }
 
+    /// <summary>
+    /// Water, as a loop of frames: two swells crossing each other and travelling.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ <b>Ours was a speckle, and a speckle does not move.</b> Every pack in the genre ships
+    /// water as a strip of thirty-two pictures precisely because still water reads as blue rock, and
+    /// a lake that is visibly a lake is most of what a coastline is for. Now that a strip from a pack
+    /// can be played, ours has to be a strip too, or importing a pack is the only way to get moving
+    /// water in a game whose whole art set is drawn in code.</para>
+    /// <para>Two sine swells at different angles and different rates, plus the same dither the rest
+    /// of the tiles use. Two rather than one because a single travelling wave reads as a moving
+    /// stripe; crossed, they read as a surface. Both wavelengths divide the tile exactly, so the
+    /// pattern wraps across a lake with no seam, and the phases close over the loop so the last frame
+    /// runs into the first.</para>
+    /// </remarks>
+    public static byte[][] WaterFrames(int seed, int count, byte r, byte g, byte b)
+    {
+        var frames = new byte[count][];
+
+        for (var f = 0; f < count; f++)
+        {
+            var t = new byte[BytesPerTile];
+            var phase = f / (float)count * MathF.Tau;
+
+            for (var y = 0; y < Size; y++)
+            for (var x = 0; x < Size; x++)
+            {
+                // Whole numbers of waves across the tile, so it still tiles.
+                var a = MathF.Sin((x + y) / (float)Size * MathF.Tau * 2f - phase);
+                var c = MathF.Sin((x * 2f - y) / (float)Size * MathF.Tau - phase * 2f);
+
+                var swell = (a * 0.6f + c * 0.4f) * 9f;
+                var grain = (Noise(x, y, seed) * 2f - 1f) * 5f;
+
+                var d = (int)(swell + grain);
+                Put(t, x, y, Clamp(r + d), Clamp(g + d), Clamp(b + (int)(d * 1.3f)), 255);
+            }
+
+            frames[f] = t;
+        }
+
+        return frames;
+    }
+
     /// <summary>Speckle plus scattered blobs of a second colour, for ore in rock.</summary>
     public static byte[] Ore(int seed, byte[] baseTile, byte r, byte g, byte b, int blobs)
     {

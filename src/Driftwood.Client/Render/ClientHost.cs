@@ -345,6 +345,9 @@ public sealed class ClientHost : IDisposable
     private BlockOutline _outline = null!;
     private BlockTextureArray _blockTextures = null!;
     private BlockTextureSet.Result _textures = null!;
+
+    /// <summary>The layers that move. Ticked once a frame; uploads only when a frame changes.</summary>
+    private TextureAnimator _animatedTextures = null!;
     private bool[] _targetable = null!;
 
     private PlayerRenderer _playerRenderer = null!;
@@ -836,6 +839,37 @@ public sealed class ClientHost : IDisposable
 
         _blockTextures = new BlockTextureArray(_gl, _textures.Tiles, _textures.Size);
         Console.WriteLine($"textures    {_textures.Summary}");
+
+        _animatedTextures = new TextureAnimator(_blockTextures, _textures.Animations);
+        if (_animatedTextures.Count > 0)
+        {
+            // ⚠ How different the frames actually are goes in the line. "51 frames" is true of
+            // fifty-one copies of the same picture, and that is a real way for a generator or a
+            // strip reader to be wrong while every count in the report looks right. The QUIETEST
+            // track is the one reported, because that is the one at risk and an average over six
+            // would hide it — a real pack's water is a far subtler ripple than ours.
+            var quietest = 100;
+            var quietestLayer = "";
+
+            foreach (var track in _textures.Animations)
+            {
+                var apart = 0;
+                var half = track.Frames[track.Frames.Length / 2];
+                for (var p = 0; p < track.Frames[0].Length; p += 4)
+                    if (track.Frames[0][p] != half[p]) apart++;
+
+                var share = apart * 400 / track.Frames[0].Length;
+                if (share >= quietest) continue;
+
+                quietest = share;
+                quietestLayer = BlockTextureSet.Layers[track.Layer].Name;
+            }
+
+            Console.WriteLine(
+                $"animated    {_animatedTextures.Count} layers, {_animatedTextures.FrameCount} frames, "
+                + $"quietest is {quietestLayer} at {quietest}% of its tile between first and middle");
+        }
+
         _startup.Mark("texture upload");
 
         var skin = PlayerSkin.Build(_options.SkinPath, _options.Arms);
@@ -4358,6 +4392,11 @@ public sealed class ClientHost : IDisposable
         // Before anything else, with no depth. Everything in the frame is nearer than the sky.
         _sky.Draw(_skyState, _viewForward, _camera.FovDegrees, aspect);
 
+        // Before the chunk pass binds the array and draws with it. Ticked from the world's own clock
+        // rather than an accumulator, so a stall leaves the water where the clock says rather than
+        // where the frames got to.
+        _animatedTextures.Update(_elapsed);
+
         _chunkShader.Use();
         _chunkShader.SetMatrix4("uViewProj", viewProj);
         _chunkShader.SetVec3("uCameraPos", _viewPosition);
@@ -4747,6 +4786,60 @@ public sealed class ClientHost : IDisposable
     /// <summary>How many frames the check has drawn, for its own timing.</summary>
     private int _uiCheckFrame;
 
+    /// <summary>The water layer as it was ten frames ago, for the check that it moves.</summary>
+    private byte[]? _waterBefore;
+
+    /// <summary>True once the water on the card has been seen to differ from itself.</summary>
+    private bool _waterMoved;
+
+    /// <summary>What share of the water layer changed, and the control that says the read is real.</summary>
+    private void JudgeWater()
+    {
+        if (_waterBefore is null) return;
+
+        var after = _blockTextures.ReadLayer(StarterBlocks.LayerWater);
+        if (after.Length != _waterBefore.Length) return;
+
+        // ⛔ COUNTED PIXEL FOR PIXEL, NEVER AVERAGED. A travelling swell keeps very nearly the same
+        // mean brightness however far along it is, so a mean is blind to exactly the thing being
+        // measured — the same trap the turning-block check fell into and was rewritten for.
+        var moved = 0;
+        var pixels = after.Length / 4;
+        for (var p = 0; p < pixels; p++)
+        {
+            var at = p * 4;
+            if (after[at] != _waterBefore[at]
+                || after[at + 1] != _waterBefore[at + 1]
+                || after[at + 2] != _waterBefore[at + 2])
+            {
+                moved++;
+            }
+        }
+
+        // ⚠ Three percent, not the twenty the first version asked for. Ours is a swell that moves
+        // most of the tile; a real pack's water is a far subtler ripple, and Vintage's failed a
+        // working animation on the threshold alone. What makes a small number mean something here is
+        // not its size but the control below — these are exact byte comparisons, so there is no
+        // noise for a low bar to let through, and a layer nobody animates has to come back identical.
+        var share = moved * 100 / pixels;
+        if (share < 3) return;
+
+        // ⛔ And the control, only once it matters: a layer nobody animates has to come back the same
+        // twice running. If stone "moves" too then the read is handing back something other than the
+        // layer it was asked for, and the water number is measuring the reader rather than the water.
+        var stone = _blockTextures.ReadLayer(StarterBlocks.LayerStone);
+        var stoneAgain = _blockTextures.ReadLayer(StarterBlocks.LayerStone);
+        var stoneStill = stone.AsSpan().SequenceEqual(stoneAgain);
+
+        _waterMoved = stoneStill;
+
+        Console.WriteLine(
+            $"ui-check    water      {share}% of the layer changed on the card by frame "
+            + $"{_uiCheckFrame}, stone {(stoneStill ? "unchanged" : "CHANGED")}, "
+            + $"{_animatedTextures.Uploads} uploads over {_elapsed:F2}s");
+        Console.Out.Flush();
+    }
+
     /// <summary>Worlds the check writes to disk so the menu has something real to go and find.</summary>
     private static readonly string[] CheckWorlds = ["ui-check-alpha", "ui-check-beta"];
 
@@ -4831,9 +4924,26 @@ public sealed class ClientHost : IDisposable
     {
         _uiCheckFrame++;
 
+        // ⚠ Watched every frame until it moves rather than compared across a fixed gap, and the two
+        // versions before this one both got it wrong in the same way. Two reads ten frames apart is
+        // 0.09 s on this machine and a frame of water is held for 0.125 s, so the check failed a
+        // working animation by looking twice inside one frame. Widening the window to seventy frames
+        // fixed it here and still went red intermittently, because frames are not time: the run that
+        // failed spent most of its early frames loading and covered barely a tenth of a second
+        // between the two ends of the window. The deadline is now most of the check's whole life,
+        // which is seconds however fast the frames go.
+        if (_uiCheckFrame is > 20 and < 320 && !_waterMoved) JudgeWater();
+
         // A few frames to let the world stream in, then each screen in turn.
         switch (_uiCheckFrame)
         {
+            // ⛔ THE WATER, OFF THE CARD, TWICE. Everything short of this proves the animator decided
+            // to upload something: that the strip was read, that a frame changed, that WriteLayer was
+            // called. None of it proves a texel on the card moved — an upload aimed at the wrong
+            // layer, the wrong mip level or a texture nobody binds does all of the above and leaves
+            // a still lake. Read the layer, wait, read it again, and compare it to itself.
+            case 20: _waterBefore = _blockTextures.ReadLayer(StarterBlocks.LayerWater); break;
+
             case 60: SampleUi(size, "no screen"); break;
 
             case 61:
@@ -6021,6 +6131,9 @@ public sealed class ClientHost : IDisposable
         // measuring what they claim and every judgement above is on the same wrong pixels.
         if (world.B <= world.R)
             faults.Add($"the corner of a plain frame is not sky — read {world.R} {world.G} {world.B}");
+
+        if (!_waterMoved)
+            faults.Add("the water layer on the card did not change, or the read cannot tell layers apart");
 
         UiCheckFailed = faults.Count > 0;
 
