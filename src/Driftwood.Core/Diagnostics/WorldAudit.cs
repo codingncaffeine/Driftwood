@@ -356,6 +356,10 @@ public static class WorldAudit
         Check("water is meshed into a pass of its own", passFaults.Count == 0,
             passFaults.Count == 0 ? passDetail : string.Join("; ", passFaults));
 
+        var shoreFaults = ShoreFaults(seed, registry, ids, oceanCoverage, out var shoreDetail);
+        Check("breaking a block beside the sea fills it", shoreFaults.Count == 0,
+            shoreFaults.Count == 0 ? shoreDetail : string.Join("; ", shoreFaults));
+
         var frustumFaults = Frustum.SelfTest();
         Check("frustum culls correctly", frustumFaults.Count == 0,
             frustumFaults.Count == 0
@@ -6454,6 +6458,192 @@ public static class WorldAudit
     }
 
     private static BlockId At(VoxelWorld world, int x, int y, int z) => world.GetBlock(x, y, z);
+
+    /// <summary>
+    /// Does what a player does: walks to the sea in a real streamed world, breaks a block beside it,
+    /// and counts the ticks before the water arrives.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛔ <b>Written because the flow was demonstrably correct and did nothing in the game.</b>
+    /// Every other fluid check drives <see cref="FluidEngine"/> directly, in a hand-built box, with a
+    /// queue holding nothing but the cells the check put there. None of them touch the wiring — the
+    /// streamer, the tick, the budget, or what else is in the queue by the time a player's edit
+    /// arrives — and that is where the fault was.</para>
+    /// <para>⛳ <b>The number that matters is TICKS, not "did it fill eventually".</b> A settle with
+    /// no budget fills it every time; what the player sees is whether it fills within a moment of the
+    /// block coming out, and a queue with ten thousand cells of ocean already in it will get there in
+    /// its own time.</para>
+    /// </remarks>
+    private static List<string> ShoreFaults(
+        WorldSeed seed, BlockRegistry registry, StarterBlocks.Ids ids, float oceanCoverage,
+        out string detail)
+    {
+        const int radius = 4;
+        const int budget = 256;          // the same budget the game ticks with
+        const int patience = 15;         // three seconds of ticks at five a second
+
+        var faults = new List<string>();
+        var moved = new List<(int X, int Y, int Z)>();
+
+        using var streamer = new WorldStreamer(
+            registry, new TerrainGenerator(seed, ids, oceanCoverage), radius)
+        {
+            Fluids = new FluidEngine(registry),
+        };
+
+        // Find a shore: somewhere with sea in it, and load the world round there the way a walk does.
+        var generator = new TerrainGenerator(seed, ids, oceanCoverage);
+        var shore = FindShore(generator);
+        if (shore is not { } spot)
+        {
+            // ⛔ NOT A PASS. A check that cannot find its subject and reports green is the exact
+            // shape of thing this project keeps being bitten by — it looks like evidence and is the
+            // absence of it. Every seed the gate runs has a quarter of its surface under water.
+            detail = "no shoreline within 1,600 blocks of the origin on this seed";
+            faults.Add(detail);
+            return faults;
+        }
+
+        streamer.Update(new Vector3(spot.X + 0.5f, TerrainGenerator.SeaLevel + 4f, spot.Z + 0.5f));
+
+        var watch = Stopwatch.StartNew();
+        var quiet = 0;
+        while (watch.ElapsedMilliseconds < 30_000)
+        {
+            streamer.PromoteReadyChunks();
+            while (streamer.TryDequeueMesh(out _)) { }
+
+            if (streamer.PendingGenerate > 0 || streamer.PendingLight > 0 || streamer.PendingMesh > 0)
+            {
+                quiet = 0;
+                Thread.Sleep(2);
+                continue;
+            }
+
+            if (++quiet >= 25) break;
+            Thread.Sleep(2);
+        }
+
+        // ⛳ THE MEASUREMENT THE WHOLE CHECK IS FOR. Generation places fluid at rest, so a world that
+        // has only been walked into should leave the flow with nothing to do. A queue that is full
+        // before the player has touched anything is a queue their edit has to wait behind.
+        var backlog = streamer.Fluids!.Pending;
+
+        // ⛳ AND WHAT THAT BACKLOG ACTUALLY DOES, which is the number that means something. Cells
+        // queued is a proxy — a cell can be queued and turn out to have nowhere to go. Cells CHANGED
+        // is the claim: generation places the sea and the molten floor at rest, so walking into a
+        // world should move almost nothing. A big number here means the generator is producing a
+        // world that immediately rearranges itself, which is a different and much worse fault.
+        streamer.Fluids.ResetCounters();
+        streamer.Fluids.Settle(streamer.World, moved, limit: 2_000_000);
+        var settledBy = streamer.Fluids.Changed;
+
+        // The cell to break: solid, at the waterline, with sea beside it.
+        var target = FindWetWall(streamer, ids, spot);
+        if (target is not { } cell)
+        {
+            // ⛔ NOT A PASS EITHER, and this one caught itself: two of the four gate seeds reported
+            // it and went green. The shore is found off the height field, which says where the water
+            // LINE is and not where a wall stands beside it, so the search has to reach as far as
+            // the finder's own tolerance did.
+            detail = $"no solid block beside the sea within 24 of ({spot.X},{spot.Z}) after loading";
+            faults.Add(detail);
+            return faults;
+        }
+
+        // The control: nothing is there yet, so "it filled" cannot be measuring water already in it.
+        if (!streamer.World.GetBlock(cell.X, cell.Y, cell.Z).Value.Equals(cell.Was))
+            faults.Add("the cell to break changed before it was broken");
+
+        streamer.EditBlock(cell.X, cell.Y, cell.Z, BlockId.Air);
+
+        var table = new FluidTable(registry);
+        var ticks = 0;
+        while (ticks < patience)
+        {
+            ticks++;
+            streamer.StepFluid(budget, moved);
+
+            if (table.KindOf(streamer.World.GetBlock(cell.X, cell.Y, cell.Z).Value) == FluidKind.Water)
+                break;
+        }
+
+        var filled = table.KindOf(streamer.World.GetBlock(cell.X, cell.Y, cell.Z).Value)
+                   == FluidKind.Water;
+
+        if (!filled)
+            faults.Add($"three seconds after breaking a block beside the sea at "
+                     + $"({cell.X},{cell.Y},{cell.Z}) it is still empty; {backlog:N0} cells were "
+                     + $"already queued when the world finished loading");
+
+        // ⛔ AND WHAT LOADING THE WORLD MOVED, which is a separate claim from whether this cell
+        // filled. Generation places the sea and the molten floor AT REST — that is the whole reason
+        // the deep is affordable — so walking into a world should rearrange almost nothing. A large
+        // number here means the generator is producing a world that immediately reshapes itself.
+        if (settledBy > 4000)
+            faults.Add($"walking into a world moved {settledBy:N0} cells, so it is not generated at rest");
+
+        detail = $"filled in {ticks} tick{(ticks == 1 ? "" : "s")} of the 5 a second; loading the "
+               + $"world queued {backlog:N0} cells and moved {settledBy:N0} of them";
+
+        return faults;
+
+        /// <summary>Dry land within a few blocks of water, found off the height field alone.</summary>
+        /// <remarks>
+        /// ⚠ Spiralled outward rather than scanned in raster order, so it lands on the nearest shore
+        /// to the origin — which keeps the streamed region small and the check quick.
+        /// </remarks>
+        static (int X, int Z)? FindShore(TerrainGenerator gen)
+        {
+            for (var r = 0; r <= 1600; r += 4)
+            for (var dz = -r; dz <= r; dz += 4)
+            for (var dx = -r; dx <= r; dx += 4)
+            {
+                if (r > 0 && Math.Abs(dx) != r && Math.Abs(dz) != r) continue;   // the ring only
+
+                // Land, with the sea bed within a couple of dozen blocks of it in some direction.
+                if (gen.SurfaceHeight(dx, dz) <= TerrainGenerator.SeaLevel) continue;
+
+                for (var reach = 4; reach <= 24; reach += 4)
+                for (var side = 0; side < 4; side++)
+                {
+                    var ox = side == 0 ? reach : side == 1 ? -reach : 0;
+                    var oz = side == 2 ? reach : side == 3 ? -reach : 0;
+
+                    if (gen.SurfaceHeight(dx + ox, dz + oz) < TerrainGenerator.SeaLevel - 2)
+                        return (dx, dz);
+                }
+            }
+
+            return null;
+        }
+
+        static (int X, int Y, int Z, ushort Was)? FindWetWall(
+            WorldStreamer streamer, StarterBlocks.Ids ids, (int X, int Z) near)
+        {
+            var world = streamer.World;
+
+            for (var dz = -24; dz <= 24; dz++)
+            for (var dx = -24; dx <= 24; dx++)
+            for (var y = TerrainGenerator.SeaLevel; y >= TerrainGenerator.SeaLevel - 3; y--)
+            {
+                int x = near.X + dx, z = near.Z + dz;
+
+                var here = world.GetBlock(x, y, z);
+                if (here.IsAir || here == ids.Water) continue;
+
+                // Sea on at least one side of it, at the same height.
+                if (world.GetBlock(x + 1, y, z) != ids.Water
+                    && world.GetBlock(x - 1, y, z) != ids.Water
+                    && world.GetBlock(x, y, z + 1) != ids.Water
+                    && world.GetBlock(x, y, z - 1) != ids.Water) continue;
+
+                return (x, y, z, here.Value);
+            }
+
+            return null;
+        }
+    }
 
     /// <summary>
     /// Meshes three chunks — stone, stone with water in it, and stone with lava in it — and asks

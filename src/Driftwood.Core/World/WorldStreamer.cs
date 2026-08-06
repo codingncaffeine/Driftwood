@@ -237,10 +237,11 @@ public sealed class WorldStreamer : IDisposable
         _editQueue.Enqueue((wx, wy, wz));
         _lightWork.Release();
 
-        // Breaking a block beside a river is the whole feature. The flow is asked about the cell and
-        // its six neighbours, because an edit can be a placement as easily as a removal and only one
-        // of those two reads as "something opened up".
-        Fluids?.Touch(wx, wy, wz);
+        // ⛳ Breaking a block beside a river is the whole feature, and it goes to the FRONT of the
+        // queue. A chunk arriving can wait a moment; a block somebody just broke cannot, whatever
+        // else is settling. The cell and its six neighbours, because an edit can be a placement as
+        // easily as a removal and only one of those two reads as "something opened up".
+        Fluids?.Touch(wx, wy, wz, urgent: true);
 
         Rewire(wx, wy, wz);
     }
@@ -322,7 +323,7 @@ public sealed class WorldStreamer : IDisposable
             _world.SetBlock(x, y, z, become);
             _editQueue.Enqueue((x, y, z));
             _lightWork.Release();
-            Fluids?.Touch(x, y, z);
+            Fluids?.Touch(x, y, z, urgent: true);
         }
     }
 

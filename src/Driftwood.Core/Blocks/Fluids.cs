@@ -173,6 +173,20 @@ public sealed class FluidEngine
     private readonly Queue<(int X, int Y, int Z)> _pending = [];
 
     /// <summary>
+    /// Cells a player's own edit put in, drained before anything else.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>The same lesson the lighting thread's edit queue taught, in the same session.</b> One
+    /// queue is fair and fairness is wrong here: a chunk arriving can wait a moment, and a block
+    /// somebody just broke cannot. Whatever else is in flight — a cave system filling, a river
+    /// settling after a wall came down — the water beside the block a player is standing at has to
+    /// arrive within a tick or two, or the whole feature reads as not working.
+    /// <para>⛳ Safe because the settled state does not depend on the order cells are looked at in.
+    /// The fixpoint is unique; the queue only decides what a player watches happen first.</para>
+    /// </remarks>
+    private readonly Queue<(int X, int Y, int Z)> _urgent = [];
+
+    /// <summary>
     /// What is waiting in <see cref="_pending"/>, so nothing is queued twice.
     /// </summary>
     /// <remarks>
@@ -192,7 +206,7 @@ public sealed class FluidEngine
     public FluidTable Table => _table;
 
     /// <summary>Cells waiting to be looked at.</summary>
-    public int Pending => _pending.Count;
+    public int Pending => _pending.Count + _urgent.Count;
 
     /// <summary>Cells this engine has changed since it was made. For the instruments.</summary>
     public long Changed { get; private set; }
@@ -213,11 +227,16 @@ public sealed class FluidEngine
     /// <em>placement</em> — putting a block into a cell full of water is the same event as taking
     /// away the wall beside it, and only one of those reads as "something moved".
     /// </remarks>
-    public void Touch(int x, int y, int z)
+    public void Touch(int x, int y, int z, bool urgent = false)
     {
+        _urgentNow = urgent;
         Seed(x, y, z);
         Ring(x, y, z);
+        _urgentNow = false;
     }
+
+    /// <summary>Whether the cells being seeded right now go to the front. Set only by Touch.</summary>
+    private bool _urgentNow;
 
     /// <summary>Queues every fluid cell in a chunk, and the shell around it.</summary>
     /// <remarks>
@@ -265,13 +284,21 @@ public sealed class FluidEngine
 
         void Offer(int wx, int wy, int wz)
         {
-            if (_table.KindOf(world.GetBlock(wx, wy, wz).Value) == FluidKind.None) return;
+            var block = world.GetBlock(wx, wy, wz).Value;
+            if (_table.KindOf(block) == FluidKind.None) return;
+
+            // ⛔ AND THE SAME FILTER AS THE CELLS INSIDE, which is what separates "stalled at this
+            // seam" from "sitting in the middle of the ocean". The shell of a sea chunk is a
+            // thousand water cells with nowhere to go; offering all of them cost 70,405 queued cells
+            // per walk to the beach, every one of which was looked at and found already correct.
+            // ⛳ It is exactly the right question: before this chunk arrived a stalled cell could not
+            // spread, because the space it wanted was unloaded and unloaded is not empty. Now it can.
+            if (!CanSpread(world, wx, wy, wz, block)) return;
 
             // ⛔ THE RING, NOT THE CELL. A fall stalled at a seam is already in the state it should
             // be in — full, falling, nothing to change — so re-examining it does nothing and it does
             // not wake its neighbours, because a cell only wakes them when it moves. What has to be
-            // asked is the cell on the other side of the seam, which is in the chunk that has just
-            // arrived. Measured: the fall resumed to y 0 and stopped there.
+            // asked is the cell on the other side of the seam, in the chunk that has just arrived.
             Touch(wx, wy, wz);
         }
     }
@@ -290,7 +317,7 @@ public sealed class FluidEngine
     {
         var looked = 0;
 
-        while (looked < budget && _pending.TryDequeue(out var cell))
+        while (looked < budget && NextCell(out var cell))
         {
             _queued.Remove(cell);
             looked++;
@@ -320,7 +347,7 @@ public sealed class FluidEngine
     {
         var looked = 0;
 
-        while (_pending.Count > 0 && looked < limit)
+        while (Pending > 0 && looked < limit)
             looked += Step(world, Math.Min(4096, limit - looked), changed);
 
         return looked;
@@ -476,6 +503,17 @@ public sealed class FluidEngine
     }
 
     /// <summary>True when any neighbour of this fluid cell is somewhere it could go.</summary>
+    /// <remarks>
+    /// ⛔⛔ <b>DOWN AND SIDEWAYS. NEVER UP — and getting that wrong made the whole feature look
+    /// broken in the game while every check passed.</b> Every cell on the surface of the sea has air
+    /// above it, so counting up as "somewhere to go" queued <em>every ocean surface cell in every
+    /// chunk</em> the moment it loaded: measured at <b>117,124 cells queued with nothing to do</b>
+    /// after a walk to the beach. Not one of them could move, so nothing was ever visibly wrong — but
+    /// the queue is first-in-first-out, so a player breaking a block beside the water went to the
+    /// back of it and their water arrived some minutes later.
+    /// <para>⛳ It was invisible to every fluid check because they all drive the engine in a box they
+    /// filled themselves. Reported by the user, in one sentence, from the beach.</para>
+    /// </remarks>
     private bool CanSpread(VoxelWorld world, int x, int y, int z, ushort here)
     {
         var kind = _table.KindOf(here);
@@ -484,6 +522,8 @@ public sealed class FluidEngine
         for (var face = 0; face < Faces.Count; face++)
         {
             var (dx, dy, dz) = Faces.Normals[face];
+            if (dy > 0) continue;
+
             int nx = x + dx, ny = y + dy, nz = z + dz;
 
             if (!Loaded(world, nx, ny, nz)) continue;
@@ -515,6 +555,12 @@ public sealed class FluidEngine
     private void Seed(int x, int y, int z)
     {
         if (!TerrainGenerator.InWorld(y)) return;
-        if (_queued.Add((x, y, z))) _pending.Enqueue((x, y, z));
+        if (!_queued.Add((x, y, z))) return;
+
+        if (_urgentNow) _urgent.Enqueue((x, y, z));
+        else _pending.Enqueue((x, y, z));
     }
+
+    private bool NextCell(out (int X, int Y, int Z) cell) =>
+        _urgent.TryDequeue(out cell) || _pending.TryDequeue(out cell);
 }
