@@ -364,6 +364,9 @@ public sealed class HudRenderer : IDisposable
     /// <summary>The five worn-slot silhouettes, in <see cref="EquipSlot"/> order.</summary>
     private const int IconEquip = IconCursor + 1;
 
+    /// <summary>A soft round bloom, drawn behind anything that gives off light.</summary>
+    private const int IconBloom = IconEquip + 5;
+
     public unsafe HudRenderer(GL gl)
     {
         _gl = gl;
@@ -373,6 +376,7 @@ public sealed class HudRenderer : IDisposable
         icons.AddRange(TileGen.Digits());
         icons.Add(TileGen.Cursor());
         icons.AddRange(TileGen.EquipGhosts());
+        icons.Add(TileGen.Bloom());
         _icons = new BlockTextureArray(gl, [.. icons], TileGen.Size);
 
         _font = new BlockTextureArray(gl, TileGen.Font(), TileGen.Size);
@@ -1313,6 +1317,7 @@ public sealed class HudRenderer : IDisposable
 
             var type = catalogue[stack.Item];
             var inset = MathF.Round(z);
+            Bloom(type, zone.X, zone.Y, zone.W, zone.H);
             SlotIcon(catalogue, stack, zone.X + inset, zone.Y + inset, zone.W - inset * 2f, Vector4.One);
 
             if (type.Durability > 0 && stack.Damage > 0)
@@ -1383,15 +1388,60 @@ public sealed class HudRenderer : IDisposable
         _ => ItemStack.Empty,
     };
 
-    /// <summary>A square pressed into the panel: eighteen across with sixteen inside it.</summary>
+    /// <summary>
+    /// A square pressed into the panel: eighteen across with sixteen inside it.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>A rim and a well, rather than a bevel.</b> Modelled on the user's own reference sheet
+    /// for this screen, where every square is a near-black interior inside a lighter grey-blue frame
+    /// with the corners picked out darker. A bevel says "pressed in"; a frame says "this is one of a
+    /// set", which is what a grid of thirty-six squares actually needs to say. The two lit sides are
+    /// kept as a hairline inside the rim, so it still catches the light from the top left the way
+    /// every other panel in the game does.
+    /// </remarks>
     private void Well(ScreenLayout layout, Zone zone)
     {
         var z = layout.Zoom;
-        Rect(_plain, zone.X - z, zone.Y - z, zone.W + z * 2f, zone.H + z * 2f, SlotFill);
-        Rect(_plain, zone.X - z, zone.Y - z, zone.W + z * 2f, z, PanelDark);
-        Rect(_plain, zone.X - z, zone.Y - z, z, zone.H + z * 2f, PanelDark);
-        Rect(_plain, zone.X - z, zone.Y + zone.H, zone.W + z * 2f, z, PanelLight);
-        Rect(_plain, zone.X + zone.W, zone.Y - z, z, zone.H + z * 2f, PanelLight);
+
+        // The rim: the full 18, in one tone that is neither the panel nor the interior.
+        Rect(_plain, zone.X - z, zone.Y - z, zone.W + z * 2f, zone.H + z * 2f, SlotRim);
+
+        // The corners of the rim, darker, which is what stops a grid of them reading as one mesh.
+        Rect(_plain, zone.X - z, zone.Y - z, z, z, PanelDark);
+        Rect(_plain, zone.X + zone.W, zone.Y - z, z, z, PanelDark);
+        Rect(_plain, zone.X - z, zone.Y + zone.H, z, z, PanelDark);
+        Rect(_plain, zone.X + zone.W, zone.Y + zone.H, z, z, PanelDark);
+
+        // The interior, and a hairline of shadow along the two sides the light does not reach.
+        Rect(_plain, zone.X, zone.Y, zone.W, zone.H, SlotFill);
+        Rect(_plain, zone.X, zone.Y, zone.W, MathF.Max(1f, z * 0.5f), PanelDark);
+        Rect(_plain, zone.X, zone.Y, MathF.Max(1f, z * 0.5f), zone.H, PanelDark);
+    }
+
+    /// <summary>
+    /// A pool of its own colour behind anything that gives off light.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ From the user's own reference sheet for this screen, where every light source sits in a
+    /// bloom. It is the thing that tells a torch from a stick and a lamp from a rock at the size of
+    /// a fingernail: they are the same shape in the same square with the same three shaded faces,
+    /// and only one of them is worth carrying into a cave. Drawn <em>behind</em> the icon and spread
+    /// wider than the square, so it reads as light coming off the thing rather than as a tint on it.
+    /// </remarks>
+    private void Bloom(ItemType type, float x, float y, float w, float h)
+    {
+        var glow = type.Glow;
+        var peak = MathF.Max(glow.X, MathF.Max(glow.Y, glow.Z));
+        if (peak <= 0f) return;
+
+        // ⚠ Kept inside its own square, and kept faint. The first pass spread it nearly a whole
+        // square either side at half opacity, and a hotbar with a torch in it had two neighbours
+        // washed out and the torch itself hidden under its own light. A bloom is a hint that a thing
+        // gives off light; it is not the light.
+        var colour = new Vector4(glow.X / peak, glow.Y / peak, glow.Z / peak, 0.12f + peak * 0.26f);
+        var spread = MathF.Round(w * 0.18f);
+
+        Rect(_iconQuads, x - spread, y - spread, w + spread * 2f, h + spread * 2f, colour, IconBloom);
     }
 
     /// <summary>A bevel measured in the pack's pixels rather than in layout units.</summary>
@@ -1599,8 +1649,45 @@ public sealed class HudRenderer : IDisposable
     private static readonly Vector4 PanelFill = new(0.36f, 0.36f, 0.36f, 0.97f);
     private static readonly Vector4 PanelLight = new(0.63f, 0.63f, 0.63f, 1f);
     private static readonly Vector4 PanelDark = new(0.15f, 0.15f, 0.15f, 1f);
-    private static readonly Vector4 SlotFill = new(0.24f, 0.24f, 0.24f, 0.97f);
+
+    /// <summary>Inside a square: nearly black, so what is in it is the only thing with a tone.</summary>
+    /// <remarks>
+    /// ⛔ <b>Measured off the user's own reference sheet for this screen, and it was the single
+    /// biggest difference.</b> There, a well reads rgb 9 8 13 against a panel of 30 17 11 — about a
+    /// third of the panel's brightness. Ours read 61 against 92, which is two thirds, and at that
+    /// contrast a grid of squares is grey on grey and every icon in it looks washed. The blocks are
+    /// the only things on this screen with any colour in them and the furniture round them should be
+    /// getting out of the way.
+    /// </remarks>
+    private static readonly Vector4 SlotFill = new(0.085f, 0.085f, 0.095f, 0.98f);
+
+    /// <summary>
+    /// The rim round a square. Lighter than the panel, which is what makes a grid read as a grid.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ The reference sheet's rim is three times its panel's brightness, and ours cannot be — its
+    /// panel is a dark brown and this one is a mid grey, so three times is off the top of the range.
+    /// What carries over is that the rim is <em>distinct</em>: three tones, panel then rim then a
+    /// near-black interior. Matched to the panel it is not a frame at all, which is what the first
+    /// pass at this looked like.
+    /// </remarks>
+    private static readonly Vector4 SlotRim = new(0.50f, 0.49f, 0.53f, 1f);
+
     private static readonly Vector4 Highlight = new(0.96f, 0.96f, 0.96f, 1f);
+
+    /// <summary>
+    /// What is picked out. The one colour in the whole interface, and it is not chrome.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ <b>The rule this bends was written down deliberately and is worth restating.</b> The chrome
+    /// is strictly greyscale so that the blocks are the only things on screen with any colour, and
+    /// so that no panel ever needs a decision about whether it gets an accent. A selection is not
+    /// chrome — it is a <em>state</em>, the answer to "which one", and it is the one thing on the
+    /// screen that has to be found at a glance without reading anything. The reference sheet marks
+    /// it in mint over a glow, and it is instantly the thing your eye goes to. Everything else stays
+    /// grey.
+    /// </remarks>
+    private static readonly Vector4 Picked = new(0.55f, 0.98f, 0.78f, 1f);
 
     /// <summary>Text on a panel, and text on a panel that is not the one selected.</summary>
     private static readonly Vector4 Ink = new(0.95f, 0.95f, 0.95f, 1f);
@@ -1644,7 +1731,15 @@ public sealed class HudRenderer : IDisposable
 
     private void Frame(float x, float y, float w, float h) => Bevel(x, y, w, h, raised: true, PanelFill);
 
-    /// <summary>What is picked out: pressed into the panel, with a lit edge round it.</summary>
+    /// <summary>
+    /// What is picked out: a line round it, and a wash of the same colour outside that.
+    /// </summary>
+    /// <remarks>
+    /// The wash is what makes it findable across a screen of thirty-six squares — a one-pixel line
+    /// is invisible at a glance and reads as an artefact of the grid when it is not. Two rings at a
+    /// quarter and an eighth rather than a real blur: the overlay draws rectangles and a gradient
+    /// here would want a texture, a second batch and a pass over the whole panel to be worth it.
+    /// </remarks>
     private void Select(float x, float y, float w, float h)
     {
         x = MathF.Round(x);
@@ -1652,10 +1747,19 @@ public sealed class HudRenderer : IDisposable
         w = MathF.Round(w);
         h = MathF.Round(h);
 
-        Rect(_plain, x - 1f, y - 1f, w + 2f, 1f, Highlight);
-        Rect(_plain, x - 1f, y + h, w + 2f, 1f, Highlight);
-        Rect(_plain, x - 1f, y - 1f, 1f, h + 2f, Highlight);
-        Rect(_plain, x + w, y - 1f, 1f, h + 2f, Highlight);
+        for (var ring = 3; ring >= 1; ring--)
+        {
+            var wash = Picked with { W = 0.10f / ring };
+            Rect(_plain, x - ring, y - ring, w + ring * 2f, ring, wash);
+            Rect(_plain, x - ring, y + h, w + ring * 2f, ring, wash);
+            Rect(_plain, x - ring, y - ring, ring, h + ring * 2f, wash);
+            Rect(_plain, x + w, y - ring, ring, h + ring * 2f, wash);
+        }
+
+        Rect(_plain, x - 1f, y - 1f, w + 2f, 1f, Picked);
+        Rect(_plain, x - 1f, y + h, w + 2f, 1f, Picked);
+        Rect(_plain, x - 1f, y - 1f, 1f, h + 2f, Picked);
+        Rect(_plain, x + w, y - 1f, 1f, h + 2f, Picked);
     }
 
     /// <summary>

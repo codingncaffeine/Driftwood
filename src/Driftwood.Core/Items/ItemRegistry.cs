@@ -1,4 +1,5 @@
 using Driftwood.Core.Blocks;
+using Driftwood.Core.Lighting;
 
 namespace Driftwood.Core.Items;
 
@@ -64,7 +65,25 @@ public sealed class ItemRegistry
 
             // What this puts down, so a slot can draw it as the block it is rather than as one of
             // its faces. The first variant is the one an item is thought of as.
-            if (places.Variants.Length > 0) type.IconModel = blocks[places.Variants[0]].Model;
+            if (places.Variants.Length > 0)
+            {
+                var plain = blocks[places.Variants[0]];
+                type.IconModel = plain.Model;
+
+                // ⚠ The BRIGHTEST variant, not the first. A furnace's first form is the cold one and
+                // a lantern's is the hung one; a light whose square only glows in one of its own
+                // orientations reads as a rendering fault rather than as a state.
+                var lit = 0;
+                foreach (var variant in places.Variants)
+                {
+                    var emission = blocks[variant].LightEmission;
+                    if (LightValue.BlockPeak(emission) > LightValue.BlockPeak((ushort)lit)) lit = emission;
+                }
+
+                type.Glow = new System.Numerics.Vector3(
+                    LightValue.Red((ushort)lit), LightValue.Green((ushort)lit), LightValue.Blue((ushort)lit))
+                    / LightValue.Max;
+            }
 
             foreach (var variant in places.Variants)
             {

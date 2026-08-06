@@ -4464,7 +4464,19 @@ public sealed class ClientHost : IDisposable
     /// front buffer. Nothing here is a special-case renderer, because a special-case renderer is a
     /// thing that can be right while the game is wrong.</para>
     /// </remarks>
-    private readonly record struct Shot(int Frame, string Name, string Item, ViewMode View, bool Strike);
+    private readonly record struct Shot(
+        int Frame, string Name, string Item, ViewMode View, bool Strike, ShotScreen Screen = ShotScreen.None);
+
+    /// <summary>Which interface, if any, is up when the picture is taken.</summary>
+    private enum ShotScreen
+    {
+        None,
+        Player,
+        Book,
+        Bench,
+        Furnace,
+        Chest,
+    }
 
     /// <summary>
     /// What gets photographed. Order matters only in that a strike needs frames to travel through.
@@ -4487,6 +4499,32 @@ public sealed class ClientHost : IDisposable
         new(136, "9-third-block", "stone", ViewMode.ThirdBehind, false),
         new(144, "10-facing-pickaxe", "stone_pickaxe", ViewMode.ThirdFacing, false),
         new(152, "11-facing-sword", "stone_sword", ViewMode.ThirdFacing, false),
+
+        // ⛳ And the screens, for the same reason the hand is here. Every square, every well and
+        // every icon in this game is drawn in code against a grid measured off a pack's own sheet,
+        // and the only way to look at any of it was to start the game and open it.
+        new(164, "12-player", "stone", ViewMode.First, false, ShotScreen.Player),
+        new(176, "13-book", "stone", ViewMode.First, false, ShotScreen.Book),
+        new(188, "14-bench", "stone", ViewMode.First, false, ShotScreen.Bench),
+        new(200, "15-furnace", "stone", ViewMode.First, false, ShotScreen.Furnace),
+        new(212, "16-chest", "stone", ViewMode.First, false, ShotScreen.Chest),
+    ];
+
+    /// <summary>
+    /// A pocketful of things worth photographing: rock, worked rock, a shape, a tool, a light.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ Deliberately not one item repeated. The question a picture of a slot answers is whether a
+    /// block, a slab cut from the same block, a tool and a torch are told apart in a square the size
+    /// of a fingernail — and a screen full of identical stone answers it for none of them.
+    /// </remarks>
+    private static readonly string[] ScreenShow =
+    [
+        "stone", "stone_slab", "stone_bricks", "driftoak_log", "driftoak_planks",
+        "sand", "gravel", "clay", "glass", "bricks",
+        "coal", "iron_ingot", "gold_ingot", "stick", "torch",
+        "stone_pickaxe", "iron_axe", "gold_shovel", "stormglass_sword", "bench",
+        "furnace", "chest", "ladder", "door", "lantern",
     ];
 
     /// <summary>
@@ -4536,10 +4574,24 @@ public sealed class ClientHost : IDisposable
             if (_shotFrame == shot.Frame - ShotLead)
             {
                 _inventory.Clear();
-                _inventory.Add(new ItemStack(_items.ByName(shot.Item).Id, 1));
+
+                if (shot.Screen == ShotScreen.None)
+                {
+                    _inventory.Add(new ItemStack(_items.ByName(shot.Item).Id, 1));
+                }
+                else
+                {
+                    foreach (var name in ScreenShow)
+                    {
+                        if (_items.TryByName(name, out var type))
+                            _inventory.Add(new ItemStack(type.Id, type.MaxStack > 1 ? 17 : 1));
+                    }
+                }
+
                 _inventory.Select(0);
                 _view = shot.View;
                 if (shot.Strike) _animator.Strike();
+                OpenForShot(shot.Screen);
             }
 
             if (_shotFrame == shot.Frame) WriteShot(size, shot.Name);
@@ -4549,6 +4601,53 @@ public sealed class ClientHost : IDisposable
         {
             Console.WriteLine($"shots       {Shots.Length} written to {_options.ShotPath}");
             _window.Close();
+        }
+    }
+
+    /// <summary>Puts up the screen a shot wants, or takes down whatever is up.</summary>
+    /// <remarks>
+    /// Through the same doors a player uses — <see cref="OpenPlayer"/>, <see cref="OpenBench"/> and
+    /// the rest — rather than by setting the kind directly. A screen opened by hand here would be a
+    /// screen in a state no player can reach, and the picture would be of that.
+    /// </remarks>
+    private void OpenForShot(ShotScreen screen)
+    {
+        if (screen == ShotScreen.None)
+        {
+            if (_hudScreen.IsOpen) CloseScreen();
+            return;
+        }
+
+        // A block of its own for the stations to be opened against, put down and taken back after,
+        // because a furnace screen with no furnace behind it has nothing to draw a flame from.
+        var at = ((int)MathF.Floor(_player.Position.X), (int)MathF.Floor(_player.Position.Y) + 2,
+                  (int)MathF.Floor(_player.Position.Z) + 1);
+
+        switch (screen)
+        {
+            case ShotScreen.Player:
+                OpenPlayer(PlayerTab.Items, atBench: false, default);
+                break;
+
+            case ShotScreen.Book:
+                OpenPlayer(PlayerTab.Items, atBench: false, default);
+                _hudScreen.BookOut = true;
+                RefreshScreen();
+                break;
+
+            case ShotScreen.Bench:
+                OpenBench(at.Item1, at.Item2, at.Item3);
+                break;
+
+            case ShotScreen.Furnace:
+                _furnaces.Open(at.Item1, at.Item2, at.Item3);
+                OpenFurnace(at.Item1, at.Item2, at.Item3);
+                break;
+
+            case ShotScreen.Chest:
+                _chests.Open(at.Item1, at.Item2, at.Item3);
+                OpenChest(at.Item1, at.Item2, at.Item3);
+                break;
         }
     }
 

@@ -106,6 +106,19 @@ public sealed class ItemType
     /// </remarks>
     public BlockModel? IconModel { get; internal set; }
 
+    /// <summary>
+    /// The colour this gives off, 0..1 per channel, for a slot to glow behind it. Black for the
+    /// vast majority of things, which give off nothing.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ From the user's own reference sheet for the inventory: glowstone, a beacon, a redstone lamp
+    /// and a lantern all carry a bloom in their square, and it is the thing that tells a light apart
+    /// from a rock at the size of a fingernail. Filled in by <see cref="ItemRegistry.Seal"/> off the
+    /// block's own <c>LightEmission</c> rather than from a second list — a light that stops emitting
+    /// stops glowing in the pocket too, which is the behaviour you want and comes free.
+    /// </remarks>
+    public System.Numerics.Vector3 Glow { get; internal set; }
+
     public bool IsTool => Tool != ToolClass.None;
 
     public bool IsFuel => BurnSeconds > 0f;

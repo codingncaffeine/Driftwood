@@ -546,6 +546,38 @@ public static class TileGen
     ]);
 
     /// <summary>
+    /// A soft round bloom: white, fading to nothing at the edge of the tile.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ From the user's own reference sheet for the inventory, where glowstone, a beacon, a
+    /// redstone lamp and a lantern each sit in a pool of their own colour. It is what tells a light
+    /// apart from a rock in a square the size of a fingernail — the two are the same shape, the same
+    /// size and the same three shaded faces, and only one of them is worth carrying into a cave.
+    /// <para>Drawn at the tile size rather than as a shader, because the overlay batcher already
+    /// draws a rectangle with a layer number and a second pass for one gradient would cost more code
+    /// than the gradient is worth. The falloff is squared so the middle stays bright and the edge
+    /// gets out of the way of whatever is drawn on top of it.</para>
+    /// </remarks>
+    public static byte[] Bloom()
+    {
+        var t = new byte[BytesPerTile];
+        const float Centre = (Size - 1) / 2f;
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var dx = (x - Centre) / (Size / 2f);
+            var dy = (y - Centre) / (Size / 2f);
+            var d = MathF.Sqrt(dx * dx + dy * dy);
+
+            var a = 1f - Math.Clamp(d, 0f, 1f);
+            Put(t, x, y, 255, 255, 255, (byte)(a * a * 255f));
+        }
+
+        return t;
+    }
+
+    /// <summary>
     /// The four worn slots and the other hand, as silhouettes of what belongs in them.
     /// </summary>
     /// <remarks>
