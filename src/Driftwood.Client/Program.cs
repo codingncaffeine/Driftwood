@@ -38,6 +38,19 @@ public static class Program
 
             if (args.Contains("--audio-check")) return AudioCheck();
 
+            // ⛳ THE INSTRUMENT THIS PROJECT WAS MISSING, AND THE ONE IT NEEDED MOST. Every tile in
+            // the game is drawn in code, and until now the only way to see one was to start the game
+            // and look at a square the size of a fingernail. Three separate redraws of the tools
+            // went out on guesses because of that, and the user had to be the eye each time.
+            //
+            // A sheet of them, magnified, in a file anybody — or anything — can open.
+            if (args.Contains("--icon-sheet"))
+            {
+                var at = Array.IndexOf(args, "--icon-sheet");
+                var path = at + 1 < args.Length ? args[at + 1] : "icons.png";
+                return IconSheet(path);
+            }
+
             // Which of our own layers a pack actually supplied, and which kept ours. The count in
             // the startup line says how many and never which, and "is the thing I am looking at one
             // of them" is the only question anybody has when a pack looks like it did nothing.
@@ -82,6 +95,59 @@ public static class Program
     /// wrong. Deliberately silent, because making noise on somebody else's machine to prove a
     /// speaker works is not a test anybody asked for.
     /// </remarks>
+    /// <summary>
+    /// Writes every tool tile to one magnified sheet, so a drawing can be looked at.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>The instrument this project did not have and needed most.</b> Every tile in the game is
+    /// drawn in code, and the only way to see one was to start the game and squint at a square the
+    /// size of a fingernail — so three redraws of the tools went out on guesses and the user had to
+    /// be the eye every time. Nearest-neighbour, so a pixel stays a pixel and what comes out is the
+    /// drawing rather than a blur of it.
+    /// </remarks>
+    private static int IconSheet(string path)
+    {
+        const int Zoom = 12;
+        const int Gap = 2;
+
+        var tiles = new List<byte[]>();
+        for (var shape = 0; shape < TileGen.ToolShapes.Length; shape++)
+            tiles.Add(TileGen.IconTool(4000 + shape, shape, 150, 120, 90));
+
+        var cell = TileGen.Size * Zoom + Gap;
+        var width = cell * tiles.Count;
+        var height = cell;
+        var pixels = new byte[width * height * 4];
+
+        // A mid grey behind them: a tool drawn on nothing cannot be told from a tool with a hole in
+        // it, and the outline is the whole point of the drawing.
+        for (var i = 0; i < pixels.Length; i += 4)
+        {
+            pixels[i] = 90;
+            pixels[i + 1] = 90;
+            pixels[i + 2] = 96;
+            pixels[i + 3] = 255;
+        }
+
+        for (var t = 0; t < tiles.Count; t++)
+        for (var y = 0; y < TileGen.Size * Zoom; y++)
+        for (var x = 0; x < TileGen.Size * Zoom; x++)
+        {
+            var from = ((y / Zoom) * TileGen.Size + x / Zoom) * 4;
+            if (tiles[t][from + 3] < 128) continue;
+
+            var to = ((y * width) + t * cell + x) * 4;
+            pixels[to] = tiles[t][from];
+            pixels[to + 1] = tiles[t][from + 1];
+            pixels[to + 2] = tiles[t][from + 2];
+            pixels[to + 3] = 255;
+        }
+
+        File.WriteAllBytes(path, Png.Encode(new Image(width, height, pixels)));
+        Console.WriteLine($"icons       {tiles.Count} tools at {Zoom}x written to {path}");
+        return 0;
+    }
+
     private static int AudioCheck()
     {
         var registry = new BlockRegistry();
@@ -248,6 +314,10 @@ public static class Program
                     break;
                 case "--ui-check":
                     options = options with { UiCheck = true, Mute = true };
+                    break;
+                // Takes a path, so the parser has to step over it as well as allow it.
+                case "--icon-sheet":
+                    i++;
                     break;
                 case "--audit":
                 case "--audio-check":

@@ -1548,93 +1548,95 @@ public static class TileGen
     /// </remarks>
     public static readonly string[][] ToolShapes =
     [
-        // Pickaxe: one bar socketed at its middle, both tips sweeping down — which is what a real
-        // one is, and what tells it from an axe at a glance. The widest head of the four.
-        [
-            "................",
-            "................",
-            "....oooooooooo..",
-            "...omMllllllMmo.",
-            "...omMoooooohho.",
-            "....oo.....ohho.",
-            "..........ohho..",
-            ".........ohho...",
-            "........ohho....",
-            ".......ohho.....",
-            "......ohho......",
-            ".....ohho.......",
-            "....ohho........",
-            "..ohhho.........",
-            "..oooo..........",
-            "................",
-        ],
-
-        // Axe: taller than it is wide, and asymmetric — a blade flaring down one side with a blunt
-        // poll opposite, the haft through the eye. An axe bites one way and has to look like it.
-        [
-            "................",
-            ".........ooo....",
-            "........omMlo...",
-            ".......omMlMo...",
-            "......omMlMMo...",
-            "......oMmlMMo...",
-            "......oMmlMhho..",
-            ".......oMMohho..",
-            "........oohho...",
-            ".......ohho.....",
-            "......ohho......",
-            ".....ohho.......",
-            "....ohho........",
-            "..ohhho.........",
-            "..oooo..........",
-            "................",
-        ],
-
-        // Shovel: a small symmetric scoop set high on a long shaft — six across where the axe is
-        // seven and the pickaxe ten, which is the proportion a real one has and the pack confirms.
-        [
-            "................",
-            "................",
-            "..........oooo..",
-            ".........omMMlo.",
-            ".........oMmMlo.",
-            "..........oMMo..",
-            ".........ohho...",
-            "........ohho....",
-            ".......ohho.....",
-            "......ohho......",
-            ".....ohho.......",
-            "....ohho........",
-            "...ohho.........",
-            "..ohhho.........",
-            "..oooo..........",
-            "................",
-        ],
-
-        // Sword: a blade of even width running the whole diagonal into the corner, a SHORT
-        // SYMMETRIC crossguard, a short grip, and a pommel wider than the grip.
+        // ⛳ SAMPLED FROM THE PROJECT'S OWN REFERENCE SHEET, not drawn here. Six hand-drawn passes
+        // traded one fault for another — a pickaxe that read as a bent pipe, an axe as a lollipop, a
+        // shovel as a stub — because 16-pixel art is a skill and guessing at it in a text file is
+        // not one. The sheet is ours, so the shapes come straight off it: the metal-headed variant
+        // of each tool, so head and haft separate by colour rather than by my judgement, downsampled
+        // to sixteen squares and classified by brightness into the letters below.
         //
-        // ⛔ The pommel is not decoration. The user's word for the first attempt at this was "a
-        // gun", and they were right: it had a five-wide guard with the grip running on PAST it and
-        // tapering away, which is a stock. Short guard, short grip, and a blob on the end are the
-        // three things that make a silhouette read as a sword — no gun has a pommel.
+        // ⚠ Regenerate with the same method if the sheet changes — the extraction reads the STONE
+        // pickaxe, the IRON axe, the IRON shovel and the STONE sword, because on a wooden tool the
+        // head and the haft are the same timber and nothing can tell them apart.
+
+        // Pickaxe: a bar across the top, its right end turning down, the haft off its middle.
         [
-            ".............ooo",
-            "............omlo",
-            "...........omlmo",
-            "..........omlmo.",
-            ".........omlmo..",
-            "........omlmo...",
-            ".......omlmo....",
-            "......omlmo.....",
-            ".....omlmo......",
-            "....oomoo.......",
-            "...oMMMMo.......",
-            "....ohho........",
-            "....ohho........",
-            "...oohhoo.......",
-            "...ooooo........",
+            "......MMMMM.....",
+            ".....Mmmmmmm.HH.",
+            "......mmMmmmHH..",
+            "..........mmmH..",
+            "...........mmmM.",
+            ".........hH..mmm",
+            "........Hh...Mmm",
+            ".......MM.....mm",
+            ".......H......mm",
+            ".....HhM......mm",
+            "....HHH.........",
+            "....H...........",
+            "...hH...........",
+            ".m..............",
+            ".m..............",
+            ".M..............",
+        ],
+
+        // Axe: a broad blade with its edge on the left, the haft passing behind it.
+        [
+            "........mmmm....",
+            ".......mlllmM...",
+            "......mlllll....",
+            ".....mllllllHh..",
+            ".....mllllllm...",
+            "......mlllllmlM.",
+            ".......MMhlmllM.",
+            "........hH.lllM.",
+            ".......hh..lll..",
+            "......hh...MMM..",
+            ".....Hh.........",
+            "....Hh..........",
+            "...Hh...........",
+            "..hh............",
+            ".hh.............",
             "................",
+        ],
+
+        // Shovel: a spade blade, wide and angular, on a long shaft.
+        [
+            "...........Mmmmm",
+            "..........Mmllll",
+            "..........mlmmml",
+            ".........mmmmmml",
+            "........Mmmmmmmm",
+            "..........Mmmlm.",
+            ".........HHmmlm.",
+            "........Hh..mm..",
+            ".......Hh...M...",
+            "......hh........",
+            "................",
+            "....Hh..........",
+            "...HH...........",
+            "...h............",
+            "HhH.............",
+            ".hH.............",
+        ],
+
+        // Sword: a blade the whole diagonal, a cross-guard over it, a short grip and a pommel.
+        [
+            "............Mllm",
+            "...........Mmlmm",
+            "...........mlmmm",
+            "..........mmmmm.",
+            ".........mmmmm..",
+            "........mmmmM...",
+            ".......mmmm.....",
+            "..mM..mmmmM.....",
+            "...M.mmmmM......",
+            "...mMmmmM.......",
+            "...MMMmM........",
+            "....MMM.........",
+            "..MM.MMM........",
+            ".mM.............",
+            "MMM.............",
+            "m...............",
         ],
     ];
 
@@ -1681,10 +1683,43 @@ public static class TileGen
                 _ => -34,      // 'M' and 'H', the shadowed side
             } + (int)((Noise(x, y, seed) * 2f - 1f) * 8f);
 
+            // ⛳ THE HAFT IS KNURLED, and it is the thing a flat bar of timber most obviously is
+            // not. Every tool in the reference art has light and dark banding running along its
+            // shaft — it is what reads as grain at this size, and ours was one flat colour. The
+            // haft is drawn on the diagonal, so (x + y) runs along it and its remainder is a band
+            // across it.
+            if (handle) d += (x + y) % 3 switch { 0 => 18, 1 => 0, _ => -16 };
+
             Put(t, x, y, Clamp(br + d), Clamp(bg + d), Clamp(bb + d), 255);
         }
 
-        return t;
+        // ⛳ THE DARK EDGE, GROWN ROUND WHATEVER WAS DRAWN RATHER THAN DRAWN IN. Every tool in the
+        // reference art carries a one-pixel line all the way round, and it is what holds a shape
+        // together against whatever is behind it — without one a tool floats. Written as a pass
+        // rather than as pixels in the drawings for two reasons: a hand-drawn outline is a hand-
+        // drawn mistake on a shape that is otherwise sampled, and this way a shape sampled from the
+        // sheet gets its edge for free, including the sword's guard and the gaps down a knurled
+        // haft. Taken from what is already there, so the tile it wraps is the tile it belongs to.
+        var edged = (byte[])t.Clone();
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            if (t[(y * Size + x) * 4 + 3] >= 128) continue;
+
+            var touches = false;
+            for (var side = 0; side < 4 && !touches; side++)
+            {
+                var nx = x + (side == 0 ? -1 : side == 1 ? 1 : 0);
+                var ny = y + (side == 2 ? -1 : side == 3 ? 1 : 0);
+                if (nx < 0 || ny < 0 || nx >= Size || ny >= Size) continue;
+                touches = t[(ny * Size + nx) * 4 + 3] >= 128;
+            }
+
+            if (touches) Put(edged, x, y, 30, 24, 18, 255);
+        }
+
+        return edged;
     }
 
     /// <summary>Printable ASCII, from space to tilde. The range every string in the game uses.</summary>
