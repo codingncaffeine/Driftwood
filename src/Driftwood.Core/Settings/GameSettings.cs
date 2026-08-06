@@ -46,6 +46,18 @@ public sealed class GameSettings
     /// </remarks>
     public bool RecipeNotices { get; set; } = true;
 
+    /// <summary>
+    /// A folder of creature skeletons to read at startup, or empty for no animals.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>A path rather than a switch, and it lives here rather than on the command line, because
+    /// it cannot be found by looking.</b> The skeletons ship with an installed Bedrock client, and
+    /// enumerating <c>WindowsApps</c> to find that install throws for a plain process even where a
+    /// known path under it opens perfectly. So it is said once — by <c>--creature-geometry</c> now,
+    /// by the import screen later — and remembered.
+    /// </remarks>
+    public string CreatureGeometry { get; set; } = "";
+
     public Bindings Keys { get; set; } = Bindings.Defaults();
 
     /// <summary>Lines the reader did not recognise, kept so a newer build's file survives an older one.</summary>
@@ -113,6 +125,10 @@ public sealed class GameSettings
                 case "audio.mute": settings.Mute = Bool(value, settings.Mute); break;
                 case "input.sensitivity": settings.MouseSensitivity = Int(value, 10, 400, settings.MouseSensitivity); break;
                 case "ui.recipenotices": settings.RecipeNotices = Bool(value, settings.RecipeNotices); break;
+
+                // ⚠ Taken verbatim, not trimmed of anything but its edges. A Windows path is full of
+                // characters every other value here would reject, and one of them is a backslash.
+                case "world.creaturegeometry": settings.CreatureGeometry = value; break;
                 default: settings._unknown[key] = value; break;
             }
         }
@@ -176,6 +192,15 @@ public sealed class GameSettings
         text.AppendLine();
         text.AppendLine($"ui.recipenotices={Text(RecipeNotices)}");
         text.AppendLine();
+
+        // Only written when there is one, so a file from a machine with no creature geometry does
+        // not carry an empty key that reads like a setting somebody cleared.
+        if (CreatureGeometry.Length > 0)
+        {
+            text.AppendLine($"world.creaturegeometry={CreatureGeometry}");
+            text.AppendLine();
+        }
+
 
         foreach (var action in GameActions.All)
         {

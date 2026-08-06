@@ -811,6 +811,14 @@ public static class WorldAudit
         // ⛔ And it has to be the right skeleton. An install carries the same creature modelled
         // several times over, and the bare name is the oldest of them — a flat list of bones from
         // before there were skeletons, which nothing in the file can pose.
+        // ⛔ And then it has to stand somewhere. A herd that spawns inside a hill, sinks through the
+        // floor or walks through walls looks from any console exactly like one that works.
+        var herdFaults = CreatureHerd.Validate();
+        Check("a herd stands on the ground and stays on it", herdFaults.Count == 0,
+            herdFaults.Count == 0
+                ? "6 placed on a plain, all still on it after 10s, and none crossed a wall in 15s"
+                : $"{herdFaults.Count} faults: {herdFaults[0]}");
+
         var matchFaults = CreatureSet.Validate();
         Check("a creature wears the skeleton its art was painted for", matchFaults.Count == 0,
             matchFaults.Count == 0

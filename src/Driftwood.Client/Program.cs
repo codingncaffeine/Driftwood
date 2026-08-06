@@ -258,6 +258,32 @@ public static class Program
             if (clip.Seconds > 8f) faults.Add($"{name} is {clip.Seconds:F1}s, which is a loop not a one-shot");
         }
 
+        // ⛳ The animals, on the same terms. A creature that says nothing and a creature whose clip
+        // is missing are the same silence from inside the game, and sound is the one thing this
+        // machine cannot judge by playing it.
+        Console.WriteLine();
+        Console.WriteLine("clips the creatures name");
+        foreach (var name in CreatureSounds.All.Distinct().Order(StringComparer.Ordinal))
+        {
+            var clip = library.Load(name);
+            if (clip is null)
+            {
+                Console.WriteLine($"  {name,-32} MISSING");
+                faults.Add($"{name} is missing or would not decode");
+                continue;
+            }
+
+            Console.WriteLine(
+                $"  {name,-32} {clip.Seconds,6:F2}s  {clip.Channels}ch {clip.SampleRate}Hz  peak {clip.Peak:F2}");
+
+            if (clip.Peak < 0.02f) faults.Add($"{name} decodes to near silence (peak {clip.Peak:F3})");
+            if (clip.Seconds > 8f) faults.Add($"{name} is {clip.Seconds:F1}s, which is a loop not a one-shot");
+
+            // ⚠ Stereo is not positional. OpenAL plays a two-channel buffer flat, at the listener,
+            // whatever position is asked for — so a stereo cow is a cow that follows you about.
+            if (clip.Channels != 1) faults.Add($"{name} is {clip.Channels}-channel, so it cannot come from where the animal is");
+        }
+
         Console.WriteLine();
         Console.WriteLine("materials");
         foreach (var material in MaterialSounds.Materials.Order())
@@ -345,6 +371,13 @@ public static class Program
                     break;
                 case "--skin":
                     options = options with { SkinPath = Next(args, ref i, "--skin") };
+                    break;
+                // ⛔ Given once and remembered. The skeletons ship with an installed Bedrock client
+                // rather than with us or with a pack, and that install cannot be found by looking —
+                // enumerating WindowsApps throws for a plain process even where a known path under
+                // it opens. So the folder is said once and kept in the settings file.
+                case "--creature-geometry":
+                    options = options with { CreatureGeometry = Next(args, ref i, "--creature-geometry") };
                     break;
                 case "--skin-model":
                     options = options with { Arms = ParseArms(Next(args, ref i, "--skin-model")) };
@@ -482,6 +515,9 @@ public static class Program
               --audit           generate and mesh headlessly, print a census and checks, then exit
               --audio-check     resolve every sound the block table names and report, silently
               --pack-coverage   with --pack, report what the pack has art for that we do not
+              --creature-geometry <dir>
+                                put animals in the world, wearing skeletons read from this folder.
+                                Same folder --creatures reports on, and remembered once given.
               --creatures [dir] read creature skeletons and say which of ours found one. The
                                 skeletons ship with the GAME, not with a texture pack — a pack only
                                 overrides shapes it changes — so this wants the folder of .geo.json

@@ -116,6 +116,18 @@ public sealed record ClientOptions
     /// <summary>A skin PNG to wear, or null for Driftwood's own.</summary>
     public string? SkinPath { get; init; }
 
+    /// <summary>
+    /// A folder of creature skeletons, or null for no creatures at all.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>It has to be passed in and it has to be remembered.</b> The skeletons ship with an
+    /// installed Bedrock client rather than with a texture pack, and that install cannot be found by
+    /// looking: enumerating <c>WindowsApps</c> throws for a plain process even where a known path
+    /// under it opens perfectly. So the folder is given once with <c>--creature-geometry</c> and
+    /// kept in the settings file, which is also where the import screen will set it.
+    /// </remarks>
+    public string? CreatureGeometry { get; init; }
+
     /// <summary>Arm width, or null to read it out of the sheet.</summary>
     public ArmStyle? Arms { get; init; }
 
@@ -351,6 +363,14 @@ public sealed class ClientHost : IDisposable
     private bool[] _targetable = null!;
 
     private PlayerRenderer _playerRenderer = null!;
+
+    /// <summary>Null on a machine with no creature geometry, which is the ordinary case.</summary>
+    private CreatureRenderer? _creatureRenderer;
+    private CreatureHerd? _herd;
+
+    /// <summary>Seconds until the herd is looked at again. See <see cref="TopUpCreatures"/>.</summary>
+    private float _creatureTopUp;
+
     private BlockCracks _cracks = null!;
     private readonly PlayerAnimator _animator = new();
     private readonly PlayerMining _mining = new();
@@ -888,6 +908,8 @@ public sealed class ClientHost : IDisposable
         Console.WriteLine($"cracks      {cracks.Summary}");
         _startup.Mark("skin and cracks");
 
+        BuildCreatures();
+
         BuildWorld();
 
         // Last, because it wants the camera, the window and the audio device to all exist. Doing
@@ -895,6 +917,109 @@ public sealed class ClientHost : IDisposable
         // that turns a setting into an effect, which is the place to look when one does nothing.
         ApplySettings();
         _startup.Mark("settings applied");
+    }
+
+    /// <summary>
+    /// Reads the creature skeletons and the pack's art for them, and builds what can be drawn.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ <b>A machine with no geometry folder is the ordinary case, not a fault.</b> The skeletons
+    /// ship with an installed Bedrock client rather than with us or with a pack, so this stays quiet
+    /// about having found none and says exactly one line when it has. ⛔ It also must not throw: an
+    /// unreadable folder, a pack with no entity art and a path that is simply wrong all have to end
+    /// in a world with no animals in it rather than a game that will not start.
+    /// </remarks>
+    private void BuildCreatures()
+    {
+        // Given on the command line it is also remembered, so it is typed once ever rather than
+        // once a launch. ⚠ Remembered only when it is real: writing a path that does not exist into
+        // the settings file leaves somebody with a permanent setting that does nothing.
+        var folder = _options.CreatureGeometry;
+
+        if (!string.IsNullOrWhiteSpace(folder) && Directory.Exists(folder))
+        {
+            if (_settings.CreatureGeometry != folder)
+            {
+                _settings.CreatureGeometry = folder;
+                _settings.Save();
+            }
+        }
+        else
+        {
+            folder = _settings.CreatureGeometry;
+        }
+
+        if (string.IsNullOrWhiteSpace(folder) || !Directory.Exists(folder)) return;
+
+        try
+        {
+            var faults = new List<string>();
+            var models = CreatureLibrary.ReadFolder(folder, faults);
+
+            using var pack = string.IsNullOrWhiteSpace(_options.PackPath)
+                ? null
+                : TexturePack.Open(_options.PackPath);
+
+            var resolved = CreatureLibrary.Resolve(models, pack);
+
+            // ⚠ The renderer only. The herd is made when the player spawns, because a herd made here
+            // is one SpawnCreatures finds already present and declines to fill — which is a world
+            // with every animal loaded, none of them placed, and nothing anywhere saying so.
+            _creatureRenderer = new CreatureRenderer(_gl, resolved, pack);
+
+            Console.WriteLine(
+                $"creatures   {_creatureRenderer.Summary}, from {models.Count} skeletons"
+                + (faults.Count > 0 ? $" ({faults.Count} unreadable)" : ""));
+        }
+        catch (Exception error)
+        {
+            Console.WriteLine($"creatures   not loaded: {error.GetType().Name}: {error.Message}");
+        }
+
+        _startup.Mark("creatures");
+    }
+
+    /// <summary>Whether a cell would hold an animal up. The herd's whole view of the world.</summary>
+    private bool SolidForCreature(int x, int y, int z) =>
+        _registry[_streamer.World.GetBlock(x, y, z)].Solid;
+
+    /// <summary>How many animals to keep in the world around the player.</summary>
+    private const int HerdSize = 12;
+
+    /// <summary>
+    /// Tops the herd up near the player, as ground to stand on becomes available.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>A top-up rather than one spawn, and the reason is streaming.</b> Placed the moment the
+    /// player's own chunk arrives, eleven of twelve animals find nowhere to stand — unloaded space
+    /// reads as air, so the search falls through the world and comes back with nothing. Waiting a
+    /// fixed number of seconds instead would be a guess about a worker pool. Asking again while
+    /// there is room is neither, and it is also the shape a real spawner wants.
+    /// </remarks>
+    private void TopUpCreatures(float dt)
+    {
+        if (_creatureRenderer is null || _creatureRenderer.Count == 0 || !_spawned) return;
+
+        _herd ??= new CreatureHerd(_seed.Derive("creatures"));
+
+        _creatureTopUp -= dt;
+        if (_creatureTopUp > 0f || _herd.Count >= HerdSize) return;
+
+        _creatureTopUp = 1f;
+
+        // The beasts, not the hostiles: the first thing anybody meets in a field should be a cow.
+        var kinds = CreatureSet.All
+            .Where(k => k.Family == CreatureFamily.Beast && _creatureRenderer.TryMeasure(k.Name, out _))
+            .Select(k => k.Name)
+            .ToList();
+
+        if (kinds.Count == 0) return;
+
+        var before = _herd.Count;
+        _herd.Spawn(SolidForCreature, kinds, _player.Position, HerdSize - before);
+
+        if (_herd.Count == before) return;
+        Console.WriteLine($"creatures   {_herd.Count} of {HerdSize} standing, {kinds.Count} kinds to draw from");
     }
 
     private void BuildWorld()
@@ -3387,6 +3512,30 @@ public sealed class ClientHost : IDisposable
         PlaySound(SoundMaterial.Glass, SoundEvent.Place, _viewPosition, 0.35f);
     }
 
+    /// <summary>Tops the herd up, walks it on, and lets it be heard.</summary>
+    private void StepCreatures(float dt)
+    {
+        TopUpCreatures(dt);
+        if (_herd is null) return;
+
+        _herd.Update(dt, SolidForCreature);
+
+        foreach (var creature in _herd.All)
+        {
+            if (!creature.Spoke) continue;
+
+            var clip = CreatureSounds.IdleFor(creature.Kind);
+            if (clip.Length == 0) continue;
+
+            // ⚠ From the animal's own head rather than its feet, and pitched a little differently
+            // every time. Six animals of one kind playing one recording in unison is the tell that
+            // it is one recording; a few percent of pitch either way is what makes them individuals.
+            _audio?.Play(
+                clip, creature.Position + new Vector3(0f, 0.8f, 0f), 0.7f,
+                0.92f + (float)Random.Shared.NextDouble() * 0.16f);
+        }
+    }
+
     /// <summary>Advances every furnace and swaps the block under any whose flame changed.</summary>
     private void StepFurnaces(float dt)
     {
@@ -3668,6 +3817,7 @@ public sealed class ClientHost : IDisposable
         StepVitals((float)dt);
         StepLeaffall((float)dt);
         StepFurnaces((float)dt);
+        StepCreatures((float)dt);
         StepToasts((float)dt);
         StepAutosave(dt);
         _particles.Update(_streamer.World, (float)dt);
@@ -4507,8 +4657,14 @@ public sealed class ClientHost : IDisposable
     /// front buffer. Nothing here is a special-case renderer, because a special-case renderer is a
     /// thing that can be right while the game is wrong.</para>
     /// </remarks>
+    /// <param name="Creature">
+    /// Stand the body beside the nearest animal and look at it. ⚠ Without this the picture is of
+    /// wherever the shot placement happened to leave the camera, and an animal twenty blocks behind
+    /// it is a picture of an empty field that looks exactly like a renderer drawing nothing.
+    /// </param>
     private readonly record struct Shot(
-        int Frame, string Name, string Item, ViewMode View, bool Strike, ShotScreen Screen = ShotScreen.None);
+        int Frame, string Name, string Item, ViewMode View, bool Strike, ShotScreen Screen = ShotScreen.None,
+        bool Creature = false);
 
     /// <summary>Which interface, if any, is up when the picture is taken.</summary>
     private enum ShotScreen
@@ -4551,6 +4707,13 @@ public sealed class ClientHost : IDisposable
         new(188, "14-bench", "stone", ViewMode.First, false, ShotScreen.Bench),
         new(200, "15-furnace", "stone", ViewMode.First, false, ShotScreen.Furnace),
         new(212, "16-chest", "stone", ViewMode.First, false, ShotScreen.Chest),
+
+        // ⛳ And an animal, which is the same argument one more time: a creature is a skeleton read
+        // off somebody else's disk, wearing a net off somebody else's pack, posed by a matrix chain
+        // and a bind pose. Every part of that is checkable headlessly and none of it says whether
+        // there is a cow on the screen.
+        new(260, "17-creature", "stone", ViewMode.First, false, ShotScreen.None, Creature: true),
+        new(300, "18-creature-third", "stone", ViewMode.ThirdBehind, false, ShotScreen.None, Creature: true),
     ];
 
     /// <summary>
@@ -4588,6 +4751,14 @@ public sealed class ClientHost : IDisposable
     /// travelled furthest from the fist.
     /// </remarks>
     private const int ShotLead = 4;
+
+    /// <summary>Frames between walking the body to an animal and photographing it.</summary>
+    /// <remarks>
+    /// Half a second, against the four frames every other shot needs, because this one moves the
+    /// body rather than what is in its hand. The streamer follows the player, so the ground at the
+    /// new spot has to be generated, meshed and uploaded before there is anything under the animal.
+    /// </remarks>
+    private const int CreatureLead = 30;
 
     private void RunShots(Vector2D<int> size)
     {
@@ -4637,6 +4808,13 @@ public sealed class ClientHost : IDisposable
                 OpenForShot(shot.Screen);
             }
 
+            // ⛔ A LONG way ahead of the picture, and four frames is nowhere near enough. Walking the
+            // body somewhere else moves the streamer's centre with it, and until the chunks round
+            // the new spot have been generated, meshed and uploaded the world there is not drawn at
+            // all — which came out as a photograph of animals standing in an empty blue sky with one
+            // stone block in the corner. The creatures were right; the ground had not arrived.
+            if (shot.Creature && _shotFrame == shot.Frame - CreatureLead) StandBesideACreature();
+
             if (_shotFrame == shot.Frame) WriteShot(size, shot.Name);
         }
 
@@ -4645,6 +4823,38 @@ public sealed class ClientHost : IDisposable
             Console.WriteLine($"shots       {Shots.Length} written to {_options.ShotPath}");
             _window.Close();
         }
+    }
+
+    /// <summary>
+    /// Stands the body a few paces from the nearest animal, looking at it.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ <b>Placed to the animal's south and turned to face it</b> rather than dropped on top of it:
+    /// a camera inside a cow photographs the inside of a cow, which is black and reads as nothing
+    /// being drawn at all. Three blocks back is far enough to see a whole one and near enough that
+    /// it fills the frame. The line is printed whether or not there was an animal, because "no cow
+    /// in the picture" and "no cow in the world" are the same photograph.
+    /// </remarks>
+    private void StandBesideACreature()
+    {
+        if (_herd is null || _herd.Count == 0)
+        {
+            Console.WriteLine("shots       no creature to stand beside — the picture is of an empty field");
+            return;
+        }
+
+        var creature = _herd.All[0];
+        var stand = creature.Position + new Vector3(0f, 0f, 3f);
+
+        _player.Teleport(stand);
+        _camera.Position = _player.EyePosition;
+        _camera.Yaw = -90f;      // Facing −z, which is where the animal is from here.
+        _camera.Pitch = -10f;
+        _animator.Reset(_camera.Yaw);
+
+        Console.WriteLine(
+            $"shots       standing at {stand.X:F1} {stand.Y:F1} {stand.Z:F1}, "
+            + $"looking at a {creature.Kind} 3 blocks away");
     }
 
     /// <summary>Puts up the screen a shot wants, or takes down whatever is up.</summary>
@@ -4926,6 +5136,27 @@ public sealed class ClientHost : IDisposable
     /// </remarks>
     private unsafe void RunUiCheck(Vector2D<int> size)
     {
+        // ⛔ NOTHING UNTIL THE BODY IS STANDING ON REAL GROUND, which is the same guard the shot
+        // harness has and for the same reason. What follows is a script of frame numbers, and the
+        // sixty frames it allowed for the world to arrive were a guess about a worker pool rather
+        // than a fact about one. On a machine that had just finished a publish — cold cache, the
+        // binary still being scanned — the world had not arrived by frame sixty, the screens were
+        // opened over nothing, and eight assertions fired at once naming everything except the
+        // reason. It passed five times out of five when run again by hand, which is what a race
+        // looks like from the outside.
+        // ⛔ NOTHING UNTIL THE BODY IS STANDING ON REAL GROUND, which is the same guard the shot
+        // harness has and for the same reason. What follows is a script of frame numbers, and the
+        // sixty frames it allowed for the world to arrive were a guess about a worker pool rather
+        // than a fact about one.
+        //
+        // ⚠ HONESTLY: this did not reproduce. The gate failed once, immediately after a publish,
+        // with eight assertions firing at once and every sample reading sky — a screen script that
+        // ran over a world that was not there. Five runs by hand afterwards passed, and starving the
+        // chunk uploads to one a frame did not bring it back either. So this is the precondition
+        // that failure implies rather than a fix measured against it, and if it returns, the thing
+        // to find out first is whether the frames had been reached at all.
+        if (!_spawned) { _uiCheckFrame = 0; return; }
+
         _uiCheckFrame++;
 
         // ⚠ Watched every frame until it moves rather than compared across a fixed gap, and the two
@@ -6223,6 +6454,20 @@ public sealed class ClientHost : IDisposable
 
         var light = SampleLight(_camera.Position);
 
+        // ⛳ The animals, before the player and before the held arm — the arm clears the depth
+        // buffer, so anything drawn into the world after it is drawn over the top of the world.
+        // Each one is lit where it is standing rather than where the camera is, which is what makes
+        // a cow in a wood darker than one in a field.
+        if (_creatureRenderer is not null && _herd is not null)
+        {
+            foreach (var creature in _herd.All)
+            {
+                _creatureRenderer.Draw(
+                    viewProj, _viewPosition, sky, SampleLight(creature.Position + new Vector3(0f, 0.6f, 0f)),
+                    creature.Kind, creature.Position, creature.Yaw);
+            }
+        }
+
         // Third person only means anything when there is a body to stand behind, which is the same
         // condition PlaceCamera uses to decide whether to run the boom out. The two have to agree,
         // or the camera pulls back from a player it is not drawing.
@@ -6338,6 +6583,7 @@ public sealed class ClientHost : IDisposable
         _audio?.Dispose();
         _blockTextures?.Dispose();
         _playerRenderer?.Dispose();
+        _creatureRenderer?.Dispose();
         _cracks?.Dispose();
     }
 
