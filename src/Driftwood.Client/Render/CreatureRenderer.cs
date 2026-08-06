@@ -212,9 +212,18 @@ public sealed class CreatureRenderer : IDisposable
     }
 
     /// <summary>Draws one creature, stood at <paramref name="feet"/> and facing <paramref name="yawDegrees"/>.</summary>
+    /// <param name="hurt">
+    /// 0 for an animal going about its business, rising to 1 the instant it is struck. ⚠ Always
+    /// passed rather than only set when it is non-zero: a uniform is program state and holds its last
+    /// value, so a cow hit once would otherwise stay red for the rest of the session and take every
+    /// other cow drawn after it with it.
+    /// </param>
+    /// <param name="tipped">
+    /// 0 standing, 1 lying on its side. What a death looks like on the way down.
+    /// </param>
     public unsafe void Draw(
         Matrix4x4 viewProj, Vector3 cameraPos, in SkyParams sky, EntityLight light,
-        string kind, Vector3 feet, float yawDegrees)
+        string kind, Vector3 feet, float yawDegrees, float hurt = 0f, float tipped = 0f)
     {
         if (!_kinds.TryGetValue(kind, out var found)) return;
 
@@ -231,6 +240,7 @@ public sealed class CreatureRenderer : IDisposable
         _shader.SetFloat("uFogEnd", sky.FogEnd);
         _shader.SetFloat("uSky", light.Sky);
         _shader.SetVec3("uBlockLight", light.Block);
+        _shader.SetFloat("uHurt", Math.Clamp(hurt, 0f, 1f));
         _shader.SetInt("uSkin", 0);
 
         _gl.ActiveTexture(TextureUnit.Texture0);
@@ -242,6 +252,17 @@ public sealed class CreatureRenderer : IDisposable
         // and every animal walks sideways.
         var yaw = float.DegreesToRadians(yawDegrees);
         var root = Matrix4x4.CreateRotationY(-(yaw + MathF.PI / 2f)) * Matrix4x4.CreateTranslation(feet);
+
+        // ⚠ Going over is a roll about the model's OWN forward axis, applied before the yaw — which
+        // is what makes an animal fall on its side whichever way it happened to be facing. Rolled
+        // afterwards it would tip about a fixed compass direction, so half the herd would fall
+        // forwards. It stops a couple of degrees short of flat: a body at exactly ninety reads as a
+        // model rotated rather than as something that has fallen down.
+        if (tipped > 0f)
+        {
+            root = Matrix4x4.CreateRotationZ(float.DegreesToRadians(88f * Math.Clamp(tipped, 0f, 1f)))
+                 * root;
+        }
 
         var pose = found.Mesh.Pose(root);
 

@@ -813,10 +813,16 @@ public static class WorldAudit
         // before there were skeletons, which nothing in the file can pose.
         // ⛔ And then it has to stand somewhere. A herd that spawns inside a hill, sinks through the
         // floor or walks through walls looks from any console exactly like one that works.
+        // ⛔ And then it has to be able to be hit. Damage, flight and death are three claims that all
+        // read as "nothing happened" from a console, so every one of them is paired with a control:
+        // a swing turned away must miss, a swing that reaches too little must miss, a second blow
+        // inside the cooldown must not land, and a death must be reported exactly once.
         var herdFaults = CreatureHerd.Validate();
-        Check("a herd stands on the ground and stays on it", herdFaults.Count == 0,
+        Check("a herd stands, walks, falls, and can be fought", herdFaults.Count == 0,
             herdFaults.Count == 0
-                ? "6 placed on a plain, all still on it after 10s, and none crossed a wall in 15s"
+                ? "6 on a plain, none through a wall in 15s; a dug-out pillar drops one 20 blocks in "
+                  + "1.2s and hurts it; a blow lands, is refused inside its cooldown, turns it away, "
+                  + "and the last one kills it once"
                 : $"{herdFaults.Count} faults: {herdFaults[0]}");
 
         // ⛔ The creatures that SHIP. Everything above tests what can be read off somebody else's

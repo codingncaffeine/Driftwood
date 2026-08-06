@@ -69,6 +69,11 @@ public static class EntityShaders
         uniform sampler2D uSkin;
         uniform vec3 uFogColor;
 
+        // How hard this thing has just been hit, 0..1. ⛳ An unset uniform is zero and zero is "not
+        // hit", so the renderers that have nothing to say about it — the player, the held arm — say
+        // nothing and get the right answer. A tint written as a multiply would have gone black.
+        uniform float uHurt;
+
         out vec4 FragColor;
 
         void main()
@@ -80,7 +85,14 @@ public static class EntityShaders
             // itself — an arm passing in front of a torso is exactly the case blending gets wrong.
             if (texel.a < 0.5) discard;
 
-            FragColor = vec4(mix(texel.rgb * vLight, uFogColor, vFog), 1.0);
+            vec3 lit = texel.rgb * vLight;
+
+            // ⚠ Mixed toward red AFTER the lighting, so a blow lands visibly on an animal standing
+            // in a cave. Tinting the texture first would put the flash under the light and a hit in
+            // the dark would be a slightly darker cow.
+            lit = mix(lit, vec3(0.85, 0.12, 0.10), uHurt * 0.65);
+
+            FragColor = vec4(mix(lit, uFogColor, vFog), 1.0);
         }
         """;
 }

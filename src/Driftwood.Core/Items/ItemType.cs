@@ -1,4 +1,5 @@
 using Driftwood.Core.Blocks;
+using Driftwood.Core.Entities;
 
 namespace Driftwood.Core.Items;
 
@@ -76,6 +77,18 @@ public sealed class ItemType
 
     /// <summary>How much faster than a hand this is at its own class of work.</summary>
     public float MiningSpeed { get; init; } = 1f;
+
+    /// <summary>
+    /// Half-hearts one blow with this takes off, over and above what a bare fist does.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>A third axis, and it has to be.</b> <see cref="Tier"/> says what a tool will bring up and
+    /// <see cref="MiningSpeed"/> says how fast it works, and neither of them is what a sword is for —
+    /// a sword harvests nothing and digs at the speed of a hand. Written as the extra rather than as
+    /// the total so that <see cref="Combat.BareHands"/> is the one place the floor is named, and
+    /// everything that is not a weapon can leave this at zero and still hit for something.
+    /// </remarks>
+    public int AttackDamage { get; init; }
 
     /// <summary>Uses before it breaks. Zero means it never wears out.</summary>
     public int Durability { get; init; }

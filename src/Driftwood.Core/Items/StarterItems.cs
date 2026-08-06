@@ -1,4 +1,5 @@
 using Driftwood.Core.Blocks;
+using Driftwood.Core.Entities;
 
 namespace Driftwood.Core.Items;
 
@@ -309,6 +310,10 @@ public static class StarterItems
                 Tier = headClass == ToolClass.Sword ? 0 : t.Tier,
                 MiningSpeed = headClass == ToolClass.Sword ? 1f : t.Speed,
                 Durability = t.Durability,
+
+                // ⛔ From the tier's own rung, not from the item's — a sword's Tier is zero above,
+                // so reading it back would make every sword in the game hit like a wooden one.
+                AttackDamage = Combat.DamageFor(head, t.Tier),
             });
         }
     }

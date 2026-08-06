@@ -395,6 +395,18 @@ public sealed class ClientHost : IDisposable
     /// <summary>The block under the crosshair, if anything is in reach.</summary>
     private RayHit? _target;
 
+    /// <summary>
+    /// The creature under the crosshair, when one is standing in front of whatever block is.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>The two are mutually exclusive, and that is the whole of the rule.</b> Resolved in
+    /// <see cref="UpdateTarget"/>, which is the one place that has both distances — an animal nearer
+    /// than the block takes the aim outright, so mining stops, the outline goes, and the swing lands
+    /// on the cow rather than on the hill behind it. Written as "the nearer wins" rather than as two
+    /// independent tests, because two tests is how a player ends up digging through a sheep.
+    /// </remarks>
+    private Creature? _creatureTarget;
+
     /// <summary>How far a player can reach to break or place. Genre-standard.</summary>
     private const float Reach = 5f;
 
@@ -1012,10 +1024,16 @@ public sealed class ClientHost : IDisposable
         _creatureTopUp = 1f;
 
         // The beasts, not the hostiles: the first thing anybody meets in a field should be a cow.
-        var kinds = CreatureSet.All
-            .Where(k => k.Family == CreatureFamily.Beast && _creatureRenderer.TryMeasure(k.Name, out _))
-            .Select(k => k.Name)
-            .ToList();
+        // ⛳ Each one carries the size its own mesh came out at, because that is the box a blow has
+        // to land inside — measured off the model rather than written down beside it.
+        var kinds = new List<SpawnKind>();
+
+        foreach (var kind in CreatureSet.All)
+        {
+            if (kind.Family != CreatureFamily.Beast) continue;
+            if (!_creatureRenderer.TryMeasure(kind.Name, out var size)) continue;
+            kinds.Add(new SpawnKind(kind.Name, size));
+        }
 
         if (kinds.Count == 0) return;
 
@@ -3516,7 +3534,7 @@ public sealed class ClientHost : IDisposable
         PlaySound(SoundMaterial.Glass, SoundEvent.Place, _viewPosition, 0.35f);
     }
 
-    /// <summary>Tops the herd up, walks it on, and lets it be heard.</summary>
+    /// <summary>Tops the herd up, walks it on, lets it be heard, and buries whatever died.</summary>
     private void StepCreatures(float dt)
     {
         TopUpCreatures(dt);
@@ -3538,7 +3556,52 @@ public sealed class ClientHost : IDisposable
                 clip, creature.Position + new Vector3(0f, 0.8f, 0f), 0.7f,
                 0.92f + (float)Random.Shared.NextDouble() * 0.16f);
         }
+
+        foreach (var death in _herd.TakeDead())
+        {
+            _audio?.Play(Pick(CreatureSounds.Deaths), death.Position, 0.85f, Wobble());
+
+            // ⚠ Its own voice, one last time and pitched down. The impact says a blow landed; what
+            // says which animal it was is the recording it has been lowing with all afternoon.
+            var voice = CreatureSounds.IdleFor(death.Kind);
+            if (voice.Length > 0) _audio?.Play(voice, death.Position, 0.9f, 0.72f);
+        }
     }
+
+    /// <summary>Lands one blow on an animal, with whatever is in hand behind it.</summary>
+    /// <remarks>
+    /// ⚠ <b>The tool wears from a swing that connects, and only from one that connects.</b> Same rule
+    /// as mining, and for the same reason: a sword that blunted itself on thin air would be a sword
+    /// that a player learns to stop swinging.
+    /// </remarks>
+    private void StrikeCreature(Creature quarry)
+    {
+        if (_herd is null) return;
+
+        var damage = Combat.DamageOf(_inventory.HeldType);
+        var before = quarry.Health;
+
+        _herd.Hurt(quarry, damage, _viewPosition);
+
+        // Still ringing from the last blow, so nothing happened and nothing should be heard.
+        if (quarry.Health == before) return;
+
+        _audio?.Play(Pick(CreatureSounds.Blows), quarry.Middle, 0.8f, Wobble());
+
+        // Its voice, raised. ⚠ The angry clip where a creature has one and its ordinary one where it
+        // does not, which is most of them — a table with a hole in it is quieter than a wrong entry.
+        var cry = CreatureSounds.AngryFor(quarry.Kind);
+        if (cry.Length > 0 && quarry.Alive) _audio?.Play(cry, quarry.Middle, 0.85f, 1.18f);
+
+        if (_inventory.HeldType is { IsTool: true } && _inventory.WearHeld())
+            PlaySound(SoundMaterial.Wood, SoundEvent.Break, _viewPosition, 0.7f);
+    }
+
+    /// <summary>One of a handful of recordings of the same thing, so a run of them is not a loop.</summary>
+    private static string Pick(string[] clips) => clips[Random.Shared.Next(clips.Length)];
+
+    /// <summary>A few percent of pitch either way — what stops two of one clip reading as one clip.</summary>
+    private static float Wobble() => 0.92f + (float)Random.Shared.NextDouble() * 0.16f;
 
     /// <summary>Advances every furnace and swaps the block under any whose flame changed.</summary>
     private void StepFurnaces(float dt)
@@ -3922,6 +3985,15 @@ public sealed class ClientHost : IDisposable
             UpdateTarget();
         }
 
+        // ⛳ A blow at an animal, and it spends the swing. The arm is the clock for this exactly as
+        // it is for mining — a strike is one blow whatever the frame rate, and the creature's own
+        // cooldown is the second half of that so a fast arm cannot whittle a cow down in a frame.
+        if (strikes > 0 && !placing && _creatureTarget is { } quarry)
+        {
+            StrikeCreature(quarry);
+            strikes--;
+        }
+
         var target = _target is { } hit ? _registry[_streamer.World.GetBlock(hit.X, hit.Y, hit.Z)] : null;
         var cell = _target is { } at ? (at.X, at.Y, at.Z) : ((int, int, int)?)null;
 
@@ -4189,14 +4261,33 @@ public sealed class ClientHost : IDisposable
     private (Vector3 Min, Vector3 Max) OutlineOf(int x, int y, int z) =>
         _outlines[_streamer.World.GetBlock(x, y, z).Value];
 
-    /// <summary>Finds the block under the crosshair, if any is within reach.</summary>
+    /// <summary>Finds what is under the crosshair — a creature if one is nearer, otherwise a block.</summary>
+    /// <remarks>
+    /// ⛔ <b>An animal in the way takes the aim off the block behind it.</b> Both are asked, and the
+    /// nearer wins: without that, a player swinging at a cow standing against a cliff mines the cliff
+    /// and hits the cow at the same time, and holding the button digs a tunnel through whatever the
+    /// animal happens to be standing in front of. The reach differs too — see <see cref="Combat"/>.
+    /// </remarks>
     private void UpdateTarget()
     {
-        _target = _bench is not null
-            ? null
-            : BlockRay.TryCast(_streamer.World, _targetable, _camera.Position, _camera.Forward, Reach, out var hit)
-                ? hit
-                : null;
+        _target = null;
+        _creatureTarget = null;
+
+        if (_bench is not null) return;
+
+        var blockAt = BlockRay.TryCast(
+            _streamer.World, _targetable, _camera.Position, _camera.Forward, Reach, out var hit)
+            ? hit.Distance
+            : float.PositiveInfinity;
+
+        // ⚠ Only as far as the block, and never further than a swing goes. Passing the block's own
+        // distance in as the ceiling is what makes "the nearer wins" one comparison rather than two
+        // answers to be reconciled afterwards.
+        var creature = _herd?.Pick(
+            _camera.Position, _camera.Forward, MathF.Min(blockAt, Combat.Reach), out _);
+
+        if (creature is not null) { _creatureTarget = creature; return; }
+        if (!float.IsInfinity(blockAt)) _target = hit;
     }
 
     /// <summary>Removes the targeted block, and empties it first if it was holding anything.</summary>
@@ -6468,7 +6559,8 @@ public sealed class ClientHost : IDisposable
             {
                 _creatureRenderer.Draw(
                     viewProj, _viewPosition, sky, SampleLight(creature.Position + new Vector3(0f, 0.6f, 0f)),
-                    creature.Kind, creature.Position, creature.Yaw);
+                    creature.Kind, creature.Position, creature.Yaw,
+                    creature.HurtFor / CreatureHerd.HurtSeconds, creature.TippedOver);
             }
         }
 
