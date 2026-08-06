@@ -659,6 +659,41 @@ public static class WorldAudit
         Check("azurite rate in band", azuritePct is > 0.03 and < 0.38, $"{azuritePct:F3}% of rock in band (want 0.03-0.38)");
         Check("stormglass rate in band", stormglassPct is > 0.015 and < 0.20, $"{stormglassPct:F3}% of rock in band (want 0.015-0.20)");
 
+        // ⛳ HOW IT ARRIVES, not just how much of it there is — and a rate cannot answer this at all.
+        // "One block every two hundred and fifty" and "a vein of eight every two thousand" are the
+        // same percentage and are nothing alike to play: the first is a trickle nobody notices and
+        // the second is the moment a tunnel was dug for. Every rate band above passes either way.
+        var veins = VeinSizes(chunks, registry, ids);
+        var veinFaults = new List<string>();
+
+        foreach (var band in bands)
+        {
+            if (!veins.TryGetValue(band.Ore.Value, out var size) || size.Count == 0) continue;
+
+            // ⚠ WIDE, AND ONE END OF IT IS KNOWINGLY GENEROUS. A seam of two is speckle nobody
+            // notices digging past; a seam of fifty is a room. Both extremes are what this catches.
+            //
+            // ⛔ Coal measures 35 with a tail to 650 and it is ABOVE the genre, which runs a handful
+            // to a dozen. That is not a bug in this check — it is what noise thresholding produces,
+            // and TerrainGenerator.OreAt has said so since P0: "Noise thresholding gives blobs but
+            // only indirect control over how much ore exists. P4 replaces this with explicit vein
+            // placement." It never did. The band is set to hold the current shape as a REGRESSION
+            // gate rather than to bless it, because changing it moves every vein in every existing
+            // world and that is the user's call, not this file's.
+            if (size.Mean is < 2.0 or > 45.0)
+                veinFaults.Add($"{band.Name} comes in veins of {size.Mean:F1}");
+        }
+
+        // ⚠ The whole table either way. A fault that names only the ore that broke leaves the reader
+        // guessing whether it is an outlier or the shape of the whole set.
+        var veinReport = string.Join(", ", bands
+            .Where(b => veins.ContainsKey(b.Ore.Value))
+            .Select(b => $"{b.Name} {veins[b.Ore.Value].Mean:F1}/{veins[b.Ore.Value].Largest}"));
+
+        Check("ore comes in seams, not speckle", veinFaults.Count == 0,
+            (veinFaults.Count == 0 ? "" : string.Join("; ", veinFaults) + " — ")
+            + veinReport + " mean/largest blocks a vein (want a mean of 2-45)");
+
         // The ladder, which is the check the individual bands cannot make. Every tier could sit
         // inside its own band and still come out in the wrong order, and the order is the whole
         // point: what makes stormglass worth going deep for is that it is rarer than everything
@@ -6810,6 +6845,86 @@ public static class WorldAudit
                + $"{SpawnRules.HostileMinRadius:F0} blocks, and stops pushing as it fills";
 
         return faults;
+    }
+
+    /// <summary>How big a seam of each ore actually is, counted as connected runs of it.</summary>
+    /// <param name="Count">Seams found.</param>
+    /// <param name="Mean">Blocks in the average one.</param>
+    /// <param name="Largest">Blocks in the biggest one.</param>
+    private readonly record struct VeinSize(int Count, double Mean, int Largest);
+
+    /// <summary>
+    /// Walks every ore block in the generated volume and groups it into connected seams.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ <b>The number a rate cannot give you, and the one a player actually feels.</b> "One
+    /// block every two hundred and fifty" and "a vein of eight every two thousand" are the same
+    /// percentage of the world and are nothing alike to play — the first is a trickle nobody notices
+    /// digging past, the second is the reason the tunnel was dug. Every rate band in this file passes
+    /// either way.</para>
+    /// <para>Six-connected, not twenty-six: two ore blocks touching only at a corner are two finds a
+    /// player walks between, not one seam. Iterative rather than recursive — a large vein in a
+    /// hundred-million-block census would put a recursion through the stack.</para>
+    /// </remarks>
+    private static Dictionary<ushort, VeinSize> VeinSizes(
+        Chunk[] chunks, BlockRegistry registry, StarterBlocks.Ids ids)
+    {
+        var wanted = new HashSet<ushort>();
+        foreach (var band in TerrainGenerator.OreBands(ids)) wanted.Add(band.Ore.Value);
+
+        // The whole volume as one map, so a seam crossing a chunk seam is one seam.
+        var cells = new Dictionary<(int X, int Y, int Z), ushort>();
+        foreach (var chunk in chunks)
+        {
+            var (ox, oy, oz) = chunk.Position.Origin;
+            var raw = chunk.Raw;
+
+            for (var y = 0; y < Chunk.Size; y++)
+            for (var z = 0; z < Chunk.Size; z++)
+            for (var x = 0; x < Chunk.Size; x++)
+            {
+                var id = raw[Chunk.Index(x, y, z)];
+                if (wanted.Contains(id)) cells[(ox + x, oy + y, oz + z)] = id;
+            }
+        }
+
+        var totals = new Dictionary<ushort, (int Count, long Blocks, int Largest)>();
+        var seen = new HashSet<(int X, int Y, int Z)>();
+        var stack = new Stack<(int X, int Y, int Z)>();
+
+        foreach (var (start, id) in cells)
+        {
+            if (!seen.Add(start)) continue;
+
+            var size = 0;
+            stack.Push(start);
+
+            while (stack.Count > 0)
+            {
+                var (cx, cy, cz) = stack.Pop();
+                size++;
+
+                for (var face = 0; face < Faces.Count; face++)
+                {
+                    var (dx, dy, dz) = Faces.Normals[face];
+                    var next = (cx + dx, cy + dy, cz + dz);
+
+                    if (!cells.TryGetValue(next, out var there) || there != id) continue;
+                    if (!seen.Add(next)) continue;
+
+                    stack.Push(next);
+                }
+            }
+
+            totals.TryGetValue(id, out var run);
+            totals[id] = (run.Count + 1, run.Blocks + size, Math.Max(run.Largest, size));
+        }
+
+        var sizes = new Dictionary<ushort, VeinSize>();
+        foreach (var (id, run) in totals)
+            sizes[id] = new VeinSize(run.Count, run.Blocks / (double)run.Count, run.Largest);
+
+        return sizes;
     }
 
     /// <summary>A bare world of empty chunks, with a stone floor laid across it.</summary>
