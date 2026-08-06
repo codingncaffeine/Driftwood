@@ -164,6 +164,10 @@ public static class BlockTextureSet
         new("bench_front", "textures/block/crafting_table_front.png", false),
         new("stonecutter_top", "textures/block/stonecutter_top.png", false),
         new("stonecutter_side", "textures/block/stonecutter_side.png", false),
+        new("blast_top",   "textures/block/blast_furnace_top.png",  false),
+        new("blast_side",  "textures/block/blast_furnace_side.png", false),
+        new("blast_front", "textures/block/blast_furnace_front.png", false),
+        new("blast_front_lit", "textures/block/blast_furnace_front_on.png", false),
 
         // Items, from here to the end. They live in the same array as the block faces because they
         // are the same sixteen-pixel tiles drawn by the same two places — a slot on the bar and a
@@ -538,6 +542,15 @@ public static class BlockTextureSet
                 TileGen.Hearth(1041, TileGen.Cobble(1040, 116, 114, 116), lit: false),
             StarterBlocks.LayerFurnaceFrontLit =>
                 TileGen.Hearth(1042, TileGen.Cobble(1040, 116, 114, 116), lit: true),
+
+            // Deepstone brick rather than cobble, and a letterbox rather than an arch. Both, so the
+            // two are told apart by shape as well as by shade — see the note on TileGen.Hearth.
+            StarterBlocks.LayerBlastTop => TileGen.Speckle(1080, 74, 74, 82, 12, 0.5f),
+            StarterBlocks.LayerBlastSide => TileGen.Bricks(1081, 78, 78, 86, 52),
+            StarterBlocks.LayerBlastFront =>
+                TileGen.Hearth(1082, TileGen.Bricks(1081, 78, 78, 86, 52), lit: false, slot: true),
+            StarterBlocks.LayerBlastFrontLit =>
+                TileGen.Hearth(1083, TileGen.Bricks(1081, 78, 78, 86, 52), lit: true, slot: true),
 
             StarterBlocks.LayerStick => TileGen.IconStick(1043, 150, 112, 66),
             StarterBlocks.LayerCoal => TileGen.IconLump(1044, 46, 44, 46),

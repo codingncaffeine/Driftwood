@@ -224,4 +224,50 @@ public sealed class SmeltRecipe
 
     /// <summary>Seconds of burn one of these takes. The genre's own ten.</summary>
     public float Seconds { get; init; } = 10f;
+
+    /// <summary>
+    /// What sort of job this is, which is what says whether a specialised smelter will take it.
+    /// </summary>
+    /// <remarks>
+    /// On the recipe rather than on the item, because it is a property of the <em>job</em>: the same
+    /// rock is ore when it is being reduced to metal and is not when it is being fired into a
+    /// building block. A table of "which items are ore" would have to be kept in step with this one.
+    /// </remarks>
+    public SmeltWork Work { get; init; } = SmeltWork.Other;
+}
+
+/// <summary>What kind of job a smelt is.</summary>
+public enum SmeltWork
+{
+    /// <summary>Firing, baking, melting sand — anything only a plain furnace will do.</summary>
+    Other,
+
+    /// <summary>Reducing a raw lump to metal, which is what a blast furnace is for.</summary>
+    Ore,
+}
+
+/// <summary>Which sort of smelting block this is.</summary>
+public enum FurnaceKind
+{
+    /// <summary>A furnace. Takes everything, at the time each recipe says.</summary>
+    Furnace,
+
+    /// <summary>A blast furnace. Ore only, in half the time.</summary>
+    Blast,
+}
+
+/// <summary>What each kind of smelter will take, and how fast.</summary>
+public static class FurnaceKinds
+{
+    /// <summary>How long a smelt takes here, against what the recipe says on its own.</summary>
+    /// <remarks>
+    /// ⚠ <b>Half, and that is the whole of what a blast furnace is for.</b> It costs five iron and
+    /// a furnace and it takes nothing but ore, so what it gives back has to be worth walking to —
+    /// and the genre's answer, which is the right one, is that it is simply twice as quick.
+    /// </remarks>
+    public static float SpeedOf(FurnaceKind kind) => kind == FurnaceKind.Blast ? 0.5f : 1f;
+
+    /// <summary>True when a smelter of this kind will do this job at all.</summary>
+    public static bool Takes(FurnaceKind kind, SmeltWork work) =>
+        kind != FurnaceKind.Blast || work == SmeltWork.Ore;
 }

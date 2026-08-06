@@ -110,31 +110,41 @@ public static class StarterBlocks
     public const ushort LayerStonecutterTop = 63;
     public const ushort LayerStonecutterSide = 64;
 
+    // A blast furnace. Darker and harder than a furnace — deepstone brick rather than cobble — and
+    // its mouth is a slot rather than an arch, so the two are told apart at a glance in a row.
+    public const ushort LayerBlastTop = 65;
+    public const ushort LayerBlastSide = 66;
+    public const ushort LayerBlastFront = 67;
+    public const ushort LayerBlastFrontLit = 68;
+
     /// <summary>The first layer that is an item icon rather than a block face.</summary>
     /// <remarks>
-    /// Items share the block texture array rather than taking one of their own. They are the same
-    /// sixteen-pixel tiles, they are drawn by the same two places — a slot on the bar and a thing
-    /// spinning on the floor — and a second array would be a second bind, a second upload and a
-    /// second pack-import path for no difference anybody could see.
+    /// <para>Items share the block texture array rather than taking one of their own. They are the
+    /// same sixteen-pixel tiles, they are drawn by the same two places — a slot on the bar and a
+    /// thing spinning on the floor — and a second array would be a second bind, a second upload and
+    /// a second pack-import path for no difference anybody could see.</para>
+    /// <para>⚠ <b>Faces and icons are kept contiguous</b>, so a block family added here moves every
+    /// number below it. That is a search and replace and the audit's "every icon is painted" check
+    /// is what catches one missed.</para>
     /// </remarks>
-    public const ushort LayerFirstIcon = 65;
+    public const ushort LayerFirstIcon = 69;
 
-    public const ushort LayerStick = 65;
-    public const ushort LayerCoal = 66;
-    public const ushort LayerCharcoal = 67;
-    public const ushort LayerRawCopper = 68;
-    public const ushort LayerRawIron = 69;
-    public const ushort LayerRawGold = 70;
-    public const ushort LayerCopperIngot = 71;
-    public const ushort LayerIronIngot = 72;
-    public const ushort LayerGoldIngot = 73;
-    public const ushort LayerStormglass = 74;
-    public const ushort LayerAzurite = 75;
-    public const ushort LayerClayLump = 76;
-    public const ushort LayerBrick = 77;
+    public const ushort LayerStick = 69;
+    public const ushort LayerCoal = 70;
+    public const ushort LayerCharcoal = 71;
+    public const ushort LayerRawCopper = 72;
+    public const ushort LayerRawIron = 73;
+    public const ushort LayerRawGold = 74;
+    public const ushort LayerCopperIngot = 75;
+    public const ushort LayerIronIngot = 76;
+    public const ushort LayerGoldIngot = 77;
+    public const ushort LayerStormglass = 78;
+    public const ushort LayerAzurite = 79;
+    public const ushort LayerClayLump = 80;
+    public const ushort LayerBrick = 81;
 
     /// <summary>The tool icons: one palette per tier, four heads each, tier-major.</summary>
-    public const ushort LayerFirstTool = 78;
+    public const ushort LayerFirstTool = 82;
 
     /// <summary>Head shapes a tier comes in — pickaxe, axe, shovel, sword.</summary>
     public const int ToolShapeCount = 4;
@@ -558,6 +568,26 @@ public static class StarterBlocks
             if (lit) furnaceLit = id; else furnace = id;
         }
 
+        // The same machine, harder to build and twice as quick, and it will only take ore. Its own
+        // family rather than a flag on the furnace, for the same reason every stair facing is its
+        // own id: a cell holds an id and nothing beside it.
+        for (var i = 0; i < Placeable.Facings.Length; i++)
+        foreach (var lit in (bool[])[false, true])
+            registry.Register(new BlockType
+            {
+                Name = $"blast_furnace_{FacingNames[i]}{(lit ? "_lit" : "")}",
+                Hardness = 4.5f, Crafted = true, Use = BlockUse.Furnace,
+                HarvestClass = ToolClass.Pickaxe, HarvestTier = 1,
+
+                // Whiter and fiercer than a hearth, and a little dimmer: the mouth is a slot rather
+                // than an open arch, so less of it is showing.
+                LightEmission = lit ? LightValue.PackBlock(11, 9, 7) : (ushort)0,
+                Model = BlockModel.CubeFacing(
+                    LayerBlastTop, LayerBlastSide, LayerBlastTop,
+                    lit ? LayerBlastFrontLit : LayerBlastFront,
+                    Placeable.Facings[i]),
+            });
+
         return new Ids(
             stone, dirt, grass, sand, water, gravel, log, leaves, planks, coal, iron, bedrock,
             emberstone, vine, deepstone, coralstone, driftstone, saltstone, copper, gold, stormglass,
@@ -879,12 +909,62 @@ public static class StarterBlocks
     }
 
     /// <summary>Every form of the furnace, by facing then lit — the order they were registered.</summary>
-    public static BlockId[] Furnaces(BlockRegistry registry, bool lit)
+    public static BlockId[] Furnaces(BlockRegistry registry, bool lit) => Smelters(registry, "furnace", lit);
+
+    /// <summary>The same, for the blast furnace.</summary>
+    public static BlockId[] BlastFurnaces(BlockRegistry registry, bool lit) =>
+        Smelters(registry, "blast_furnace", lit);
+
+    private static BlockId[] Smelters(BlockRegistry registry, string family, bool lit)
     {
         var ids = new BlockId[Placeable.Facings.Length];
         for (var i = 0; i < ids.Length; i++)
-            ids[i] = registry.ByName($"furnace_{FacingNames[i]}{(lit ? "_lit" : "")}").Id;
+            ids[i] = registry.ByName($"{family}_{FacingNames[i]}{(lit ? "_lit" : "")}").Id;
         return ids;
+    }
+
+    /// <summary>
+    /// What every smelting block turns into when its flame goes in or out, keyed by raw block id.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>A table rather than a search through one family's array.</b> The swap used to be
+    /// <c>Array.IndexOf</c> over the four cold furnaces, which answered -1 for anything that was not
+    /// one — so the day a second family arrived, every blast furnace in the world would have gone on
+    /// burning invisibly with nothing to say why. A lit form and a cold form are a property of a
+    /// block, and this is where a block says so.
+    /// </remarks>
+    public static (BlockId[] Lighting, BlockId[] Cooling) SmelterStates(BlockRegistry registry)
+    {
+        var lighting = new BlockId[registry.Count];
+        var cooling = new BlockId[registry.Count];
+
+        foreach (var family in (string[])["furnace", "blast_furnace"])
+        {
+            var cold = Smelters(registry, family, lit: false);
+            var hot = Smelters(registry, family, lit: true);
+
+            for (var i = 0; i < cold.Length; i++)
+            {
+                lighting[cold[i].Value] = hot[i];
+                cooling[hot[i].Value] = cold[i];
+            }
+        }
+
+        return (lighting, cooling);
+    }
+
+    /// <summary>Which kind of smelter a block is, or none at all.</summary>
+    public static FurnaceKind[] SmelterKinds(BlockRegistry registry)
+    {
+        var kinds = new FurnaceKind[registry.Count];
+
+        foreach (var lit in (bool[])[false, true])
+        {
+            foreach (var id in Furnaces(registry, lit)) kinds[id.Value] = FurnaceKind.Furnace;
+            foreach (var id in BlastFurnaces(registry, lit)) kinds[id.Value] = FurnaceKind.Blast;
+        }
+
+        return kinds;
     }
 
     /// <summary>One material that comes in slab and stair form: its tiles, its sound, its tool.</summary>

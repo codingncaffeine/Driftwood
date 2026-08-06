@@ -2344,8 +2344,50 @@ public static class WorldAudit
         if (carried != 1) faults.Add($"breaking a furnace holding one ingot handed back {carried} things");
         if (watched.Count != 0) faults.Add("a broken furnace is still in the world");
 
+        // ⛳ THE BLAST FURNACE, AND BOTH HALVES OF WHAT IT IS FOR. It takes ore and nothing else, and
+        // it takes it in half the time. Run in the same bank as the pair above with only the kind
+        // changed, so the two numbers are comparable — a separate world would be comparing setups.
+        //
+        // ⚠ The refusal has to be checked against something the plain furnace DOES take, or "it made
+        // nothing" is true of a station that does nothing at all.
+        float SmeltRun(ItemId input, int count, FurnaceKind kind)
+        {
+            var bench = new FurnaceBank(items, book);
+            var one = bench.Open(0, 0, 0);
+            one.Input = new ItemStack(input, count);
+            one.Fuel = new ItemStack(planks, 16);
+
+            for (var frame = 1; frame <= 4000; frame++)
+            {
+                bench.Update(Step, relit, (_, _, _) => kind);
+                if (one.Input.IsEmpty && one.Output.Count >= count) return frame * Step;
+            }
+
+            return -1f;
+        }
+
+        var plain = SmeltRun(iron, Ore, FurnaceKind.Furnace);
+        var blast = SmeltRun(iron, Ore, FurnaceKind.Blast);
+
+        if (plain < 0f || blast < 0f) faults.Add("a smelter never finished four ore");
+        else if (blast > plain * 0.6f)
+            faults.Add(
+                $"a blast furnace took {blast:F2}s over four ore where a furnace took {plain:F2}s — "
+                + "it is meant to be half, and half is the only reason to build one");
+
+        var sand = items.ByName("sand").Id;
+        if (book.SmeltFor(sand, FurnaceKind.Furnace) is null)
+            faults.Add("a furnace will not melt sand, so refusing it below proves nothing");
+        if (book.SmeltFor(sand, FurnaceKind.Blast) is not null)
+            faults.Add("a blast furnace took sand, which is not ore");
+
+        var refused = SmeltRun(sand, 1, FurnaceKind.Blast);
+        if (refused >= 0f) faults.Add("a blast furnace with sand in it smelted it anyway");
+
         detail = $"{Ore} ore into {Ore} ingots in {doneAfter:F0}s on {burnt} planks of {perFuel:F0}s; "
-               + "idle burns nothing, unfuelled makes no progress, a full one stops, and the flame is reported both ways";
+               + "idle burns nothing, unfuelled makes no progress, a full one stops, and the flame is "
+               + $"reported both ways. A blast furnace does the same four in {blast:F0}s against "
+               + $"{plain:F0}s and will not touch sand";
 
         return faults;
     }

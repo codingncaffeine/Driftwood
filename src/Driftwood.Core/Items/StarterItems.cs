@@ -250,6 +250,18 @@ public static class StarterItems
             },
         });
 
+        items.Register(new ItemType
+        {
+            Name = "blast_furnace", Label = "blast furnace", IconLayer = StarterBlocks.LayerBlastFront,
+            DrawsAsCube = true,
+            Places = new Placeable
+            {
+                Label = "blast furnace",
+                Kind = PlacementKind.Facing,
+                Variants = StarterBlocks.BlastFurnaces(blocks, lit: false),
+            },
+        });
+
         // Loose things: nothing puts these down, and half the recipe tree is made of them.
         Loose(items, "stick", "stick", StarterBlocks.LayerStick, burn: 5f);
         Loose(items, "coal", "coal", StarterBlocks.LayerCoal, burn: 80f);
@@ -347,6 +359,11 @@ public static class StarterItems
         new BlockDrops.Rule("furnace_west_lit", "furnace"),
         new BlockDrops.Rule("furnace_south_lit", "furnace"),
         new BlockDrops.Rule("furnace_north_lit", "furnace"),
+
+        new BlockDrops.Rule("blast_furnace_east_lit", "blast_furnace"),
+        new BlockDrops.Rule("blast_furnace_west_lit", "blast_furnace"),
+        new BlockDrops.Rule("blast_furnace_south_lit", "blast_furnace"),
+        new BlockDrops.Rule("blast_furnace_north_lit", "blast_furnace"),
 
         // And a fire that has gone out is still a campfire. The item places the lit pair, so it is
         // the other two that need saying — the same shape of rule, from the other side.

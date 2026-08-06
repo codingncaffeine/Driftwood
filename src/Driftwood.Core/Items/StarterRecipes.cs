@@ -166,12 +166,14 @@ public static class StarterRecipes
             });
         }
 
-        void Smelt(string input, string result, int count = 1) => book.Add(new SmeltRecipe
-        {
-            Name = $"smelt {input}",
-            Input = Of(input),
-            Result = items.Stack(result, count),
-        });
+        void Smelt(string input, string result, int count = 1, SmeltWork work = SmeltWork.Other) =>
+            book.Add(new SmeltRecipe
+            {
+                Name = $"smelt {input}",
+                Input = Of(input),
+                Result = items.Stack(result, count),
+                Work = work,
+            });
 
         // The first two moves of the game. A log opens into four planks with nothing but hands, and
         // two planks make the sticks everything else is hafted on.
@@ -190,6 +192,12 @@ public static class StarterRecipes
         // A blade over a stone bed. Iron is the gate on every worked stone in the game, which is
         // the whole point: a decorative vocabulary should cost a trip underground, not nothing.
         Shaped("stonecutter", "stonecutter", 1, [" I ", "RRR"]);
+
+        // ⛳ A furnace clad in iron over a bed of smooth stone. It costs five ingots and a furnace
+        // you already built, which puts it a full trip underground past the furnace — and what it
+        // gives back is that every ingot after it comes twice as fast. The smooth stone is what
+        // makes it a second, deliberate visit to the fire rather than a thing found in a wall.
+        Shaped("blast furnace", "blast_furnace", 1, ["III", "IFI", "MMM"], "smooth_stone");
 
         // Light. Either coal will do — the one that comes out of the ground and the one that comes
         // out of a furnace are the same thing on the end of a stick.
@@ -283,9 +291,12 @@ public static class StarterRecipes
         Smelt("sand", "glass");
         Smelt("clay_lump", "brick");
         Smelt("#logs", "charcoal");
-        Smelt("raw_copper", "copper_ingot");
-        Smelt("raw_iron", "iron_ingot");
-        Smelt("raw_gold", "gold_ingot");
+        // ⛳ The three that are ORE, which is what a blast furnace will take and the only thing it
+        // will. Everything above is firing, baking or melting — jobs a specialised smelter has no
+        // business doing, and the reason the two stations are worth having side by side.
+        Smelt("raw_copper", "copper_ingot", work: SmeltWork.Ore);
+        Smelt("raw_iron", "iron_ingot", work: SmeltWork.Ore);
+        Smelt("raw_gold", "gold_ingot", work: SmeltWork.Ore);
 
         return book;
     }
@@ -337,6 +348,7 @@ public static class StarterRecipes
         'W' => "#logs",
         'T' => "torch",
         'I' => "iron_ingot",
+        'F' => "furnace",
         'G' => "glass",
         'A' => "azurite",
         'Z' => "stormglass",

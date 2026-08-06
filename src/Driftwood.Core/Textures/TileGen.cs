@@ -1365,7 +1365,14 @@ public static class TileGen
     }
 
     /// <summary>A stone face with a mouth in it, dark or burning — the front of a furnace.</summary>
-    public static byte[] Hearth(int seed, byte[] baseTile, bool lit)
+    /// <param name="slot">True for a straight-sided letterbox rather than an arch.</param>
+    /// <remarks>
+    /// ⛳ <b>The one difference between a furnace's face and a blast furnace's is a SHAPE, on
+    /// purpose.</b> Two stations that do nearly the same thing have to be told apart in a row along
+    /// a wall, at a distance, and in a slot sixteen pixels across — a darker grey survives none of
+    /// those. An arch is a fire you feed; a letterbox is a machine you load.
+    /// </remarks>
+    public static byte[] Hearth(int seed, byte[] baseTile, bool lit, bool slot = false)
     {
         var t = (byte[])baseTile.Clone();
 
@@ -1373,10 +1380,15 @@ public static class TileGen
         for (var x = 3; x < 13; x++)
         {
             // A rounded top on the opening, so it reads as an arch rather than as a letterbox.
-            if (y == 5 && (x < 5 || x > 10)) continue;
-            if (y == 6 && (x < 4 || x > 11)) continue;
+            if (!slot && y == 5 && (x < 5 || x > 10)) continue;
+            if (!slot && y == 6 && (x < 4 || x > 11)) continue;
+
+            // And a letterbox is exactly what the other one wants: solid above and below, so the
+            // mouth is a band across the middle with a lintel over it.
+            if (slot && y is < 7 or > 12) continue;
 
             var lip = y == 13 || x == 3 || x == 12;
+            if (slot) lip = y is 7 or 12 || x == 3 || x == 12;
             if (lip)
             {
                 Put(t, x, y, 88, 84, 80, 255);

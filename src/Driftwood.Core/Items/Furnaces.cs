@@ -99,22 +99,38 @@ public sealed class FurnaceBank
     /// <param name="relit">
     /// Filled with the cells whose lit state changed, so the caller can swap the block that is drawn.
     /// </param>
-    public void Update(float dt, List<(int X, int Y, int Z, bool Lit)> relit)
+    /// <param name="kindOf">
+    /// What sort of smelter stands at a cell, or null when they are all plain furnaces.
+    /// </param>
+    /// <remarks>
+    /// ⛔ <b>Asked of the world every tick rather than stored beside the furnace.</b> Which sort of
+    /// smelter this is is a property of the <em>block</em> somebody built there, so a copy kept here
+    /// is a copy that can disagree with it. Storing it would also want a save-format change, and a
+    /// world written by a newer build and read by an older one would come back with every blast
+    /// furnace quietly behaving as a plain one.
+    /// </remarks>
+    public void Update(
+        float dt, List<(int X, int Y, int Z, bool Lit)> relit,
+        Func<int, int, int, FurnaceKind>? kindOf = null)
     {
         relit.Clear();
 
         foreach (var (cell, furnace) in _at)
         {
             var wasLit = furnace.Lit;
-            Step(furnace, dt);
+            Step(furnace, dt, kindOf?.Invoke(cell.X, cell.Y, cell.Z) ?? FurnaceKind.Furnace);
             if (furnace.Lit != wasLit) relit.Add((cell.X, cell.Y, cell.Z, furnace.Lit));
         }
     }
 
-    private void Step(Furnace furnace, float dt)
+    private void Step(Furnace furnace, float dt, FurnaceKind kind)
     {
-        var recipe = Smeltable(furnace);
-        furnace.Takes = recipe?.Seconds ?? 0f;
+        var recipe = Smeltable(furnace, kind);
+
+        // ⚠ The station's speed, not the recipe's own seconds, and it is used everywhere below —
+        // including by the gauge on the screen, which reads Fraction off this. A blast furnace whose
+        // bar filled at the plain rate and then finished early would read as a rendering fault.
+        furnace.Takes = (recipe?.Seconds ?? 0f) * FurnaceKinds.SpeedOf(kind);
 
         // Light a new piece of fuel only if there is work for it. This is the whole reason the
         // recipe is looked up before the fuel is touched rather than after.
@@ -142,7 +158,7 @@ public sealed class FurnaceBank
         }
 
         furnace.Progress += dt;
-        if (furnace.Progress < recipe.Seconds) return;
+        if (furnace.Progress < furnace.Takes) return;
 
         furnace.Progress = 0f;
         furnace.Input = furnace.Input.MinusOne();
@@ -156,10 +172,10 @@ public sealed class FurnaceBank
     }
 
     /// <summary>What this furnace would make next, or null when it has nothing to do.</summary>
-    private SmeltRecipe? Smeltable(Furnace furnace)
+    private SmeltRecipe? Smeltable(Furnace furnace, FurnaceKind kind)
     {
         if (furnace.Input.IsEmpty) return null;
-        if (_book.SmeltFor(furnace.Input.Item) is not { } recipe) return null;
+        if (_book.SmeltFor(furnace.Input.Item, kind) is not { } recipe) return null;
 
         if (furnace.Output.IsEmpty) return recipe;
         if (furnace.Output.Item.Value != recipe.Result.Item.Value) return null;

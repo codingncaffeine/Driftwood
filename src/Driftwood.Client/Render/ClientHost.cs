@@ -421,9 +421,17 @@ public sealed class ClientHost : IDisposable
     /// <summary>Notices on screen at once before the oldest is pushed off.</summary>
     private const int MaxToasts = 3;
 
-    /// <summary>The four facings of the furnace, unlit and lit, for swapping between them.</summary>
-    private BlockId[] _furnaceCold = null!;
-    private BlockId[] _furnaceHot = null!;
+    /// <summary>
+    /// What every smelting block becomes when its flame goes in or out, keyed by raw block id.
+    /// </summary>
+    /// <remarks>
+    /// Air where a block has no such form, which is every block in the game but these eight.
+    /// </remarks>
+    private BlockId[] _smelterLighting = null!;
+    private BlockId[] _smelterCooling = null!;
+
+    /// <summary>Which sort of smelter each block id is, for the tick to ask.</summary>
+    private FurnaceKind[] _smelterKind = null!;
 
     /// <summary>Each half-slab and the whole block a second one laid on it makes.</summary>
     private readonly Dictionary<ushort, BlockId> _slabMerge = [];
@@ -854,8 +862,8 @@ public sealed class ClientHost : IDisposable
         _book = StarterRecipes.Build(_items);
         _furnaces = new FurnaceBank(_items, _book);
         _chests = new ChestBank(_items);
-        _furnaceCold = StarterBlocks.Furnaces(registry, lit: false);
-        _furnaceHot = StarterBlocks.Furnaces(registry, lit: true);
+        (_smelterLighting, _smelterCooling) = StarterBlocks.SmelterStates(registry);
+        _smelterKind = StarterBlocks.SmelterKinds(registry);
         foreach (var (slab, whole) in StarterBlocks.SlabMerges(registry)) _slabMerge[slab.Value] = whole;
         foreach (var (from, to) in StarterBlocks.Toggles(registry)) _toggle[from.Value] = to;
         foreach (var (lower, upper) in StarterBlocks.TallPairs(registry)) _tallUpper[lower.Value] = upper;
@@ -3283,20 +3291,20 @@ public sealed class ClientHost : IDisposable
     {
         if (_furnaces.Count == 0) return;
 
-        _furnaces.Update(dt, _relit);
+        _furnaces.Update(dt, _relit, (x, y, z) => _smelterKind[_streamer.World.GetBlock(x, y, z).Value]);
 
         foreach (var (x, y, z, lit) in _relit)
         {
-            // Which way it faces is carried by the id, so the swap has to find the facing first —
-            // otherwise a furnace lights up pointing a different way than it did unlit.
+            // ⛳ A table keyed on the block, not a search through one family's four facings. Which
+            // way it faces and which family it belongs to are both carried by the id, and the table
+            // answers both at once — an IndexOf over the furnaces answered -1 for a blast furnace,
+            // so the day a second family arrived every one of them would have gone on burning with
+            // nothing to say why.
             var here = _streamer.World.GetBlock(x, y, z);
-            var from = lit ? _furnaceCold : _furnaceHot;
-            var to = lit ? _furnaceHot : _furnaceCold;
+            var to = (lit ? _smelterLighting : _smelterCooling)[here.Value];
+            if (to.IsAir) continue;
 
-            var facing = Array.IndexOf(from, here);
-            if (facing < 0) continue;
-
-            _streamer.EditBlock(x, y, z, to[facing]);
+            _streamer.EditBlock(x, y, z, to);
         }
     }
 

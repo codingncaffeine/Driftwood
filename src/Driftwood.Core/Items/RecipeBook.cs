@@ -39,9 +39,23 @@ public sealed class RecipeBook
     }
 
     /// <summary>What a furnace would turn this into, if anything.</summary>
-    public SmeltRecipe? SmeltFor(ItemId input)
+    public SmeltRecipe? SmeltFor(ItemId input) => SmeltFor(input, FurnaceKind.Furnace);
+
+    /// <summary>
+    /// What a smelter of this kind would turn it into, or null when that one will not take it.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ <b>The kind is asked here rather than at every call site.</b> A blast furnace refusing a
+    /// log is the same question as a furnace having nothing to do with an empty slot, and both have
+    /// to give the same answer to the tick, to the screen's "will this slot take this" and to the
+    /// check — three places that would otherwise each decide it.
+    /// </remarks>
+    public SmeltRecipe? SmeltFor(ItemId input, FurnaceKind kind)
     {
-        foreach (var recipe in _smelting) if (recipe.Input.Matches(input)) return recipe;
+        foreach (var recipe in _smelting)
+            if (recipe.Input.Matches(input))
+                return FurnaceKinds.Takes(kind, recipe.Work) ? recipe : null;
+
         return null;
     }
 
