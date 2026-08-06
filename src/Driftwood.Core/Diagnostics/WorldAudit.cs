@@ -5583,9 +5583,53 @@ public static class WorldAudit
                     + $"where a real pack's narrowest fills {Fills} — it is drawn small rather than drawn");
         }
 
+        // ⛳ AND HOW FAR THE TONE ACTUALLY TRAVELS ACROSS ONE, which is the other half of what was
+        // wrong and is not in the drawings at all — it is what the generator does with them.
+        //
+        // ⛔ ASKED FIRST AS A COUNT OF DISTINCT COLOURS, AND THAT COULD NOT SEE IT. The flat build
+        // scored TWENTY, one MORE than the shaded one, because a dither of plus-or-minus eight over
+        // three tones already produces twenty different values. Counting colours measures dithering.
+        // What separates a shaded tool from a flat one is how far the light travels: measured on a
+        // real 16-pixel pack, the tenth to ninetieth percentile of brightness spans 59 to 73.
+        var flattest = int.MaxValue;
+        var flattestAt = "";
+
+        for (var s = 0; s < shapes.Length; s++)
+        {
+            var tile = TileGen.IconTool(4000 + s, s, 150, 120, 90);
+            var light = new List<int>();
+
+            for (var i = 0; i < tile.Length; i += 4)
+            {
+                if (tile[i + 3] < 128) continue;
+                light.Add((int)(0.299f * tile[i] + 0.587f * tile[i + 1] + 0.114f * tile[i + 2]));
+            }
+
+            if (light.Count < 10) continue;
+
+            light.Sort();
+            var spread = light[(int)(light.Count * 0.9f)] - light[(int)(light.Count * 0.1f)];
+
+            if (spread >= flattest) continue;
+            flattest = spread;
+            flattestAt = named[s];
+        }
+
+        // ⛔ REPORTED, NOT ASSERTED ON, and that is the honest answer to a measurement that turned
+        // out to say nothing. The claim being tested was "ours are flatter than a real pack's" — and
+        // measured, they are not: the build before any of this travelled 57 where the pack travels
+        // 59 to 73. The highlight and shadow the drawings already carried span nearly the whole of
+        // it. Any bar clear of the flat build would also be clear of the pack, so there is no bar to
+        // set; a check that passes both arms is worse than no check, because it looks like one.
+        //
+        // It stays as a NUMBER because it is worth watching — a future change that flattens these
+        // would show here — but nothing may fail on it until somebody finds a value that separates
+        // two builds that genuinely differ.
+
         detail =
             $"{shapes.Length} silhouettes, the closest pair ({closestPair}) {closest} cells apart at "
-            + "their best alignment, each filling its tile corner to corner";
+            + $"their best alignment, each filling its tile corner to corner, the flattest "
+            + $"({flattestAt}) travelling {flattest} levels of light against the pack's 59 to 73";
 
         return faults;
     }

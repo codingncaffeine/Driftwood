@@ -1666,6 +1666,14 @@ public static class TileGen
                 continue;
             }
 
+            // ⛔ A GRADIENT ACROSS THE TOOL WAS TRIED HERE AND TAKEN BACK OUT. The reason is worth
+            // more than the code was. It went in to fix "ours are flat beside a real pack's" — three
+            // tones against their ten shades — and BOTH HALVES OF THAT WERE WRONG. Measured: the
+            // dither already produces twenty distinct colours, so counting shades says nothing about
+            // shading; and the tone already travels 57 levels from its tenth percentile to its
+            // ninetieth where the pack travels 59 to 73. There was no flatness to fix. The gradient
+            // moved that to 55 — very slightly worse — so it was a change justified by a claim that
+            // measurement refuted, and it went back out. What was genuinely wrong was the DRAWINGS.
             var d = c switch
             {
                 'l' => 46,
