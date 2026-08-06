@@ -396,6 +396,16 @@ public static class WorldAudit
         // see that a box appeared; only this can see that it named the right thing, and it is the
         // half that goes wrong silently — a tooltip saying "pocket" over every square looks exactly
         // like one that works from any screenshot.
+        // ⛔ And which world a launch opens, which was wrong and invisible: --play saves on quit and
+        // with no --world fell through to the same name a double-click opens, so every timing run
+        // loaded somebody's world, played in it and wrote it back.
+        var namingFaults = WorldSave.ValidateNaming();
+        Check("an instrument never opens somebody's own world", namingFaults.Count == 0,
+            namingFaults.Count == 0
+                ? $"a bare launch opens '{WorldSave.DefaultWorld}', a seed names its own, and every "
+                  + $"instrument works in '{WorldSave.TestWorld}' unless a name is typed"
+                : $"{namingFaults.Count} faults: {namingFaults[0]}");
+
         var tipFaults = Tooltip.Validate(items, book);
         Check("hovering a thing says what it is", tipFaults.Count == 0,
             tipFaults.Count == 0

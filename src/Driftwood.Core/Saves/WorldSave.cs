@@ -75,6 +75,62 @@ public static class WorldSave
 
     public static string PathFor(string name) => Path.Combine(Folder, $"{Sanitised(name)}.dws");
 
+    /// <summary>What a bare launch opens, and what an instrument opens instead.</summary>
+    public const string DefaultWorld = "world";
+
+    public const string TestWorld = "driftwood-test";
+
+    /// <summary>
+    /// Which world a launch opens, from what it was given.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛔ <b>A rule with a check beside it rather than four lines at the call site, because it
+    /// was wrong and nobody could see it.</b> <c>--play</c> exists to close the window the way a
+    /// player does, which means it saves on quit — and with no <c>--world</c> it fell through to the
+    /// same name a double-click opens. Every timing run loaded somebody's world, played in it, and
+    /// wrote it back.</para>
+    /// <para>The order is: a name that was typed, then the test world for anything that is an
+    /// instrument, then the seed, then the default. ⚠ <b>The instrument beats the seed</b> — a seeded
+    /// instrument run still gets that seed's terrain and still does not get a world of its own, which
+    /// is the case that left ten of them in a player's saves folder across two sessions and read from
+    /// inside the game as a save list breeding by itself.</para>
+    /// </remarks>
+    public static string NameFor(string? typed, bool instrument, bool seedGiven, string? seedText) =>
+        Sanitised(
+            !string.IsNullOrWhiteSpace(typed) ? typed!
+            : instrument ? TestWorld
+            : seedGiven && !string.IsNullOrWhiteSpace(seedText) ? $"world-{seedText}"
+            : DefaultWorld);
+
+    /// <summary>Checks a launch opens the world it should, and never somebody's own by accident.</summary>
+    /// <remarks>
+    /// ⛔ <b>The pairs are the check.</b> "An instrument opens the test world" is equally true of a
+    /// rule that opens it always, so a plain launch and a seeded one are asserted beside it — and the
+    /// case that actually broke, a seeded instrument run, is asserted against both.
+    /// </remarks>
+    public static List<string> ValidateNaming()
+    {
+        var faults = new List<string>();
+
+        void Want(string what, string got, string expected)
+        {
+            if (got == expected) return;
+            faults.Add($"{what} opens '{got}' rather than '{expected}'");
+        }
+
+        Want("a bare launch", NameFor(null, false, false, null), DefaultWorld);
+        Want("a seeded launch", NameFor(null, false, true, "stonebreak"), "world-stonebreak");
+        Want("a named launch", NameFor("harbour", false, false, null), "harbour");
+
+        // ⛔ THE THREE THAT MATTER. An instrument may not reach a real world by any route that does
+        // not involve somebody typing its name.
+        Want("an instrument run", NameFor(null, true, false, null), TestWorld);
+        Want("a seeded instrument run", NameFor(null, true, true, "stonebreak"), TestWorld);
+        Want("a named instrument run", NameFor("harbour", true, false, null), "harbour");
+
+        return faults;
+    }
+
     /// <summary>How many previous states of a world are kept beside it.</summary>
     public const int Backups = 3;
 

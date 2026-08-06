@@ -1324,16 +1324,39 @@ public sealed class ClientHost : IDisposable
     /// over somebody's world is not the fixed path it reports itself as, and a check that writes a
     /// save file has reached out of its own process and changed something.</para>
     /// </remarks>
+    /// <summary>
+    /// The one world every instrument works in, so none of them ever opens somebody's own.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>WRITTEN BECAUSE THE INSTRUMENTS WERE PLAYING THE USER'S SAVE.</b> The bench and the
+    /// ui-check have kept nothing and loaded nothing since the day saves landed — but <c>--play</c>
+    /// exists precisely to close the window the way a player does, which means it <em>saves on
+    /// quit</em>, and with no <c>--world</c> given it fell through to the same default name a
+    /// double-click opens. Every timing run and every save-on-quit check has therefore been loading
+    /// somebody's world, playing in it and writing it back.
+    /// <para>⛳ It also fixes the thing the user actually noticed. Naming a different world per test
+    /// run — <c>--world creature-test</c>, <c>--seed q1</c> — left ten worlds in their saves folder
+    /// across two sessions, which reads from the game as a save list breeding by itself. One name,
+    /// always the same one, and the list is theirs again.</para>
+    /// <para>⚠ An explicit <c>--world</c> still wins, because otherwise there would be no way to
+    /// point an instrument at a real world on purpose — but it has to be typed.</para>
+    /// </remarks>
     private void OpenWorld()
     {
         _seed = _options.Seed;
 
         if (_options.BenchSeconds > 0 || _options.UiCheck) return;
 
-        _worldName = WorldSave.Sanitised(
-            !string.IsNullOrWhiteSpace(_options.WorldName) ? _options.WorldName!
-            : _options.SeedGiven ? $"world-{_options.SeedText ?? _options.Seed.ToString()}"
-            : "world");
+        // Anything that drives the game itself rather than being played. ⛳ The rule lives in
+        // WorldSave.NameFor with a check beside it, rather than here where nothing could see it.
+        var instrument = _options.PlaySeconds > 0 || _options.ShotPath is not null;
+
+        _worldName = WorldSave.NameFor(
+            _options.WorldName, instrument,
+            _options.SeedGiven, _options.SeedText ?? _options.Seed.ToString());
+
+        if (instrument)
+            Console.WriteLine($"world       instrument run, working in '{_worldName}' rather than a real world");
 
         var path = WorldSave.PathFor(_worldName);
 
