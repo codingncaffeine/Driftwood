@@ -174,7 +174,7 @@ public sealed class CreatureDrops
                 kills[items[stack.Item].Name] = kills.GetValueOrDefault(items[stack.Item].Name) + stack.Count;
 
             foreach (var stack in table.Roll("sheep", DropTrigger.Killed, null, true, random))
-                if (items[stack.Item].Name == "wool") woolFromShorn++;
+                if (items[stack.Item].Name == "wool_white") woolFromShorn++;
 
             var chicken = table.Roll("chicken", DropTrigger.Killed, null, false, random);
             foreach (var stack in chicken)
@@ -196,7 +196,7 @@ public sealed class CreatureDrops
         var woolFromWhole = 0;
         for (var i = 0; i < 400; i++)
             foreach (var stack in table.Roll("sheep", DropTrigger.Killed, null, false, random))
-                if (items[stack.Item].Name == "wool") woolFromWhole++;
+                if (items[stack.Item].Name == "wool_white") woolFromWhole++;
 
         if (woolFromWhole != 400)
             faults.Add($"{woolFromWhole} of 400 unshorn sheep dropped a fleece");

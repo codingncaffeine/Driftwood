@@ -1629,6 +1629,52 @@ public static class TileGen
         return t;
     }
 
+    /// <summary>
+    /// A pinch of dye: a low heap of powder with a few grains loose on top of it.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>One drawing for all sixteen, and it has to be.</b> Sixteen different silhouettes would
+    /// be sixteen things to learn where the player is choosing purely by colour — a dye is the one
+    /// item in the game whose whole identity is its colour, which is the opposite of the argument
+    /// that gave the four tool heads four shapes. ⚠ The heap is lit from the upper left like every
+    /// other icon here, so a row of sixteen reads as one family seen in sixteen colours.
+    /// </remarks>
+    public static byte[] IconDye(int seed, byte r, byte g, byte b)
+    {
+        var t = new byte[BytesPerTile];
+        const float Centre = (Size - 1) / 2f;
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            // A heap: wide at the bottom, domed on top, sitting in the lower two thirds of the tile.
+            var dx = (x - Centre) / 5.8f;
+            var dy = (y - 10.4f) / 4.6f;
+
+            var wobble = 1f + (Noise(x >> 1, y >> 1, seed) * 2f - 1f) * 0.14f;
+            var inHeap = dx * dx + dy * dy <= wobble && y >= 5;
+
+            // And a few grains above it, placed on the dome's own shoulders so they touch it rather
+            // than floating — a picture made of loose specks fails the audit's ink-island count, and
+            // rightly: it would read as a spray rather than as a pinch of something.
+            var grain = !inHeap && y is >= 4 and <= 6
+                        && Math.Abs(x - (int)Centre) <= 3
+                        && Noise(x, y, seed + 71) > 0.52f;
+
+            if (!inHeap && !grain) continue;
+
+            var lift = (int)((Centre - x) * 1.3f + (10.4f - y) * 2.4f);
+            var speckle = (int)((Noise(x, y, seed + 19) * 2f - 1f) * 12f);
+
+            // ⚠ Dark colours keep their texture because the shading is an OFFSET rather than a
+            // scale. A multiply would take black dye to black and leave the heap a flat square.
+            var d = lift + speckle + (grain ? 26 : 0);
+            Put(t, x, y, Clamp(r + d), Clamp(g + d), Clamp(b + d), 255);
+        }
+
+        return t;
+    }
+
     /// <summary>A cured hide: a rounded piece with a darker edge and a couple of creases.</summary>
     public static byte[] IconLeather(int seed, byte r, byte g, byte b)
     {

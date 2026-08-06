@@ -112,7 +112,29 @@ public static class StarterItems
         Block(items, blocks, "emberstone", "emberstone", StarterBlocks.LayerEmberstone);
         Block(items, blocks, "glass", "glass", StarterBlocks.LayerGlass);
         Block(items, blocks, "bricks", "bricks", StarterBlocks.LayerBricks);
-        Block(items, blocks, "wool", "wool", StarterBlocks.LayerWool);
+
+        // ⛳ The flowers, which are worth carrying now that they are worth crushing. All four:
+        // until the dye tree there was nothing to do with one, so picking a flower left nothing at
+        // all — which is the right answer for grass and the wrong one for the thing a whole colour
+        // axis is made of.
+        Block(items, blocks, "seaflax", "seaflax", StarterBlocks.LayerSeaflax);
+        Block(items, blocks, "marshlily", "marshlily", StarterBlocks.LayerMarshlily);
+        Block(items, blocks, "emberbloom", "emberbloom", StarterBlocks.LayerEmberbloom);
+        Block(items, blocks, "sunwort", "sunwort", StarterBlocks.LayerSunwort);
+
+        // ⛳ THE WIDEST AXIS IN THE GAME: sixteen wools, sixteen carpets, sixteen powders, all off
+        // one table of colours. Forty-eight items in twelve lines, which is what a content axis is
+        // supposed to cost by the time it reaches here.
+        for (var i = 0; i < StarterBlocks.Colours.Length; i++)
+        {
+            var dye = StarterBlocks.Colours[i];
+            var shown = dye.Name.Replace('_', ' ');
+
+            Block(items, blocks, $"wool_{dye.Name}", $"{shown} wool", (ushort)(StarterBlocks.LayerFirstWool + i));
+            Block(items, blocks, $"carpet_{dye.Name}", $"{shown} carpet", (ushort)(StarterBlocks.LayerFirstWool + i));
+
+            Loose(items, $"dye_{dye.Name}", $"{shown} dye", (ushort)(StarterBlocks.LayerFirstDye + i));
+        }
         Block(items, blocks, "bench", "bench", StarterBlocks.LayerBenchTop, Timber);
         Block(items, blocks, "stonecutter", "stonecutter", StarterBlocks.LayerStonecutterTop);
 
@@ -435,10 +457,13 @@ public static class StarterItems
 
         new CreatureDrops.Rule("pig", DropTrigger.Killed, "raw_pork", 1, 3),
 
+        // ⚠ White, because every sheep in the world is. A fleece that came off the animal already
+        // dyed would want the animal to carry a colour, which is a field on the creature and a
+        // column in the save — and the dye tree makes the other fifteen out of this one anyway.
         new CreatureDrops.Rule("sheep", DropTrigger.Killed, "raw_mutton", 1, 2),
-        new CreatureDrops.Rule("sheep", DropTrigger.Killed, "wool", 1, 1, NeedsFleece: true),
+        new CreatureDrops.Rule("sheep", DropTrigger.Killed, "wool_white", 1, 1, NeedsFleece: true),
         new CreatureDrops.Rule(
-            "sheep", DropTrigger.Harvested, "wool", 1, 3,
+            "sheep", DropTrigger.Harvested, "wool_white", 1, 3,
             Tool: ToolClass.Shears, NeedsFleece: true),
 
         new CreatureDrops.Rule("chicken", DropTrigger.Killed, "feather", 0, 2),
@@ -460,9 +485,12 @@ public static class StarterItems
 
         new BlockDrops.Rule("driftoak_leaves", null),
         new BlockDrops.Rule("vine", null),
+
+        // ⚠ Grass still leaves nothing and the flowers no longer do. The difference is that one of
+        // them is now a material: every colour in the game starts as something picked out of a
+        // field, so a bloom that vanished when it was broken would be a dye source a player could
+        // walk over and never obtain.
         new BlockDrops.Rule("meadowgrass", null),
-        new BlockDrops.Rule("seaflax", null),
-        new BlockDrops.Rule("marshlily", null),
         new BlockDrops.Rule("snow_layer", null),
         new BlockDrops.Rule("water", null),
         new BlockDrops.Rule("bedrock", null),

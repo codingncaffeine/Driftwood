@@ -150,7 +150,11 @@ public static class StarterRecipes
         void Cut(string name, string from, string result, int count = 1) =>
             Shaped(name, result, count, ["M"], from, station: CraftStation.Stonecutter);
 
-        void Loose(string name, string result, int count, params string[] parts)
+        void Loose(string name, string result, int count, params string[] parts) =>
+            LooseAt(name, result, count, CraftStation.Hand, parts);
+
+        void LooseAt(
+            string name, string result, int count, CraftStation station, params string[] parts)
         {
             var cells = new Ingredient?[parts.Length];
             for (var i = 0; i < parts.Length; i++) cells[i] = Of(parts[i]);
@@ -163,6 +167,7 @@ public static class StarterRecipes
                 Height = 1,
                 Cells = cells,
                 Shapeless = true,
+                Station = station,
             });
         }
 
@@ -271,6 +276,56 @@ public static class StarterRecipes
         Shaped("brick block", "bricks", 1, ["BB", "BB"]);
         Shaped("clay block", "clay", 1, ["LL", "LL"]);
 
+        // ═══ THE DYE TREE ═══════════════════════════════════════════════════════════════════════
+        //
+        // ⛳ Seven the world gives and nine it mixes, which is what makes sixteen colours a tree
+        // rather than sixteen errands. Every primary is something a player already walks past:
+        // two flowers, a mineral, a mineral, a rock, a weed and the block under a torch.
+        //
+        // ⚠ The mixes are OURS. The reference's brown comes off a jungle tree we do not have, so
+        // ours is red and green — which is what brown is on a palette, and is the sort of decision
+        // that has to be written down because nothing about it is derivable.
+        LooseAt("white dye", "dye_white", 1, CraftStation.Bench, "marshlily");
+        LooseAt("light blue dye", "dye_light_blue", 1, CraftStation.Bench, "seaflax");
+        LooseAt("red dye", "dye_red", 1, CraftStation.Bench, "emberbloom");
+        LooseAt("yellow dye", "dye_yellow", 1, CraftStation.Bench, "sunwort");
+        LooseAt("blue dye", "dye_blue", 2, CraftStation.Bench, "azurite");
+        LooseAt("black dye", "dye_black", 1, CraftStation.Bench, "#coals");
+
+        // ⛳ Green is MIXED rather than found, and that is a deliberate difference from the
+        // reference — which smelts a cactus, in a desert we do not have. Blue and yellow is what
+        // green is, so the tree stays a tree and the world does not have to grow a seventh source.
+        LooseAt("green dye", "dye_green", 2, CraftStation.Bench, "dye_blue", "dye_yellow");
+
+        LooseAt("orange dye", "dye_orange", 2, CraftStation.Bench, "dye_red", "dye_yellow");
+        LooseAt("lime dye", "dye_lime", 2, CraftStation.Bench, "dye_green", "dye_white");
+        LooseAt("pink dye", "dye_pink", 2, CraftStation.Bench, "dye_red", "dye_white");
+        LooseAt("grey dye", "dye_grey", 2, CraftStation.Bench, "dye_black", "dye_white");
+        LooseAt("light grey dye", "dye_light_grey", 2, CraftStation.Bench, "dye_grey", "dye_white");
+        LooseAt("cyan dye", "dye_cyan", 2, CraftStation.Bench, "dye_blue", "dye_green");
+        LooseAt("purple dye", "dye_purple", 2, CraftStation.Bench, "dye_blue", "dye_red");
+        LooseAt("magenta dye", "dye_magenta", 2, CraftStation.Bench, "dye_purple", "dye_pink");
+        LooseAt("brown dye", "dye_brown", 2, CraftStation.Bench, "dye_red", "dye_green");
+
+        // ⛳ Every colour of wool from any other colour of wool, and every carpet from its own wool.
+        // Thirty-two rows out of one loop — and the re-dye takes the #wool tag rather than white, so
+        // a bad choice is a dye away from being fixed instead of a trip back to the sheep.
+        // ⚠ All of it at a bench, and the gate is what said so. Every one of these would fit in a
+        // player's two hands, and moving forty-one recipes there took the bare-hand set from six to
+        // fifty-four — which the audit calls "most of a game before anything is built", and it is
+        // right. Dyeing is an industry rather than a first move: the hand makes planks, sticks and
+        // the bench, and the bench makes everything that is a choice about how a thing should look.
+        foreach (var dye in StarterBlocks.Colours)
+        {
+            LooseAt(
+                $"{dye.Name.Replace('_', ' ')} wool", $"wool_{dye.Name}", 1, CraftStation.Bench,
+                "#wool", $"dye_{dye.Name}");
+
+            Shaped(
+                $"{dye.Name.Replace('_', ' ')} carpet", $"carpet_{dye.Name}", 3, ["MM"],
+                $"wool_{dye.Name}", mirrored: false, station: CraftStation.Bench);
+        }
+
         // ⛳ Two blades on a pivot, drawn as a diagonal because that is what a pair of shears is.
         // ⚠ At a bench rather than in the hands, though it would fit in a player's two-by-two: every
         // other piece of metalwork in the game is made at one, and an iron tool that could be run up
@@ -344,6 +399,14 @@ public static class StarterRecipes
             // second rung would let a player skip nothing and gain nothing.
             ["#rough_stone"] = Tag(
                 "any rough stone", "rubble", "deepstone", "coralstone", "driftstone", "saltstone"),
+
+            // ⛳ Every colour, so a dye recolours wool a player already has rather than only white.
+            // A bad choice is then one dye away from being fixed instead of a trip back to the
+            // sheep, and it is the whole reason the re-dye is a tag rather than sixteen rows naming
+            // white — this is the tag doing the job the tag system was added for.
+            ["#wool"] = Tag(
+                "any wool",
+                [.. StarterBlocks.Colours.Select(c => $"wool_{c.Name}")]),
         };
     }
 

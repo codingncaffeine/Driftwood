@@ -507,9 +507,20 @@ public sealed class TerrainGenerator
             // agree. Which flower is a slow field of its own, so a patch is one kind or the other.
             if (roll < 0.03f)
             {
-                var kind = Noise.Fbm2(wx / 96f, wz / 96f, _seedMeadow + 23, 2) < 0f
-                    ? _ids.Seaflax
-                    : _ids.Marshlily;
+                // ⚠ Which flower is a SLOW field, so a patch is one kind rather than a scattering of
+                // four — and it is quantised into bands rather than compared against zero, because
+                // "below zero or not" only ever divides a field into two however many kinds there
+                // are. Four bands of a field that runs about −0.4 to 0.4, which is where fBm
+                // normalised by its octave sum actually lives.
+                var which = Noise.Fbm2(wx / 96f, wz / 96f, _seedMeadow + 23, 2);
+                var kind = which switch
+                {
+                    < -0.12f => _ids.Seaflax,
+                    < 0f => _ids.Emberbloom,
+                    < 0.12f => _ids.Sunwort,
+                    _ => _ids.Marshlily,
+                };
+
                 PlaceIntoAir(chunk, ox, oy, oz, wx, surface + 1, wz, kind);
                 continue;
             }

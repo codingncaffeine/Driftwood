@@ -170,9 +170,15 @@ public static class BlockTextureSet
         new("blast_front", "textures/block/blast_furnace_front.png", false),
         new("blast_front_lit", "textures/block/blast_furnace_front_on.png", false),
 
-        // ⚠ White wool, and only white. A pack keeps each dyed colour in its own file, so the day
-        // the other fifteen land they are fifteen more rows here and not a tint applied to this one.
-        new("wool",        "textures/block/white_wool.png",       false, "textures/block/wool_colored_white.png"),
+        // Two more flowers, for the two colours nothing else in the world could have given. Ours by
+        // name; a pack has painted a red bloom and a yellow one whatever its own game calls them.
+        new("emberbloom",  "textures/block/poppy.png",            true, "textures/block/flower_rose.png"),
+        new("sunwort",     "textures/block/dandelion.png",        true, "textures/block/flower_dandelion.png"),
+
+        // ⛳ The sixteen wools, generated from StarterBlocks.Colours rather than written out — see
+        // WoolRows below. Each is its own file in a pack, which is exactly why they cannot be one
+        // tinted layer: a tint is a colour nothing a player installs could ever replace.
+        .. WoolRows(),
 
         // Items, from here to the end. They live in the same array as the block faces because they
         // are the same sixteen-pixel tiles drawn by the same two places — a slot on the bar and a
@@ -239,7 +245,59 @@ public static class BlockTextureSet
         new("stormglass_axe", "textures/item/diamond_axe.png",    true),
         new("stormglass_shovel", "textures/item/diamond_shovel.png", true),
         new("stormglass_sword", "textures/item/diamond_sword.png", true),
+
+        // And the sixteen powders, on the same terms as the wools they colour.
+        .. DyeRows(),
     ];
+
+    /// <summary>One row per colour of wool, off the colour table rather than written out.</summary>
+    /// <remarks>
+    /// ⚠ <b>Two pack paths, and both are needed.</b> The modern layout is <c>white_wool.png</c>; the
+    /// pre-flattening one is <c>wool_colored_white.png</c>, and its grey is spelled <c>silver</c>
+    /// rather than <c>light_gray</c> — which is why the stem comes off the table instead of being
+    /// derived from our own name. Sixteen rows written by hand would be sixteen chances to get one
+    /// of those wrong, in a way that shows up as one colour of wool keeping our art.
+    /// </remarks>
+    private static BlockTextureLayer[] WoolRows()
+    {
+        var rows = new BlockTextureLayer[StarterBlocks.Colours.Length];
+
+        for (var i = 0; i < rows.Length; i++)
+        {
+            var dye = StarterBlocks.Colours[i];
+            var old = dye.Pack == "light_gray" ? "silver" : dye.Pack;
+
+            rows[i] = new BlockTextureLayer(
+                $"wool_{dye.Name}",
+                $"textures/block/{dye.Pack}_wool.png",
+                false,
+                $"textures/block/wool_colored_{old}.png");
+        }
+
+        return rows;
+    }
+
+    /// <summary>And one per powder.</summary>
+    private static BlockTextureLayer[] DyeRows()
+    {
+        var rows = new BlockTextureLayer[StarterBlocks.Colours.Length];
+
+        for (var i = 0; i < rows.Length; i++)
+        {
+            var dye = StarterBlocks.Colours[i];
+
+            // ⚠ The old layout kept every dye in ONE file, <c>dye_powder_{colour}.png</c>, and its
+            // blue is <c>lapis_lazuli</c> — a mineral rather than a dye. Ours is a dye made from
+            // azurite, so the modern path is the one that matches and the alternate is best effort.
+            rows[i] = new BlockTextureLayer(
+                $"dye_{dye.Name}",
+                $"textures/item/{dye.Pack}_dye.png",
+                true,
+                $"textures/item/dye_powder_{(dye.Pack == "light_gray" ? "silver" : dye.Pack)}.png");
+        }
+
+        return rows;
+    }
 
     /// <param name="GrassMap">Grass colormap, the pack's if it ships one.</param>
     /// <param name="FoliageMap">Foliage colormap, likewise.</param>
@@ -689,16 +747,45 @@ public static class BlockTextureSet
             StarterBlocks.LayerClayLump => TileGen.IconLump(1054, 164, 170, 180),
             StarterBlocks.LayerBrick => TileGen.IconBrick(1055, 158, 94, 78),
 
-            // A fleece, and what comes off the animals with it. ⚠ The wool is not pure white: a
-            // white block against a snowfield is invisible, and 236 against snow's 243 is enough.
-            StarterBlocks.LayerWool => TileGen.Wool(1084, 236, 234, 228),
+            // The two flowers the dye tree needed. A bloom and a stem, the colour the flower is.
+            StarterBlocks.LayerEmberbloom => TileGen.Flower(1092, 66, 112, 52, 176, 34, 30, 226, 196, 82),
+            StarterBlocks.LayerSunwort => TileGen.Flower(1093, 78, 124, 54, 236, 198, 44, 250, 244, 190),
+
+            // What comes off the animals with the fleece.
             StarterBlocks.LayerLeather => TileGen.IconLeather(1085, 166, 116, 70),
             StarterBlocks.LayerFeather => TileGen.IconFeather(1086, 238, 240, 244),
             StarterBlocks.LayerEgg => TileGen.IconEgg(1087, 232, 220, 198),
             StarterBlocks.LayerShears => TileGen.IconShears(1088, 206, 208, 214),
 
-            _ => Meat(layer) ?? Tool(layer),
+            _ => Wool(layer) ?? Meat(layer) ?? Dye(layer) ?? Tool(layer),
         };
+    }
+
+    /// <summary>One wool tile, or null when this layer is not one.</summary>
+    /// <remarks>
+    /// ⚠ <b>Not white tinted sixteen ways.</b> A tint multiplies, so every colour would come out
+    /// darker than the one before it and black wool would be black — which is exactly what a hue
+    /// rotation over one grey tile produces. Each is drawn from its own numbers, and
+    /// <see cref="TileGen.Wool"/>'s shading is written as an offset rather than a scale so a dark
+    /// colour keeps its texture instead of collapsing into a flat square.
+    /// </remarks>
+    private static byte[]? Wool(int layer)
+    {
+        var index = layer - StarterBlocks.LayerFirstWool;
+        if (index < 0 || index >= StarterBlocks.Colours.Length) return null;
+
+        var dye = StarterBlocks.Colours[index];
+        return TileGen.Wool(1200 + index, dye.R, dye.G, dye.B);
+    }
+
+    /// <summary>One dye powder, or null when this layer is not one.</summary>
+    private static byte[]? Dye(int layer)
+    {
+        var index = layer - StarterBlocks.LayerFirstDye;
+        if (index < 0 || index >= StarterBlocks.Colours.Length) return null;
+
+        var dye = StarterBlocks.Colours[index];
+        return TileGen.IconDye(1240 + index, dye.R, dye.G, dye.B);
     }
 
     /// <summary>

@@ -117,8 +117,22 @@ public static class StarterBlocks
     public const ushort LayerBlastFront = 67;
     public const ushort LayerBlastFrontLit = 68;
 
-    /// <summary>A fleece laid as a block. The first thing in the game made out of an animal.</summary>
-    public const ushort LayerWool = 69;
+    // Two more flowers, and they exist to be crushed. ⛳ The dye tree needs a red and a yellow it
+    // can find in a field, and the two we had are a blue and a white — so rather than inventing a
+    // source, the world grows one. Ours by name, in the same coastal register as driftoak.
+    public const ushort LayerEmberbloom = 69;
+    public const ushort LayerSunwort = 70;
+
+    /// <summary>
+    /// A fleece laid as a block, in each of the sixteen. The first thing made out of an animal.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ <b>Sixteen layers rather than one tinted one.</b> A pack keeps every dyed wool in its own
+    /// file — <c>white_wool.png</c>, <c>red_wool.png</c> — so a tint applied to one layer would be a
+    /// colour nothing in a pack could ever replace. It is also why <see cref="Colours"/> is a table
+    /// of real numbers rather than a hue rotation: ours have to sit where theirs sit.
+    /// </remarks>
+    public const ushort LayerFirstWool = 71;
 
     /// <summary>The first layer that is an item icon rather than a block face.</summary>
     /// <remarks>
@@ -130,27 +144,27 @@ public static class StarterBlocks
     /// number below it. That is a search and replace and the audit's "every icon is painted" check
     /// is what catches one missed.</para>
     /// </remarks>
-    public const ushort LayerFirstIcon = 70;
+    public const ushort LayerFirstIcon = 87;
 
-    public const ushort LayerStick = 70;
-    public const ushort LayerCoal = 71;
-    public const ushort LayerCharcoal = 72;
-    public const ushort LayerRawCopper = 73;
-    public const ushort LayerRawIron = 74;
-    public const ushort LayerRawGold = 75;
-    public const ushort LayerCopperIngot = 76;
-    public const ushort LayerIronIngot = 77;
-    public const ushort LayerGoldIngot = 78;
-    public const ushort LayerStormglass = 79;
-    public const ushort LayerAzurite = 80;
-    public const ushort LayerClayLump = 81;
-    public const ushort LayerBrick = 82;
+    public const ushort LayerStick = 87;
+    public const ushort LayerCoal = 88;
+    public const ushort LayerCharcoal = 89;
+    public const ushort LayerRawCopper = 90;
+    public const ushort LayerRawIron = 91;
+    public const ushort LayerRawGold = 92;
+    public const ushort LayerCopperIngot = 93;
+    public const ushort LayerIronIngot = 94;
+    public const ushort LayerGoldIngot = 95;
+    public const ushort LayerStormglass = 96;
+    public const ushort LayerAzurite = 97;
+    public const ushort LayerClayLump = 98;
+    public const ushort LayerBrick = 99;
 
     // What an animal leaves, and the one tool that takes something off a live one.
-    public const ushort LayerLeather = 83;
-    public const ushort LayerFeather = 84;
-    public const ushort LayerEgg = 85;
-    public const ushort LayerShears = 86;
+    public const ushort LayerLeather = 100;
+    public const ushort LayerFeather = 101;
+    public const ushort LayerEgg = 102;
+    public const ushort LayerShears = 103;
 
     /// <summary>
     /// The meats: raw and cooked, in the <see cref="Meats"/> order.
@@ -162,10 +176,54 @@ public static class StarterBlocks
     /// same argument that made the four tool heads four different silhouettes rather than four
     /// colours of the same one.
     /// </remarks>
-    public const ushort LayerFirstMeat = 87;
+    public const ushort LayerFirstMeat = 104;
+
+    /// <summary>The sixteen dye powders, in <see cref="Colours"/> order.</summary>
+    public const ushort LayerFirstDye = 112;
 
     /// <summary>The tool icons: one palette per tier, four heads each, tier-major.</summary>
-    public const ushort LayerFirstTool = 95;
+    public const ushort LayerFirstTool = 128;
+
+    /// <summary>One of the sixteen: our name for it, and what it looks like.</summary>
+    /// <param name="Pack">
+    /// The stem a pack uses for it. Ours are the same words for every one of them — nobody owns
+    /// "red" — but the ordering and the spelling of the two greys are theirs, and a wool tile is
+    /// looked up as <c>{stem}_wool.png</c>.
+    /// </param>
+    public readonly record struct Dye(string Name, string Pack, byte R, byte G, byte B);
+
+    /// <summary>
+    /// The sixteen, in the order everything derived from them runs.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ <b>Sixteen is the genre's number and it is the right one for a reason worth writing
+    /// down.</b> It is the largest set that still reads as a palette rather than as a gradient — every
+    /// one of them is nameable at a glance in a slot — and it is what every pack in existence has
+    /// already painted. Ours sit near theirs deliberately, per the same contract as the 64×64 skin
+    /// and the 176×166 panel: a player's pack has to be able to replace them.</para>
+    /// <para>⚠ <b>The colours are the wool's, not the dye's.</b> A dye powder is drawn from the same
+    /// numbers lifted a little, because what a player is actually choosing between is sixteen
+    /// blocks — and a powder that did not match the block it makes is a slot that lies.</para>
+    /// </remarks>
+    public static readonly Dye[] Colours =
+    [
+        new("white", "white", 233, 236, 236),
+        new("orange", "orange", 240, 118, 19),
+        new("magenta", "magenta", 189, 68, 179),
+        new("light_blue", "light_blue", 58, 175, 217),
+        new("yellow", "yellow", 248, 198, 39),
+        new("lime", "lime", 112, 185, 25),
+        new("pink", "pink", 237, 141, 172),
+        new("grey", "gray", 62, 68, 71),
+        new("light_grey", "light_gray", 142, 142, 134),
+        new("cyan", "cyan", 21, 137, 145),
+        new("purple", "purple", 121, 42, 172),
+        new("blue", "blue", 53, 57, 157),
+        new("brown", "brown", 114, 71, 40),
+        new("green", "green", 84, 109, 27),
+        new("red", "red", 160, 39, 34),
+        new("black", "black", 20, 21, 25),
+    ];
 
     /// <summary>Head shapes a tier comes in — pickaxe, axe, shovel, sword.</summary>
     public const int ToolShapeCount = 4;
@@ -205,6 +263,8 @@ public static class StarterBlocks
         BlockId Meadowgrass,
         BlockId Seaflax,
         BlockId Marshlily,
+        BlockId Emberbloom,
+        BlockId Sunwort,
         BlockId Rubble,
         BlockId Glass,
         BlockId Bricks,
@@ -219,10 +279,10 @@ public static class StarterBlocks
         public BlockId[] Ores => [CoalOre, IronOre, CopperOre, GoldOre, StormglassOre, AzuriteOre, Emberstone];
 
         /// <summary>Everything that grows on open ground, for the census to weigh together.</summary>
-        public BlockId[] GroundCover => [Meadowgrass, Seaflax, Marshlily];
+        public BlockId[] GroundCover => [Meadowgrass, Seaflax, Marshlily, Emberbloom, Sunwort];
 
         /// <summary>The flowers, which are rarer than the grass they stand in.</summary>
-        public BlockId[] Flowers => [Seaflax, Marshlily];
+        public BlockId[] Flowers => [Seaflax, Marshlily, Emberbloom, Sunwort];
     }
 
     public static Ids Register(BlockRegistry registry)
@@ -459,12 +519,32 @@ public static class StarterBlocks
         var seaflax = registry.Register(new BlockType
         {
             Name = "seaflax", Hardness = 0.05f, Solid = false, Opaque = false, Sounds = SoundMaterial.Plant,
+            SupportFace = Faces.NegY,
             Model = BlockModel.Cross(LayerSeaflax, tinted: false),
         });
         var marshlily = registry.Register(new BlockType
         {
             Name = "marshlily", Hardness = 0.05f, Solid = false, Opaque = false, Sounds = SoundMaterial.Plant,
+            SupportFace = Faces.NegY,
             Model = BlockModel.Cross(LayerMarshlily, tinted: false),
+        });
+
+        // ⛳ Two more, and they exist because the dye tree needs them. A red and a yellow are the two
+        // colours nothing else in the world could have given — azurite is the blue, coal is the
+        // black, the marshlily is the white — so rather than inventing a source somewhere abstract,
+        // the field grows one. That is the genre's own answer and it is the right one: the reason to
+        // look at a meadow should be that there is something in it worth picking.
+        var emberbloom = registry.Register(new BlockType
+        {
+            Name = "emberbloom", Hardness = 0.05f, Solid = false, Opaque = false, Sounds = SoundMaterial.Plant,
+            SupportFace = Faces.NegY,
+            Model = BlockModel.Cross(LayerEmberbloom, tinted: false),
+        });
+        var sunwort = registry.Register(new BlockType
+        {
+            Name = "sunwort", Hardness = 0.05f, Solid = false, Opaque = false, Sounds = SoundMaterial.Plant,
+            SupportFace = Faces.NegY,
+            Model = BlockModel.Cross(LayerSunwort, tinted: false),
         });
 
         // What a pickaxe leaves when it takes stone, and what a furnace turns back into stone. The
@@ -496,15 +576,36 @@ public static class StarterBlocks
             TopLayer = LayerBricks, SideLayer = LayerBricks, BottomLayer = LayerBricks,
         });
 
-        // ⛳ The first block in the game made out of an animal. Soft enough to take by hand — a
-        // fleece that wanted a tool would be a wall a player could not knock down after building it
-        // — and it names no harvest class at all, which is what lets a bare hand keep it.
-        registry.Register(new BlockType
+        // ⛳ The first blocks in the game made out of an animal, and the widest axis in it. Soft
+        // enough to take by hand — a fleece that wanted a tool would be a wall a player could not
+        // knock down after building it — and they name no harvest class at all, which is what lets a
+        // bare hand keep one.
+        // ⚠ A carpet is the SAME sixteen tiles at a sixteenth of the height, so the axis costs 32
+        // blocks and 16 layers rather than 32 of each: it is snow's own model with wool on it.
+        for (var i = 0; i < Colours.Length; i++)
         {
-            Name = "wool", Hardness = 0.8f, Crafted = true,
-            Sounds = SoundMaterial.Cloth,
-            TopLayer = LayerWool, SideLayer = LayerWool, BottomLayer = LayerWool,
-        });
+            var layer = (ushort)(LayerFirstWool + i);
+
+            registry.Register(new BlockType
+            {
+                Name = $"wool_{Colours[i].Name}", Hardness = 0.8f, Crafted = true,
+                Sounds = SoundMaterial.Cloth,
+                TopLayer = layer, SideLayer = layer, BottomLayer = layer,
+            });
+        }
+
+        for (var i = 0; i < Colours.Length; i++)
+        {
+            var layer = (ushort)(LayerFirstWool + i);
+
+            registry.Register(new BlockType
+            {
+                Name = $"carpet_{Colours[i].Name}", Hardness = 0.1f, Crafted = true,
+                Solid = false, Opaque = false, Sounds = SoundMaterial.Cloth,
+                SupportFace = Faces.NegY,
+                Model = BlockModel.Layer(layer, layer, layer, 1f),
+            });
+        }
 
         // Cut stone: every rock worked, and the harder ones bonded after that. One loop, because
         // the difference between them is a name, a tile and how hard it is to break — which is what
@@ -623,6 +724,7 @@ public static class StarterBlocks
             stone, dirt, grass, sand, water, gravel, log, leaves, planks, coal, iron, bedrock,
             emberstone, vine, deepstone, coralstone, driftstone, saltstone, copper, gold, stormglass,
             azurite, clay, sandstone, snow, snowLayer, meadowgrass, seaflax, marshlily,
+            emberbloom, sunwort,
             rubble, glass, bricks, bench, furnace, furnaceLit);
     }
 

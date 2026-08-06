@@ -641,12 +641,19 @@ public static class WorldAudit
         // the share does not — and banded at both ends, since a field that is more bloom than grass
         // is as wrong as one with none.
         var flowerPct = flowers * 100.0 / Math.Max(cover, 1);
+        // ⛔ EVERY KIND, NOT TWO OF THEM. Naming the two that existed when this was written would
+        // have gone on passing after the dye tree added another two — and a colour whose flower
+        // never grows is a whole branch of the recipe tree nobody can reach, which reads from a
+        // console exactly like a world that works. The four are asked for by name, off ids.Flowers,
+        // so a fifth is a row in that array and not an edit here.
+        var barren = ids.Flowers.Where(f => counts[f.Value] == 0).ToList();
+        var bloomCounts = string.Join(
+            ", ", ids.Flowers.Select(f => $"{counts[f.Value]:N0} {registry[f].Name}"));
+
         Check(
             "meadows carry flowers",
-            flowers > 0 && flowerPct is > 2.0 and < 25.0
-                && counts[ids.Seaflax.Value] > 0 && counts[ids.Marshlily.Value] > 0,
-            $"{flowers:N0} blooms, {flowerPct:F1}% of ground cover (want 2-25), "
-            + $"{counts[ids.Seaflax.Value]:N0} seaflax and {counts[ids.Marshlily.Value]:N0} marshlily");
+            flowers > 0 && flowerPct is > 2.0 and < 25.0 && barren.Count == 0,
+            $"{flowers:N0} blooms, {flowerPct:F1}% of ground cover (want 2-25), {bloomCounts}");
 
         // The dusting has to be a fringe on the snowfield rather than a second one. Measured as its
         // share of all the white ground: with no band the edge either vanishes (a snow line drawn
@@ -3033,10 +3040,22 @@ public static class WorldAudit
             // The positive control. Everything below is a claim about a cell in a chunk the streamer
             // was supposed to have generated, and all of it passes vacuously in a world where
             // generation never ran at all.
-            if (streamer.World.GetBlock(untouched.X, untouched.Y, untouched.Z) == BlockId.Air)
+            //
+            // ⛔ A COLUMN, NOT A CELL, AND THE CELL WAS A CHECK THAT LIED. It probed (7,2,7) and
+            // called air there "nothing generated" — but two of the five test seeds have a cave
+            // running through exactly that cell, so a perfectly generated world failed its own
+            // positive control on saltmarsh and on 9911. The claim was never about one cell; it is
+            // that the chunk has terrain in it, and a chunk of terrain is not something a cave can
+            // empty. Counted over the whole column, with a floor well under what any real one holds —
+            // measured at 53 to 66 across the five test seeds, and gated at 8.
+            var column = 0;
+            for (var y = 1; y < TerrainGenerator.WorldHeight; y++)
+                if (streamer.World.GetBlock(untouched.X, y, untouched.Z) != BlockId.Air) column++;
+
+            if (column < 8)
                 faults.Add(
-                    $"nothing generated at all — ({untouched.X},{untouched.Y},{untouched.Z}) is air, "
-                    + "so every check below is measuring an empty world");
+                    $"nothing generated at all — the column at ({untouched.X},{untouched.Z}) holds "
+                    + $"{column} solid cells, so every check below is measuring an empty world");
 
             Judge("under the spawn", near, streamer);
 
