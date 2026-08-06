@@ -200,6 +200,19 @@ public sealed class HudScreen
     /// <summary>What the pointer is over, refreshed each frame from the layout.</summary>
     public Zone? Hovered;
 
+    /// <summary>
+    /// Where the tooltip was drawn last frame, in layout units. Zero-width when there was none.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>Published for the same reason <see cref="ScreenLayout"/> is: so a check reads where the
+    /// box IS rather than where the constants say it should be.</b> A tooltip flips to the other side
+    /// of the pointer near an edge, and a check sampling "twelve units down and right" read bare
+    /// panel every time for a slot on the bottom row — it passed, on a two-count difference that was
+    /// two panels rather than a box. This is one field and it turns a colour comparison into
+    /// "was a box laid out at all, and what is in it".
+    /// </remarks>
+    public Vector4 TipBox;
+
     public bool IsOpen => Kind != HudScreenKind.None;
 
     /// <summary>
@@ -517,7 +530,12 @@ public sealed class HudRenderer : IDisposable
 
         // Last, over everything, because a pointer that goes behind a panel is a pointer somebody
         // is about to lose. What is on the cursor rides under it, offset so the hotspot still reads.
-        if (screen.IsOpen) Pointer(catalogue, screen, layout);
+        // ⚠ The tooltip goes UNDER the cursor and OVER everything else, in that order.
+        if (screen.IsOpen)
+        {
+            Tip(catalogue, inventory, equipment, screen, layout, w, h);
+            Pointer(catalogue, screen, layout);
+        }
 
         // Said once per screen, on the frame it opens. "It is not appearing" and "it is appearing
         // somewhere I am not looking" are different faults with the same symptom, and the only
@@ -1617,6 +1635,81 @@ public sealed class HudRenderer : IDisposable
     /// Ours rather than the desktop's, so it scales with the interface, lands on the same pixel grid
     /// and is the same pointer on every machine. Drawn last, over everything.
     /// </remarks>
+    /// <summary>
+    /// The box that names whatever the pointer is over.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ <b>Drawn LAST, after the panel and before the cursor</b>, which is the whole of its
+    /// stacking: under the panel it describes it would be invisible, and over the cursor it would
+    /// hide the thing doing the pointing.</para>
+    /// <para>⚠ <b>It flips rather than clamping.</b> A box held inside the window by clamping sits
+    /// <em>on top of</em> the square it is describing the moment the pointer nears an edge — which is
+    /// the one place a tooltip must not be. Flipping to the other side of the pointer keeps the
+    /// square visible wherever it is.</para>
+    /// <para>⚠ Nothing is carried while a tooltip shows. A box under a dragged stack is a box
+    /// describing a square the stack is not going into, and it covers what the drag is aiming at.
+    /// </para>
+    /// </remarks>
+    private void Tip(ItemRegistry catalogue, Inventory inventory, Equipment equipment,
+                     HudScreen screen, ScreenLayout layout, float w, float h)
+    {
+        screen.TipBox = Vector4.Zero;
+
+        if (!screen.Carried.IsEmpty) return;
+        if (screen.Hovered is not { } zone) return;
+
+        Recipe? recipe = null;
+        var payable = true;
+
+        if (zone.Kind == ZoneKind.Recipe)
+        {
+            // ⚠ Two lists answer to one zone kind: the book's recipes and a stonecutter's offers.
+            // The panel says which, exactly as the click handler does.
+            var list = layout.Kind == PanelKind.Stonecutter ? screen.Cuts : screen.Recipes;
+            if (zone.Index < 0 || zone.Index >= list.Count) return;
+
+            recipe = list[zone.Index];
+            payable = layout.Kind == PanelKind.Stonecutter
+                      || (zone.Index < screen.Payable.Count && screen.Payable[zone.Index]);
+        }
+
+        var told = Tooltip.For(
+            zone, Contents(inventory, equipment, screen, zone), catalogue, recipe, payable);
+
+        if (told.IsEmpty) return;
+
+        const float Title = 8f;
+        const float NoteSize = 7f;
+        const float Pad = 5f;
+
+        var width = TextWidth(told.Title, Title);
+        var note = told.Note.Length > 0 ? Wrap(told.Note, 150f, NoteSize) : null;
+        var lines = new List<string>(note ?? []);
+
+        foreach (var line in lines) width = MathF.Max(width, TextWidth(line, NoteSize));
+
+        var boxWidth = width + Pad * 2f;
+        var boxHeight = Title + lines.Count * (NoteSize + 2f) + Pad * 2f;
+
+        // Below and right of the point by default — the corner a cursor's own arrow leaves free —
+        // and flipped to the other side of it rather than clamped when that would run off.
+        var x = screen.Pointer.X + 12f;
+        var y = screen.Pointer.Y + 10f;
+
+        if (x + boxWidth > w - 2f) x = screen.Pointer.X - boxWidth - 4f;
+        if (y + boxHeight > h - 2f) y = screen.Pointer.Y - boxHeight - 2f;
+
+        x = MathF.Round(MathF.Max(2f, x));
+        y = MathF.Round(MathF.Max(2f, y));
+
+        screen.TipBox = new Vector4(x, y, boxWidth, boxHeight);
+        Bevel(x, y, boxWidth, boxHeight, raised: false, TipFill);
+        Text(told.Title, x + Pad, y + Pad, Title, Ink);
+
+        for (var i = 0; i < lines.Count; i++)
+            Text(lines[i], x + Pad, y + Pad + Title + 2f + i * (NoteSize + 2f), NoteSize, InkFaint);
+    }
+
     private void Pointer(ItemRegistry catalogue, HudScreen screen, ScreenLayout layout)
     {
         var size = MathF.Max(12f, MathF.Round(layout.Zoom * 8f));
@@ -1649,6 +1742,19 @@ public sealed class HudRenderer : IDisposable
     private static readonly Vector4 PanelFill = new(0.36f, 0.36f, 0.36f, 0.97f);
     private static readonly Vector4 PanelLight = new(0.63f, 0.63f, 0.63f, 1f);
     private static readonly Vector4 PanelDark = new(0.15f, 0.15f, 0.15f, 1f);
+
+    /// <summary>
+    /// A tooltip's own fill: darker than a panel, and strictly neutral.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>USER, 2026-08-06: "we go with a pixel art styling in grey tones throughout the game."</b>
+    /// This started life as 0.13/0.13/0.15 — a blue cast of two hundredths, invisible written down
+    /// and exactly the sort of drift that makes an interface stop reading as one thing. Named here
+    /// with the rest of the palette so the whole of it re-tones in one place and no two panels can
+    /// disagree by a hex digit. Darker than <see cref="PanelFill"/> because it sits ON a panel and
+    /// has to be told apart from it; the same three channels because everything here is.
+    /// </remarks>
+    private static readonly Vector4 TipFill = new(0.13f, 0.13f, 0.13f, 0.97f);
 
     /// <summary>Inside a square: nearly black, so what is in it is the only thing with a tone.</summary>
     /// <remarks>

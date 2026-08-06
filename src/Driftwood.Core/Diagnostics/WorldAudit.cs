@@ -392,6 +392,17 @@ public static class WorldAudit
                   + "into a grid and found again, none duplicated, none bigger than a bench"
                 : $"{recipeFaults.Count} faults: {recipeFaults[0]}");
 
+        // ⛔ What a square SAYS, which is a different claim from where it is drawn. The ui-check can
+        // see that a box appeared; only this can see that it named the right thing, and it is the
+        // half that goes wrong silently — a tooltip saying "pocket" over every square looks exactly
+        // like one that works from any screenshot.
+        var tipFaults = Tooltip.Validate(items, book);
+        Check("hovering a thing says what it is", tipFaults.Count == 0,
+            tipFaults.Count == 0
+                ? "every special square names what it is for, the pockets stay quiet when empty, a "
+                  + "tool gives its tier and its wear, and a recipe says what it costs"
+                : $"{tipFaults.Count} faults: {tipFaults[0]}");
+
         var reach = ReachabilitySelfTest(registry, items, drops, creatureDrops, book, counts, out var reachDetail);
         Check("everything is reachable from bare hands", reach.Count == 0,
             reach.Count == 0 ? reachDetail : $"{reach.Count} faults: {reach[0]}");

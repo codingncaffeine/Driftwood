@@ -5521,7 +5521,29 @@ public sealed class ClientHost : IDisposable
                 _inventory.Clear();
                 break;
 
-            case 91: _hudScreen.BookOut = true; RefreshScreen(); break;
+            // ⛳ THE TOOLTIP, AND THE GUTTER BESIDE IT. A stone goes in the first pocket, the pointer
+            // is put on it, and the frame after that the box is read back. Then the pointer moves two
+            // units left into the gap between that square and the next — where the layout has no zone
+            // at all — and the same rectangle is read again. One arm alone passes a build that draws
+            // a tooltip everywhere; it is the pair that says it is reading the square.
+            case 91:
+                _inventory.Add(new ItemStack(_items.ByName("stone_pickaxe").Id, 1));
+                RefreshScreen();
+                PointAt(SlotRole.Pocket, 0);
+                break;
+
+            case 93: SampleTooltip(size, "tip on a slot"); break;
+
+            case 94: PointAt(SlotRole.Pocket, 0, gutter: true); break;
+
+            case 96:
+                SampleTooltip(size, "tip on a gutter");
+                _inventory.Clear();
+                _hudScreen.Pointer = Vector2.Zero;
+                _hudScreen.Hovered = null;
+                _hudScreen.BookOut = true;
+                RefreshScreen();
+                break;
 
             case 120:
                 SampleUi(size, "book");
@@ -5897,6 +5919,108 @@ public sealed class ClientHost : IDisposable
     /// <para>Averaged over the box's left half rather than read at one point, because a single pixel
     /// between two letters is background in a box that is drawing perfectly.</para>
     /// </remarks>
+    /// <summary>
+    /// Puts the pointer somewhere and reads back where a tooltip would be.
+    /// </summary>
+    /// <param name="onto">A square to point at, or null to point at the gutter between two.</param>
+    /// <remarks>
+    /// ⛔ <b>Always run as a PAIR, and the gutter arm is the one that matters.</b> "A tooltip
+    /// appeared" is equally true of a build that draws one everywhere the pointer goes, so the
+    /// second arm points at the gap between two squares — where the layout has no zone at all — and
+    /// asserts the same rectangle stays panel-coloured. One arm alone tests nothing.
+    /// <para>⚠ Sampled at the offset the renderer actually places the box at, and only the top left
+    /// of it: a tooltip is mostly its own dark fill, so averaging the whole box would read dark
+    /// whatever was written in it, and averaging none of it reads whichever letter it landed on.
+    /// </para>
+    /// </remarks>
+    /// <summary>
+    /// Aims the pointer at one square, or at the gutter between two.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ <b>A frame before the sample</b>, because the check runs after the draw: a pointer moved and
+    /// read in the same call is read against the frame it was drawn without.
+    /// </remarks>
+    private void PointAt(SlotRole role, int index, bool gutter = false)
+    {
+        var first = _layout.Find(role, index);
+        if (first is not { } a) return;
+
+        if (gutter)
+        {
+            // ⚠ The gap between two squares, found off the layout rather than worked out from the
+            // pitch — two units of panel that no zone claims, and the only honest "over nothing".
+            var second = _layout.Find(role, index + 1);
+            if (second is not { } b) return;
+
+            _hudScreen.Pointer = new Vector2((a.X + a.W + b.X) * 0.5f, a.CentreY);
+        }
+        else
+        {
+            _hudScreen.Pointer = new Vector2(a.CentreX, a.CentreY);
+        }
+
+        _hudScreen.Hovered = _layout.At(_hudScreen.Pointer.X, _hudScreen.Pointer.Y);
+    }
+
+    /// <summary>Whether a box was laid out at each of the two points, and what colour it was.</summary>
+    private readonly Dictionary<string, bool> _uiTipDrawn = new(StringComparer.Ordinal);
+
+    private unsafe void SampleTooltip(Vector2D<int> size, string what)
+    {
+        // ⛳ WHERE THE BOX ACTUALLY IS, off the renderer rather than worked out again from the
+        // offset it usually sits at. A tooltip flips to the other side of the pointer near an edge,
+        // and the first version of this sampled twelve units down and right unconditionally — which
+        // for a bottom-row pocket is bare panel. It read 64 against the gutter's 66 and passed, on a
+        // two-count difference that was two samples of the same panel.
+        var box = _hudScreen.TipBox;
+        _uiTipDrawn[what] = box.Z > 0f;
+
+        if (box.Z <= 0f)
+        {
+            _uiSamples[what] = default;
+            Console.WriteLine($"ui-check    {what,-17} no box laid out");
+            Console.Out.Flush();
+            return;
+        }
+
+        var scale = HudRenderer.ScaleFor(size.Y);
+
+        // The top strip of it, where the title is, rather than the whole box — most of a tooltip is
+        // its own fill and an average over all of it reads the fill whatever is written there.
+        var x0 = (int)(box.X * scale);
+        var y0 = (int)(box.Y * scale);
+        var x1 = (int)((box.X + box.Z) * scale);
+        var y1 = (int)((box.Y + MathF.Min(box.W, 14f)) * scale);
+
+        long r = 0, g = 0, b = 0;
+        var taken = 0;
+
+        Span<byte> px = stackalloc byte[4];
+        for (var y = y0; y < y1; y++)
+        for (var x = x0; x < x1; x++)
+        {
+            if (x < 0 || y < 0 || x >= size.X || y >= size.Y) continue;
+
+            fixed (byte* p = px)
+                _gl.ReadPixels(x, size.Y - 1 - y, 1, 1, PixelFormat.Rgba, PixelType.UnsignedByte, p);
+
+            r += px[0];
+            g += px[1];
+            b += px[2];
+            taken++;
+        }
+
+        if (taken == 0) return;
+
+        _uiSamples[what] = ((byte)(r / taken), (byte)(g / taken), (byte)(b / taken));
+
+        var zoneName = _hudScreen.Hovered is { } over ? $"{over.Kind}/{over.Role}" : "nothing";
+        Console.WriteLine(
+            $"ui-check    {what,-17} rgb {r / taken,3} {g / taken,3} {b / taken,3} "
+            + $"over {zoneName}, box {box.Z:F0}x{box.W:F0}");
+        Console.Out.Flush();
+    }
+
     private unsafe void SampleField(Vector2D<int> size, string what)
     {
         var zone = _layout.Zones.FirstOrDefault(z => z.Kind == ZoneKind.Field);
@@ -6366,6 +6490,32 @@ public sealed class ClientHost : IDisposable
                      + $"{storedFull.R} {storedFull.G} {storedFull.B}");
 
         if (cutter == bare) faults.Add("opening a stonecutter changed nothing on screen");
+
+        // ⛔ THE TOOLTIP AND THE GUTTER BESIDE IT, and the second is the whole check. The pointer is
+        // put on a pocket holding a pickaxe, then two units left into the gap between that square
+        // and the next, where the layout has no zone at all. "A box appeared" is only worth
+        // believing alongside "and none appeared where there is nothing".
+        if (!_uiTipDrawn.GetValueOrDefault("tip on a slot"))
+            faults.Add("hovering a pocket holding a stone pickaxe drew no tooltip");
+
+        if (_uiTipDrawn.GetValueOrDefault("tip on a gutter"))
+            faults.Add("a tooltip was drawn over the bare panel between two squares");
+
+        // ⚠ And it has to be the DARK box the palette names rather than merely something. A tooltip
+        // drawn in the panel's own tone is one nobody can see, and a box that was laid out proves
+        // nothing about whether it can be read.
+        var onSlot = Read("tip on a slot");
+        var panel = Read("items");
+
+        if (_uiTipDrawn.GetValueOrDefault("tip on a slot") && onSlot.R >= panel.R)
+            faults.Add($"the tooltip is no darker than the panel it sits on, "
+                     + $"{onSlot.R} against {panel.R}");
+
+        // ⛳ And grey, per the rule the whole interface is drawn to: no channel may stray from the
+        // others. A cast of two hundredths is invisible written down and is exactly how a set of
+        // panels stops reading as one thing.
+        else if (Math.Abs(onSlot.R - onSlot.B) > 6 || Math.Abs(onSlot.R - onSlot.G) > 6)
+            faults.Add($"the tooltip has a colour cast, {onSlot.R} {onSlot.G} {onSlot.B}");
 
         // The title has to be there, and has to be made of something. A cell the word fills reading
         // the same as a cell it leaves empty is a title that is not drawn, drawn somewhere else, or
