@@ -3544,7 +3544,10 @@ public sealed class ClientHost : IDisposable
 
         // ⚠ Held still for the check, which reads a moving title off the framebuffer and would
         // otherwise sample a different frame of it every run.
-        if (_options.UiCheck) _hudScreen.Drift = 0.8f;
+        // ⚠ Held still for the check, which reads a moving title and a turning page off the
+        // framebuffer and would otherwise sample a different frame of each every run. The check
+        // moves it on purpose, once, to prove the page is turning at all — see "book turn".
+        if (_options.UiCheck) _hudScreen.Drift = _uiDrift;
         else _hudScreen.Drift += (float)dt;
 
         // The caret's own clock. Held at a lit moment for the check, for the same reason the title
@@ -4548,7 +4551,14 @@ public sealed class ClientHost : IDisposable
                 ProbeBook();
                 break;
 
-            case 121: CloseScreen(); OpenBench(0, 0, 0); break;
+            // ⛳ The same square of the same page, twice, with the clock moved between them. A block
+            // turning is the one thing here no still frame can show, and a page that had quietly
+            // stopped turning would look exactly like one that never did.
+            case 121: _turnBefore = CaptureRecipe(size); break;
+            case 122: _uiDrift = TurnedDrift; break;
+            case 123: JudgeTurn(size); _uiDrift = StillDrift; break;
+
+            case 124: CloseScreen(); OpenBench(0, 0, 0); break;
             case 150: SampleUi(size, "bench"); ProbeSquares(); break;
 
             // A chest with something in it, because an empty one draws the same twenty seven wells
@@ -4690,6 +4700,82 @@ public sealed class ClientHost : IDisposable
     /// <summary>What the box was holding after the check typed into it.</summary>
     private string _typedSeed = "";
 
+    /// <summary>Where the check holds the drifting clock, so every run samples the same frame.</summary>
+    private const float StillDrift = 0.8f;
+
+    /// <summary>And where it moves it to, once, to see whether the page turns. About a radian on.</summary>
+    private const float TurnedDrift = 2.6f;
+
+    private float _uiDrift = StillDrift;
+
+    /// <summary>The middle of the first recipe square, pixel for pixel.</summary>
+    /// <remarks>
+    /// ⛔ <b>Kept whole rather than averaged, and the average is why.</b> "Did this move" was first
+    /// asked as a mean over the square, which changed by <b>one unit</b> across fifty-seven degrees
+    /// of turn — and would have changed by about that much if the block had been standing still and
+    /// something else had twitched. A turning solid keeps very nearly the same average brightness
+    /// however far round it is: the mean is blind to exactly the thing being measured. Counting the
+    /// pixels that actually differ is not.
+    /// </remarks>
+    private unsafe byte[] CaptureRecipe(Vector2D<int> size)
+    {
+        foreach (var zone in _layout.Zones)
+        {
+            if (zone.Kind != ZoneKind.Recipe) continue;
+
+            var scale = HudRenderer.ScaleFor(size.Y);
+            var w = Math.Max(1, (int)(zone.W * scale * 0.6f));
+            var h = Math.Max(1, (int)(zone.H * scale * 0.6f));
+            var x = (int)((zone.X + zone.W * 0.2f) * scale);
+            var y = (int)((zone.Y + zone.H * 0.2f) * scale);
+
+            if (x < 0 || y < 0 || x + w > size.X || y + h > size.Y) return [];
+
+            var patch = new byte[w * h * 4];
+            fixed (byte* p = patch)
+                _gl.ReadPixels(
+                    x, size.Y - 1 - (y + h), (uint)w, (uint)h,
+                    (GLEnum)PixelFormat.Rgba, (GLEnum)PixelType.UnsignedByte, p);
+
+            return patch;
+        }
+
+        Console.Error.WriteLine("ui-check    the page laid out no recipe squares at all");
+        return [];
+    }
+
+    /// <summary>The middle of a recipe square before the clock was moved on.</summary>
+    private byte[] _turnBefore = [];
+
+    /// <summary>How many of its pixels changed once it had, as a share of the patch.</summary>
+    private float _turnMoved = -1f;
+
+    /// <summary>Compares the patch against the one taken before the clock moved.</summary>
+    private void JudgeTurn(Vector2D<int> size)
+    {
+        var after = CaptureRecipe(size);
+        if (_turnBefore.Length == 0 || after.Length != _turnBefore.Length) return;
+
+        var moved = 0;
+        var pixels = after.Length / 4;
+
+        for (var i = 0; i < after.Length; i += 4)
+        {
+            // Eight levels, so a rounding difference in one channel is not a moving block.
+            if (Math.Abs(after[i] - _turnBefore[i]) > 8
+                || Math.Abs(after[i + 1] - _turnBefore[i + 1]) > 8
+                || Math.Abs(after[i + 2] - _turnBefore[i + 2]) > 8)
+                moved++;
+        }
+
+        _turnMoved = (float)moved / pixels;
+
+        Console.WriteLine(
+            $"ui-check    book turn  {moved} of {pixels} pixels moved ({_turnMoved * 100f:F0}%) "
+            + $"over {(TurnedDrift - StillDrift) * 0.55f:F2} radians");
+        Console.Out.Flush();
+    }
+
     /// <summary>
     /// Reads the square a named item is sitting in, averaged over the whole of it.
     /// </summary>
@@ -4722,17 +4808,36 @@ public sealed class ClientHost : IDisposable
             return;
         }
 
+        SampleZone(size, zone, what, fromY, toY);
+    }
+
+    /// <summary>Averages the pixels of one zone the renderer laid down, or a patch of it.</summary>
+    /// <remarks>
+    /// ⚠ <b>The patch matters more than it looks.</b> A square is mostly its own well: the icon in
+    /// it is inset and, when it is turning, scaled to seven tenths again — so an average over the
+    /// whole square is three parts unchanging bevel to one part the thing being measured, and a real
+    /// change in the icon arrives here as one or two units. Sample where the thing is.
+    /// </remarks>
+    private unsafe void SampleZone(
+        Vector2D<int> size, Zone zone, string what,
+        float fromY = 0f, float toY = 1f, float fromX = 0f, float toX = 1f)
+    {
         var scale = HudRenderer.ScaleFor(size.Y);
-        long r = 0, g = 0, b = 0;
-        var taken = 0;
 
         var tall = (int)(zone.H * scale);
         var top = (int)(tall * fromY);
         var bottom = (int)(tall * toY);
 
+        var wide = (int)(zone.W * scale);
+        var left = (int)(wide * fromX);
+        var right = (int)(wide * toX);
+
+        long r = 0, g = 0, b = 0;
+        var taken = 0;
+
         Span<byte> px = stackalloc byte[4];
         for (var dy = top; dy < bottom; dy++)
-        for (var dx = 0; dx < (int)(zone.W * scale); dx++)
+        for (var dx = left; dx < right; dx++)
         {
             var x = (int)(zone.X * scale) + dx;
             var y = (int)(zone.Y * scale) + dy;
@@ -5418,6 +5523,19 @@ public sealed class ClientHost : IDisposable
             faults.Add(
                 "a file in the saves folder that is not a world took the readable worlds with it — "
                 + "one bad file must cost its own row and nothing else");
+
+        // ⛳ THE PAGE TURNS. The same patch of the same square at two points on the clock, compared
+        // pixel for pixel — the only way a still frame can say anything about a moving one, and a
+        // page that had quietly stopped turning looks exactly like one that never did.
+        //
+        // A fifth of the patch is a low bar on purpose: how much of it moves depends on which block
+        // the first recipe happens to make, and that changes whenever the recipe set does. What is
+        // being asked is whether it moved at all, and the mean could not answer that.
+        if (_turnMoved < 0f) faults.Add("the turning page was never compared at two moments");
+        else if (_turnMoved < 0.2f)
+            faults.Add(
+                $"only {_turnMoved * 100f:F0}% of a recipe square changed across a radian of turn, "
+                + "so the block in it is not turning");
 
         // ⛳ A SLAB IS HALF AS TALL AS THE BLOCK IT IS CUT FROM, SO IT REACHES LESS FAR UP ITS
         // SQUARE. Both wear the same tile, so nothing but the shape can move this number, and the

@@ -1082,8 +1082,18 @@ public sealed class HudRenderer : IDisposable
 
             var result = screen.Recipes[zone.Index].Result;
             var inset = MathF.Round(z * 2f);
+
+            // ⛳ THE BOOK TURNS AND NOTHING ELSE DOES, and that is the point rather than a saving.
+            // A page is a display case: it is what somebody is reading, and turning is what says a
+            // thing has a shape rather than a picture. Thirty six pockets all turning at once is a
+            // fruit machine, and the one place a shape most needs to be legible — the bar under the
+            // crosshair, glanced at mid-swing — is the last place anything should be moving.
+            //
+            // Offset per entry so a page does not turn in lockstep, which reads as one object seen
+            // several times rather than as several objects.
             SlotIcon(catalogue, result, zone.X + inset, zone.Y + inset, zone.W - inset * 2f,
-                payable ? Vector4.One : new Vector4(0.45f, 0.45f, 0.45f, 0.85f));
+                payable ? Vector4.One : new Vector4(0.45f, 0.45f, 0.45f, 0.85f),
+                spin: screen.Drift * BookTurn + zone.Index * 0.7f);
 
             if (result.Count > 1)
                 Number(result.Count, zone.X + zone.W, zone.Y + zone.H - cell * 0.32f, MathF.Max(5f, z * 4f));
@@ -1826,7 +1836,12 @@ public sealed class HudRenderer : IDisposable
     /// <see cref="ItemType.DrawsAsBlock"/>: a torch is art on crossed planes, so a solid of it is a
     /// solid of black, and a tool is not a box at all.</para>
     /// </remarks>
-    private void SlotIcon(ItemRegistry catalogue, ItemStack stack, float x, float y, float size, Vector4 tint)
+    /// <param name="spin">
+    /// Radians about the block's own upright axis, or 0 for the fixed three-quarter view.
+    /// </param>
+    private void SlotIcon(
+        ItemRegistry catalogue, ItemStack stack, float x, float y, float size, Vector4 tint,
+        float spin = 0f)
     {
         if (stack.IsEmpty) return;
 
@@ -1838,8 +1853,121 @@ public sealed class HudRenderer : IDisposable
             return;
         }
 
-        foreach (var box in model.Icon) IconBox(box, x, y, size, tint);
+        if (spin != 0f) TurningIcon(model, x, y, size, tint, spin);
+        else foreach (var box in model.Icon) IconBox(box, x, y, size, tint);
     }
+
+    /// <summary>
+    /// Radians a second a block in the recipe book turns.
+    /// </summary>
+    /// <remarks>
+    /// Slow on purpose: about eleven seconds a turn. Fast enough that a page is obviously alive and
+    /// slow enough to read a shape off one without waiting for it — a spin quick enough to be
+    /// noticed is a spin quick enough to be annoying on a screen somebody is browsing.
+    /// </remarks>
+    private const float BookTurn = 0.55f;
+
+    /// <summary>How much of the square a turning block is allowed, so its corners stay inside it.</summary>
+    /// <remarks>
+    /// ⚠ <b>A cube is 41% wider corner-on than face-on</b>, so one drawn at the size the fixed view
+    /// uses would swing outside its own square twice a turn and clip against the panel. This is the
+    /// price of turning, not a preference — a turning icon reads a little smaller than a still one.
+    /// </remarks>
+    private const float TurnFit = 0.70f;
+
+    /// <summary>
+    /// A block turning on the spot, drawn as its own faces from whatever angle it is at.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ <b>Sorted and culled here rather than left to a depth buffer.</b> The still view gets
+    /// away with drawing three faces in a fixed order because the same three always face you; the
+    /// moment it turns, both which faces are visible and which order they go in change every frame.
+    /// Doing it on the processor keeps the whole thing inside the overlay's existing batch — no
+    /// second pass, no depth buffer to clear in the middle of the interface, and no state to put
+    /// back afterwards.</para>
+    /// <para>A face pointing away is dropped outright, and what is left is drawn far to near. That
+    /// is exact for a solid and near enough for everything we have; a shape with a hole in it may
+    /// show its own far side through the hole, which is the same trade the dropped items make.</para>
+    /// <para>⚠ <b>Ties are broken by the order the model baked them in</b>, so two faces at the same
+    /// depth — a grass block's overlay lies exactly on the dirt under it — come out in the same
+    /// order every frame instead of flickering between them.</para>
+    /// </remarks>
+    private void TurningIcon(
+        BlockModel model, float x, float y, float size, Vector4 tint, float spin)
+    {
+        var h = size * 0.5f * TurnFit;
+        var ox = x + size * 0.5f;
+        var oy = y + size * 0.5f;
+
+        var cos = MathF.Cos(spin);
+        var sin = MathF.Sin(spin);
+
+        // A direction, turned. Nothing is moved: a normal has no position to be moved about.
+        Vector3 Spun(Vector3 d) => new(d.X * cos + d.Z * sin, d.Y, -d.X * sin + d.Z * cos);
+
+        // A point of the block, turned about its own middle.
+        Vector3 Turn(Vector3 p) => Spun(p - new Vector3(0.5f));
+
+        // Flattened the same way the still view flattens it: sx = (x - z) * h and
+        // sy = (x + z) * h/2 - y * h, about the middle of the square.
+        (float X, float Y) Flatten(Vector3 t) =>
+            (ox + (t.X - t.Z) * h, oy + (t.X + t.Z) * (h * 0.5f) - t.Y * h);
+
+        _turning.Clear();
+
+        for (var i = 0; i < model.Quads.Length; i++)
+        {
+            var quad = model.Quads[i];
+
+            var (nx, ny, nz) = Faces.Normals[quad.Face];
+            var normal = Spun(new Vector3(nx, ny, nz));
+
+            // The eye is off the block's +x +y +z corner, so a face is seen when its own direction
+            // leans that way at all.
+            if (normal.X + normal.Y + normal.Z <= 0f) continue;
+
+            var depth = 0f;
+            foreach (var corner in quad.Corners)
+            {
+                var t = Turn(corner.Position);
+                depth += t.X + t.Y + t.Z;
+            }
+
+            _turning.Add((depth, i, normal));
+        }
+
+        // Far first. The index breaks a tie so coplanar faces keep the order they were baked in.
+        _turning.Sort((a, b) =>
+            a.Depth != b.Depth ? a.Depth.CompareTo(b.Depth) : a.Index.CompareTo(b.Index));
+
+        foreach (var (_, index, normal) in _turning)
+        {
+            var quad = model.Quads[index];
+
+            // The three shades the still view uses, blended by which way this face now points, so a
+            // block turning through the angles between them shades smoothly rather than jumping.
+            var weight = MathF.Abs(normal.X) + MathF.Abs(normal.Y) + MathF.Abs(normal.Z);
+            var shade = weight <= 0f
+                ? 1f
+                : (MathF.Abs(normal.Y) + MathF.Abs(normal.Z) * 0.80f + MathF.Abs(normal.X) * 0.62f) / weight;
+
+            var lit = tint * new Vector4(shade, shade, shade, 1f);
+
+            var a = Flatten(Turn(quad.Corners[0].Position));
+            var b = Flatten(Turn(quad.Corners[1].Position));
+            var c = Flatten(Turn(quad.Corners[2].Position));
+            var d = Flatten(Turn(quad.Corners[3].Position));
+
+            Quad(_blocks, quad.Layer, lit,
+                a.X, a.Y, quad.Corners[0].U, quad.Corners[0].V,
+                b.X, b.Y, quad.Corners[1].U, quad.Corners[1].V,
+                c.X, c.Y, quad.Corners[2].U, quad.Corners[2].V,
+                d.X, d.Y, quad.Corners[3].U, quad.Corners[3].V);
+        }
+    }
+
+    /// <summary>Reused so a page of turning blocks costs no allocation per frame.</summary>
+    private readonly List<(float Depth, int Index, Vector3 Normal)> _turning = [];
 
     /// <summary>The three faces one box of a block shows, seen from off its +x +y +z corner.</summary>
     /// <remarks>
