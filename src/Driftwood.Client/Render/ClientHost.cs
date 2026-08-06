@@ -6131,10 +6131,37 @@ public sealed class ClientHost : IDisposable
         if (spread > 12)
             faults.Add($"the options panel reads {game.R} {game.G} {game.B}, which is not the grey it is drawn in");
 
-        // The control: a corner of a plain frame must still be the world, or the samples are not
-        // measuring what they claim and every judgement above is on the same wrong pixels.
-        if (world.B <= world.R)
-            faults.Add($"the corner of a plain frame is not sky — read {world.R} {world.G} {world.B}");
+        // ⛔ THE CONTROL: every middle sampled above has to be a panel and every corner has to be
+        // the world behind it, or nothing here is comparing two different things and every
+        // judgement is on the same pixels.
+        //
+        // ⚠ It used to ask whether the corner of a plain frame was SKY, and that was a race rather
+        // than a check. Whether a hillside has arrived in the top-left of the frame sixty frames in
+        // is up to the streaming threads, so it passed *because the world had not finished
+        // loading* and went red the moment this machine got there first — a check whose green is
+        // the incomplete state. Worse, it read one pixel at frame sixty against panels sampled two
+        // hundred frames later, so the two were never even in the same picture.
+        //
+        // ⛳ The corner and the middle are read from the SAME FRAME, so this cannot race at all,
+        // and it says the load-bearing thing directly: a panel that reached the corner, or a
+        // ReadPixels that answered the same for everything, is what makes the samples worthless.
+        // What the corner happens to be a picture of — sky, a hill, a tree, night — is not the
+        // claim and never was.
+        foreach (var (screen, middle) in (ReadOnlySpan<(string, (byte R, byte G, byte B))>)
+                 [("items", items), ("book", book), ("bench", bench), ("chest", chestPanel),
+                  ("cutter", cutter), ("game", game)])
+        {
+            var outside = Read($"{screen} corner");
+            if (middle != outside) continue;
+
+            faults.Add(
+                $"the {screen} screen reads {middle.R} {middle.G} {middle.B} in its middle and the same in "
+                + "the corner of the frame — the panel covers what it is being measured against");
+        }
+
+        // And on a plain frame the two are the crosshair and the world, which are never the same.
+        if (world == bare)
+            faults.Add($"a plain frame's corner reads the same as its crosshair, {world.R} {world.G} {world.B}");
 
         if (!_waterMoved)
             faults.Add("the water layer on the card did not change, or the read cannot tell layers apart");
