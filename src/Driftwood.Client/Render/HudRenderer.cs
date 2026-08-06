@@ -87,6 +87,9 @@ public enum GameTab
     Audio,
     World,
     Saves,
+
+    /// <summary>The shelf of texture packs, and the box that puts one on it.</summary>
+    Packs,
 }
 
 /// <summary>

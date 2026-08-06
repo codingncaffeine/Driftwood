@@ -58,6 +58,17 @@ public sealed class GameSettings
     /// </remarks>
     public string CreatureGeometry { get; set; } = "";
 
+    /// <summary>
+    /// The texture pack to wear, by NAME on the shelf — empty for our own art.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>A name and not a path</b>, resolved through <see cref="Textures.PackLibrary"/>. A path
+    /// remembered here breaks the day a downloads folder is tidied, and it makes the set of packs a
+    /// player has a set of one. A name survives the file moving, and it lets two packs be swapped
+    /// between without going and finding either of them again.
+    /// </remarks>
+    public string TexturePack { get; set; } = "";
+
     public Bindings Keys { get; set; } = Bindings.Defaults();
 
     /// <summary>Lines the reader did not recognise, kept so a newer build's file survives an older one.</summary>
@@ -129,6 +140,7 @@ public sealed class GameSettings
                 // ⚠ Taken verbatim, not trimmed of anything but its edges. A Windows path is full of
                 // characters every other value here would reject, and one of them is a backslash.
                 case "world.creaturegeometry": settings.CreatureGeometry = value; break;
+                case "video.texturepack": settings.TexturePack = value; break;
                 default: settings._unknown[key] = value; break;
             }
         }
@@ -198,6 +210,12 @@ public sealed class GameSettings
         if (CreatureGeometry.Length > 0)
         {
             text.AppendLine($"world.creaturegeometry={CreatureGeometry}");
+            text.AppendLine();
+        }
+
+        if (TexturePack.Length > 0)
+        {
+            text.AppendLine($"video.texturepack={TexturePack}");
             text.AppendLine();
         }
 

@@ -867,7 +867,9 @@ public sealed class ClientHost : IDisposable
         _skyState = _clock.Now;
         _sky = new SkyRenderer(_gl);
 
-        var cloudField = new CloudField(_seed, _options.PackPath);
+        ResolvePack();
+
+        var cloudField = new CloudField(_seed, _packPath);
         _clouds = new CloudRenderer(_gl, cloudField.Build());
         Console.WriteLine(
             $"clouds      {cloudField.Summary}, {cloudField.Coverage * 100:F0}% cover, "
@@ -875,7 +877,7 @@ public sealed class ClientHost : IDisposable
         _startup.Mark("sky and clouds");
 
         var ceiling = TextureCeiling();
-        _textures = BlockTextureSet.Build(_options.PackPath, _options.TextureSize, ceiling);
+        _textures = BlockTextureSet.Build(_packPath, _options.TextureSize, ceiling);
         _startup.Mark("block textures");
 
         _blockTextures = new BlockTextureArray(_gl, _textures.Tiles, _textures.Size, BlockTextureSet.Cutouts());
@@ -924,7 +926,7 @@ public sealed class ClientHost : IDisposable
 
         // The same size the block tiles came out at, whatever decided it — cracks are laid over a
         // block face and a crack chain at a different resolution is visible as a crack chain.
-        var cracks = CrackTextures.Build(_options.PackPath, _textures.Size);
+        var cracks = CrackTextures.Build(_packPath, _textures.Size);
         _cracks = new BlockCracks(_gl, cracks);
         Console.WriteLine($"cracks      {cracks.Summary}");
         _startup.Mark("skin and cracks");
@@ -981,9 +983,9 @@ public sealed class ClientHost : IDisposable
                 ? []
                 : CreatureLibrary.ReadFolder(folder, faults);
 
-            using var pack = string.IsNullOrWhiteSpace(_options.PackPath)
+            using var pack = string.IsNullOrWhiteSpace(_packPath)
                 ? null
-                : TexturePack.Open(_options.PackPath);
+                : TexturePack.Open(_packPath);
 
             var resolved = CreatureLibrary.Resolve(models, pack);
 
@@ -1580,6 +1582,7 @@ public sealed class ClientHost : IDisposable
 
         // The list is on screen while a save-by-hand happens, so it has to follow.
         if (OnTab(GameTab.Saves)) ReadSavesFolder();
+        if (OnTab(GameTab.Packs)) ReadPacksFolder();
 
         return true;
     }
@@ -2174,6 +2177,7 @@ public sealed class ClientHost : IDisposable
                 // way in is OpenGame. Missing this is how a tab shows an empty list until it is
                 // opened a second time.
                 if (OnTab(GameTab.Saves)) ReadSavesFolder();
+        if (OnTab(GameTab.Packs)) ReadPacksFolder();
 
                 RefreshScreen();
                 ShowSelectedRow();
@@ -2265,6 +2269,7 @@ public sealed class ClientHost : IDisposable
                 if (_hudScreen.Kind == HudScreenKind.Game) _hudScreen.Selected = _tabRow[_hudScreen.Tab];
                 _hudScreen.Scroll = 0;
                 if (OnTab(GameTab.Saves)) ReadSavesFolder();
+        if (OnTab(GameTab.Packs)) ReadPacksFolder();
                 _shown.Clear();
                 RefreshScreen();
                 ShowSelectedRow();
@@ -2888,6 +2893,7 @@ public sealed class ClientHost : IDisposable
 
         // Once, here, rather than in the row builder that runs every frame the screen is up.
         if (tab == GameTab.Saves) ReadSavesFolder();
+        if (tab == GameTab.Packs) ReadPacksFolder();
 
         StopHands();
         TakeThePointer();
@@ -3350,6 +3356,10 @@ public sealed class ClientHost : IDisposable
                 }
                 break;
 
+            case GameTab.Packs:
+                BuildPackRows();
+                break;
+
             default:
                 var p = _walking ? _player.Position : _camera.Position;
 
@@ -3469,6 +3479,226 @@ public sealed class ClientHost : IDisposable
         ApplySettings();
     }
 
+    /// <summary>The pack actually being worn this run, resolved from the setting or the switch.</summary>
+    private string? _packPath;
+
+    /// <summary>
+    /// Works out which pack this run wears, and remembers a good one given on the command line.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ <b><c>--pack</c> wins, and installs itself.</b> Somebody who has typed a path once
+    /// should not have to type it again, so a pack pointed at from the command line is copied onto
+    /// the shelf and remembered — the same courtesy <c>--creature-geometry</c> already does.</para>
+    /// <para>⛔ <b>A setting naming a pack that has gone falls back to our own art and SAYS SO.</b>
+    /// Silently wearing the default is how somebody spends an evening wondering why their pack
+    /// stopped working; one line on the console is the whole difference.</para>
+    /// </remarks>
+    private void ResolvePack()
+    {
+        if (!string.IsNullOrWhiteSpace(_options.PackPath))
+        {
+            _packPath = _options.PackPath;
+
+            if (PackLibrary.Install(_options.PackPath, out _) is { } added
+                && !string.Equals(_settings.TexturePack, added.Name, StringComparison.Ordinal))
+            {
+                _settings.TexturePack = added.Name;
+                _settings.Save();
+            }
+
+            Console.WriteLine($"pack        {_packPath} (given on the command line)");
+            return;
+        }
+
+        var wanted = _settings.TexturePack;
+        if (string.IsNullOrWhiteSpace(wanted))
+        {
+            _packPath = null;
+            return;
+        }
+
+        _packPath = PackLibrary.PathOf(wanted);
+
+        Console.WriteLine(_packPath is null
+            ? $"pack        '{wanted}' is no longer on the shelf — wearing Driftwood's own art"
+            : $"pack        {wanted}");
+    }
+
+    /// <summary>The box a path is pasted into to put a pack on the shelf.</summary>
+    private readonly TextField _packBox = new(240);
+
+    /// <summary>What the shelf held when it was last read, and what the last import said.</summary>
+    private IReadOnlyList<PackLibrary.Entry> _packs = [];
+    private string _packNote = "";
+
+    private void ReadPacksFolder()
+    {
+        _packs = PackLibrary.List();
+    }
+
+    /// <summary>
+    /// The shelf: our own art, then everything installed, then the box that adds one.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ <b>Every row says what the thing IS</b>, not just that it exists — "Bedrock, 512px"
+    /// rather than a filename. That is the only line on the screen that tells a player whether the
+    /// file they downloaded is the file they meant, and it costs one open per pack.</para>
+    /// <para>⛔ <b>A pack that will not open is a ROW WITH A REASON, never a gap.</b> Same fault the
+    /// saves list had and the same fix: "nothing here" and "something here I cannot read" were four
+    /// identical words, and the second is far likelier with files people download.</para>
+    /// <para>⚠ <b>Applying is a relaunch, and the note says so before it happens.</b> The texture
+    /// array is built once at startup and half the game holds layer numbers into it; rebuilding it
+    /// under a live session is the change <see cref="OpenAnotherWorld"/> already declined to make for
+    /// the world, for the same reasons.</para>
+    /// </remarks>
+    private void BuildPackRows()
+    {
+        var wearing = _settings.TexturePack;
+
+        _hudScreen.Rows.Add(new MenuRow(
+            _packs.Count == 1 ? "1 pack installed" : $"{_packs.Count} packs installed", Heading: true));
+
+        _hudScreen.Rows.Add(new MenuRow(
+            "Driftwood's own art",
+            wearing.Length == 0 ? "worn" : "",
+            Note: "Drawn in code, and the only set guaranteed to cover everything in the game"));
+
+        foreach (var pack in _packs)
+        {
+            _hudScreen.Rows.Add(new MenuRow(
+                pack.Name,
+                !pack.Readable ? "cannot read"
+                    : string.Equals(pack.Name, wearing, StringComparison.OrdinalIgnoreCase) ? "worn"
+                    : "",
+                Note: pack.Readable
+                    ? $"{pack.Kind}. Enter wears it — the game restarts to build the textures"
+                    : $"{pack.Kind}. Enter takes it off the shelf"));
+        }
+
+        _hudScreen.Rows.Add(new MenuRow("add one", Heading: true));
+
+        _hudScreen.Rows.Add(new MenuRow(
+            "from a path", Edits: _packBox,
+            Note: _packNote.Length > 0
+                ? _packNote
+                : "A folder, a .zip, a .mcpack or a .mcaddon. Enter opens the box, enter again "
+                  + "copies it onto the shelf — Java, pre-flattening Java and Bedrock all read"));
+
+        _hudScreen.Rows.Add(new MenuRow(
+            "the shelf", "", Note: $"Packs live in {PackLibrary.Folder} — dropping one in there by "
+                               + "hand works just as well"));
+    }
+
+    /// <summary>Puts the pack named on this row on, or takes an unreadable one off the shelf.</summary>
+    private void ChoosePack(string label)
+    {
+        if (label == "Driftwood's own art")
+        {
+            WearPack("");
+            return;
+        }
+
+        foreach (var pack in _packs)
+        {
+            if (!string.Equals(pack.Name, label, StringComparison.Ordinal)) continue;
+
+            // ⛳ An unreadable row is the only way to get rid of a bad file without leaving the game,
+            // which is the whole reason it is listed rather than skipped.
+            if (!pack.Readable)
+            {
+                _packNote = PackLibrary.Remove(pack.Name)
+                    ? $"'{pack.Name}' taken off the shelf"
+                    : $"'{pack.Name}' could not be removed — it may be open in something else";
+
+                ReadPacksFolder();
+                RefreshScreen();
+                return;
+            }
+
+            WearPack(pack.Name);
+            return;
+        }
+    }
+
+    /// <summary>Remembers the choice and starts again wearing it.</summary>
+    /// <remarks>
+    /// ⚠ <b>A relaunch, exactly as switching worlds is, and for the same reason.</b> The texture
+    /// array is built once at startup, uploaded to the card, and every block, item and particle in
+    /// the game holds a layer number into it; rebuilding that under a live session means tearing
+    /// down and re-uploading everything while a world is streaming into it. Started again, the
+    /// setting is simply read at the top like any other.
+    /// </remarks>
+    private void WearPack(string name)
+    {
+        if (string.Equals(_settings.TexturePack, name, StringComparison.Ordinal))
+        {
+            _packNote = name.Length == 0 ? "already wearing our own art" : $"already wearing '{name}'";
+            RefreshScreen();
+            return;
+        }
+
+        _settings.TexturePack = name;
+        _settingsDirty = true;
+        _settings.Save();
+
+        // ⛔ The command line is REBUILT without --pack rather than added to. A run started with
+        // --pack on it would otherwise carry that pack forward for ever and the screen would appear
+        // to do nothing at all — which is the same shape of bug as a setting that never applies.
+        var exe = Environment.ProcessPath;
+        if (exe is null)
+        {
+            _packNote = "cannot find this program on disk, so it cannot start again";
+            RefreshScreen();
+            return;
+        }
+
+        if (!_atStartScreen) SaveWorld("before changing the texture pack");
+
+        var carried = new List<string>();
+        var was = Environment.GetCommandLineArgs();
+
+        for (var i = 1; i < was.Length; i++)
+        {
+            if (was[i] == "--pack") { i++; continue; }
+            carried.Add(was[i]);
+        }
+
+        var start = new ProcessStartInfo(exe) { UseShellExecute = false };
+        foreach (var argument in carried) start.ArgumentList.Add(argument);
+
+        try
+        {
+            Process.Start(start);
+            _stopRequested = true;
+        }
+        catch (Exception fault)
+        {
+            _packNote = $"could not start again: {fault.Message}";
+            RefreshScreen();
+        }
+    }
+
+    /// <summary>Takes what is in the box and tries to put it on the shelf.</summary>
+    private void ImportPack()
+    {
+        var entry = PackLibrary.Install(_packBox.Text, out var why);
+
+        if (entry is { } added)
+        {
+            _packNote = $"'{added.Name}' added — {added.Kind}. Enter on its row to wear it";
+            _packBox.Clear();
+        }
+        else
+        {
+            // ⛔ The reason, said where the attempt was made. An import that fails silently is a
+            // player pressing the same key harder.
+            _packNote = $"could not add that: {why}";
+        }
+
+        ReadPacksFolder();
+        RefreshScreen();
+    }
+
     /// <summary>Enter, on a settings row. Toggles what toggles and listens for a key on a binding.</summary>
     private void ActivateRow()
     {
@@ -3477,7 +3707,9 @@ public sealed class ClientHost : IDisposable
         if (_hudScreen.Selected >= 0 && _hudScreen.Selected < _hudScreen.Rows.Count
             && _hudScreen.Rows[_hudScreen.Selected].Edits is { } box)
         {
-            StartTyping(box);
+            // ⛳ The pack box is the one that DOES something when it is accepted rather than merely
+            // remembering what was typed — a path is not a setting, it is an instruction.
+            StartTyping(box, box == _packBox ? kept => { if (kept) ImportPack(); } : null);
             return;
         }
 
@@ -3501,6 +3733,15 @@ public sealed class ClientHost : IDisposable
         {
             if (ActionAtRow() is { } action) _rebinding = action;
             RefreshScreen();
+            return;
+        }
+
+        if (OnTab(GameTab.Packs)
+            && _hudScreen.Selected >= 0
+            && _hudScreen.Selected < _hudScreen.Rows.Count)
+        {
+            var row = _hudScreen.Rows[_hudScreen.Selected];
+            if (!row.Heading && row.Label != "the shelf") ChoosePack(row.Label);
             return;
         }
 

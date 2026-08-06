@@ -352,6 +352,10 @@ public static class WorldAudit
         Check("where a thing lives takes two questions", spawnFaults.Count == 0,
             spawnFaults.Count == 0 ? spawnDetail : string.Join("; ", spawnFaults));
 
+        var shelfFaults = PackShelfFaults(out var shelfDetail);
+        Check("a pack can be put on the shelf and named", shelfFaults.Count == 0,
+            shelfFaults.Count == 0 ? shelfDetail : string.Join("; ", shelfFaults));
+
         var tierFaults = ToolTierColourFaults(out var tierDetail);
         Check("a tool is the colour of what it is made of", tierFaults.Count == 0,
             tierFaults.Count == 0 ? tierDetail : string.Join("; ", tierFaults));
@@ -6853,6 +6857,98 @@ public static class WorldAudit
                + $"{SpawnRules.NextAttempt(0.0):F0}-{SpawnRules.NextAttempt(1.0):F0}s, places at "
                + $"most {SpawnRules.HostileBatch} of {SpawnRules.HostileCap} at "
                + $"{SpawnRules.HostileMinRadius:F0} blocks, and stops pushing as it fills";
+
+        return faults;
+    }
+
+    /// <summary>
+    /// Builds a pack, a folder pack and a broken file, and puts them through the shelf.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛔ <b>The half that matters is what happens to the BAD one.</b> The saves list cost this
+    /// project a session by silently dropping a file it could not open, so "no worlds" and "a world I
+    /// cannot open" were four identical words. Packs are far likelier to arrive broken — people
+    /// download them — so a pack that will not open has to be refused at the moment of the mistake,
+    /// with the reason, and never quietly accepted onto the shelf to fail one relaunch later.</para>
+    /// <para>⚠ Against a real shelf in a temporary folder rather than a mocked one, because the
+    /// thing being tested is largely the file system: copying, replacing, and finding by name.</para>
+    /// </remarks>
+    private static List<string> PackShelfFaults(out string detail)
+    {
+        var faults = new List<string>();
+        var root = Path.Combine(Path.GetTempPath(), "driftwood-shelf-" + Guid.NewGuid().ToString("N"));
+        detail = "";
+
+        try
+        {
+            // A Bedrock-shaped folder pack, which is the one shape that needs no zip to be real.
+            var good = Path.Combine(root, "Testpack");
+            Directory.CreateDirectory(Path.Combine(good, "textures", "blocks"));
+            File.WriteAllText(Path.Combine(good, "manifest.json"), "{\"format_version\":2}");
+            File.WriteAllBytes(Path.Combine(good, "textures", "blocks", "stone.png"), [1, 2, 3, 4]);
+
+            // And something that is not a pack at all, under a name the shelf accepts.
+            var bad = Path.Combine(root, "Broken.mcpack");
+            Directory.CreateDirectory(root);
+            File.WriteAllText(bad, "this is not a zip");
+
+            // A wrong extension, which must be refused by name rather than opened and puzzled over.
+            var wrong = Path.Combine(root, "notes.txt");
+            File.WriteAllText(wrong, "hello");
+
+            var shelf = PackLibrary.Folder;
+            var installed = PackLibrary.Install(good, out var why);
+
+            if (installed is not { } entry)
+            {
+                faults.Add($"a sound pack was refused: {why}");
+                return faults;
+            }
+
+            if (!entry.Readable) faults.Add($"a sound pack landed unreadable: {entry.Kind}");
+            if (!entry.Kind.Contains("Bedrock")) faults.Add($"a Bedrock pack was called '{entry.Kind}'");
+
+            // ⛳ Found again BY NAME, which is what the setting stores — an index would mean something
+            // different the moment anything else is added, and adding is what the screen is for.
+            if (PackLibrary.PathOf(entry.Name) is null)
+                faults.Add($"'{entry.Name}' went on the shelf and cannot be found by name");
+
+            var listed = PackLibrary.List();
+            if (!listed.Any(p => p.Name == entry.Name))
+                faults.Add($"'{entry.Name}' is on the shelf and not in the list");
+
+            // ⛔ THE CONTROL. A shelf that takes anything passes every row above.
+            if (PackLibrary.Install(bad, out var badWhy) is not null)
+                faults.Add("a file that is not a pack was accepted onto the shelf");
+            else if (badWhy.Length == 0)
+                faults.Add("a broken pack was refused with no reason given");
+
+            if (PackLibrary.Install(wrong, out var wrongWhy) is not null)
+                faults.Add("a .txt was accepted as a texture pack");
+            else if (!wrongWhy.Contains(".txt"))
+                faults.Add($"a .txt was refused without saying what was wrong with it: '{wrongWhy}'");
+
+            // Re-importing replaces rather than piling up, which is what an updated pack needs.
+            PackLibrary.Install(good, out _);
+            if (PackLibrary.List().Count(p => p.Name == entry.Name) != 1)
+                faults.Add("importing the same pack twice left two of it on the shelf");
+
+            if (!PackLibrary.Remove(entry.Name)) faults.Add("a pack could not be taken off the shelf");
+            if (PackLibrary.PathOf(entry.Name) is not null)
+                faults.Add("a pack was removed and is still found by name");
+
+            detail = $"a {entry.Kind} pack copied to the shelf, found by name, replaced on re-import "
+                   + $"and removed; a broken one and a .txt both refused with a reason ({shelf})";
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            faults.Add($"could not exercise the shelf: {error.Message}");
+        }
+        finally
+        {
+            try { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); }
+            catch (IOException) { }
+        }
 
         return faults;
     }
