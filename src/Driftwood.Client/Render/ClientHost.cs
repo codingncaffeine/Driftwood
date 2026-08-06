@@ -7348,7 +7348,8 @@ public sealed class ClientHost : IDisposable
     /// keeps it from reading as a flat silhouette.
     /// </remarks>
     private Vector3 HandLight(EntityLight light) =>
-        light.Block + new Vector3(light.Sky * _skyState.SunColor.X + _skyState.SkyAmbient.X);
+        HeldGrip.HandLight(
+            light.Block, light.Sky * _skyState.SunColor.X + _skyState.SkyAmbient.X);
 
     private void OnResize(Vector2D<int> size) => _gl.Viewport(size);
 

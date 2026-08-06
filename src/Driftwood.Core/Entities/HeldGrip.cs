@@ -197,7 +197,32 @@ public static class HeldGrip
     /// bare hand, which is drawn when the pockets are empty, and moving the tool by moving the arm
     /// moves the hand with it.
     /// </param>
-    public readonly record struct Grip(float Lean, float Tilt, float Roll, Vector3 Shift);
+    /// <param name="Twist">
+    /// Radians about the tool's OWN long axis — the diagonal its picture runs along.
+    /// </param>
+    /// <remarks>
+    /// ⛳ <b>The degree of freedom the rig did not have, and the one a weapon needs.</b> Lean turns
+    /// about y, Tilt about x and Roll about z, and not one of those is the axis a blade turns on: a
+    /// tool is drawn corner to corner, so its long axis is the picture's <em>diagonal</em>, and
+    /// rolling about z spins the whole picture instead of turning the head on its handle. With only
+    /// the three, the flat of an axe faces the eye and its edge lies across the screen — which is
+    /// carrying it like a tray rather than holding it like an axe.
+    /// <para>⚠ <b>The sign is the one thing to flip if the edge comes out pointing the wrong way.</b>
+    /// Positive turns the leading edge away from the eye. One number per grip, nothing else depends
+    /// on it, and it is a judgement about a picture rather than something a check can settle.</para>
+    /// </remarks>
+    public readonly record struct Grip(
+        float Lean, float Tilt, float Roll, Vector3 Shift, float Twist = 0f);
+
+    /// <summary>
+    /// The long axis of a flat tool in its own space: the diagonal its drawing runs along.
+    /// </summary>
+    /// <remarks>
+    /// Every tool in the set is drawn with its head in one corner and its haft in the opposite one —
+    /// the user asked for that angle in so many words — so one axis serves all four shapes, and a
+    /// shape that stopped being diagonal would want its own entry here rather than a second field.
+    /// </remarks>
+    private static readonly Vector3 LongAxis = Vector3.Normalize(new Vector3(1f, 1f, 0f));
 
     /// <summary>First person: the picture faces the eye, on its own diagonal.</summary>
     /// <remarks>
@@ -216,8 +241,16 @@ public static class HeldGrip
     /// turn. −0.20 leaves about 14°, which is enough to see the thickness down one side and not
     /// enough to lose the silhouette.</para>
     /// </remarks>
+    /// <remarks>
+    /// ⛳ <b>The twist is the user's own report:</b> <i>"twist the weapons like the axe so that the
+    /// sharp edge of the blade is facing away from the player"</i>. The axe is drawn with its edge on
+    /// the left of the head, and with no twist the flat of that head faces the eye — so the edge lay
+    /// across the screen and the thing read as being presented rather than wielded. A third of a
+    /// radian is about nineteen degrees: enough that the edge leads and the head reads as having a
+    /// front and a back, and not so much that the silhouette turns into a line.
+    /// </remarks>
     public static readonly Grip FirstFlat = new(
-        -0.20f, -MathF.PI / 2f, 0f, new Vector3(0.12f, 0f, 0.12f));
+        -0.20f, -MathF.PI / 2f, 0f, new Vector3(0.12f, 0f, 0.12f), Twist: 0.34f);
 
     /// <summary>Third person: the picture faces out of the player's own side.</summary>
     /// <remarks>
@@ -227,7 +260,7 @@ public static class HeldGrip
     /// so a haft does not run through the arm holding it.
     /// </remarks>
     public static readonly Grip ThirdFlat = new(
-        MathF.PI / 2f, 0.22f, -0.55f, new Vector3(0.05f, -0.04f, -0.04f));
+        MathF.PI / 2f, 0.22f, -0.55f, new Vector3(0.05f, -0.04f, -0.04f), Twist: 0.34f);
 
     /// <summary>A block is held corner forward, in the corner of the frame.</summary>
     /// <remarks>
@@ -254,6 +287,41 @@ public static class HeldGrip
     /// </remarks>
     public static readonly Vector3 BlockHold = new(0f, -0.05f, 0f);
 
+    /// <summary>
+    /// How much of a torch's colour a thing in the hand takes.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>From the user, in the game:</b> <i>"the colour of the tool shown on the player [should
+    /// match] the colour of the material being used to make it"</i>. It did not, and the tiles were
+    /// never the problem — measured, they run wood 204,168,118 through iron 218,218,223 to
+    /// stormglass 123,226,223, and each material covers 45% to 71% of its own silhouette.
+    /// <para>What was wrong is the LIGHT. Block light in this engine is coloured on purpose — that is
+    /// the whole reason an ember glow reads orange against a blue-grey cave — and a torch is
+    /// (14,10,5), which is very orange indeed. The held item was multiplied by it raw, and
+    /// underground a torch is the only light there is: an iron axe came out at roughly 203,149,74,
+    /// which is to say the colour of the torch rather than the colour of iron. Every tier converged
+    /// on the same orange and the ladder stopped reading.</para>
+    /// <para>⛳ <b>So the hand desaturates and the world does not.</b> A held thing is eight inches
+    /// from the eye and is the one object a player identifies by its colour; everything else in the
+    /// frame keeps the full coloured light it always had. Most of the way to neutral, not all —
+    /// a tool by a fire should still look warm.</para>
+    /// </remarks>
+    public const float HandDesaturation = 0.75f;
+
+    /// <summary>
+    /// What a thing in the hand is lit by: block light pulled toward neutral, plus the sky.
+    /// </summary>
+    /// <param name="block">Coloured block light where the player stands.</param>
+    /// <param name="sky">Daylight reaching them, already scaled by the hour.</param>
+    public static Vector3 HandLight(Vector3 block, float sky)
+    {
+        // Its own brightness, weighted the way an eye weighs the three — a flat mean turns a blue
+        // lamp into something brighter than a red one at the same nominal level.
+        var grey = block.X * 0.30f + block.Y * 0.59f + block.Z * 0.11f;
+
+        return Vector3.Lerp(block, new Vector3(grey), HandDesaturation) + new Vector3(sky);
+    }
+
     /// <summary>How big a held thing is drawn, as a share of a block.</summary>
     /// <remarks>
     /// A flat thing is bigger than a block on purpose. It is a picture of a pickaxe rather than a
@@ -272,7 +340,11 @@ public static class HeldGrip
     {
         // Turned about the point the fingers are on, then carried to the fist — so dialling the
         // turn pivots the tool in the hand rather than swinging it out of the hand.
-        var rotation = Matrix4x4.CreateRotationY(grip.Lean)
+        // ⛳ The twist comes FIRST, before everything else. It is a turn in the item's own frame —
+        // the blade rolling on its handle — and applying it after the grip has been leaned and
+        // tilted would turn it about whatever axis the item had ended up lying along instead.
+        var rotation = Matrix4x4.CreateFromAxisAngle(LongAxis, grip.Twist)
+                     * Matrix4x4.CreateRotationY(grip.Lean)
                      * Matrix4x4.CreateRotationX(grip.Tilt)
                      * Matrix4x4.CreateRotationZ(grip.Roll);
 

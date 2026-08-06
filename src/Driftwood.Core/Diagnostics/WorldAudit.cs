@@ -352,6 +352,10 @@ public static class WorldAudit
         Check("where a thing lives takes two questions", spawnFaults.Count == 0,
             spawnFaults.Count == 0 ? spawnDetail : string.Join("; ", spawnFaults));
 
+        var tierFaults = ToolTierColourFaults(out var tierDetail);
+        Check("a tool is the colour of what it is made of", tierFaults.Count == 0,
+            tierFaults.Count == 0 ? tierDetail : string.Join("; ", tierFaults));
+
         var fireFaults = FireFaults(registry, ids, out var fireDetail);
         Check("things that burn put fire and smoke in the air", fireFaults.Count == 0,
             fireFaults.Count == 0 ? fireDetail : string.Join("; ", fireFaults));
@@ -6851,6 +6855,149 @@ public static class WorldAudit
                + $"{SpawnRules.HostileMinRadius:F0} blocks, and stops pushing as it fills";
 
         return faults;
+    }
+
+    /// <summary>
+    /// Reads every tool tile back and asks whether its head is the colour of its own material.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛔ <b>The head only, and that is the whole difficulty.</b> Every tool is mostly haft —
+    /// the same timber at every tier — so a mean over the tile is a mean over a brown stick and says
+    /// a stormglass sword is brown. The head is picked out by discarding anything close to the
+    /// handle's own colour, which leaves what the tier actually paints.</para>
+    /// <para>⛳ <b>Two claims, and the second is the one a player sees.</b> That each head is near its
+    /// declared material, and that <em>no two tiers land on the same colour</em> — a ladder whose
+    /// rungs are indistinguishable in a fist is a ladder with no feedback on it, and every tool
+    /// sitting inside its own tolerance does not prevent that.</para>
+    /// </remarks>
+    private static List<string> ToolTierColourFaults(out string detail)
+    {
+        var faults = new List<string>();
+        var built = BlockTextureSet.Build(packPath: null);
+
+        // The timber every haft is drawn in, so it can be told from the head.
+        var (hr, hg, hb) = (128, 94, 56);
+
+        var seen = new List<(string Name, int R, int G, int B)>();
+
+        for (var tier = 0; tier < StarterItems.Tiers.Length; tier++)
+        {
+            var name = StarterItems.Tiers[tier].Name;
+
+            long r = 0, g = 0, b = 0, taken = 0;
+
+            for (var head = 0; head < StarterBlocks.ToolShapeCount; head++)
+            {
+                var layer = StarterBlocks.LayerFirstTool + tier * StarterBlocks.ToolShapeCount + head;
+                if (layer >= built.Tiles.Length) continue;
+
+                var tile = built.Tiles[layer];
+                for (var i = 0; i < tile.Length; i += 4)
+                {
+                    if (tile[i + 3] < 128) continue;
+
+                    int pr = tile[i], pg = tile[i + 1], pb = tile[i + 2];
+
+                    // Not the haft, and not the dark line drawn round everything.
+                    if (Math.Abs(pr - hr) < 46 && Math.Abs(pg - hg) < 46 && Math.Abs(pb - hb) < 46) continue;
+                    if (pr + pg + pb < 150) continue;
+
+                    r += pr; g += pg; b += pb; taken++;
+                }
+            }
+
+            if (taken == 0)
+            {
+                faults.Add($"the {name} tools have no head left once the haft is taken out");
+                continue;
+            }
+
+            seen.Add((name, (int)(r / taken), (int)(g / taken), (int)(b / taken)));
+        }
+
+        // ⛳ THE CLAIM THAT MATTERS. Six rungs that a player has to tell apart at arm's length in a
+        // fist, so the test is that they are far apart in colour — not that each is near a number.
+        for (var i = 0; i < seen.Count; i++)
+        for (var j = i + 1; j < seen.Count; j++)
+        {
+            var a = seen[i];
+            var c = seen[j];
+            var apart = Math.Abs(a.R - c.R) + Math.Abs(a.G - c.G) + Math.Abs(a.B - c.B);
+
+            if (apart < 45)
+                faults.Add($"{a.Name} and {c.Name} tools are {apart} apart in colour, which is the same tool twice");
+        }
+
+        // ⛔ AND HOW MUCH OF THE TOOL IT IS, which is the half a colour check cannot see. Every tier
+        // can be perfectly and distinctly coloured and still read as "a brown stick" in a fist, if
+        // what carries the colour is a chip at one end. What a player recognises at arm's length is
+        // the SILHOUETTE, and the share of it the material owns is the whole of that.
+        var share = new List<(string Name, int Percent)>();
+
+        for (var head = 0; head < StarterBlocks.ToolShapeCount; head++)
+        {
+            var layer = StarterBlocks.LayerFirstTool + head;   // the wood tier; shapes are shared
+            if (layer >= built.Tiles.Length) continue;
+
+            var tile = built.Tiles[layer];
+            int ink = 0, haft = 0;
+
+            for (var i = 0; i < tile.Length; i += 4)
+            {
+                if (tile[i + 3] < 128) continue;
+                ink++;
+
+                if (Math.Abs(tile[i] - hr) < 46 && Math.Abs(tile[i + 1] - hg) < 46
+                    && Math.Abs(tile[i + 2] - hb) < 46) haft++;
+            }
+
+            if (ink == 0) continue;
+            share.Add((StarterItems.Heads[head].Name, 100 - haft * 100 / ink));
+        }
+
+        foreach (var (name, percent) in share)
+        {
+            // A third is the line. Below it the material is a detail on a stick rather than what the
+            // thing is made of, and no amount of getting the colour right rescues that.
+            if (percent < 33)
+                faults.Add($"only {percent}% of a {name} is its own material — the rest is haft");
+        }
+
+        // ⛔ AND WHAT SURVIVES BEING HELD, which is where this actually went wrong. The tiles were
+        // never the problem; the LIGHT was. Block light is coloured on purpose and a torch is
+        // (14,10,5) — so a held tool multiplied by it raw comes out the colour of the torch, and
+        // underground a torch is the only light there is.
+        var torch = new Vector3(14f / 15f, 10f / 15f, 5f / 15f);
+        var lit = HeldGrip.HandLight(torch, 0f);
+
+        // The control is the same two materials under the same torch with NO desaturation, which is
+        // exactly what shipped: whatever number this check gates on has to separate the two.
+        var apartLit = 0f;
+        var apartRaw = 0f;
+
+        for (var i = 0; i < seen.Count; i++)
+        for (var j = i + 1; j < seen.Count; j++)
+        {
+            var a = new Vector3(seen[i].R, seen[i].G, seen[i].B) / 255f;
+            var c = new Vector3(seen[j].R, seen[j].G, seen[j].B) / 255f;
+
+            apartLit = MathF.Max(apartLit, Spread(a * lit, c * lit));
+            apartRaw = MathF.Max(apartRaw, Spread(a * torch, c * torch));
+        }
+
+        // Under a torch the ladder has to stay legible. The raw multiply is the thing it must beat.
+        if (apartLit <= apartRaw)
+            faults.Add($"held under a torch the tiers are {apartLit:F3} apart, against {apartRaw:F3} raw — "
+                     + "the hand is not preserving the material");
+
+        detail = string.Join(", ", seen.Select(s => $"{s.Name} {s.R},{s.G},{s.B}"))
+               + "; material covers " + string.Join(", ", share.Select(s => $"{s.Name} {s.Percent}%"))
+               + $"; under a torch they stay {apartLit:F2} apart against {apartRaw:F2} raw";
+
+        return faults;
+
+        static float Spread(Vector3 a, Vector3 b) =>
+            MathF.Abs(a.X - b.X) + MathF.Abs(a.Y - b.Y) + MathF.Abs(a.Z - b.Z);
     }
 
     /// <summary>
