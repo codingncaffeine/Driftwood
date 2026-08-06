@@ -315,6 +315,9 @@ public static class Program
                 case "--ui-check":
                     options = options with { UiCheck = true, Mute = true };
                     break;
+                case "--shot":
+                    options = options with { ShotPath = Next(args, ref i, "--shot"), Mute = true };
+                    break;
                 // Takes a path, so the parser has to step over it as well as allow it.
                 case "--icon-sheet":
                     i++;
@@ -416,6 +419,10 @@ public static class Program
                                 never reaches the code that writes it.
               --bench [secs]    fly a fixed path once the world has settled, report frame-time
                                 percentiles, then exit (default 15 s, seed defaults to 'driftwood')
+              --shot <folder>   photograph what is in the hand — a pickaxe, a sword, a torch and a
+                                block, in each view, at rest and mid-swing — write them there and
+                                quit. The real world, the real camera, the real grip; the way to
+                                look at a held thing without starting the game and holding one.
               --uploads <n>     chunk uploads allowed per frame (default 4)
               --stall <ms>      with --bench, burn this long every 200th frame — the control that
                                 proves the benchmark can see a hitch it is known to contain

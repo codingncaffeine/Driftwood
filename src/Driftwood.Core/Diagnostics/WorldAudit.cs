@@ -782,6 +782,21 @@ public static class WorldAudit
                 ? "u runs opposite ways on the two arms, both layouts"
                 : $"{mirrorFaults.Count} faults: {mirrorFaults[0]}");
 
+        // ⛔ What the user reported, and nothing here could have caught either half of it: a held
+        // tool drawn as a cube wearing its picture on all six faces — so it read as two tools two
+        // thirds of a block apart, pointed the wrong way — and in third person not drawn at all.
+        var spriteFaults = ValidateSprites();
+        Check("a flat item is a solid, not a pair of pictures", spriteFaults.Count == 0,
+            spriteFaults.Count == 0
+                ? $"{TileGen.ToolShapes.Length + 1} silhouettes walked, walls counted against edges"
+                : $"{spriteFaults.Count} faults: {spriteFaults[0]}");
+
+        var gripFaults = HeldGrip.Validate();
+        Check("what is held stays in the fist", gripFaults.Count == 0,
+            gripFaults.Count == 0
+                ? "a tool and a block, classic and slim, at four points through a swing"
+                : $"{gripFaults.Count} faults: {gripFaults[0]}");
+
         var (modelTall, modelWide, jointFaults) = MeasureModel();
         Check(
             "model is one piece",
@@ -6433,6 +6448,47 @@ public static class WorldAudit
                 faults.Add($"stage {s} healed a fracture stage {s - 1} had");
                 break;
             }
+        }
+
+        return faults;
+    }
+
+    /// <summary>
+    /// Extrudes every tool and a torch, and asks that what came out is a solid.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>The control is built in, and it has to be.</b> A cube wearing an icon on six faces —
+    /// which is what a held tool used to be — has <em>more</em> geometry than an extrusion does,
+    /// draws without complaint, and looks correct in a still slot. So counting quads proves nothing;
+    /// the claim is that the number of walls equals the number of steps round the silhouette, which
+    /// a cube cannot satisfy for any drawing (it has four sides whatever is painted on it). A torch
+    /// is in the list because its ink is a narrow stick with a lot of boundary for its area, and a
+    /// tool is a diagonal with almost none of its tile filled.
+    /// </remarks>
+    private static List<string> ValidateSprites()
+    {
+        var faults = new List<string>();
+
+        for (var shape = 0; shape < TileGen.ToolShapes.Length; shape++)
+        {
+            var tile = TileGen.IconTool(4000 + shape, shape, 150, 120, 90);
+            faults.AddRange(ItemSprite.Validate(ItemSprite.Mask(tile, TileGen.Size), $"tool {shape}"));
+        }
+
+        faults.AddRange(ItemSprite.Validate(ItemSprite.Mask(TileGen.Torch(7001), TileGen.Size), "torch"));
+
+        // And the grip has to be ON the drawing. A hold point in the transparent corner of a tile is
+        // what put the torch in mid-air beside a closed fist.
+        for (var shape = 0; shape < TileGen.ToolShapes.Length; shape++)
+        {
+            var mask = ItemSprite.Mask(TileGen.IconTool(4000 + shape, shape, 150, 120, 90), TileGen.Size);
+            var hold = ItemSprite.Hold(mask);
+
+            var gx = (int)((hold.X + 0.5f) * ItemSprite.Grid);
+            var gy = (int)((0.5f - hold.Y) * ItemSprite.Grid);
+
+            if (gx < 0 || gy < 0 || gx >= ItemSprite.Grid || gy >= ItemSprite.Grid || !mask[gy * ItemSprite.Grid + gx])
+                faults.Add($"tool {shape} is gripped at {gx},{gy}, where nothing is drawn");
         }
 
         return faults;

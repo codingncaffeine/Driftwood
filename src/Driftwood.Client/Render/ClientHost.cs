@@ -160,6 +160,19 @@ public sealed record ClientOptions
 
     /// <summary>Opens no audio device at all. The benchmark sets this for itself.</summary>
     public bool Mute { get; init; }
+
+    /// <summary>
+    /// A folder to write pictures of the hand into, then quit. Null runs the game normally.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>The instrument the held item needed, and the reason three wrong grips shipped without
+    /// anybody noticing.</b> <c>--icon-sheet</c> made a tile lookable-at and six drawings were fixed
+    /// in minutes; what was still unlookable-at was the tile <em>in a fist</em> — which is a
+    /// projection, a swing and two entirely different arm poses on top of the drawing. So a held
+    /// pickaxe was drawn as a cube wearing its picture on all six faces, held two thirds of a block
+    /// apart, pointing at the player, and it took the user starting the game to say so.
+    /// </remarks>
+    public string? ShotPath { get; init; }
 }
 
 /// <summary>Where the camera sits relative to the player. Cycled with F5.</summary>
@@ -870,6 +883,15 @@ public sealed class ClientHost : IDisposable
         _supports = new SupportTable(registry);
         _startup.Mark("items and recipes");
 
+        // ⛳ Here, and not a line earlier: the silhouette has to be cut from the picture that will
+        // actually be drawn, which means after a pack has had its say about the textures, and it is
+        // keyed on items, which means after there are any.
+        _itemRenderer.BuildSprites(_items, _textures.Tiles, _textures.Size);
+        Console.WriteLine(
+            $"sprites     {_itemRenderer.SpriteCount} flat items extruded, "
+            + $"{_itemRenderer.SpriteQuads:N0} quads");
+        _startup.Mark("item sprites");
+
         var generator = new TerrainGenerator(_seed, ids, _options.OceanCoverage);
 
         // --chunks used to size a fixed box; it now sets how far the world is kept loaded around
@@ -950,7 +972,8 @@ public sealed class ClientHost : IDisposable
             // ⛳ The menu, over the world it is about to hand over. Not for the UI check, which opens
             // its own screens in turn and would find this one already up, and not for a timed play,
             // which is meant to be somebody playing.
-            if (!_options.UiCheck && _options.PlaySeconds <= 0) OpenStartScreen(generator, viewRadius);
+            if (!_options.UiCheck && _options.PlaySeconds <= 0 && _options.ShotPath is null)
+                OpenStartScreen(generator, viewRadius);
         }
 
         _animator.Reset(_camera.Yaw);
@@ -4414,6 +4437,7 @@ public sealed class ClientHost : IDisposable
         }
 
         if (_options.UiCheck) RunUiCheck(size);
+        if (_options.ShotPath is not null) RunShots(size);
 
         _renderMs = (Stopwatch.GetTimestamp() - renderStart) * TicksToMs;
 
@@ -4421,6 +4445,204 @@ public sealed class ClientHost : IDisposable
         // a player is actually waiting for and it is later than the moment the loading code stops.
         // Reports once and then costs a bool.
         _startup.Report("first frame drawn");
+    }
+
+    /// <summary>How many frames the shot run has drawn.</summary>
+    private int _shotFrame;
+
+    /// <summary>
+    /// Holds a thing, in a named view, and writes the frame to a file.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ <b>The instrument this whole area was missing.</b> A tile could be looked at with
+    /// <c>--icon-sheet</c>; the same tile <em>in a fist</em> could not, and that is where a
+    /// projection, a swing, a grip and two entirely different arm poses are added on top of it. So
+    /// the held pickaxe shipped as a cube wearing its picture on six faces — visibly two pickaxes,
+    /// pointed at the player — and the only eye that ever saw it was the user's, in the game.</para>
+    /// <para>Everything about it is the real path: the real world, the real camera, the real grip
+    /// and the real swing clock. It sets what is held and which way the camera sits, and reads the
+    /// front buffer. Nothing here is a special-case renderer, because a special-case renderer is a
+    /// thing that can be right while the game is wrong.</para>
+    /// </remarks>
+    private readonly record struct Shot(int Frame, string Name, string Item, ViewMode View, bool Strike);
+
+    /// <summary>
+    /// What gets photographed. Order matters only in that a strike needs frames to travel through.
+    /// </summary>
+    /// <remarks>
+    /// A pickaxe for the shape everybody knows, a sword for a long straight thing whose angle in the
+    /// fist is the whole question, a torch because it has to point up and away rather than lie along
+    /// a leg, and a block because it is the other mesh entirely.
+    /// </remarks>
+    private static readonly Shot[] Shots =
+    [
+        new(70, "1-first-pickaxe", "stone_pickaxe", ViewMode.First, false),
+        new(78, "2-first-pickaxe-swing", "stone_pickaxe", ViewMode.First, true),
+        new(86, "3-first-sword", "stone_sword", ViewMode.First, false),
+        new(94, "4-first-torch", "torch", ViewMode.First, false),
+        new(102, "5-first-block", "stone", ViewMode.First, false),
+        new(112, "6-third-pickaxe", "stone_pickaxe", ViewMode.ThirdBehind, false),
+        new(120, "7-third-pickaxe-swing", "stone_pickaxe", ViewMode.ThirdBehind, true),
+        new(128, "8-third-torch", "torch", ViewMode.ThirdBehind, false),
+        new(136, "9-third-block", "stone", ViewMode.ThirdBehind, false),
+        new(144, "10-facing-pickaxe", "stone_pickaxe", ViewMode.ThirdFacing, false),
+        new(152, "11-facing-sword", "stone_sword", ViewMode.ThirdFacing, false),
+    ];
+
+    /// <summary>
+    /// Frames of streaming allowed before the body is put somewhere worth photographing.
+    /// </summary>
+    /// <remarks>
+    /// Half a second. The world arrives on worker threads, so "the spawn chunk is here" is a long
+    /// way from "the ground for forty blocks around is here and lit" — and the placement search
+    /// reads the loaded world on purpose, because what it finds has to be what will be drawn.
+    /// </remarks>
+    private const int PlaceFrame = 30;
+
+    /// <summary>Frames before a shot that its item is put in hand and its view set.</summary>
+    /// <remarks>
+    /// Four, so the body has settled and — for the ones that want it — a strike begun on the setup
+    /// frame is a third of the way through its arc by the time the picture is taken. That is the
+    /// part of a swing worth looking at: the top of the arc is where a grip that has come loose has
+    /// travelled furthest from the fist.
+    /// </remarks>
+    private const int ShotLead = 4;
+
+    private void RunShots(Vector2D<int> size)
+    {
+        _shotFrame++;
+
+        // Nothing until the body is standing on real ground: third person draws no model before
+        // that, so an early picture would be of an empty world and would look like a fault.
+        if (!_spawned) { _shotFrame = 0; return; }
+
+        // ⛔ AND NOTHING UNTIL IT IS STANDING SOMEWHERE THE HAND CAN BE SEEN. The first run of this
+        // came back with two black bands across every frame — a tree the spawn point happened to be
+        // inside — and the second with the hearts flashing, because the same spawn was underwater.
+        // A picture of a held tool taken against the inside of a trunk answers nothing, and worse,
+        // it answers it convincingly.
+        //
+        // ⚠ AND NOT ON THE FIRST FRAME EITHER. Placing as soon as the spawn chunk lands read a world
+        // that was still arriving: unloaded space answers "air" to every question, so the search
+        // found a column with nothing above it and stood in a hole, and the light there was still
+        // zero — which came out as one shot of a pickaxe two thirds as bright as the next one, in
+        // the same run, from the same code. A held thing that is dark in one picture and lit in the
+        // next is exactly the sort of thing that gets read as a shading fault.
+        if (_shotFrame == PlaceFrame) StandInTheOpen();
+        if (_shotFrame <= PlaceFrame) return;
+
+        foreach (var shot in Shots)
+        {
+            if (_shotFrame == shot.Frame - ShotLead)
+            {
+                _inventory.Clear();
+                _inventory.Add(new ItemStack(_items.ByName(shot.Item).Id, 1));
+                _inventory.Select(0);
+                _view = shot.View;
+                if (shot.Strike) _animator.Strike();
+            }
+
+            if (_shotFrame == shot.Frame) WriteShot(size, shot.Name);
+        }
+
+        if (_shotFrame >= Shots[^1].Frame + ShotLead)
+        {
+            Console.WriteLine($"shots       {Shots.Length} written to {_options.ShotPath}");
+            _window.Close();
+        }
+    }
+
+    /// <summary>
+    /// Moves the body to somewhere with sky above it and nothing right in front of it.
+    /// </summary>
+    /// <remarks>
+    /// Asks the world that is loaded rather than the generator that made it, so what it finds is
+    /// what will actually be drawn. A column qualifies when its top is above the waterline, there
+    /// is head-room over it, and the eight blocks the camera will be looking through are empty —
+    /// the last of those is the whole point, because a clear column at the foot of a cliff is still
+    /// a picture of a cliff.
+    /// </remarks>
+    private void StandInTheOpen()
+    {
+        var world = _streamer.World;
+        var yaw = float.DegreesToRadians(_camera.Yaw);
+        var ahead = new Vector3(MathF.Cos(yaw), 0f, MathF.Sin(yaw));
+
+        for (var radius = 0; radius <= 40; radius += 4)
+        for (var step = 0; step < (radius == 0 ? 1 : 12); step++)
+        {
+            var angle = step * MathF.Tau / 12f;
+            var x = (int)MathF.Round(_player.Position.X + MathF.Cos(angle) * radius);
+            var z = (int)MathF.Round(_player.Position.Z + MathF.Sin(angle) * radius);
+
+            var top = -1;
+            for (var y = 120; y > TerrainGenerator.SeaLevel; y--)
+            {
+                if (world.GetBlock(x, y, z) == BlockId.Air) continue;
+                top = y;
+                break;
+            }
+
+            if (top < 0) continue;
+
+            // ⛔ And it has to be LIT. Sky light is what says "this is outdoors and the world here
+            // has finished arriving" in one question — a cave roof, a spot under a tree and a chunk
+            // that is still streaming all answer zero, and all three make a dark photograph of a
+            // tool that is not dark.
+            if (LightValue.Sky(world.GetLight(x, top + 1, z)) < LightValue.Max) continue;
+
+            // Head-room, and a clear line of sight for the length of the frame.
+            var clear = true;
+            for (var up = 1; up <= 3 && clear; up++)
+                clear = world.GetBlock(x, top + up, z) == BlockId.Air;
+
+            for (var out_ = 1; out_ <= 8 && clear; out_++)
+            {
+                var at = new Vector3(x, top + 2, z) + ahead * out_;
+                clear = world.GetBlock((int)MathF.Round(at.X), (int)at.Y, (int)MathF.Round(at.Z)) == BlockId.Air;
+            }
+
+            if (!clear) continue;
+
+            _player.Teleport(new Vector3(x + 0.5f, top + 1f, z + 0.5f));
+            _camera.Position = _player.EyePosition;
+            _camera.Pitch = 0f;
+            _animator.Reset(_camera.Yaw);
+            _vitals.Restore();
+            return;
+        }
+    }
+
+    /// <summary>Reads the frame off the front buffer and writes it, right way up.</summary>
+    private unsafe void WriteShot(Vector2D<int> size, string name)
+    {
+        var width = size.X;
+        var height = size.Y;
+        var raw = new byte[width * height * 4];
+
+        fixed (byte* p = raw)
+            _gl.ReadPixels(0, 0, (uint)width, (uint)height, PixelFormat.Rgba, PixelType.UnsignedByte, p);
+
+        // ⚠ GL counts rows up from the bottom and a PNG counts them down from the top. Skip this
+        // and every picture the instrument produces is upside down, which is a fine way to spend an
+        // afternoon deciding a grip is inverted.
+        var flipped = new byte[raw.Length];
+        var stride = width * 4;
+        for (var row = 0; row < height; row++)
+            Array.Copy(raw, (height - 1 - row) * stride, flipped, row * stride, stride);
+
+        var folder = _options.ShotPath!;
+        Directory.CreateDirectory(folder);
+        var path = Path.Combine(folder, $"{name}.png");
+        File.WriteAllBytes(path, Png.Encode(new Image(width, height, flipped)));
+
+        // ⚠ The light goes in the line, because the first run of this produced one picture of a
+        // pickaxe visibly darker than the next picture of a sword, from the same code, and there is
+        // no way to tell "the grip is showing me its shaded side" from "this frame was lit less"
+        // by looking. A number settles it; a picture cannot.
+        var lit = HandLight(SampleLight(_camera.Position));
+        Console.WriteLine(
+            $"shot        {name,-24} {width}x{height}   light {lit.X:F2} {lit.Y:F2} {lit.Z:F2}");
     }
 
     /// <summary>How many frames the check has drawn, for its own timing.</summary>
@@ -5765,9 +5987,22 @@ public sealed class ClientHost : IDisposable
         {
             if (_spawned)
             {
-                _playerRenderer.DrawWorld(
-                    viewProj, _viewPosition, sky, light,
-                    _player.Position, _animator.Pose(_camera.Yaw, _camera.Pitch));
+                var pose = _animator.Pose(_camera.Yaw, _camera.Pitch);
+                _playerRenderer.DrawWorld(viewProj, _viewPosition, sky, light, _player.Position, pose);
+
+                // ⛳ And what they are carrying, in the world, against the same arm. Third person
+                // showed empty hands until now — no tool, no torch, nothing — which the user called
+                // a big part of the game to be missing.
+                if (_inventory.HeldType is { } carried)
+                {
+                    _blockTextures.Bind();
+                    _itemRenderer.DrawInHand(
+                        viewProj,
+                        _playerRenderer.HeldWorldTransform(
+                            _player.Position, pose, !carried.DrawsAsBlock,
+                            _itemRenderer.HoldPoint(carried)),
+                        carried, _registry, HandLight(light));
+                }
             }
 
             return;
@@ -5800,23 +6035,31 @@ public sealed class ClientHost : IDisposable
     /// The transform comes from the arm rather than from a second set of numbers here, even though
     /// the arm itself is not drawn: the arm is what defines where a hand is and how it travels
     /// through a swing, and a tool animated from its own copy of those numbers drifts out of the
-    /// grip the first time either is dialled. A block is held small and square; a tool is held
-    /// bigger, because it is a flat card and reads as nothing edge-on.
+    /// grip the first time either is dialled.
     /// </remarks>
     private void DrawHeldItem(Matrix4x4 projection, EntityLight light, ItemType held)
     {
-        var flat = !held.DrawsAsBlock;
-        var size = flat ? 0.62f : 0.40f;
-
         _blockTextures.Bind();
         _itemRenderer.DrawInHand(
             projection,
-            PlayerRenderer.HeldTransform(
-                _animator.Swinging ? _animator.SwingProgress : 0f, size, flat),
+            _playerRenderer.HeldTransform(
+                _animator.Swinging ? _animator.SwingProgress : 0f, !held.DrawsAsBlock,
+                _itemRenderer.HoldPoint(held)),
             held,
             _registry,
-            light.Block + new Vector3(light.Sky * _skyState.SunColor.X + _skyState.SkyAmbient.X));
+            HandLight(light));
     }
+
+    /// <summary>
+    /// What a held thing is lit by: the cell the player is standing in, sun and block light together.
+    /// </summary>
+    /// <remarks>
+    /// One sample rather than a face-by-face light, because a held item is a few centimetres across
+    /// and every one of its faces is in the same cell. The self-shading in the item shader is what
+    /// keeps it from reading as a flat silhouette.
+    /// </remarks>
+    private Vector3 HandLight(EntityLight light) =>
+        light.Block + new Vector3(light.Sky * _skyState.SunColor.X + _skyState.SkyAmbient.X);
 
     private void OnResize(Vector2D<int> size) => _gl.Viewport(size);
 
@@ -5831,7 +6074,10 @@ public sealed class ClientHost : IDisposable
         //
         // ⚠ Not from the menu. Quitting without ever pressing start must leave the world exactly as
         // it was found, and a new world nobody played must not appear in the list as one they did.
-        if (!_atStartScreen) SaveWorld("on quit");
+        // ⚠ And not for the shot instrument either. It teleports the body, empties the pockets and
+        // fills them with whatever it is photographing — none of which is anybody's game, and all of
+        // which would be written into a world file with a name in the list on the menu.
+        if (!_atStartScreen && _options.ShotPath is null) SaveWorld("on quit");
 
         // Stop the workers before tearing down GL state, or a mesh can land in the queue after
         // the context it was destined for is gone.

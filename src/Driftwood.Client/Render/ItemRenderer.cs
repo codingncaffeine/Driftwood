@@ -6,15 +6,14 @@ using Silk.NET.OpenGL;
 namespace Driftwood.Client.Render;
 
 /// <summary>
-/// Draws what is lying on the ground: a small cube of the block, or a card of the icon, bobbing
-/// and turning.
+/// Draws a thing that is not part of the world: lying on the ground, or held in a fist.
 /// </summary>
 /// <remarks>
-/// <para>A block draws as a cube, because a block reads as a block from every angle and it means
-/// the thing on the floor is visibly the thing that was broken. Everything else — a stick, an
-/// ingot, a pickaxe — draws as the same cube squashed almost flat with its icon on every face,
-/// which is a card with thickness. It has to have <em>some</em> thickness: a plane turning on its
-/// axis vanishes once a revolution, and an item that blinks looks like a rendering fault.</para>
+/// <para>A block draws as a cube, because a block reads as a block from every angle and it means the
+/// thing on the floor is visibly the thing that was broken. Everything else — a stick, an ingot, a
+/// pickaxe — draws as its own picture <em>extruded</em>: front, back, and a wall of its own colour
+/// round the silhouette. See <see cref="ItemSprite"/> for why that is not a cube with a picture on
+/// it, which is what this used to be and what the user saw as two pickaxes.</para>
 /// <para>One draw call each. A stack of dropped items is tens of entities, not thousands, and an
 /// instanced path would cost more code than the draw calls cost frames — the moment that stops
 /// being true, the vertex buffer here is already shaped to take a per-instance stream.</para>
@@ -47,7 +46,8 @@ public sealed class ItemRenderer : IDisposable
             vUvw = vec3(aUv, layer);
 
             // Fixed per direction. A dropped item is lit by the cell it is in rather than by its
-            // own faces, so this exists only to keep the cube from reading as a flat hexagon.
+            // own faces, so this exists only to keep the cube from reading as a flat hexagon — and,
+            // on a sprite, to make the extruded wall darker than the picture it holds up.
             vShade = face == 2 ? 1.0 : face == 3 ? 0.62 : (face == 0 || face == 1 ? 0.78 : 0.88);
         }
         """;
@@ -73,8 +73,13 @@ public sealed class ItemRenderer : IDisposable
     /// <summary>How big a dropped block is, as a share of a full one.</summary>
     private const float Size = 0.26f;
 
-    /// <summary>How thick a flat item is, as a share of its width.</summary>
-    private const float CardThickness = 0.14f;
+    private const int FloatsPerVertex = 6;
+
+    /// <summary>Where one icon layer's extruded sprite lives in the shared buffer, and its grip.</summary>
+    private readonly record struct SpriteRange(int First, int Count, Vector3 Hold);
+
+    /// <summary>Where a block is held: by its underside, so it rests on the fist.</summary>
+    private static readonly Vector3 BlockHold = new(0f, -0.5f, 0f);
 
     private readonly GL _gl;
     private readonly Shader _shader;
@@ -82,8 +87,19 @@ public sealed class ItemRenderer : IDisposable
     private readonly uint _vbo;
     private readonly uint _ebo;
 
+    private uint _spriteVao;
+    private uint _spriteVbo;
+    private uint _spriteEbo;
+    private readonly Dictionary<ushort, SpriteRange> _sprites = [];
+
     /// <summary>Items the last <see cref="Draw"/> put on screen.</summary>
     public int DrawnItems { get; private set; }
+
+    /// <summary>How many icon layers were extruded, for the startup line.</summary>
+    public int SpriteCount => _sprites.Count;
+
+    /// <summary>Quads across every extruded sprite, so the cost of the pass is a number.</summary>
+    public int SpriteQuads { get; private set; }
 
     public unsafe ItemRenderer(GL gl)
     {
@@ -92,7 +108,7 @@ public sealed class ItemRenderer : IDisposable
 
         // A unit cube from the same corner table the mesher uses, so its winding is the winding
         // that has already been checked rather than a second transcription of it.
-        var vertices = new List<float>(24 * 6);
+        var vertices = new List<float>(24 * FloatsPerVertex);
         var indices = new List<uint>(36);
 
         for (var face = 0; face < Faces.Count; face++)
@@ -112,22 +128,26 @@ public sealed class ItemRenderer : IDisposable
             indices.AddRange([start, start + 1, start + 2, start, start + 2, start + 3]);
         }
 
-        _vao = _gl.GenVertexArray();
-        _gl.BindVertexArray(_vao);
+        (_vao, _vbo, _ebo) = Upload([.. vertices], [.. indices]);
+    }
 
-        var data = vertices.ToArray();
-        _vbo = _gl.GenBuffer();
-        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vbo);
+    /// <summary>Makes one vertex array out of a block of floats and its index list.</summary>
+    private unsafe (uint Vao, uint Vbo, uint Ebo) Upload(float[] data, uint[] order)
+    {
+        var vao = _gl.GenVertexArray();
+        _gl.BindVertexArray(vao);
+
+        var vbo = _gl.GenBuffer();
+        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, vbo);
         fixed (float* p = data)
             _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(data.Length * sizeof(float)), p, BufferUsageARB.StaticDraw);
 
-        var order = indices.ToArray();
-        _ebo = _gl.GenBuffer();
-        _gl.BindBuffer(BufferTargetARB.ElementArrayBuffer, _ebo);
+        var ebo = _gl.GenBuffer();
+        _gl.BindBuffer(BufferTargetARB.ElementArrayBuffer, ebo);
         fixed (uint* p = order)
             _gl.BufferData(BufferTargetARB.ElementArrayBuffer, (nuint)(order.Length * sizeof(uint)), p, BufferUsageARB.StaticDraw);
 
-        const uint stride = 6 * sizeof(float);
+        const uint stride = FloatsPerVertex * sizeof(float);
         _gl.EnableVertexAttribArray(0);
         _gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, stride, (void*)0);
         _gl.EnableVertexAttribArray(1);
@@ -136,6 +156,73 @@ public sealed class ItemRenderer : IDisposable
         _gl.VertexAttribPointer(2, 1, VertexAttribPointerType.Float, false, stride, (void*)(5 * sizeof(float)));
 
         _gl.BindVertexArray(0);
+        return (vao, vbo, ebo);
+    }
+
+    /// <summary>
+    /// Extrudes every flat item's icon, once, into one buffer with a range per layer.
+    /// </summary>
+    /// <remarks>
+    /// <para>After construction rather than in it, because the textures a pack may have replaced are
+    /// not read until later and the silhouette has to come off the picture that will actually be
+    /// drawn — import a pack whose axe is a different shape and the wall round it moves with it.</para>
+    /// <para>Keyed on the layer rather than on the item: twenty stair orientations are one item and
+    /// several items can share a picture, and the geometry only ever depends on the picture.</para>
+    /// </remarks>
+    public void BuildSprites(ItemRegistry catalogue, byte[][] tiles, int size)
+    {
+        var vertices = new List<SpriteVertex>();
+        var indices = new List<uint>();
+        var floats = new List<float>();
+
+        foreach (var type in catalogue.All)
+        {
+            if (type.DrawsAsBlock) continue;
+            if (_sprites.ContainsKey(type.IconLayer)) continue;
+            if (type.IconLayer >= tiles.Length) continue;
+
+            vertices.Clear();
+            indices.Clear();
+            var mask = ItemSprite.Mask(tiles[type.IconLayer], size);
+            ItemSprite.Build(mask, vertices, indices);
+            if (indices.Count == 0) continue;
+
+            var first = floats.Count / FloatsPerVertex;
+
+            foreach (var v in vertices)
+            {
+                floats.Add(v.X);
+                floats.Add(v.Y);
+                floats.Add(v.Z);
+                floats.Add(v.U);
+                floats.Add(v.V);
+                floats.Add(v.Face);
+            }
+
+            _sprites[type.IconLayer] = new SpriteRange(first, indices.Count, ItemSprite.Hold(mask));
+            SpriteQuads += vertices.Count / 4;
+        }
+
+        if (_sprites.Count == 0) return;
+
+        // ⚠ Indices are rebuilt over the whole buffer rather than appended, because each sprite's
+        // own indices count from its own first vertex. Every quad is the same four corners in the
+        // same order, so the list is a function of the vertex count and nothing has to be offset by
+        // hand — which is exactly the arithmetic that goes wrong when it is done by hand.
+        var quads = floats.Count / FloatsPerVertex / 4;
+        var order = new uint[quads * 6];
+        for (var q = 0; q < quads; q++)
+        {
+            var v = (uint)(q * 4);
+            order[q * 6] = v;
+            order[q * 6 + 1] = v + 1;
+            order[q * 6 + 2] = v + 2;
+            order[q * 6 + 3] = v;
+            order[q * 6 + 4] = v + 2;
+            order[q * 6 + 5] = v + 3;
+        }
+
+        (_spriteVao, _spriteVbo, _spriteEbo) = Upload([.. floats], order);
     }
 
     public unsafe void Draw(
@@ -152,8 +239,6 @@ public sealed class ItemRenderer : IDisposable
         _shader.SetMatrix4("uViewProj", viewProj);
         _shader.SetInt("uBlocks", 0);
 
-        _gl.BindVertexArray(_vao);
-
         foreach (var item in ground.Live)
         {
             var type = catalogue[item.Stack.Item];
@@ -162,17 +247,19 @@ public sealed class ItemRenderer : IDisposable
             var scale = Size * (1f - item.Collecting * 0.8f);
             var bob = MathF.Sin(item.Age * 2.6f) * 0.045f;
 
-            var thickness = type.DrawsAsBlock ? 1f : CardThickness;
+            // A flat thing is drawn bigger than a block: it is a picture of a pickaxe rather than a
+            // solid, and at a block's size it reads as a splinter.
+            if (!type.DrawsAsBlock) scale *= 1.55f;
 
-            var model = Matrix4x4.CreateScale(scale, scale, scale * thickness)
+            var model = Matrix4x4.CreateScale(scale)
                       * Matrix4x4.CreateRotationY(item.Age * 1.5f)
                       * Matrix4x4.CreateTranslation(item.Position + new Vector3(0f, scale + bob, 0f));
 
             _shader.SetMatrix4("uModel", model);
             SetLayers(type, registry);
-
             _shader.SetVec3("uLight", lightAt(item.Position));
-            _gl.DrawElements(PrimitiveType.Triangles, 36, DrawElementsType.UnsignedInt, (void*)0);
+
+            DrawMesh(type);
             DrawnItems++;
         }
 
@@ -180,33 +267,61 @@ public sealed class ItemRenderer : IDisposable
     }
 
     /// <summary>
-    /// Draws what the player is holding, in the camera's own space, in the fist of the view model.
+    /// Draws what somebody is holding, at the transform the arm hands over.
     /// </summary>
     /// <remarks>
-    /// <para>The same cube as everything on the floor, at the transform the arm hands over. That
-    /// sharing is the point: a pickaxe animated from its own copy of the arm's numbers leaves the
-    /// fist the first time either is dialled, and it only ever shows mid-swing.</para>
-    /// <para>Depth is on but the view-model pass has already cleared the buffer, so this sits over
-    /// the world with the arm and tests only against the arm.</para>
+    /// <para>The same mesh as everything on the floor. That sharing is the point: a pickaxe animated
+    /// from its own copy of the arm's numbers leaves the fist the first time either is dialled, and
+    /// it only ever shows mid-swing.</para>
+    /// <para>Called twice over, from two spaces. In first person <paramref name="viewProj"/> is the
+    /// projection alone and the transform is in the camera's own space, over a cleared depth buffer.
+    /// In third person it is the full view-projection and the transform is in the world, so the item
+    /// is occluded by whatever is between it and the eye like anything else.</para>
     /// </remarks>
-    public unsafe void DrawInHand(
-        Matrix4x4 projection, Matrix4x4 model, ItemType type, BlockRegistry registry, Vector3 light)
+    public void DrawInHand(
+        Matrix4x4 viewProj, Matrix4x4 model, ItemType type, BlockRegistry registry, Vector3 light)
     {
         _shader.Use();
-        _shader.SetMatrix4("uViewProj", projection);
+        _shader.SetMatrix4("uViewProj", viewProj);
         _shader.SetMatrix4("uModel", model);
         _shader.SetInt("uBlocks", 0);
         _shader.SetVec3("uLight", light);
         SetLayers(type, registry);
 
-        _gl.BindVertexArray(_vao);
-        _gl.DrawElements(PrimitiveType.Triangles, 36, DrawElementsType.UnsignedInt, (void*)0);
+        DrawMesh(type);
         _gl.BindVertexArray(0);
     }
 
     /// <summary>
-    /// A block wears its own three faces; anything else wears its icon on all six, which is what
-    /// makes a card read the same whichever way round the spin has it.
+    /// The point of this item a fist closes on, in the item's own space.
+    /// </summary>
+    /// <remarks>
+    /// Measured off the ink for a flat thing — see <see cref="ItemSprite.Hold"/> for why it cannot
+    /// be one constant — and the underside for a block, so a block rests on the hand rather than
+    /// being skewered by it.
+    /// </remarks>
+    public Vector3 HoldPoint(ItemType type) =>
+        !type.DrawsAsBlock && _sprites.TryGetValue(type.IconLayer, out var range) ? range.Hold : BlockHold;
+
+    /// <summary>The cube, or this item's own extruded silhouette.</summary>
+    private unsafe void DrawMesh(ItemType type)
+    {
+        if (!type.DrawsAsBlock && _sprites.TryGetValue(type.IconLayer, out var range))
+        {
+            _gl.BindVertexArray(_spriteVao);
+            _gl.DrawElements(
+                PrimitiveType.Triangles, (uint)range.Count, DrawElementsType.UnsignedInt,
+                (void*)(range.First / 4 * 6 * sizeof(uint)));
+            return;
+        }
+
+        _gl.BindVertexArray(_vao);
+        _gl.DrawElements(PrimitiveType.Triangles, 36, DrawElementsType.UnsignedInt, (void*)0);
+    }
+
+    /// <summary>
+    /// A block wears its own three faces; anything else wears its icon on every one, which is what
+    /// lets a sprite's extruded wall read the same picture as its front.
     /// </summary>
     private void SetLayers(ItemType type, BlockRegistry registry)
     {
@@ -228,6 +343,14 @@ public sealed class ItemRenderer : IDisposable
         _gl.DeleteBuffer(_vbo);
         _gl.DeleteBuffer(_ebo);
         _gl.DeleteVertexArray(_vao);
+
+        if (_spriteVao != 0)
+        {
+            _gl.DeleteBuffer(_spriteVbo);
+            _gl.DeleteBuffer(_spriteEbo);
+            _gl.DeleteVertexArray(_spriteVao);
+        }
+
         _shader.Dispose();
     }
 }

@@ -101,6 +101,30 @@ public static class PlayerModel
 
     private static float ArmWidth(ArmStyle style) => style == ArmStyle.Slim ? 3f : 4f;
 
+    /// <summary>Where an arm turns, in model units. The one place the shoulders are measured.</summary>
+    /// <remarks>
+    /// Read by <see cref="Build"/> and by whatever wants to hang something off a hand. Two copies of
+    /// a shoulder is exactly how a held tool ends up half a limb away from the fist holding it.
+    /// </remarks>
+    public static Vector3 ArmPivot(bool right) => new(right ? 5f : -5f, ShoulderHeight, 0f);
+
+    /// <summary>
+    /// The middle of a fist, in that arm's own space, measured from its shoulder.
+    /// </summary>
+    /// <remarks>
+    /// <para>Down the arm rather than at the end of it: the limb runs from +2 to −10 about its pivot
+    /// and the fingers close a little short of the wrist.</para>
+    /// <para>⚠ <b>Not on the arm's axis.</b> The limb box hangs off the shoulder toward the outside
+    /// of the body — a classic arm spans −1 to +3 across its own x — so the middle of the hand is
+    /// half an arm's width out, and a slim arm's is half a unit further in. A held thing centred on
+    /// x=0 sits with a quarter of itself inside the sleeve.</para>
+    /// </remarks>
+    public static Vector3 FistInArm(ArmStyle arms, bool right)
+    {
+        var across = (ArmWidth(arms) - 2f) * 0.5f;
+        return new Vector3(right ? across : -across, -9.6f, 0f);
+    }
+
     /// <summary>
     /// Every box, base layer first in <see cref="PlayerPart"/> order, then the overlays.
     /// </summary>
@@ -127,10 +151,10 @@ public static class PlayerModel
             new(PlayerPart.Body, false, new Vector3(0f, 12f, 0f), new Vector3(-4f, 0f, -2f),
                 8f, 12f, 4f, 16, 16, false, 0f),
 
-            new(PlayerPart.RightArm, false, new Vector3(5f, ShoulderHeight, 0f), rightArmOffset,
+            new(PlayerPart.RightArm, false, ArmPivot(true), rightArmOffset,
                 w, 12f, 4f, 40, 16, false, 0f),
 
-            new(PlayerPart.LeftArm, false, new Vector3(-5f, ShoulderHeight, 0f), leftArmOffset,
+            new(PlayerPart.LeftArm, false, ArmPivot(false), leftArmOffset,
                 w, 12f, 4f, legacy ? 40 : 32, legacy ? 16 : 48, true, 0f),
 
             // Legs overlap by a fifth of a unit down the middle. Butting them exactly together
@@ -151,10 +175,10 @@ public static class PlayerModel
             boxes.Add(new ModelBox(PlayerPart.Body, true, new Vector3(0f, 12f, 0f), new Vector3(-4f, 0f, -2f),
                 8f, 12f, 4f, 16, 32, false, OverlayInflate));
 
-            boxes.Add(new ModelBox(PlayerPart.RightArm, true, new Vector3(5f, ShoulderHeight, 0f), rightArmOffset,
+            boxes.Add(new ModelBox(PlayerPart.RightArm, true, ArmPivot(true), rightArmOffset,
                 w, 12f, 4f, 40, 32, false, OverlayInflate));
 
-            boxes.Add(new ModelBox(PlayerPart.LeftArm, true, new Vector3(-5f, ShoulderHeight, 0f), leftArmOffset,
+            boxes.Add(new ModelBox(PlayerPart.LeftArm, true, ArmPivot(false), leftArmOffset,
                 w, 12f, 4f, 48, 48, true, OverlayInflate));
 
             boxes.Add(new ModelBox(PlayerPart.RightLeg, true, new Vector3(1.9f, 12f, 0f), new Vector3(-2f, -12f, -2f),
