@@ -1907,6 +1907,11 @@ public sealed class ClientHost : IDisposable
             return;
         }
 
+        // ⛳ A hand in the grid ends the repeat. Everything below this line changes the arrangement
+        // by hand, and re-laying a remembered recipe over the top of what somebody has just put
+        // there themselves is the screen arguing with them.
+        if (zone.Role == SlotRole.Craft) _laidOut = null;
+
         var half = button == MouseButton.Right;
 
         // Shift sends a whole slot somewhere sensible without the cursor being involved at all.
@@ -2179,16 +2184,24 @@ public sealed class ClientHost : IDisposable
             // things and is what lets it be dropped straight into a bar slot. Everything else goes
             // to the pockets — including a shift-click, where wanting sixty of them on the cursor
             // makes no sense at all.
-            if (!many && _hudScreen.Carried.IsEmpty)
+            if (!many && _hudScreen.Carried.IsEmpty) _hudScreen.Carried = result;
+            else
             {
-                _hudScreen.Carried = result;
-                continue;
+                if (_hudScreen.Carried.Matches(result))
+                    _hudScreen.Carried = _hudScreen.Carried.Merge(result, _items[result.Item].MaxStack, out result);
+
+                Spill(result);
             }
 
-            if (_hudScreen.Carried.Matches(result))
-                _hudScreen.Carried = _hudScreen.Carried.Merge(result, _items[result.Item].MaxStack, out result);
-
-            Spill(result);
+            // ⛳ AND LAY IT OUT AGAIN, HERE, INSIDE THE LOOP. Taking the result spends the
+            // arrangement, so without this the grid is left empty and a second door is another trip
+            // to the book — which is exactly what was reported. Inside rather than after, because a
+            // shift-click asks for as many as possible and "as many as possible" was one: the
+            // second pass found an empty grid and stopped.
+            //
+            // It ends of its own accord the moment the pockets can no longer pay, and it does
+            // nothing at all when the grid was filled by hand rather than from a recipe.
+            if (_laidOut is { } again && !LayOut(again, quiet: true)) break;
         }
 
         if (made > 0) PlaySound(material, SoundEvent.Place, _viewPosition, 0.7f);
@@ -2340,6 +2353,7 @@ public sealed class ClientHost : IDisposable
         _hudScreen.Tab = (int)tab;
         _hudScreen.Selected = 0;
         _hudScreen.Grid = _handGrid;
+        _laidOut = null;
         _atBench = atBench;
         _station = at;
         _shown.Clear();
@@ -2355,6 +2369,7 @@ public sealed class ClientHost : IDisposable
         _hudScreen.TabNames = [];
         _hudScreen.Tab = 0;
         _hudScreen.Grid = _benchGrid;
+        _laidOut = null;
         _atBench = true;
         _station = (x, y, z);
         _shown.Clear();
@@ -2397,6 +2412,7 @@ public sealed class ClientHost : IDisposable
         _hudScreen.Tab = (int)tab;
         _hudScreen.Selected = _tabRow[(int)tab];
         _hudScreen.Grid = null;
+        _laidOut = null;
         _hudScreen.Scroll = 0;
         _hudScreen.Recipes.Clear();
         _hudScreen.Payable.Clear();
@@ -2424,6 +2440,7 @@ public sealed class ClientHost : IDisposable
         _hudScreen.TabNames = [];
         _hudScreen.Tab = 0;
         _hudScreen.Grid = null;
+        _laidOut = null;
         _station = (x, y, z);
         _holdingBreak = false;
         _holdingPlace = false;
@@ -2440,6 +2457,7 @@ public sealed class ClientHost : IDisposable
         _hudScreen.TabNames = [];
         _hudScreen.Tab = 0;
         _hudScreen.Grid = null;
+        _laidOut = null;
         _hudScreen.Cutting = ItemStack.Empty;
         _hudScreen.Cuts.Clear();
         _hudScreen.Cut = -1;
@@ -2481,6 +2499,7 @@ public sealed class ClientHost : IDisposable
         _hudScreen.TabNames = [];
         _hudScreen.Tab = 0;
         _hudScreen.Grid = null;
+        _laidOut = null;
         _hudScreen.Stored = _chests.Open(x, y, z);
         _station = (x, y, z);
         StopHands();
@@ -2543,6 +2562,7 @@ public sealed class ClientHost : IDisposable
         _rebinding = null;
         _hudScreen.Kind = HudScreenKind.None;
         _hudScreen.Grid = null;
+        _laidOut = null;
 
         // The chest keeps what is in it — that is the whole point of one — but the screen lets go
         // of it, so a shift-click on a pocket goes back to trading with the bar.
@@ -3183,12 +3203,30 @@ public sealed class ClientHost : IDisposable
     /// </remarks>
     private void LayOut(int index)
     {
-        if (_hudScreen.Grid is not { } grid) return;
         if (index < 0 || index >= _shown.Count) return;
+        LayOut(_shown[index]);
+    }
 
-        var recipe = _shown[index];
-        if (!recipe.WorkedAt(grid.Station, grid.Width)) return;
-        if (!_book.CanPay(_inventory, recipe)) return;
+    /// <summary>
+    /// The recipe the grid is currently holding, so taking the result can lay it out again.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>From the user, 2026-08-05:</b> <i>"once i'm on a door i should be able to keep clicking
+    /// the door to get multiple copies of it, the way it is now i have to click on the recipe each
+    /// and every time"</i>. Making ten doors was ten trips to the book and ten trips back to the
+    /// result square. Held here rather than on the grid because it is a property of <em>how the grid
+    /// came to hold what it holds</em>, which the grid itself has no way to know — put the same
+    /// planks in by hand and there is no recipe to repeat, only an arrangement.
+    /// </remarks>
+    private Recipe? _laidOut;
+
+    /// <param name="quiet">True when this is a repeat, which must not make the sound again.</param>
+    /// <returns>True when the grid is now holding it.</returns>
+    private bool LayOut(Recipe recipe, bool quiet = false)
+    {
+        if (_hudScreen.Grid is not { } grid) return false;
+        if (!recipe.WorkedAt(grid.Station, grid.Width)) return false;
+        if (!_book.CanPay(_inventory, recipe)) return false;
 
         foreach (var left in grid.Empty(_inventory)) Spill(left);
 
@@ -3221,7 +3259,9 @@ public sealed class ClientHost : IDisposable
             cell++;
         }
 
-        PlaySound(SoundMaterial.Wood, SoundEvent.Place, _viewPosition, 0.4f);
+        _laidOut = recipe;
+        if (!quiet) PlaySound(SoundMaterial.Wood, SoundEvent.Place, _viewPosition, 0.4f);
+        return true;
     }
 
     /// <summary>Makes the selected recipe outright, straight into the pockets.</summary>
@@ -4805,13 +4845,43 @@ public sealed class ClientHost : IDisposable
         // And what the arrangement makes, which is the point of laying it out at all.
         var makes = _hudScreen.Grid?.Result ?? ItemStack.Empty;
 
-        _uiBook = (entries, overlapping, laid, payable, _shown.Count, !makes.IsEmpty);
+        // ⛳ AND THAT TAKING IT LAYS THE SAME RECIPE OUT AGAIN. Reported from the game: making ten
+        // doors was ten trips back to the book, because taking the result spent the arrangement and
+        // left the grid empty. Taken through the real click path rather than by calling LayOut a
+        // second time, or this would be checking that a function called twice runs twice.
+        //
+        // ⚠ The pair is "it refilled" and "it stopped when the logs ran out". Refilling for ever
+        // would be items out of nowhere, and that reads as generosity rather than as a fault.
+        var again = 0;
+        var stopped = false;
+
+        if (payable >= 0 && _layout.Find(SlotRole.Result, 0) is { } well)
+        {
+            ClickSlot(well, MouseButton.Left, many: false);
+            _hudScreen.Carried = ItemStack.Empty;
+
+            for (var i = 0; i < (_hudScreen.Grid?.Cells ?? 0); i++)
+                if (!(_hudScreen.Grid?[i] ?? ItemStack.Empty).IsEmpty) again++;
+
+            // Eight logs, one a craft, so the ninth take has nothing left to lay out.
+            for (var take = 0; take < 12; take++)
+            {
+                ClickSlot(well, MouseButton.Left, many: false);
+                _hudScreen.Carried = ItemStack.Empty;
+            }
+
+            stopped = (_hudScreen.Grid?.Result ?? ItemStack.Empty).IsEmpty;
+        }
+
+        _uiBook = (entries, overlapping, laid, payable, _shown.Count, !makes.IsEmpty, again, stopped);
 
         Console.WriteLine(
             $"ui-check    book       {entries} recipes on the page of {_shown.Count}, "
             + $"{overlapping} over the panel; laying out '{(payable >= 0 ? _shown[payable].Name : "nothing")}' "
             + $"filled {laid} squares and makes "
-            + (makes.IsEmpty ? "nothing" : $"{makes.Count} {_items[makes.Item].Name}"));
+            + (makes.IsEmpty ? "nothing" : $"{makes.Count} {_items[makes.Item].Name}")
+            + $"; taking it laid {again} squares out again and ran out after "
+            + (stopped ? "the logs did" : "NOTHING — it is still making them"));
         Console.Out.Flush();
 
         // Put it back the way it was found, so the screens after this one are measured on the same
@@ -4820,7 +4890,8 @@ public sealed class ClientHost : IDisposable
         _inventory.Clear();
     }
 
-    private (int Entries, int Overlapping, int Laid, int Payable, int Total, bool Makes) _uiBook;
+    private (int Entries, int Overlapping, int Laid, int Payable, int Total, bool Makes,
+             int Again, bool Stopped) _uiBook;
 
     /// <summary>
     /// Puts the pointer on a square and asks the layout what it is over.
@@ -5123,6 +5194,18 @@ public sealed class ClientHost : IDisposable
         if (_uiBook.Payable < 0) faults.Add("nothing was payable with eight logs in the pockets");
         else if (_uiBook.Laid == 0) faults.Add("laying a recipe out of the book filled no squares");
         else if (!_uiBook.Makes) faults.Add("the squares the book laid out make nothing");
+
+        // ⛳ And that a second one is another click on the result rather than another trip to the
+        // book. Reported from the game: making ten doors was ten journeys back to the recipe.
+        else if (_uiBook.Again == 0)
+            faults.Add(
+                "taking the result left the grid empty, so making a second one means going back to "
+                + "the book for the same recipe again");
+
+        // The other half. A grid that refills for ever is items out of nowhere, and it would read
+        // as the feature working rather than as the fault it is.
+        else if (!_uiBook.Stopped)
+            faults.Add("the grid kept laying the recipe out after the pockets were empty");
 
         // The container panel is centred, so the middle of the window is inside it — and it is drawn
         // in the same neutral grey the options are. A middle that still reads dark is the backdrop
