@@ -104,6 +104,101 @@ public static class TileGen
         return frames;
     }
 
+    /// <summary>
+    /// A fluid seen travelling rather than lying still: bands running down the tile.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ <b>A different picture from the still one, not the same picture moving faster</b>, and
+    /// every pack in the genre agrees — they all ship <c>_still</c> and <c>_flow</c> as separate
+    /// files. Still water is a surface seen from above and its waves cross; flowing water is a sheet
+    /// seen edge on and everything in it runs one way. Putting the still tile on a waterfall is the
+    /// single most obvious way to make a fluid look wrong, and it costs nothing to be right.</para>
+    /// <para>The bands travel along v, which is down every side face the mesher emits, so a fall
+    /// reads as falling from any angle without the geometry knowing anything about it. The phase
+    /// closes over the loop and the wavelength divides the tile, so a column of it has no seam.</para>
+    /// </remarks>
+    public static byte[][] FlowFrames(int seed, int count, byte r, byte g, byte b, float contrast)
+    {
+        var frames = new byte[count][];
+
+        for (var f = 0; f < count; f++)
+        {
+            var t = new byte[BytesPerTile];
+            var phase = f / (float)count * MathF.Tau;
+
+            for (var y = 0; y < Size; y++)
+            for (var x = 0; x < Size; x++)
+            {
+                // Two rates so the bands do not read as a barber's pole, and a slow lean across x
+                // so the sheet has some body to it rather than being a stack of stripes.
+                var a = MathF.Sin(y / (float)Size * MathF.Tau * 2f - phase * 2f);
+                var c = MathF.Sin((y * 3f + x) / (float)Size * MathF.Tau - phase * 3f);
+
+                var band = (a * 0.65f + c * 0.35f) * contrast;
+                var grain = (Noise(x, y, seed) * 2f - 1f) * (contrast * 0.35f);
+
+                var d = (int)(band + grain);
+                Put(t, x, y, Clamp(r + d), Clamp(g + d), Clamp(b + d), 255);
+            }
+
+            frames[f] = t;
+        }
+
+        return frames;
+    }
+
+    /// <summary>
+    /// Molten rock: a dark crust with the heat showing through the cracks in it, moving slowly.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>Not simply water in orange.</b> What makes lava read as lava rather than as juice is that
+    /// it is mostly <em>dark</em> — a skin of cooled crust with a bright network under it — and that
+    /// it moves at about a fifth of water's rate. A tile that is uniformly bright orange reads as a
+    /// flat colour at any distance and takes the eye off everything else in the frame, which matters
+    /// more here than in most places because this block also lights the room.
+    /// </remarks>
+    public static byte[][] LavaFrames(int seed, int count)
+    {
+        var frames = new byte[count][];
+
+        for (var f = 0; f < count; f++)
+        {
+            var t = new byte[BytesPerTile];
+            var phase = f / (float)count * MathF.Tau;
+
+            for (var y = 0; y < Size; y++)
+            for (var x = 0; x < Size; x++)
+            {
+                // Two crossed swells as the water tile has, but read as a THRESHOLD rather than as a
+                // brightness: above the line is crust, below it is the glow coming through.
+                var a = MathF.Sin((x + y) / (float)Size * MathF.Tau * 2f - phase);
+                var c = MathF.Sin((x * 2f - y) / (float)Size * MathF.Tau - phase * 2f);
+                var swell = a * 0.6f + c * 0.4f;
+
+                var grain = Noise(x, y, seed) * 2f - 1f;
+                var heat = Math.Clamp(swell * 0.5f + 0.5f + grain * 0.18f, 0f, 1f);
+
+                // Crust through ember to the brightest core, so the ramp has three colours in it
+                // rather than one fading — molten rock is never a single hue.
+                var (r, g, b) = heat < 0.55f
+                    ? Mix(58, 22, 12, 148, 46, 16, heat / 0.55f)
+                    : Mix(148, 46, 16, 255, 196, 92, (heat - 0.55f) / 0.45f);
+
+                Put(t, x, y, r, g, b, 255);
+            }
+
+            frames[f] = t;
+        }
+
+        return frames;
+
+        static (byte R, byte G, byte B) Mix(
+            int r0, int g0, int b0, int r1, int g1, int b1, float k) =>
+            (Clamp((int)float.Lerp(r0, r1, k)),
+             Clamp((int)float.Lerp(g0, g1, k)),
+             Clamp((int)float.Lerp(b0, b1, k)));
+    }
+
     /// <summary>Speckle plus scattered blobs of a second colour, for ore in rock.</summary>
     public static byte[] Ore(int seed, byte[] baseTile, byte r, byte g, byte b, int blobs)
     {

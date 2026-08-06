@@ -136,6 +136,8 @@ public sealed class TerrainGenerator
     private readonly int _seedDeep;
     private readonly int _seedClay;
     private readonly int _seedMeadow;
+    private readonly int _seedLavaTable;
+    private readonly int _seedLavaPools;
 
     /// <summary>
     /// Climate, for the one thing terrain reads out of it: where snow lies.
@@ -184,6 +186,8 @@ public sealed class TerrainGenerator
         _seedDeep = seed.Derive("rock.deepstone");
         _seedClay = seed.Derive("deposit.clay");
         _seedMeadow = seed.Derive("decor.meadowgrass");
+        _seedLavaTable = seed.Derive("deep.lava_table");
+        _seedLavaPools = seed.Derive("deep.lava_pools");
 
         _climate = new ClimateField(seed);
 
@@ -305,7 +309,8 @@ public sealed class TerrainGenerator
                     else id = RockAt(wx, wy, wz);
 
                     // Caves cut through everything but bedrock and the seabed.
-                    if (Carved(wx, wy, wz, surface)) id = 0;
+                    if (Carved(wx, wy, wz, surface))
+                        id = wy <= LavaTable(wx, wz) ? _ids.Lava.Value : (ushort)0;
 
                     if (IsRock(id)) id = OreAt(wx, wy, wz, id);
                 }
@@ -335,6 +340,54 @@ public sealed class TerrainGenerator
         if (wy <= SeaLevel && surface <= SeaLevel) return false;
         return IsCave(wx, wy, wz);
     }
+
+    /// <summary>
+    /// The height molten rock stands at in this column, the way <see cref="SeaLevel"/> is for water.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳⛳ <b>Bulk lava is placed AT REST, exactly as the ocean is, and therefore costs no flow
+    /// at all.</b> That is the whole trick to affording a molten core: a cave floor below the lava
+    /// table is filled with sources by the generator, so a lake, a river running along a cavern and
+    /// the shore where the floor rises are all a pure function of seed and position, all settled the
+    /// moment they are generated, and all free. Making the generator place a few sources and letting
+    /// the flow work out the rest would be tens of thousands of cell updates every time a chunk
+    /// loads, for a result the generator can simply state.</para>
+    /// <para>⛳ <b>A gradient rather than a boundary</b>, which is the user's own idea and the better
+    /// one. The table rises with depth instead of switching on at a line: a stray pool at the top of
+    /// the hollows, lakes through the middle of them, and by the floor of the Emberdeep it is above
+    /// every cave there is, so the bottom of the world is a molten sea. Every hundred blocks down is
+    /// a different place rather than one line crossed once.</para>
+    /// <para>The noise is what stops it reading as a spirit level: without it the surface of every
+    /// lake in the world would sit at exactly the same height, which is the tell that a number was
+    /// picked rather than a place existing.</para>
+    /// </remarks>
+    public int LavaTable(int wx, int wz)
+    {
+        // The core: a molten sea across the floor of the world, under every column there is. This is
+        // the bottom of the world and it is meant to be a wall rather than a place — you go as far
+        // as its shore and no further.
+        var core = WorldBottom + 26
+                 + (int)(Noise.Fbm2(wx / 300f, wz / 300f, _seedLavaTable, 3) * 16f);
+
+        // Lakes and rivers standing above it, wherever a slow field says there are any. Where the
+        // field is strong the table is lifted most of the way up into the hollows, so the deep is
+        // threaded with molten water rather than having one surface everybody crosses at once.
+        var pool = Noise.Fbm2(wx / 140f, wz / 140f, _seedLavaPools, 3);
+        if (pool <= PoolThreshold) return core;
+
+        var lift = Math.Clamp((pool - PoolThreshold) / 0.26f, 0f, 1f);
+        return core + (int)(lift * (HollowsTop - 20 - core));
+    }
+
+    /// <summary>
+    /// How much of the field is lava-bearing. Measured against the census, not chosen.
+    /// </summary>
+    /// <remarks>
+    /// The field runs about −0.4 to 0.4, so this is roughly the top third of columns. Lower and the
+    /// deep is one continuous lake with nowhere to stand; higher and a descent turns up nothing but
+    /// grey rock and the Emberdeep is a name.
+    /// </remarks>
+    private const float PoolThreshold = 0.12f;
 
     /// <summary>
     /// Sky light in a cell, worked out from the generator alone — no chunks, no loaded world.

@@ -259,6 +259,17 @@ public static class BlockTextureSet
         new("stormglass_axe", "textures/item/diamond_axe.png",    true),
         new("stormglass_shovel", "textures/item/diamond_shovel.png", true),
         new("stormglass_sword", "textures/item/diamond_sword.png", true),
+
+        // ⛳ The fluids, last in the array because THIS ARRAY'S ORDER IS THE LAYER NUMBERING and a
+        // face inserted beside water would move every constant after it — see
+        // StarterBlocks.LayerFirstFluid; the sixteen dyes cost this project that lesson once already.
+        //
+        // Still and flowing are two different pictures in every pack there is, and putting the still
+        // one on a waterfall is the most obvious way to make a fluid look wrong: still is a surface
+        // seen from above, flowing is a sheet travelling in a direction. Both are strips of frames.
+        new("water_flow",  "textures/block/water_flow.png",       false),
+        new("lava",        "textures/block/lava_still.png",       false),
+        new("lava_flow",   "textures/block/lava_flow.png",        false),
     ];
 
     /// <summary>One row per colour of wool, off the colour table rather than written out.</summary>
@@ -511,14 +522,30 @@ public static class BlockTextureSet
         const int Frames = 16;
         const float Seconds = 2f / Frames;
 
-        var water = Upscale(TileGen.WaterFrames(1006, Frames, 41, 92, 158), size);
         var times = new float[Frames];
         Array.Fill(times, Seconds);
 
-        moving.Add(new LayerAnimation(StarterBlocks.LayerWater, water, times));
-        tiles[StarterBlocks.LayerWater] = water[0];
+        // ⚠ Lava runs at a fifth of water's rate. Molten rock that ripples like a pond reads as
+        // orange water, and the pace is most of what says otherwise before the colour does.
+        var slow = new float[Frames];
+        Array.Fill(slow, Seconds * 5f);
+
+        Add(StarterBlocks.LayerWater, TileGen.WaterFrames(1006, Frames, 41, 92, 158), times);
+        Add(StarterBlocks.LayerWaterFlow, TileGen.FlowFrames(1090, Frames, 41, 92, 158, 11f), times);
+        Add(StarterBlocks.LayerLava, TileGen.LavaFrames(1091, Frames), slow);
+        Add(StarterBlocks.LayerLavaFlow, TileGen.FlowFrames(1092, Frames, 176, 74, 22, 46f), slow);
 
         return moving;
+
+        void Add(ushort layer, byte[][] frames, float[] hold)
+        {
+            var scaled = Upscale(frames, size);
+            moving.Add(new LayerAnimation(layer, scaled, hold));
+
+            // Frame 0 written back over the still tile, so a build that never ticks the clock is
+            // unchanged rather than blank.
+            tiles[layer] = scaled[0];
+        }
     }
 
     /// <summary>Nearest-neighbour, the same way <see cref="Own"/> takes a 16px tile to the pack's size.</summary>
@@ -775,6 +802,13 @@ public static class BlockTextureSet
             StarterBlocks.LayerBone => TileGen.IconBone(1095, 234, 232, 216),
             StarterBlocks.LayerRottenFlesh =>
                 TileGen.IconMeat(1096, 128, 78, 74, TileGen.MeatShape.Cut, cooked: false),
+
+            // The fluids' first frames. OwnAnimations writes these back over the top with frame 0 of
+            // the real strip, so these are what a build that never ticks a clock draws — a still
+            // answer for every layer rather than a hole where the moving ones should be.
+            StarterBlocks.LayerWaterFlow => TileGen.FlowFrames(1090, 1, 41, 92, 158, 11f)[0],
+            StarterBlocks.LayerLava => TileGen.LavaFrames(1091, 1)[0],
+            StarterBlocks.LayerLavaFlow => TileGen.FlowFrames(1092, 1, 176, 74, 22, 46f)[0],
 
             _ => Wool(layer) ?? Meat(layer) ?? Dye(layer) ?? Tool(layer),
         };

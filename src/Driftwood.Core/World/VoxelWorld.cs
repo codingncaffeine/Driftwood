@@ -173,16 +173,55 @@ public sealed class VoxelWorld
     /// </summary>
     public void SetBlock(int wx, int wy, int wz, BlockId id)
     {
+        Write(wx, wy, wz, id, create: true);
+
+        _edits[(wx, wy, wz)] = id;
+        Changed = true;
+    }
+
+    /// <summary>
+    /// Writes a cell that flowed there rather than one somebody changed.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛔⛔ <b>The whole reason this exists is that <see cref="SetBlock"/> is the save's edit
+    /// log</b>, deliberately — it is hooked there rather than in the streamer precisely so that it
+    /// catches the connection rewire and the support-shed passes as well as a player's own swing. A
+    /// settling river through that door writes a few thousand entries to disk and sets
+    /// <see cref="Changed"/>, so the two-minute autosave fires on a world nobody touched.</para>
+    /// <para>⛳ <b>And it does not need to.</b> At rest, a fluid configuration is a deterministic
+    /// function of where the sources are and where the solids are — and both of those are already
+    /// described by the seed plus the player's edit diff. Flow is recomputed when a world opens and
+    /// never stored. The obvious objection, "I channelled lava into a moat and blocked the channel,
+    /// and on reload the moat is gone", is answered by the model itself: it was gone before the save,
+    /// because fluid cut off from a source drains. "Persists" and "is fed by a source" are the same
+    /// statement.</para>
+    /// <para>⚠ <b>It will not create a chunk.</b> Fluid must stall at the edge of the loaded world
+    /// rather than pour into it; a write that made the chunk would be filled in over the top by
+    /// generation, which is the exact failure a saved edit had before <see cref="Restore"/> existed.
+    /// </para>
+    /// <para>The line, stated once: <b>reversible fluid state is derived; irreversible terrain change
+    /// is saved.</b> The only thing that crosses it is a lava/water reaction, which goes through
+    /// <see cref="SetBlock"/> like anything else that cannot be undone.</para>
+    /// </remarks>
+    public void SetFluid(int wx, int wy, int wz, BlockId id) => Write(wx, wy, wz, id, create: false);
+
+    /// <summary>
+    /// Puts a block in a cell and dirties any neighbouring chunk whose mesh it could change — a block
+    /// on a chunk seam is a face-culling input for the chunk on the other side, and forgetting this
+    /// leaves a hole in the world.
+    /// </summary>
+    private void Write(int wx, int wy, int wz, BlockId id, bool create)
+    {
         var pos = ChunkPos.FromWorld(wx, wy, wz);
-        var chunk = GetOrCreateChunk(pos);
+
+        Chunk chunk;
+        if (create) chunk = GetOrCreateChunk(pos);
+        else if (!_chunks.TryGetValue(pos, out chunk!)) return;
 
         var lx = wx & Chunk.SizeMask;
         var ly = wy & Chunk.SizeMask;
         var lz = wz & Chunk.SizeMask;
         chunk.Set(lx, ly, lz, id);
-
-        _edits[(wx, wy, wz)] = id;
-        Changed = true;
 
         if (lx == 0) DirtyNeighbour(pos.Offset(-1, 0, 0));
         else if (lx == Chunk.SizeMask) DirtyNeighbour(pos.Offset(1, 0, 0));

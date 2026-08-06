@@ -36,6 +36,17 @@ public sealed class BlockDrops
         // of the world and every orientation of every shape at once.
         for (ushort id = 1; id < blocks.Count; id++)
         {
+            // ⛳ A fluid leaves nothing, and it is said once here rather than as seventeen rows in
+            // the table below. Every level of every fluid is its own registered block, so writing
+            // them out would be a list somebody has to extend by hand the day a third fluid lands —
+            // and a forgotten row would not fail loudly, it would hand out an item that never existed.
+            if (blocks[id].Fluid != Blocks.FluidKind.None)
+            {
+                _item[id] = ItemId.None;
+                _count[id] = 0;
+                continue;
+            }
+
             _item[id] = items.ForBlock(new BlockId(id));
             _count[id] = 1;
         }

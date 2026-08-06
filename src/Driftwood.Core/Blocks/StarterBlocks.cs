@@ -236,7 +236,28 @@ public static class StarterBlocks
     /// <summary>Palettes a head comes in — wood, stone, copper, gold, iron, stormglass.</summary>
     public const int ToolTierCount = 6;
 
-    public const int LayerCount = LayerFirstTool + ToolShapeCount * ToolTierCount;
+    /// <summary>
+    /// The fluids, appended past the tools rather than filed beside the other block faces.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>Appended on purpose, and the reason is a trap this project has already paid for.</b>
+    /// <see cref="Textures.BlockTextureSet.Layers"/>' <em>order</em> is the layer numbering, so
+    /// slotting a face in beside <see cref="LayerWater"/> moves eighty-five constants by one while
+    /// every texture check goes on passing — the sixteen dyes went in at the end of that array while
+    /// their constant said 112, and a pack would have painted a wooden pickaxe onto white dye.
+    /// Appending costs the <c>--icon-sheet</c> report a fourth group and nothing else.
+    /// <para>Three of them because a fluid is drawn two ways. Every pack in the genre ships a
+    /// <c>_still</c> and a <c>_flow</c> and they are different pictures — still is a surface seen
+    /// from above, flowing is a sheet travelling in a direction. Water already had its still tile at
+    /// <see cref="LayerWater"/>; this adds the moving one, and both of lava's.</para>
+    /// </remarks>
+    public const ushort LayerFirstFluid = LayerFirstTool + ToolShapeCount * ToolTierCount;
+
+    public const ushort LayerWaterFlow = LayerFirstFluid;
+    public const ushort LayerLava = LayerFirstFluid + 1;
+    public const ushort LayerLavaFlow = LayerFirstFluid + 2;
+
+    public const int LayerCount = LayerFirstFluid + 3;
 
     public sealed record Ids(
         BlockId Stone,
@@ -275,7 +296,8 @@ public static class StarterBlocks
         BlockId Bricks,
         BlockId Bench,
         BlockId Furnace,
-        BlockId FurnaceLit)
+        BlockId FurnaceLit,
+        BlockId Lava)
     {
         /// <summary>Every rock an ore can form in. Ore replaces rock, whichever rock it is.</summary>
         public BlockId[] Rock => [Stone, Deepstone, Coralstone, Driftstone, Saltstone];
@@ -293,7 +315,14 @@ public static class StarterBlocks
     public static Ids Register(BlockRegistry registry)
     {
         // Id 0 must be air; chunk storage treats a zeroed array as empty.
-        registry.Register(new BlockType { Name = "air", Solid = false, Opaque = false });
+        //
+        // ⚠ Replaceable, which is not a formality: it is what a fluid asks before it moves into a
+        // cell, and with it left at the default a river cannot flow into an empty space — which is
+        // to say it cannot flow at all. Measured, and it read as a fall crossing 0 of 20 cells.
+        registry.Register(new BlockType
+        {
+            Name = "air", Solid = false, Opaque = false, Replaceable = true,
+        });
 
         // Hardness is in the genre's units; MiningRules turns it into seconds. Loose ground is
         // under a second, timber is a few, and anything that wants a pickaxe says so — which is
@@ -334,12 +363,19 @@ public static class StarterBlocks
         // Unbreakable because a fluid is not something you mine — a ray passes through it to the
         // sea bed and it is not targetable at all. Saying so here means that if it ever does become
         // targetable, the answer is already no rather than a silent hole in the ocean.
-        var water = registry.Register(new BlockType
-        {
-            Name = "water", Solid = false, Opaque = false, LightAttenuation = 1, Hardness = -1f,
-            Tint = TintSource.Water, Sounds = SoundMaterial.Water,
-            TopLayer = LayerWater, SideLayer = LayerWater, BottomLayer = LayerWater,
-        });
+        var water = RegisterFluid(
+            registry, "water", FluidKind.Water,
+            LayerWater, LayerWaterFlow, TintSource.Water, SoundMaterial.Water,
+            attenuation: 1, emission: 0);
+
+        // ⛳ The Emberdeep's own material, and the reason the deep is dangerous rather than merely
+        // far away. Emissive, so it lights the room it is in — which means a settling river is a
+        // relight per cell and is the one number in this whole system that had to be measured before
+        // it could be believed. Full red at the top of the scale, warm through green, almost no blue.
+        var lava = RegisterFluid(
+            registry, "lava", FluidKind.Lava,
+            LayerLava, LayerLavaFlow, TintSource.None, SoundMaterial.Stone,
+            attenuation: 2, emission: LightValue.PackBlock(15, 8, 2));
 
         var gravel = registry.Register(new BlockType
         {
@@ -730,7 +766,73 @@ public static class StarterBlocks
             emberstone, vine, deepstone, coralstone, driftstone, saltstone, copper, gold, stormglass,
             azurite, clay, sandstone, snow, snowLayer, meadowgrass, seaflax, marshlily,
             emberbloom, sunwort,
-            rubble, glass, bricks, bench, furnace, furnaceLit);
+            rubble, glass, bricks, bench, furnace, furnaceLit, lava);
+    }
+
+    /// <summary>
+    /// Registers one fluid: a source, seven flowing depths, and the falling form.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ <b>Nine registered blocks rather than one block and a level stored beside it</b>, which
+    /// is what this codebase does with every other kind of state — twenty stair orientations, sixteen
+    /// connection masks, sixteen colours of wool, a lit furnace and a cold one. The alternative is a
+    /// per-chunk level array: 32 KB on top of every chunk's 128, plus a save section, plus changes to
+    /// the snapshot, the mesher and the palette. A state is an id here.</para>
+    /// <para>⛔ <b>The source keeps the plain name</b> — "water", not "water_source" — because a save
+    /// stores blocks by name through a per-save palette, and renaming it would make every world ever
+    /// written come back with its oceans missing.</para>
+    /// <para>The source and the falling form are <em>full cubes</em>, so an ocean and a waterfall both
+    /// take the greedy merge and cost exactly what they cost before. Only the flowing tail is a shaped
+    /// block on the per-block path, and a tail is the fringe of a river rather than its body.</para>
+    /// <para>⚠ <b>Still and flowing are two textures.</b> A source is a surface seen from above; every
+    /// other state is a sheet travelling somewhere. Using one picture for both is the most obvious way
+    /// to make a fluid look wrong, and every pack in the genre already ships the pair.</para>
+    /// </remarks>
+    private static BlockId RegisterFluid(
+        BlockRegistry registry, string name, FluidKind kind,
+        ushort still, ushort flow, TintSource tint, SoundMaterial sound,
+        int attenuation, ushort emission)
+    {
+        // Unbreakable because a fluid is not something you mine: a ray passes through it to whatever
+        // is behind, and it is not targetable at all. Saying so here means that if it ever does
+        // become targetable the answer is already no, rather than a silent hole in the ocean.
+        var source = registry.Register(new BlockType
+        {
+            Name = name,
+            Solid = false, Opaque = false, Hardness = -1f, Replaceable = true,
+            LightAttenuation = attenuation, LightEmission = emission,
+            Tint = tint, Sounds = sound,
+            Fluid = kind, FluidLevel = FluidEngine.MaxLevel,
+            TopLayer = still, SideLayer = still, BottomLayer = still,
+        });
+
+        for (var level = 1; level < FluidEngine.MaxLevel; level++)
+        {
+            registry.Register(new BlockType
+            {
+                Name = $"{name}_{level}",
+                Solid = false, Opaque = false, Hardness = -1f, Replaceable = true, Derived = true,
+                LightAttenuation = attenuation, LightEmission = emission,
+                Tint = tint, Sounds = sound,
+                Fluid = kind, FluidLevel = level,
+
+                // Two model units per level, so a full cell is sixteen and the shallowest tail is a
+                // two-unit film — the same shape a snow layer and a carpet already are.
+                Model = BlockModel.Layer(flow, flow, flow, level * 2f),
+            });
+        }
+
+        registry.Register(new BlockType
+        {
+            Name = $"{name}_falling",
+            Solid = false, Opaque = false, Hardness = -1f, Replaceable = true, Derived = true,
+            LightAttenuation = attenuation, LightEmission = emission,
+            Tint = tint, Sounds = sound,
+            Fluid = kind, FluidLevel = FluidEngine.MaxLevel, FluidFalling = true,
+            TopLayer = flow, SideLayer = flow, BottomLayer = flow,
+        });
+
+        return source;
     }
 
     /// <summary>

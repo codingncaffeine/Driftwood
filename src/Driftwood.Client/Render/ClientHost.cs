@@ -1199,6 +1199,12 @@ public sealed class ClientHost : IDisposable
             // What lets a fence know it has a neighbour. Handed over rather than built inside the
             // streamer, so a world with nothing that connects pays nothing for the pass.
             Connections = StarterBlocks.Connections(registry),
+
+            // ⛳ And what makes water move. Owned out here rather than by the streamer, because the
+            // tick rate is a game decision and the per-frame budget is a frame-time one; what the
+            // streamer contributes is the two moments the flow cannot see for itself — a chunk
+            // arriving, which is where a stalled fall resumes, and a block being edited.
+            Fluids = new FluidEngine(registry),
         };
 
         var reach = viewRadius * Chunk.Size;
@@ -1517,6 +1523,42 @@ public sealed class ClientHost : IDisposable
     /// player picks things up. Making the world dirty is the useful half of that trigger, and the
     /// period is what stops it being churn.</para>
     /// </remarks>
+    /// <summary>Ticks a second of the flow, and no more than a frame can pay for.</summary>
+    /// <remarks>
+    /// <para>⛳ <b>Five times a second, not sixty.</b> A fluid that settles the instant a wall comes
+    /// down does not read as a fluid, it reads as the world changing shape — the whole point of
+    /// breaking a block beside a river is watching the water find its way in.</para>
+    /// <para><b>And a bounded number of cells per tick, which is what keeps a flood from being a
+    /// frame hitch.</b> A cave system filling takes many ticks, which is exactly what it should look
+    /// like, and the cost of a frame is a number rather than a cliff nobody meets until they break
+    /// the wrong wall. The engine keeps its own queue, so the remainder is not lost — it is next
+    /// tick's work.</para>
+    /// <para>The cells it moved go to the streamer, which books their light and their mesh. It does
+    /// <em>not</em> route them through the block-edit path: the flow has already written them, and
+    /// that path would log every one of them as something to save.</para>
+    /// </remarks>
+    private void StepFluid(float dt)
+    {
+        const float TickSeconds = 0.2f;
+        const int CellsPerTick = 256;
+
+        if (!_walking || !_spawned) return;
+
+        _fluidClock += dt;
+        if (_fluidClock < TickSeconds) return;
+
+        // Clamped rather than accumulated, so a stall does not spend the next frame catching up on
+        // a second of ticks at once.
+        _fluidClock = MathF.Min(_fluidClock - TickSeconds, TickSeconds);
+
+        _streamer.StepFluid(CellsPerTick, _fluidMoved);
+    }
+
+    private float _fluidClock;
+
+    /// <summary>Reused between ticks, so a settling river allocates nothing.</summary>
+    private readonly List<(int X, int Y, int Z)> _fluidMoved = [];
+
     private void StepAutosave(double dt)
     {
         // Nobody is playing yet, so there is nothing to keep and the flight would otherwise write
@@ -4097,6 +4139,7 @@ public sealed class ClientHost : IDisposable
         StepAnimation((float)dt);
         StepFootfall((float)dt);
         StepVitals((float)dt);
+        StepFluid((float)dt);
         StepLeaffall((float)dt);
         StepFurnaces((float)dt);
         StepCreatures((float)dt);

@@ -73,19 +73,86 @@ public sealed class PlayerVitals
 
     public bool Alive => Health > 0;
 
+    /// <summary>What a head is inside, per block id, for the two things that can happen to it.</summary>
+    private readonly bool[] _burnsIn;
+
     /// <param name="registry">
-    /// Read for which blocks a head cannot breathe in: anything that stops neither movement nor
-    /// light but is not air. Water today, and whatever else fills a space later.
+    /// Read for which blocks a head cannot breathe in, and which ones burn it.
     /// </param>
+    /// <remarks>
+    /// ⛔ <b>Asked of the block outright, and it used to be derived — <c>!Solid &amp;&amp; !Opaque
+    /// &amp;&amp; LightAttenuation &gt; 0</c>.</b> That picked out water exactly, for as long as water
+    /// was the only fluid in the game. <b>Lava satisfies all three of them</b>, so the day it was
+    /// registered a player would have held their breath in molten rock and drowned in it after five
+    /// seconds, and there is not a check anywhere that would have looked wrong. It is
+    /// <see cref="BlockType.Fluid"/> now, which is a fact a block states rather than one three other
+    /// facts happen to imply.
+    /// </remarks>
     public PlayerVitals(BlockRegistry registry)
     {
         _drownsIn = new bool[registry.Count];
+        _burnsIn = new bool[registry.Count];
+
         for (var id = 1; id < registry.Count; id++)
         {
             var type = registry[(ushort)id];
-            _drownsIn[id] = !type.Solid && !type.Opaque && type.LightAttenuation > 0;
+            _drownsIn[id] = type.Fluid == FluidKind.Water;
+            _burnsIn[id] = type.Fluid == FluidKind.Lava;
         }
     }
+
+    /// <summary>True when the given block would burn something standing in it.</summary>
+    public bool Burns(BlockId block) => _burnsIn[block.Value];
+
+    /// <summary>Half-hearts a second while actually in it. Four seconds to kill from full.</summary>
+    private const float LavaRate = 2f;
+
+    private const int LavaDamage = 2;
+
+    /// <summary>Half-hearts a second while still alight after getting out.</summary>
+    private const float BurnRate = 2f;
+
+    /// <summary>How long the burning lasts once you are clear of it.</summary>
+    /// <remarks>
+    /// Long enough that a dash across a flow costs something, short enough that a dash is survivable
+    /// — which is the whole design of the block. Water puts it out at once, which is what makes
+    /// carrying a bucket into the deep a plan rather than an errand.
+    /// </remarks>
+    private const float BurnAfter = 4f;
+
+    private float _lavaFor;
+    private float _burnTick;
+    private float _burningFor;
+
+    /// <summary>True while still alight after leaving the fire.</summary>
+    public bool Burning => _burningFor > 0f;
+
+    /// <summary>True when any part of the body is inside something that burns.</summary>
+    private bool TouchesBurning(VoxelWorld world, PlayerBody body)
+    {
+        var feet = body.Position;
+        var half = PlayerBody.Width * 0.5f;
+        var top = feet.Y + body.CurrentHeight;
+
+        var minX = (int)MathF.Floor(feet.X - half);
+        var maxX = (int)MathF.Floor(feet.X + half);
+        var minZ = (int)MathF.Floor(feet.Z - half);
+        var maxZ = (int)MathF.Floor(feet.Z + half);
+        var minY = (int)MathF.Floor(feet.Y);
+        var maxY = (int)MathF.Floor(top);
+
+        for (var y = minY; y <= maxY; y++)
+        for (var z = minZ; z <= maxZ; z++)
+        for (var x = minX; x <= maxX; x++)
+            if (_burnsIn[world.GetBlock(x, y, z).Value]) return true;
+
+        return false;
+    }
+
+    private static BlockId FeetBlock(VoxelWorld world, PlayerBody body) => world.GetBlock(
+        (int)MathF.Floor(body.Position.X),
+        (int)MathF.Floor(body.Position.Y),
+        (int)MathF.Floor(body.Position.Z));
 
     /// <summary>Full health, full breath, nothing pending. What a respawn does.</summary>
     public void Restore()
@@ -171,6 +238,45 @@ public sealed class PlayerVitals
             (int)MathF.Floor(eye.X), (int)MathF.Floor(eye.Y), (int)MathF.Floor(eye.Z));
 
         Submerged = _drownsIn[head.Value];
+
+        // ⛳ Contact damage, which did not exist at all: falling and drowning were the only two ways
+        // to be hurt by the world, and lava with neither is scenery. Asked of the whole body rather
+        // than of the head — stepping into it is what kills you, not swimming in it — and it keeps
+        // burning for a few seconds after you get out, which is what makes a dash across a flow a
+        // decision rather than a free move. Water puts it out immediately.
+        var touchingLava = TouchesBurning(world, body);
+
+        if (touchingLava) _burningFor = BurnAfter;
+        else if (Submerged || _drownsIn[FeetBlock(world, body).Value]) _burningFor = 0f;
+        else _burningFor = MathF.Max(0f, _burningFor - dt);
+
+        if (touchingLava)
+        {
+            _lavaFor += dt;
+            while (_lavaFor >= 1f / LavaRate)
+            {
+                _lavaFor -= 1f / LavaRate;
+                Hurt(LavaDamage);
+            }
+        }
+        else
+        {
+            _lavaFor = 0f;
+
+            if (_burningFor > 0f)
+            {
+                _burnTick += dt;
+                while (_burnTick >= 1f / BurnRate)
+                {
+                    _burnTick -= 1f / BurnRate;
+                    Hurt(1);
+                }
+            }
+            else
+            {
+                _burnTick = 0f;
+            }
+        }
 
         if (Submerged)
         {

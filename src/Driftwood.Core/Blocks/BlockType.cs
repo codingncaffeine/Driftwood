@@ -28,6 +28,21 @@ public enum BlockUse
     Toggle,
 }
 
+/// <summary>Which fluid a block is, when it is one.</summary>
+/// <remarks>
+/// ⛔ <b>Named outright rather than derived, and that is not tidiness.</b> The drowning test was
+/// <c>!Solid &amp;&amp; !Opaque &amp;&amp; LightAttenuation &gt; 0</c> — three fields that happened
+/// to pick out water when water was the only fluid in the game. <b>Lava satisfies all three</b>, so
+/// the day it was registered a player would have held their breath in magma and drowned in it, and
+/// nothing anywhere would have looked wrong.
+/// </remarks>
+public enum FluidKind
+{
+    None = 0,
+    Water,
+    Lava,
+}
+
 /// <summary>Which colour lookup, if any, a block's texture is multiplied by.</summary>
 public enum TintSource
 {
@@ -155,6 +170,49 @@ public sealed class BlockType
 
     /// <summary>True when a player standing in this cell can go up and down it.</summary>
     public bool Climbable { get; init; }
+
+    /// <summary>Which fluid this block is, or <see cref="FluidKind.None"/>.</summary>
+    public FluidKind Fluid { get; init; }
+
+    /// <summary>
+    /// How full of that fluid the cell is: 8 for a source, 1 to 7 for a flowing tail, 0 for anything
+    /// that is not a fluid at all.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>One registered block per level, which is what this codebase does everywhere else</b> —
+    /// twenty stair orientations, sixteen connection masks, sixteen colours of wool, a lit furnace
+    /// and a cold one. The alternative is a per-chunk level array, which is 32 KB on top of every
+    /// chunk's 128 and a change to the save format, the snapshot, the mesher and the palette. A
+    /// state is an id here; a fluid should not be the exception.
+    /// </remarks>
+    public int FluidLevel { get; init; }
+
+    /// <summary>True for a fluid fed from directly above, which falls at full strength.</summary>
+    public bool FluidFalling { get; init; }
+
+    /// <summary>True for a source: permanent until something takes it away.</summary>
+    public bool FluidSource => Fluid != FluidKind.None && FluidLevel >= FluidEngine.MaxLevel && !FluidFalling;
+
+    /// <summary>
+    /// True when a fluid or a placed block may take this cell without asking.
+    /// </summary>
+    /// <remarks>
+    /// Air and the fluids themselves. Plants are the obvious next entry — being washed away is what
+    /// a tuft of grass beside a river should do — and they are left out for now because the cell has
+    /// to leave something on the floor and that is the item layer's business, not the flow's.
+    /// </remarks>
+    public bool Replaceable { get; init; }
+
+    /// <summary>
+    /// True when a running system puts this block into the world rather than the generator or a recipe.
+    /// </summary>
+    /// <remarks>
+    /// The audit insists every material appears somewhere in a generated world, because a block
+    /// nobody can find is a block that does not exist. A flowing fluid level is neither dug nor
+    /// built: it exists only while something is flowing, so a census of terrain will not find it and
+    /// should not be asked to.
+    /// </remarks>
+    public bool Derived { get; init; }
 
     /// <summary>Nothing takes this block. Bedrock, and the floor of the world.</summary>
     public bool Unbreakable => Hardness < 0f;

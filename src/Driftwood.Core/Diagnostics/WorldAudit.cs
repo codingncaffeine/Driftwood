@@ -294,9 +294,25 @@ public static class WorldAudit
             counts[ids.Bedrock.Value] > 0 && maxY[ids.Bedrock.Value] == TerrainGenerator.WorldBottom,
             $"y {minY[ids.Bedrock.Value]}..{maxY[ids.Bedrock.Value]} (want {TerrainGenerator.WorldBottom})");
 
-        // ⛳ Air at the bottom of the world, not near y 0. The old floor is 256 blocks up now, and a
-        // check that still asked about y 2 would pass on a world with no deep in it at all.
-        Check("caves opened", minY[0] <= TerrainGenerator.WorldBottom + 4, $"lowest air at y {minY[0]}");
+        // ⛳ Air in the EMBERDEEP, not near y 2. The old floor is 256 blocks up now, so a check that
+        // still asked about y 2 would pass on a world with no deep in it at all — and it cannot ask
+        // about the very bottom either, because the very bottom is molten and air down there would
+        // mean the core had holes in it.
+        Check("caves opened", minY[0] <= TerrainGenerator.EmberdeepTop,
+            $"lowest air at y {minY[0]} (want at or under {TerrainGenerator.EmberdeepTop})");
+
+        // The molten floor, which is the reason to go down at all. Both halves: it has to reach the
+        // bedrock, or there is no core — and it must not reach the ordinary underground, or a player
+        // digging a straight shaft from their front door lands in it.
+        var lavaLow = counts[ids.Lava.Value] > 0 ? minY[ids.Lava.Value] : 0;
+        var lavaHigh = counts[ids.Lava.Value] > 0 ? maxY[ids.Lava.Value] : 0;
+
+        Check("the world has a molten floor",
+            counts[ids.Lava.Value] > 0
+            && lavaLow <= TerrainGenerator.WorldBottom + 30
+            && lavaHigh < TerrainGenerator.HollowsTop,
+            $"lava {counts[ids.Lava.Value]:N0} blocks, y {lavaLow}..{lavaHigh} "
+            + $"(want down to {TerrainGenerator.WorldBottom + 30} and no higher than {TerrainGenerator.HollowsTop})");
         Check("geometry produced", tris > 0, $"{tris:N0} tris");
 
         // Relief and mix gates. A world can pass every "does this block exist" check above and
@@ -327,6 +343,10 @@ public static class WorldAudit
 
         var verticalOk = VerticalStreamingPays(seed, registry, ids, oceanCoverage, out var verticalDetail);
         Check("the deep costs less than the surface", verticalOk, verticalDetail);
+
+        var fluidFaults = FluidFaults(registry, ids, out var fluidDetail);
+        Check("fluid flows, settles, and drains", fluidFaults.Count == 0,
+            fluidFaults.Count == 0 ? fluidDetail : string.Join("; ", fluidFaults));
 
         var frustumFaults = Frustum.SelfTest();
         Check("frustum culls correctly", frustumFaults.Count == 0,
@@ -514,10 +534,11 @@ public static class WorldAudit
         Check("moving things about never loses one", pocketFaults.Count == 0,
             pocketFaults.Count == 0 ? pocketDetail : $"{pocketFaults.Count} faults: {pocketFaults[0]}");
 
-        var vitalsFaults = VitalsSelfTest(registry, ids);
-        Check("falls and water cost health", vitalsFaults.Count == 0,
+        var vitalsFaults = VitalsSelfTest(registry, ids, out var vitalsDetail);
+        Check("falls, water and lava cost health", vitalsFaults.Count == 0,
             vitalsFaults.Count == 0
-                ? $"{PlayerVitals.SafeFall:F0} blocks free then a half-heart each, {PlayerVitals.MaxBreath / 60}s of breath, rest heals"
+                ? $"{PlayerVitals.SafeFall:F0} blocks free then a half-heart each, "
+                  + $"{PlayerVitals.MaxBreath / 60}s of breath, rest heals; {vitalsDetail}"
                 : $"{vitalsFaults.Count} faults: {vitalsFaults[0]}");
 
         var soundFaults = SoundSelfTest(registry, out var soundDetail);
@@ -560,16 +581,23 @@ public static class WorldAudit
         // forgetting to place it fails rather than quietly joining the list.
         var missing = new List<string>();
         var crafted = 0;
+        var derived = 0;
         for (ushort id = 1; id < registry.Count; id++)
         {
             if (registry[id].Crafted) { crafted++; continue; }
+
+            // A flowing fluid level exists only while something is flowing. It is neither dug nor
+            // built, so a census of terrain will not find it and is not the right thing to ask.
+            if (registry[id].Derived) { derived++; continue; }
+
             if (counts[id] > 0) continue;
             missing.Add(registry[id].Name);
         }
 
         Check("every material is in the world", missing.Count == 0,
             missing.Count == 0
-                ? $"{registry.Count - crafted - 1} of {registry.Count - 1} blocks generate; {crafted} are built, not dug"
+                ? $"{registry.Count - crafted - derived - 1} of {registry.Count - 1} blocks generate; "
+                  + $"{crafted} are built, {derived} only ever flow"
                 : $"never generated: {string.Join(", ", missing)}");
 
         // Ore gets a band, not a floor. Too little and mining never gates progression; too much
@@ -4201,7 +4229,8 @@ public static class WorldAudit
     /// where damage is a constant. Walking heights either side of the free limit and checking the
     /// cost rises with the height is what tells those apart.</para>
     /// </remarks>
-    private static List<string> VitalsSelfTest(BlockRegistry registry, StarterBlocks.Ids ids)
+    private static List<string> VitalsSelfTest(
+        BlockRegistry registry, StarterBlocks.Ids ids, out string detail)
     {
         var faults = new List<string>();
         const float Step = 1f / 60f;
@@ -4304,7 +4333,74 @@ public static class WorldAudit
         if (healing.Health != PlayerVitals.MaxHealth)
             faults.Add($"half a minute of rest left health at {healing.Health} of {PlayerVitals.MaxHealth}");
 
+        // ── Lava burns, and it goes on burning after you get out ────────────────────────────────
+        //
+        // ⛔ THE CONTROL IS THE SAME BODY IN WATER, and it is not optional: every one of these
+        // assertions is also satisfied by "standing still costs health", by "the world hurts you",
+        // and by a build where the drowning path fires on any fluid. The two runs differ in one
+        // block and nothing else.
+        var (lavaHurt, lavaBurnedAfter, lavaDrowned) = Bathe(registry, ids, ids.Lava);
+        var (waterHurt, waterBurnedAfter, _) = Bathe(registry, ids, ids.Water);
+
+        if (lavaHurt <= 0) faults.Add("two seconds in lava cost nothing");
+        if (waterHurt != 0) faults.Add($"two seconds in water cost {waterHurt}, so the burn check is measuring something else");
+        if (!lavaBurnedAfter) faults.Add("stepping out of lava put the fire out immediately");
+        if (waterBurnedAfter) faults.Add("stepping out of water left the body alight");
+
+        // ⛔ AND IT MUST NOT DROWN. The test for what a head cannot breathe in used to be derived
+        // from three other flags — not solid, not opaque, dims light — which lava satisfies exactly.
+        // A build with that derivation passes every check above and quietly has the player holding
+        // their breath in molten rock.
+        if (lavaDrowned) faults.Add("a head in lava is treated as being under water");
+
+        detail = $"two seconds in lava costs {lavaHurt} half-hearts and goes on burning after, "
+               + $"the same two in water costs {waterHurt} and does not";
+
         return faults;
+    }
+
+    /// <summary>
+    /// Stands a body in one block for two seconds, walks it out, and reports what happened.
+    /// </summary>
+    private static (int Hurt, bool StillBurning, bool Drowned) Bathe(
+        BlockRegistry registry, StarterBlocks.Ids ids, BlockId fill)
+    {
+        const float Step = 1f / 60f;
+
+        var world = new VoxelWorld(registry);
+        world.GetOrCreateChunk(new ChunkPos(0, 0, 0));
+
+        for (var z = 0; z <= 6; z++)
+        for (var x = 0; x <= 6; x++)
+        {
+            Put(world, x, 4, z, ids.Stone);
+            for (var y = 5; y <= 8; y++) Put(world, x, y, z, fill);
+            for (var y = 9; y <= 14; y++) Put(world, x, y, z, BlockId.Air);
+        }
+
+        // Dry land to climb out onto, three cells over.
+        for (var y = 5; y <= 14; y++) Put(world, 10, y, 3, BlockId.Air);
+        Put(world, 10, 4, 3, ids.Stone);
+
+        var body = new PlayerBody(registry);
+        var vitals = new PlayerVitals(registry);
+        body.Teleport(new Vector3(3.5f, 5f, 3.5f));
+
+        var drowned = false;
+        for (var i = 0; i < 120; i++)
+        {
+            vitals.Update(world, body, Step);
+            drowned |= vitals.Submerged;
+        }
+
+        var hurt = PlayerVitals.MaxHealth - vitals.Health;
+
+        // Out, and dry. Whatever happens next is the burn rather than the bath.
+        body.Teleport(new Vector3(10.5f, 5f, 3.5f));
+        vitals.Update(world, body, Step);
+        var burning = vitals.Burning;
+
+        return (hurt, burning, drowned);
     }
 
     /// <summary>
@@ -5123,7 +5219,10 @@ public static class WorldAudit
         (StarterBlocks.LayerFirstDye, "dye_white"),
         (StarterBlocks.LayerBone, "bone"),
         (StarterBlocks.LayerFirstTool, "wood_pickaxe"),
-        ((ushort)(StarterBlocks.LayerCount - 1), "stormglass_sword"),
+        ((ushort)(StarterBlocks.LayerFirstFluid - 1), "stormglass_sword"),
+        (StarterBlocks.LayerWaterFlow, "water_flow"),
+        (StarterBlocks.LayerLava, "lava"),
+        ((ushort)(StarterBlocks.LayerCount - 1), "lava_flow"),
     ];
 
     private static List<string> TextureSelfTest()
@@ -6218,6 +6317,284 @@ public static class WorldAudit
     /// a handful of large quads, while the correct broken surface needs more. Verified: forcing the
     /// streamer to mesh without waiting reports 4788 verts against 4792.</para>
     /// </remarks>
+    /// <summary>
+    /// Puts a block into a bare world the way generation does — no chunk creation, no edit logged.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>Through the chunk, not through <see cref="VoxelWorld.SetBlock"/>.</b> Setting up a test
+    /// world with SetBlock would fill the edit log before the flow ran, and the sharpest check in
+    /// this whole group is that a settling river adds <em>nothing</em> to it.
+    /// </remarks>
+    private static void Put(VoxelWorld world, int x, int y, int z, BlockId id)
+    {
+        if (!world.TryGetChunk(ChunkPos.FromWorld(x, y, z), out var chunk)) return;
+        chunk.Set(x & Chunk.SizeMask, y & Chunk.SizeMask, z & Chunk.SizeMask, id);
+    }
+
+    private static BlockId At(VoxelWorld world, int x, int y, int z) => world.GetBlock(x, y, z);
+
+    /// <summary>A bare world of empty chunks, with a stone floor laid across it.</summary>
+    private static VoxelWorld FluidBox(
+        BlockRegistry registry, StarterBlocks.Ids ids, int floorY, int chunksLow, int chunksHigh)
+    {
+        var world = new VoxelWorld(registry);
+
+        for (var cy = chunksLow; cy <= chunksHigh; cy++)
+        for (var cz = -1; cz <= 1; cz++)
+        for (var cx = -1; cx <= 1; cx++)
+            world.GetOrCreateChunk(new ChunkPos(cx, cy, cz));
+
+        for (var z = -20; z <= 20; z++)
+        for (var x = -20; x <= 20; x++)
+            Put(world, x, floorY, z, ids.Stone);
+
+        return world;
+    }
+
+    /// <summary>
+    /// Everything the flow claims, each with the control that stops it passing on a broken build.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛔ <b>Every one of these has a negative half, because this project has now shipped four
+    /// checks that passed a broken build.</b> "The fall reached the floor" passes on a world that was
+    /// already full of lava unless something asserts it was empty first; "it drained" passes on a
+    /// flow that never ran; "it settled" passes on a queue that was never filled.</para>
+    /// <para>⛳ It is all arithmetic, which is why it runs here rather than needing eyes. The only
+    /// part of a fluid that needs looking at is whether it looks like water.</para>
+    /// </remarks>
+    private static List<string> FluidFaults(
+        BlockRegistry registry, StarterBlocks.Ids ids, out string detail)
+    {
+        var faults = new List<string>();
+        var changed = new List<(int X, int Y, int Z)>();
+        var table = new FluidTable(registry);
+
+        // ── A fall reaches the floor, and spreads when it lands ──────────────────────────────────
+        var fell = 0;
+        var reach = 0;
+        {
+            var world = FluidBox(registry, ids, 0, -1, 1);
+            var engine = new FluidEngine(table);
+
+            // The control: nothing is there before the flow runs. Without this, "the column is full
+            // of lava" is satisfied by a world that started that way.
+            for (var y = 1; y <= 20; y++)
+                if (!At(world, 0, y, 0).IsAir) faults.Add("the test column was not empty to start with");
+
+            Put(world, 0, 21, 0, ids.Lava);
+            engine.Touch(0, 21, 0);
+            engine.Settle(world, changed);
+
+            if (engine.Pending != 0) faults.Add($"the flow never settled: {engine.Pending} cells still queued");
+
+            for (var y = 1; y <= 20; y++)
+                if (table.KindOf(At(world, 0, y, 0).Value) == FluidKind.Lava) fell++;
+
+            if (fell < 20) faults.Add($"a fall from y 21 reached only {fell} of the 20 cells under it");
+
+            // Lava decays by two a step above the Emberdeep, so a pool spreads three cells and stops.
+            for (var d = 1; d <= 6; d++)
+                if (table.KindOf(At(world, d, 1, 0).Value) == FluidKind.Lava) reach = d;
+
+            if (reach != 3) faults.Add($"a landed pool of lava reached {reach} cells, not the 3 its decay allows");
+
+            // ⛔ THE SHARPEST CHECK HERE. A river through VoxelWorld.SetBlock writes an entry per
+            // cell to the save and marks the world dirty, so the autosave fires on a world nobody
+            // touched. Control: route the flow back through SetBlock and this reads in the hundreds.
+            if (world.Edits.Count != 0)
+                faults.Add($"a settling river logged {world.Edits.Count} save edits, and should log none");
+
+            if (world.Changed)
+                faults.Add("a settling river marked the world dirty, so an autosave would fire on it");
+        }
+
+        // ── It settles the same way whatever order the cells are looked at in ────────────────────
+        {
+            var straight = FluidBox(registry, ids, 0, -1, 1);
+            var scrambled = FluidBox(registry, ids, 0, -1, 1);
+
+            foreach (var world in new[] { straight, scrambled })
+            {
+                Put(world, 0, 12, 0, ids.Water);
+                Put(world, 5, 12, 5, ids.Water);
+
+                // A lip, so the water has to find its way round something rather than falling flat.
+                for (var x = -3; x <= 3; x++) Put(world, x, 1, 2, ids.Stone);
+            }
+
+            var one = new FluidEngine(table);
+            one.Touch(0, 12, 0);
+            one.Touch(5, 12, 5);
+            one.Settle(straight, changed);
+
+            // The same world, seeded in a deliberately silly order and stepped a few cells at a
+            // time, which is what a player walking about actually produces.
+            var many = new FluidEngine(table);
+            for (var i = 0; i < 4000; i++)
+            {
+                var x = (i * 7919) % 21 - 10;
+                var y = (i * 104_729) % 14;
+                var z = (i * 1301) % 21 - 10;
+                many.Touch(x, y, z);
+            }
+            many.Touch(0, 12, 0);
+            many.Touch(5, 12, 5);
+            while (many.Pending > 0) many.Step(scrambled, 7, changed);
+
+            var differ = 0;
+            for (var y = 0; y <= 13; y++)
+            for (var z = -10; z <= 10; z++)
+            for (var x = -10; x <= 10; x++)
+                if (At(straight, x, y, z) != At(scrambled, x, y, z)) differ++;
+
+            if (differ != 0)
+                faults.Add($"settling in a different order gave a different world in {differ} cells");
+
+            // The control: the two worlds must actually hold something, or "identical" is two
+            // identically empty boxes.
+            var held = 0;
+            for (var y = 0; y <= 13; y++)
+            for (var z = -10; z <= 10; z++)
+            for (var x = -10; x <= 10; x++)
+                if (table.KindOf(At(straight, x, y, z).Value) == FluidKind.Water) held++;
+
+            if (held < 50) faults.Add($"the order-independence check compared two nearly empty worlds ({held} cells)");
+        }
+
+        // ── Break a block beside it and it fills the space; take the source and it drains ────────
+        var filled = 0;
+        var drained = 0;
+        {
+            var world = FluidBox(registry, ids, 0, -1, 1);
+            var engine = new FluidEngine(table);
+
+            // A wall across the channel at x = 2, with the source behind it.
+            for (var y = 1; y <= 4; y++)
+            for (var z = -4; z <= 4; z++)
+                Put(world, 2, y, z, ids.Stone);
+
+            Put(world, 0, 1, 0, ids.Water);
+            engine.Touch(0, 1, 0);
+            engine.Settle(world, changed);
+
+            // Control: nothing has got past the wall yet. Without this the fill is measuring water
+            // that was always there.
+            for (var x = 3; x <= 6; x++)
+                if (!At(world, x, 1, 0).IsAir) faults.Add($"water was already past the wall at x {x}");
+
+            // Break one block of it, exactly as a player would.
+            Put(world, 2, 1, 0, BlockId.Air);
+            engine.Touch(2, 1, 0);
+            engine.Settle(world, changed);
+
+            for (var x = 3; x <= 8; x++)
+                if (table.KindOf(At(world, x, 1, 0).Value) == FluidKind.Water) filled++;
+
+            if (filled < 5)
+                faults.Add($"breaking the wall let water reach only {filled} cells beyond it");
+
+            // Now take the source away. Everything it was feeding has to go, which is the half of
+            // this that a naive implementation gets wrong and the half the save depends on.
+            var before = CountFluid(world, table, FluidKind.Water);
+
+            Put(world, 0, 1, 0, BlockId.Air);
+            engine.Touch(0, 1, 0);
+            engine.Settle(world, changed);
+
+            drained = before - CountFluid(world, table, FluidKind.Water);
+
+            if (CountFluid(world, table, FluidKind.Water) != 0)
+                faults.Add($"taking the source left {CountFluid(world, table, FluidKind.Water)} cells of water behind");
+
+            if (before < 8)
+                faults.Add($"the drain check had only {before} cells to drain, so it proves nothing");
+        }
+
+        // ── It stalls at the edge of the loaded world, and resumes when the chunk arrives ────────
+        var stalledAt = 0;
+        var resumedTo = 0;
+        {
+            // Chunks from y 0 up only: everything below y 0 is absent, not empty.
+            var world = new VoxelWorld(registry);
+            for (var cz = -1; cz <= 1; cz++)
+            for (var cx = -1; cx <= 1; cx++)
+                world.GetOrCreateChunk(new ChunkPos(cx, 0, cz));
+
+            var engine = new FluidEngine(table);
+            Put(world, 0, 20, 0, ids.Water);
+            engine.Touch(0, 20, 0);
+            engine.Settle(world, changed);
+
+            // The control first: it did start. "It stopped at the seam" and "it never ran" look
+            // identical from below.
+            if (table.KindOf(At(world, 0, 19, 0).Value) != FluidKind.Water)
+                faults.Add("the fall never started, so nothing below it means nothing");
+
+            for (var y = 19; y >= 0; y--)
+                if (table.KindOf(At(world, 0, y, 0).Value) == FluidKind.Water) stalledAt = y;
+
+            if (stalledAt != 0)
+                faults.Add($"a fall into unloaded space stopped at y {stalledAt}, not at the seam at y 0");
+
+            // The chunk arrives. Nothing in it changed — it did not exist — so only being shown it
+            // can restart the fall.
+            for (var cz = -1; cz <= 1; cz++)
+            for (var cx = -1; cx <= 1; cx++)
+                world.GetOrCreateChunk(new ChunkPos(cx, -1, cz));
+
+            for (var z = -6; z <= 6; z++)
+            for (var x = -6; x <= 6; x++)
+                Put(world, x, -20, z, ids.Stone);
+
+            engine.TouchChunk(world, new ChunkPos(0, -1, 0));
+            engine.Settle(world, changed);
+
+            for (var y = -1; y >= -19; y--)
+                if (table.KindOf(At(world, 0, y, 0).Value) == FluidKind.Water) resumedTo = y;
+
+            if (resumedTo > -19)
+                faults.Add($"the fall resumed only to y {resumedTo} after the chunk below it loaded");
+        }
+
+        // ── The two fluids do not mix ───────────────────────────────────────────────────────────
+        {
+            var world = FluidBox(registry, ids, 0, -1, 1);
+            var engine = new FluidEngine(table);
+
+            Put(world, -4, 1, 0, ids.Water);
+            Put(world, 4, 1, 0, ids.Lava);
+            engine.Touch(-4, 1, 0);
+            engine.Touch(4, 1, 0);
+            engine.Settle(world, changed);
+
+            var mixed = 0;
+            for (var x = -8; x <= 8; x++)
+            {
+                var kind = table.KindOf(At(world, x, 1, 0).Value);
+                var above = table.KindOf(At(world, x, 2, 0).Value);
+                if (kind != FluidKind.None && above != FluidKind.None && kind != above) mixed++;
+            }
+
+            if (mixed != 0) faults.Add($"{mixed} cells hold one fluid directly under the other");
+        }
+
+        detail = $"a fall crossed {fell} cells and spread {reach}; breaking a wall let it {filled} further "
+               + $"and taking the source drained {drained}; a fall stalled at the seam and resumed to "
+               + $"y {resumedTo}; nothing reached the save";
+
+        return faults;
+    }
+
+    private static int CountFluid(VoxelWorld world, FluidTable table, FluidKind kind)
+    {
+        var count = 0;
+        foreach (var chunk in world.Chunks)
+        foreach (var id in chunk.Raw)
+            if (table.KindOf(id) == kind) count++;
+
+        return count;
+    }
+
     /// <summary>
     /// Loads the world round a viewer on the grass and round one in the Emberdeep, and compares the
     /// bill.

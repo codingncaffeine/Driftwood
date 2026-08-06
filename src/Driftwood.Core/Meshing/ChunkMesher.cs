@@ -27,6 +27,19 @@ namespace Driftwood.Core.Meshing;
 public sealed class ChunkMesher
 {
     private readonly bool[] _opaque;
+
+    /// <summary>
+    /// What a fluid hides, which identity cannot answer once a fluid has levels.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>The cull test was <c>neighbour == here</c>, and it was right for exactly as long as
+    /// water was one block.</b> Water level 7 against water level 6 are two different ids, so both
+    /// of the faces between them get drawn: a double surface running the whole length of every
+    /// river, wasted geometry, and — once water is in a sorted pass — a visible seam. Nothing in a
+    /// block census, a vertex count or a face tally would ever have noticed.
+    /// </remarks>
+    private readonly FluidTable _fluids;
+
     private readonly ChunkSnapshot _snapshot = new();
     private readonly TintSource[] _tintSource;
     private readonly BlockModel[] _models;
@@ -91,6 +104,7 @@ public sealed class ChunkMesher
         _opaque = registry.BuildOpacityTable();
         _models = registry.BuildModelTable();
         _greedy = registry.BuildGreedyTables();
+        _fluids = new FluidTable(registry);
         _tinter = tinter;
 
         _tintSource = new TintSource[registry.Count];
@@ -221,7 +235,7 @@ public sealed class ChunkMesher
             {
                 var n = Faces.Normals[face];
                 var neighbour = _snapshot.Get(x + n.X, y + n.Y, z + n.Z);
-                if (_opaque[neighbour] || neighbour == here) continue;
+                if (Hidden(here, neighbour)) continue;
 
                 for (var pass = 0; pass < _passesPresent; pass++)
                     if (_greedy.LayerFor(here, pass, face) != BlockModel.NoLayer) count++;
@@ -230,6 +244,19 @@ public sealed class ChunkMesher
 
         return count;
     }
+
+    /// <summary>
+    /// True when the face between these two is not a surface anybody can see.
+    /// </summary>
+    /// <remarks>
+    /// Three ways: something opaque stands in front of it, the neighbour is the identical block and
+    /// the seam is interior (leaves against leaves), or both are the same fluid and the neighbour is
+    /// at least as deep — which is the case identity used to cover and stopped covering the moment a
+    /// fluid had more than one state. Asymmetric on purpose: a deep cell's face toward a shallow one
+    /// is a real surface and has to be drawn.
+    /// </remarks>
+    private bool Hidden(ushort here, ushort neighbour) =>
+        _opaque[neighbour] || neighbour == here || _fluids.HiddenBy(here, neighbour);
 
     private void MeshDirection(int face)
     {
@@ -272,7 +299,7 @@ public sealed class ChunkMesher
 
             // Hidden behind something opaque, or an interior seam between two blocks of the same
             // see-through kind (water against water, leaves against leaves).
-            if (_opaque[neighbour] || neighbour == here) continue;
+            if (Hidden(here, neighbour)) continue;
 
             var nx = x + n.X;
             var ny = y + n.Y;
@@ -477,7 +504,7 @@ public sealed class ChunkMesher
                 {
                     var cn = Faces.Normals[quad.CullFace];
                     var beyond = _snapshot.Get(x + cn.X, y + cn.Y, z + cn.Z);
-                    if (_opaque[beyond] || beyond == here) continue;
+                    if (Hidden(here, beyond)) continue;
                 }
 
                 EmitModelQuad(quad, here, x, y, z, ox, oy, oz);

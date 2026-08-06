@@ -83,6 +83,21 @@ public sealed class WorldStreamer : IDisposable
     /// <summary>False once the viewer is deep enough that the horizon is rock.</summary>
     private bool _surfaceRing = true;
 
+    /// <summary>Relights taken back to back before a waiting chunk is let through.</summary>
+    private const int EditBurst = 64;
+
+    /// <summary>
+    /// The fluid, if anybody has handed one over. Null leaves the whole system costing nothing.
+    /// </summary>
+    /// <remarks>
+    /// Owned by the caller rather than by the streamer because the tick rate is a game decision and
+    /// the budget is a frame-time one, and neither belongs to the thing that loads chunks. What the
+    /// streamer does own is the two moments the flow cannot see for itself: a chunk arriving, which
+    /// is where a stalled fall resumes, and a chunk leaving, which is where its queue would
+    /// otherwise keep pointing at cells that no longer exist.
+    /// </remarks>
+    public FluidEngine? Fluids { get; set; }
+
     private readonly VoxelWorld _world;
 
     /// <summary>Positions whose terrain is complete and safe for a neighbour to sample.</summary>
@@ -97,6 +112,17 @@ public sealed class WorldStreamer : IDisposable
     private readonly ConcurrentQueue<ChunkPos> _meshQueue = new();
     private readonly ConcurrentQueue<ChunkMeshData> _finishedMeshes = new();
     private readonly ConcurrentQueue<ChunkPos> _dropped = new();
+
+    /// <summary>
+    /// Chunks that have finished generating and have not yet been shown to the fluid.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>Handed over on the main thread, never from the worker that made the chunk.</b> The flow
+    /// keeps one queue and one in-queue set and is not thread safe by design — it is cheap
+    /// specifically because it is not. Generation finishes on any of half a dozen workers, so what
+    /// crosses is a position in a concurrent queue and nothing else.
+    /// </remarks>
+    private readonly ConcurrentQueue<ChunkPos> _fluidReady = new();
 
     // Main-thread bookkeeping: what has already been asked for, so nothing is queued twice.
     private readonly HashSet<ChunkPos> _requested = [];
@@ -211,7 +237,33 @@ public sealed class WorldStreamer : IDisposable
         _editQueue.Enqueue((wx, wy, wz));
         _lightWork.Release();
 
+        // Breaking a block beside a river is the whole feature. The flow is asked about the cell and
+        // its six neighbours, because an edit can be a placement as easily as a removal and only one
+        // of those two reads as "something opened up".
+        Fluids?.Touch(wx, wy, wz);
+
         Rewire(wx, wy, wz);
+    }
+
+    /// <summary>
+    /// Advances the flow and books the light and mesh work every cell it moved needs.
+    /// </summary>
+    /// <remarks>
+    /// Called from whoever owns the frame, because the tick rate is a game decision and the budget
+    /// is a frame-time one. The cells go through <see cref="TouchBlock"/> rather than
+    /// <see cref="EditBlock"/> — the flow has already written them, and going back through the block
+    /// path would re-run the neighbour sweep once per cell and log every one of them as a save edit.
+    /// </remarks>
+    /// <returns>How many cells moved.</returns>
+    public int StepFluid(int budget, List<(int X, int Y, int Z)> scratch)
+    {
+        if (Fluids is not { } fluids || fluids.Pending == 0) return 0;
+
+        scratch.Clear();
+        fluids.Step(_world, budget, scratch);
+
+        foreach (var (x, y, z) in scratch) TouchBlock(x, y, z);
+        return scratch.Count;
     }
 
     /// <summary>
@@ -270,6 +322,7 @@ public sealed class WorldStreamer : IDisposable
             _world.SetBlock(x, y, z, become);
             _editQueue.Enqueue((x, y, z));
             _lightWork.Release();
+            Fluids?.Touch(x, y, z);
         }
     }
 
@@ -483,6 +536,7 @@ public sealed class WorldStreamer : IDisposable
                     if (restored > 0) Interlocked.Add(ref _restoredEdits, restored);
 
                     _generated[genPos] = true;
+                    _fluidReady.Enqueue(genPos);
                 }
                 finally
                 {
@@ -535,8 +589,16 @@ public sealed class WorldStreamer : IDisposable
             // Player edits jump the queue. A column arriving in the background can wait a few
             // milliseconds; a block the player just swung at cannot, and the whole point of the
             // incremental relight is that it is fast enough to feel immediate.
-            if (_editQueue.TryDequeue(out var edit))
+            //
+            // ⛔ BUT ONLY SO FAR, AND THAT IS NEW. Absolute priority was right when an edit meant a
+            // player swinging a pickaxe, which is a few a second. A settling river generates them
+            // continuously and by the thousand, so a chunk waiting to be lit would wait until the
+            // river finished — which is to say the world would stop loading while the water ran.
+            // Sixty-four edits, then whatever is next in line.
+            var burst = 0;
+            while (burst < EditBurst && _editQueue.TryDequeue(out var edit))
             {
+                burst++;
                 Interlocked.Increment(ref _lightingCount);
                 try
                 {
@@ -546,8 +608,9 @@ public sealed class WorldStreamer : IDisposable
                 {
                     Interlocked.Decrement(ref _lightingCount);
                 }
-                continue;
             }
+
+            if (burst > 0 && _lightQueue.IsEmpty) continue;
 
             if (!_lightQueue.TryDequeue(out var chunk)) continue;
 
@@ -573,6 +636,28 @@ public sealed class WorldStreamer : IDisposable
     {
         PromoteToLighting();
         PromoteToMeshing();
+        PromoteToFluid();
+    }
+
+    /// <summary>
+    /// Shows the flow every chunk that has arrived since the last frame.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>This is what makes a river resume at a boundary.</b> A fall that stopped because the
+    /// chunk under it was not loaded has no reason to start again on its own — nothing in that chunk
+    /// changed, because until now it did not exist. Handing the chunk over re-offers the fluid
+    /// standing in the shell above it, and the fall carries on from where it stopped.
+    /// </remarks>
+    private void PromoteToFluid()
+    {
+        if (Fluids is not { } fluids)
+        {
+            // Nobody is running a flow, so the queue would grow without bound.
+            while (_fluidReady.TryDequeue(out _)) { }
+            return;
+        }
+
+        while (_fluidReady.TryDequeue(out var pos)) fluids.TouchChunk(_world, pos);
     }
 
     private void PromoteToLighting()
