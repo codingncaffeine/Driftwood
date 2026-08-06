@@ -1177,6 +1177,12 @@ public sealed class ClientHost : IDisposable
         _camera.Pitch = pitch;
 
         ShowStartMenu();
+
+        // Beside the other startup lines, because "the menu says there are no saved worlds" and
+        // "there are no saved worlds" look identical from the front and have completely different
+        // causes. One line settles which, and the folder is on it because that is the next question.
+        Console.WriteLine(
+            $"menu        {_saved.Count} world{(_saved.Count == 1 ? "" : "s")} in {WorldSave.Folder}");
     }
 
     /// <summary>
@@ -1189,6 +1195,13 @@ public sealed class ClientHost : IDisposable
     /// </remarks>
     private void ShowStartMenu()
     {
+        // ⛔ THE FOLDER, HERE, EVERY TIME THE MENU COMES UP. It was read only when the saves *tab*
+        // was opened, so at boot the list was the empty one the field starts as and the menu said
+        // "none saved yet" to somebody who had saved and closed the game a minute earlier. Their
+        // world was there and had loaded — the row above even said so — but the one line they were
+        // reading was a field nothing had filled in.
+        _saved = WorldSave.List();
+
         _hudScreen.Kind = HudScreenKind.Start;
         _hudScreen.TabNames = [];
         _hudScreen.Tab = 0;
@@ -2332,14 +2345,9 @@ public sealed class ClientHost : IDisposable
             _rebinding = null;
             if (_settingsDirty) { _settings.Save(); _settingsDirty = false; }
 
-            _hudScreen.Kind = HudScreenKind.Start;
-            _hudScreen.TabNames = [];
-            _hudScreen.Tab = 0;
-            _hudScreen.Selected = 1;
-            _hudScreen.Scroll = 0;
-            _startListing = false;
-            RefreshScreen();
-            ShowSelectedRow();
+            // The same way in as every other, so the folder is read here too rather than only on
+            // the path that happened to be thought about.
+            ShowStartMenu();
             return;
         }
 
@@ -4147,6 +4155,46 @@ public sealed class ClientHost : IDisposable
     /// <summary>How many frames the check has drawn, for its own timing.</summary>
     private int _uiCheckFrame;
 
+    /// <summary>Worlds the check writes to disk so the menu has something real to go and find.</summary>
+    private static readonly string[] CheckWorlds = ["ui-check-alpha", "ui-check-beta"];
+
+    /// <summary>True once the menu has found both of them by itself.</summary>
+    private bool _foundPlanted;
+
+    /// <summary>
+    /// Writes two worlds, so opening the menu has a folder to read rather than a field to trust.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ <b>Real files, and that is the point.</b> Handing the screen a list in memory tests that it
+    /// can draw one; only a file on disk tests that it goes and looks. They are removed again as
+    /// soon as the list has been measured, and named so that one left behind by a crashed check is
+    /// obviously not somebody's world.
+    /// </remarks>
+    private void PlantWorldsForCheck()
+    {
+        foreach (var name in CheckWorlds)
+        {
+            var state = new WorldState(
+                "1234", _items, new VoxelWorld(_registry),
+                new FurnaceBank(_items, _book), new ChestBank(_items),
+                new Inventory(_items), new Equipment(_items),
+                new PlayerVitals(_registry), new RecipeUnlocks());
+
+            if (WorldSave.Write(name, state) is { } fault)
+                Console.Error.WriteLine($"ui-check    could not plant '{name}': {fault}");
+        }
+    }
+
+    private static void RemovePlantedWorlds()
+    {
+        foreach (var name in CheckWorlds)
+        {
+            try { File.Delete(WorldSave.PathFor(name)); } catch (Exception) { }
+            for (var slot = 1; slot <= WorldSave.Backups; slot++)
+                try { File.Delete(WorldSave.BackupPath(name, slot)); } catch (Exception) { }
+        }
+    }
+
     /// <summary>
     /// Opens each screen in turn and reads the pixels back off the framebuffer.
     /// </summary>
@@ -4239,13 +4287,28 @@ public sealed class ClientHost : IDisposable
             case 280: SampleUi(size, "saves"); ProbeRows("saves"); break;
 
             // The menu, opened on a world the check is already standing in rather than by flying a
-            // camera at one — the flight is not what is being looked at. Two worlds are still in the
-            // list from the tab above, so folding it out has something to fold out to.
-            case 281: CloseScreen(); ShowStartMenu(); break;
+            // camera at one — the flight is not what is being looked at.
+            //
+            // ⛔ TWO REAL WORLDS ON DISK, AND THE LIST EMPTIED FIRST. This used to lean on the two
+            // planted into _saved by the saves tab above, which were still sitting there when the
+            // menu opened — so the check watched the menu draw a list it had been handed and never
+            // once asked it to go and find one. The menu did not, at boot, and said "none saved yet"
+            // to somebody who had saved and closed the game a minute before. The setup was the bug.
+            case 281:
+                CloseScreen();
+                PlantWorldsForCheck();
+                _saved = [];
+                ShowStartMenu();
+                break;
+
             case 300: SampleUi(size, "start"); ProbeRows("start"); break;
 
             case 301: _startListing = true; RefreshScreen(); break;
-            case 310: ProbeRows("start list"); break;
+            case 310:
+                ProbeRows("start list");
+                _foundPlanted = CheckWorlds.All(name => _saved.Any(w => w.Name == name));
+                RemovePlantedWorlds();
+                break;
 
             case 311: JudgeUi(); _window.Close(); break;
         }
@@ -4787,15 +4850,25 @@ public sealed class ClientHost : IDisposable
             faults.Add("the start menu was never measured");
         }
 
+        // ⛔ THE ONE THAT MATTERS, AND THE ONE THAT WAS MISSING. Two worlds were written to disk and
+        // the list in memory emptied before the menu was opened, so the only way these names can be
+        // in it is if the menu went and read the folder. It did not, and the first thing a player
+        // saw after saving and closing the game was "none saved yet".
+        if (!_foundPlanted)
+            faults.Add(
+                "the menu did not find the worlds that are on disk — it is showing whatever was "
+                + "last left in its list rather than reading the folder when it opens");
+
         if (_uiRows.TryGetValue("start list", out var folded))
         {
-            // A heading, the two worlds planted above, and the way back.
-            const int Listed = 4;
+            // A heading, at least the two planted, and the way back. At least, because the machine
+            // running this may have worlds of its own and they are not the check's to care about.
+            const int Least = 4;
 
-            if (folded.Total != Listed)
+            if (folded.Total < Least)
                 faults.Add(
-                    $"the menu's list of worlds built {folded.Total} rows where a heading, two "
-                    + $"worlds and a way back is {Listed}");
+                    $"the menu's list of worlds built {folded.Total} rows where a heading, the two "
+                    + $"worlds put on disk for it and a way back is at least {Least}");
 
             if (folded.Total == menu.Total)
                 faults.Add("folding the list out left the same number of rows, so it added rather than replaced");
@@ -4804,6 +4877,10 @@ public sealed class ClientHost : IDisposable
         {
             faults.Add("the menu's list of worlds was never measured");
         }
+
+        // Belt and braces: a check that failed before reaching the removal must not leave two
+        // worlds nobody made sitting in somebody's list.
+        RemovePlantedWorlds();
 
         // And that the running game's own layout answers for its own squares. Every one of them.
         foreach (var (screen, probe) in _uiProbes)
