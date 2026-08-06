@@ -109,8 +109,6 @@ public static class CreatureLibrary
 
         foreach (var kind in CreatureSet.All)
         {
-            var skeleton = CreatureSet.Match(models, kind.Skeleton);
-
             var from = "";
             var width = 0;
             var height = 0;
@@ -128,6 +126,12 @@ public static class CreatureLibrary
                     break;
                 }
             }
+
+            // ⛳ The skin is looked for FIRST, because it gets a vote on which skeleton to wear. One
+            // creature is modelled several times over in an install and the versions are cut for
+            // sheets of different shapes; the pack's own art is the only thing on the machine that
+            // says which of them the paint was mixed for. See CreatureSet.Match.
+            var skeleton = CreatureSet.Match(models, kind.Skeleton, width, height);
 
             resolved.Add(new CreatureSet.Resolved(
                 kind, skeleton, skeleton?.Name ?? "", from, width, height));
@@ -196,19 +200,22 @@ public static class CreatureLibrary
             // the wrong place. A 256-pixel pack paints a cow at 256x128 — the same 2:1 — so this
             // compares the RATIO, not the size.
             //
-            // ⛳ It found two real cases on the first run, and they are different problems. Some of
-            // Intermacgod's sheets are PADDED SQUARE (a cow at 1024x1024 where the net is 2:1), and
-            // the answer there is to scale by the WIDTH alone and ignore the spare height — the art
-            // is in the top of the image where the net says it is. Others are a genuine version
-            // mismatch (its spider is 2:1 against a skeleton cut for 1:1), and no scaling fixes
-            // that; it wants the older skeleton. Both look identical on screen — an animal wearing
-            // its own texture inside out — which is why it is a line in a report and not a guess.
+            // ⛳ It found two real cases, and they are different problems. A PADDED SQUARE — a cow at
+            // 1024x1024 where the net is 2:1 — is answered by scaling on the width alone, and the
+            // line above has already said so; measured on the pack's own pixels, the art is in the
+            // top half and the bottom 37% of that image is entirely empty. What is left here is the
+            // one no scaling fixes: a sheet SHORTER than its net needs, which is new art against an
+            // old skeleton and wants a different skeleton rather than a different scale.
+            // ⚠ Asked of the sheet's own proportions, NOT of mesh.NetTexels — that is floored at the
+            // declared height on purpose, so comparing the two could never come out true and the
+            // whole line would be a check that reads well and never runs.
             if (entry.SkinWidth > 0
-                && entry.SkinWidth * model.SheetHeight != entry.SkinHeight * model.SheetWidth)
+                && entry.SkinHeight * model.SheetWidth < model.SheetHeight * entry.SkinWidth)
             {
                 text.AppendLine(
-                    $"            ⚠ the sheet is {entry.SkinWidth}x{entry.SkinHeight}, which is not the "
-                    + $"{model.SheetWidth}x{model.SheetHeight} shape the skeleton is cut for");
+                    $"            ⚠ the sheet is {entry.SkinWidth}x{entry.SkinHeight}, too short for the "
+                    + $"{model.SheetWidth}x{model.SheetHeight} net the skeleton is cut for — it wants a "
+                    + "different skeleton, not a different scale");
             }
 
             foreach (var fault in faults) text.AppendLine($"            ⚠ {fault}");

@@ -251,6 +251,60 @@ public sealed class CreatureMesh
         return any ? (min, max) : (Vector3.Zero, Vector3.Zero);
     }
 
+    /// <summary>
+    /// True when every part of the creature touches another one, which is what says this file poses
+    /// it and nothing else has to.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛔ <b>The one question worth asking of a skeleton before wearing it.</b> An install
+    /// carries the same creature modelled several times over, and two of the three eras do not carry
+    /// their own pose at all: the oldest is from before there were skeletons, when the engine
+    /// assembled each animal in hardened code, and the newest moved the rest pose out into an
+    /// animation file beside it. Both parse perfectly, both have the right bones and the right nets,
+    /// and both come out as a heap of disconnected boxes — one real cow has its torso authored
+    /// seventeen units above its own legs with nothing in the file to bring it down.</para>
+    /// <para>⛳ <b>So it is asked of the geometry</b>, rather than guessed from the file's name or its
+    /// version — the two things that look like they would answer it and do not. The newest model is
+    /// the one that carries its pose the least. A part that touches nothing is a part something else
+    /// was going to move.</para>
+    /// <para>The margin is a whole model unit: parts that meet exactly, like a torso resting on the
+    /// tops of its legs, have to count as touching, and a number that has been through a matrix
+    /// chain does not land on the same value twice.</para>
+    /// </remarks>
+    public bool Assembled(float margin = 1f)
+    {
+        var pose = Pose(Matrix4x4.Identity);
+        var boxes = new List<(Vector3 Min, Vector3 Max)>(Parts.Length);
+
+        for (var i = 0; i < Parts.Length; i++)
+        {
+            if (Parts[i].Count == 0) continue;
+            boxes.Add(PartBounds(i, pose));
+        }
+
+        if (boxes.Count < 2) return true;
+
+        var reach = margin * Unit;
+
+        for (var i = 0; i < boxes.Count; i++)
+        {
+            var touches = false;
+
+            for (var j = 0; j < boxes.Count && !touches; j++)
+            {
+                if (i == j) continue;
+
+                touches = boxes[i].Min.X - reach <= boxes[j].Max.X && boxes[j].Min.X - reach <= boxes[i].Max.X
+                       && boxes[i].Min.Y - reach <= boxes[j].Max.Y && boxes[j].Min.Y - reach <= boxes[i].Max.Y
+                       && boxes[i].Min.Z - reach <= boxes[j].Max.Z && boxes[j].Min.Z - reach <= boxes[i].Max.Z;
+            }
+
+            if (!touches) return false;
+        }
+
+        return true;
+    }
+
     /// <summary>One bone's extent, in blocks, under a pose <see cref="Pose"/> worked out.</summary>
     public (Vector3 Min, Vector3 Max) PartBounds(int part, Matrix4x4[] pose)
     {

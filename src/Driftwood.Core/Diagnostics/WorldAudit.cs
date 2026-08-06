@@ -808,6 +808,15 @@ public static class WorldAudit
                 ? "torso on its legs and behind its head, bind pose not carried down, a ring facing one way"
                 : $"{meshFaults.Count} faults: {meshFaults[0]}");
 
+        // ⛔ And it has to be the right skeleton. An install carries the same creature modelled
+        // several times over, and the bare name is the oldest of them — a flat list of bones from
+        // before there were skeletons, which nothing in the file can pose.
+        var matchFaults = CreatureSet.Validate();
+        Check("a creature wears the skeleton its art was painted for", matchFaults.Count == 0,
+            matchFaults.Count == 0
+                ? "two sheets pick two skeletons, jointed over flat, v2 over v1.8, never a namesake"
+                : $"{matchFaults.Count} faults: {matchFaults[0]}");
+
         var mipFaults = MipChain.Validate();
         Check("a cut-out keeps its colour as it shrinks", mipFaults.Count == 0,
             mipFaults.Count == 0

@@ -1,3 +1,4 @@
+using System.Numerics;
 using Driftwood.Core.Textures;
 
 namespace Driftwood.Core.Entities;
@@ -122,42 +123,108 @@ public static class CreatureSet
     /// <summary>
     /// Matches one of our creatures to a skeleton among everything that was read.
     /// </summary>
+    /// <param name="sheetWidth">
+    /// The skin the pack actually painted, or zero. ⛳ <b>It gets a vote, and it has to.</b> One
+    /// creature is often modelled several times over and the versions are cut for different sheets;
+    /// the pack's own art is the only thing on the machine that says which of them the paint was
+    /// mixed for.
+    /// </param>
     /// <remarks>
-    /// ⚠ <b>Loosely, and it has to be.</b> The file that draws a cow declares itself
-    /// <c>geometry.cow.v1.8</c>, and beside it sits <c>cow_v1.0</c> from an older overlay. An exact
-    /// match finds neither. Exact first, then the version suffix, then the legacy sibling — and
-    /// which one was taken is reported, because "it found something" and "it found the right thing"
-    /// are different claims.
+    /// <para>⛔ <b>An exact match is the WORST candidate, not the best, and that was the fault.</b>
+    /// The bare name is the oldest model in the install — the era before skeletons, when the engine
+    /// posed each animal in hardened code — so it is a flat list of bones with no parents, no bind
+    /// pose and nothing in the file saying how the pieces go together. <c>geometry.cow</c> is six
+    /// bones with the torso stood on end and no way to lay it down; <c>geometry.zombie</c> is a
+    /// single box. The real models are <c>cow.v1.8</c> and <c>cow.v2</c> beside them. Preferring the
+    /// exact name put every one of our eighteen creatures on one of those stubs.</para>
+    /// <para>⚠ <b>And "most specific version" cannot mean the longest name.</b> That reading makes
+    /// <c>cow.v1.8</c> beat <c>cow.v2</c>, which is a version older by two. Compared component by
+    /// component as numbers, v2 beats v1.8 and v1.16 still beats v1.8.</para>
+    /// <para>So the candidates are ranked, and which one was taken is reported — "it found
+    /// something" and "it found the right thing" are different claims.</para>
     /// </remarks>
-    public static CreatureModel? Match(IReadOnlyList<CreatureModel> models, string stem)
+    public static CreatureModel? Match(
+        IReadOnlyList<CreatureModel> models, string stem, int sheetWidth = 0, int sheetHeight = 0)
     {
-        foreach (var model in models) if (model.Name == stem) return model;
+        // The named model and its versions first; the underscored sibling is a different naming
+        // altogether and is only worth having when nothing else answered at all.
+        return Best(models, stem, sheetWidth, sheetHeight, sibling: false)
+            ?? Best(models, stem, sheetWidth, sheetHeight, sibling: true);
+    }
 
-        CreatureModel? versioned = null;
-        CreatureModel? legacy = null;
+    private static CreatureModel? Best(
+        IReadOnlyList<CreatureModel> models, string stem, int sheetWidth, int sheetHeight, bool sibling)
+    {
+        CreatureModel? best = null;
+        var bestRank = (Assembled: -1, Fits: -1, Version: -1L);
 
         foreach (var model in models)
         {
-            if (model.Name.StartsWith(stem + ".", StringComparison.Ordinal))
+            var version = 0L;
+
+            if (sibling)
             {
+                if (!model.Name.StartsWith(stem + "_", StringComparison.Ordinal)) continue;
+            }
+            else if (model.Name != stem)
+            {
+                if (!model.Name.StartsWith(stem + ".", StringComparison.Ordinal)) continue;
+
                 // ⛔ ONLY when what follows is a VERSION. The names are namespaced, so asking for
                 // "zombie" and taking anything beginning "zombie." also offers zombie.drowned,
                 // zombie.husk and zombie.villager — and the first run took one of those and reported
                 // a zombie with no bones. `zombie.v1.8` is the zombie; `zombie.drowned.v1.16` is a
                 // different creature that happens to be filed under it.
-                if (!IsVersion(model.Name[(stem.Length + 1)..])) continue;
+                var suffix = model.Name[(stem.Length + 1)..];
+                if (!IsVersion(suffix)) continue;
 
-                // The most specific version wins, which is the longest — v1.12 beats v1.8, and the
-                // report says which was taken because "found something" is not "found the right one".
-                if (versioned is null || model.Name.Length > versioned.Name.Length) versioned = model;
+                version = VersionOf(suffix);
             }
-            else if (model.Name.StartsWith(stem + "_", StringComparison.Ordinal))
-            {
-                legacy ??= model;
-            }
+
+            // ⛔ FIRST, and above what the sheet says: does this file pose the creature itself? Two
+            // of the three eras in an install do not. The oldest predates skeletons and was
+            // assembled by the engine in code; the newest moved the rest pose out into an animation
+            // file. Both parse, both have the right bones and nets, and both come out as a heap.
+            // A skeleton nothing here can stand up is no use however well its net matches.
+            var assembled = CreatureMesh.Build(model).Assembled() ? 1 : 0;
+
+            // Then: does the pack's own sheet have the shape this net is cut for? Nothing else on
+            // the machine can tell a cow modelled against a 64x32 sheet from one modelled against a
+            // 64x64 one, and both are sitting in the same install.
+            var fits = sheetWidth > 0 && sheetHeight > 0
+                    && model.SheetWidth * sheetHeight == model.SheetHeight * sheetWidth
+                ? 1 : 0;
+
+            var rank = (assembled, fits, version);
+            if (best is not null && rank.CompareTo(bestRank) <= 0) continue;
+
+            best = model;
+            bestRank = rank;
         }
 
-        return versioned ?? legacy;
+        return best;
+    }
+
+    /// <summary>"v1.16" as a number that sorts after "v1.8" and before "v2".</summary>
+    /// <remarks>
+    /// ⚠ <b>Each component lands in a slot of its own rather than being accumulated.</b> Multiplying
+    /// up as it goes makes a version with more components larger than one with fewer, so v1.8 comes
+    /// out above v2 — which is the arithmetic version of the bug this replaced.
+    /// </remarks>
+    private static long VersionOf(string suffix)
+    {
+        var value = 0L;
+        var slot = 1_000_000_000_000L;
+
+        foreach (var part in suffix[1..].Split('.'))
+        {
+            if (slot == 0L) break;
+
+            value += (int.TryParse(part, out var number) ? Math.Clamp(number, 0, 9999) : 0) * slot;
+            slot /= 10_000L;
+        }
+
+        return value;
     }
 
     /// <summary>True for "v1.8", "v1.12" and the like — a version suffix and nothing else.</summary>
@@ -167,5 +234,84 @@ public static class CreatureSet
 
         foreach (var c in suffix[1..]) if (!char.IsDigit(c) && c != '.') return false;
         return true;
+    }
+
+    /// <summary>
+    /// Checks the right skeleton is taken when one creature has been modelled several times.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ <b>The pair is the whole check.</b> Two sheets of different shapes have to pick two
+    /// different skeletons off the same shelf — and no fixed preference, however it is written, can
+    /// do that. A rule that always takes the newest passes one of them; one that always takes the
+    /// bare name passes neither; the old one, which took the exact name, passed neither and had been
+    /// putting every creature in the game on a stub that cannot be posed.</para>
+    /// <para>The rest of it is the ordering: a jointed model beats a flat one, and v2 beats v1.8,
+    /// which the length of a name says the other way round.</para>
+    /// </remarks>
+    public static List<string> Validate()
+    {
+        var faults = new List<string>();
+
+        CreatureBone Bone(string name, string parent) =>
+            new(name, parent, Vector3.Zero, Vector3.Zero, Vector3.Zero,
+                [new CreatureCube(Vector3.Zero, new Vector3(4f, 4f, 4f), 0, 0, false, 0f)]);
+
+        // A part authored a long way from every other one, which is what a file that leaves the
+        // posing to somebody else looks like from here.
+        CreatureBone Adrift(string name) =>
+            new(name, "", Vector3.Zero, Vector3.Zero, Vector3.Zero,
+                [new CreatureCube(new Vector3(0f, 40f, 0f), new Vector3(4f, 4f, 4f), 0, 0, false, 0f)]);
+
+        // One creature, four skeletons, exactly as an install carries them: the pre-skeleton stub
+        // under the bare name, the one that poses itself, a later rebuild cut for a taller sheet,
+        // and a newer one still whose rest pose has moved out into an animation file.
+        var shelf = new List<CreatureModel>
+        {
+            new("beast", 64, 32, [Bone("body", ""), Bone("head", "")]),
+            new("beast.v1.8", 64, 32, [Bone("body", ""), Bone("head", "body")]),
+            new("beast.v2", 64, 64, [Bone("body", ""), Bone("head", "body")]),
+            new("beast.v3", 64, 64, [Bone("body", ""), Adrift("head")]),
+
+            // ⛔ Filed under the same first word and a different creature entirely. It has the most
+            // bones and the highest version on the shelf, so anything that matches on the stem alone
+            // takes it.
+            new("beast.pale.v9", 64, 32, [Bone("body", ""), Bone("head", "body"), Bone("tail", "body")]),
+        };
+
+        var wide = Match(shelf, "beast", 256, 128);
+        if (wide?.Name != "beast.v1.8")
+            faults.Add($"a 2:1 sheet chose '{wide?.Name ?? "nothing"}' rather than the 2:1 skeleton beast.v1.8");
+
+        // ⛔ The cow's own case. beast.v3 is newer AND cut for exactly this sheet, and it still must
+        // lose, because a skeleton whose parts are flung apart is one nothing here can stand up.
+        var square = Match(shelf, "beast", 256, 256);
+        if (square?.Name != "beast.v2")
+            faults.Add($"a 1:1 sheet chose '{square?.Name ?? "nothing"}' rather than the 1:1 skeleton beast.v2");
+
+        // With nothing painted, the sheet has no vote and the newest jointed model wins. ⚠ This is
+        // the one that says v2 beats v1.8: by the length of a name it does not.
+        var bare = Match(shelf, "beast");
+        if (bare?.Name != "beast.v2")
+            faults.Add($"with no sheet to go on, '{bare?.Name ?? "nothing"}' was chosen rather than the newest, beast.v2");
+
+        // And the stub never wins, whatever the sheet says — it is the only candidate cut for 64x32
+        // once v1.8 is taken away, and it still must not be preferred over a jointed one.
+        foreach (var (label, w, h) in (ReadOnlySpan<(string, int, int)>)
+                 [("no sheet", 0, 0), ("2:1", 256, 128), ("1:1", 256, 256), ("an odd one", 100, 30)])
+        {
+            var picked = Match(shelf, "beast", w, h);
+            if (picked is null) { faults.Add($"{label}: nothing matched at all"); continue; }
+
+            if (picked.Name == "beast")
+                faults.Add($"{label}: the pre-skeleton stub was chosen over a model that poses itself");
+
+            if (picked.Name == "beast.v3")
+                faults.Add($"{label}: a skeleton whose parts do not touch was chosen for being newer");
+
+            if (picked.Name.StartsWith("beast.pale", StringComparison.Ordinal))
+                faults.Add($"{label}: '{picked.Name}' is a different creature filed under the same first word");
+        }
+
+        return faults;
     }
 }
