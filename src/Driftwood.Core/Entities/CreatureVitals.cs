@@ -62,11 +62,47 @@ public static class CreatureVitals
     /// </remarks>
     private static readonly HashSet<string> Shedders = new(StringComparer.Ordinal) { "chicken" };
 
+    /// <summary>Half-hearts a blow from each takes off. Anything absent hits for nothing.</summary>
+    /// <remarks>
+    /// ⚠ <b>Against a player's twenty.</b> A zombie needs seven blows and a spider nine, which is
+    /// between four and seven seconds of standing still — long enough that being caught is a mistake
+    /// rather than an accident, and short enough that three of them at once is a night indoors.
+    /// </remarks>
+    private static readonly Dictionary<string, int> Damage = new(StringComparer.Ordinal)
+    {
+        ["zombie"] = 3,
+        ["drowned"] = 3,
+        ["husk"] = 3,
+        ["skeleton"] = 2,
+        ["spider"] = 2,
+        ["crawler"] = 6,
+        ["farwalker"] = 7,
+        ["slime"] = 2,
+    };
+
+    /// <summary>
+    /// The kinds the sun does not agree with.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>The undead and only the undead.</b> A spider that burned would make daylight a total
+    /// answer rather than a partial one — the point of leaving one kind alive through the morning is
+    /// that going outside is safer rather than safe, which is a more interesting world than either
+    /// extreme. It is also the genre's own line and it is drawn in the right place.
+    /// </remarks>
+    private static readonly HashSet<string> Burns =
+        new(StringComparer.Ordinal) { "zombie", "husk", "skeleton" };
+
     /// <summary>Half-hearts this kind starts with.</summary>
     public static int HealthFor(string kind) => Health.GetValueOrDefault(kind, DefaultHealth);
 
     /// <summary>True when this kind leaves something behind on its own.</summary>
     public static bool Sheds(string kind) => Shedders.Contains(kind);
+
+    /// <summary>Half-hearts one of its blows takes off the player.</summary>
+    public static int DamageFor(string kind) => Damage.GetValueOrDefault(kind, 0);
+
+    /// <summary>True when full daylight sets this one alight.</summary>
+    public static bool BurnsInDaylight(string kind) => Burns.Contains(kind);
 
     /// <summary>Every kind with a number written for it, for the check that they are all sensible.</summary>
     public static IEnumerable<string> Named => Health.Keys;

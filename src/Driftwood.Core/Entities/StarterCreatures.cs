@@ -148,8 +148,131 @@ public static class StarterCreatures
                 Box(0f, 0f, -2f, 3f, 5f, 3f, 26, 0, mirror: true)),
         ]);
 
+    /// <summary>A bone laid out at rest and then turned, reaching its own boxes only.</summary>
+    private static CreatureBone Posed(
+        string name, string parent, Vector3 pivot, Vector3 bindPose, params CreatureCube[] cubes) =>
+        new(name, parent, pivot, Vector3.Zero, bindPose, cubes);
+
+    /// <summary>
+    /// The humanoid net: a head, a torso, two arms and two legs, laid out where the reference lays
+    /// them so a pack's zombie skin fits ours.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>One builder for both of the walking dead</b>, because they are the same skeleton wearing
+    /// different colours — which is the whole argument the block families already make. It is also
+    /// the <see cref="PlayerModel"/> net, so a player skin would fit one of these and a zombie skin
+    /// would fit a player: the contract is signed once and every humanoid in the game inherits it.
+    /// </remarks>
+    /// <param name="reach">
+    /// Degrees the arms are held out in front. ⚠ A <em>bind pose</em>, not a rotation — an arm has
+    /// nothing hanging off it, and using the field that carries children would be a rule that only
+    /// happens to work because this model has no hands.
+    /// </param>
+    private static CreatureModel Humanoid(string name, float reach) => new(
+        name, 64, 64,
+        [
+            Bone("body", "", new Vector3(0f, 24f, 0f),
+                Box(-4f, 12f, -2f, 8f, 12f, 4f, 16, 16)),
+
+            Bone("head", "body", new Vector3(0f, 24f, 0f),
+                Box(-4f, 24f, -4f, 8f, 8f, 8f, 0, 0)),
+
+            // ⚠ The pivot is the shoulder, not the hand. An arm turned about its far end swings the
+            // shoulder out through the chest, which reads as a broken model rather than as a reach.
+            Posed("arm0", "body", new Vector3(-5f, 22f, 0f), new Vector3(-reach, 0f, 0f),
+                Box(-8f, 10f, -2f, 4f, 12f, 4f, 40, 16)),
+
+            Posed("arm1", "body", new Vector3(5f, 22f, 0f), new Vector3(-reach, 0f, 0f),
+                Box(4f, 10f, -2f, 4f, 12f, 4f, 32, 48, mirror: true)),
+
+            Bone("leg0", "body", new Vector3(-2f, 12f, 0f),
+                Box(-4f, 0f, -2f, 4f, 12f, 4f, 0, 16)),
+
+            Bone("leg1", "body", new Vector3(2f, 12f, 0f),
+                Box(0f, 0f, -2f, 4f, 12f, 4f, 16, 48, mirror: true)),
+        ]);
+
+    /// <summary>The one that comes at you with its arms out.</summary>
+    public static CreatureModel Zombie() => Humanoid("zombie", 78f);
+
+    /// <summary>And the one that is all bone, whose arms hold something it has not got yet.</summary>
+    /// <remarks>
+    /// ⚠ Thinner limbs than the zombie's, which is the only difference in the geometry — everything
+    /// else that tells them apart is <c>CreatureArt</c>'s. Two units rather than four, and the net
+    /// says so, so a pack's skeleton skin lands on boxes the right size for it.
+    /// </remarks>
+    public static CreatureModel Skeleton() => new(
+        "skeleton", 64, 64,
+        [
+            Bone("body", "", new Vector3(0f, 24f, 0f),
+                Box(-4f, 12f, -2f, 8f, 12f, 4f, 16, 16)),
+
+            Bone("head", "body", new Vector3(0f, 24f, 0f),
+                Box(-4f, 24f, -4f, 8f, 8f, 8f, 0, 0)),
+
+            Posed("arm0", "body", new Vector3(-5f, 22f, 0f), new Vector3(-84f, 0f, 0f),
+                Box(-7f, 10f, -1f, 2f, 12f, 2f, 40, 16)),
+
+            Posed("arm1", "body", new Vector3(5f, 22f, 0f), new Vector3(-84f, 0f, 0f),
+                Box(5f, 10f, -1f, 2f, 12f, 2f, 32, 48, mirror: true)),
+
+            Bone("leg0", "body", new Vector3(-2f, 12f, 0f),
+                Box(-3f, 0f, -1f, 2f, 12f, 2f, 0, 16)),
+
+            Bone("leg1", "body", new Vector3(2f, 12f, 0f),
+                Box(1f, 0f, -1f, 2f, 12f, 2f, 16, 48, mirror: true)),
+        ]);
+
+    /// <summary>
+    /// The eight-legged one, whose legs are the whole silhouette.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>Each leg is two boxes, out and then down, rather than one box turned.</b> A single
+    /// angled box is what the reference does and it needs the leg's far end to land exactly on the
+    /// floor — which is a rotation, a pivot and a length that have to agree to a tenth of a unit, in
+    /// a table nobody can check by reading. An L reaches the ground by construction, and
+    /// <c>StarterCreatures.Validate</c>'s "feet on the ground" claim is then something the geometry
+    /// makes true rather than something a number was tuned until it was.
+    /// </remarks>
+    public static CreatureModel Spider()
+    {
+        var bones = new List<CreatureBone>
+        {
+            Bone("body", "", new Vector3(0f, 9f, 3f),
+                Box(-5f, 5f, -3f, 10f, 8f, 12f, 0, 12)),
+
+            Bone("neck", "body", new Vector3(0f, 9f, -3f),
+                Box(-3f, 6f, -6f, 6f, 6f, 6f, 0, 0)),
+
+            Bone("head", "neck", new Vector3(0f, 9f, -6f),
+                Box(-4f, 5f, -14f, 8f, 8f, 8f, 32, 4)),
+        };
+
+        // Four a side, fanning fore and aft. The upper arm reads as the span and the lower as the
+        // foot, and both take the one leg patch — eight legs, one drawing, exactly as the quadrupeds
+        // share theirs.
+        for (var i = 0; i < 4; i++)
+        {
+            var z = -1f + i * 3f;
+            var out0 = 3f + MathF.Abs(1.5f - i) * 1.5f;
+
+            for (var side = 0; side < 2; side++)
+            {
+                var sign = side == 0 ? -1f : 1f;
+                var mirror = side == 1;
+
+                bones.Add(Bone($"leg{i * 2 + side}", "body", new Vector3(sign * 5f, 9f, z),
+                    Box(sign > 0 ? 5f : -5f - out0, 8f, z - 1f, out0, 2f, 2f, 18, 0, mirror),
+                    Box(sign > 0 ? 4f + out0 : -5f - out0, 0f, z - 1f, 2f, 9f, 2f, 18, 0, mirror)));
+            }
+        }
+
+        return new CreatureModel("spider", 64, 32, [.. bones]);
+    }
+
     /// <summary>Every creature that ships with the game, by our name for it.</summary>
-    public static IReadOnlyList<CreatureModel> All { get; } = [Cow(), Pig(), Sheep(), Chicken()];
+    public static IReadOnlyList<CreatureModel> All { get; } =
+        [Cow(), Pig(), Sheep(), Chicken(), Zombie(), Skeleton(), Spider()];
 
     /// <summary>Ours for this creature, or null when we have not drawn one yet.</summary>
     public static CreatureModel? ByName(string name)

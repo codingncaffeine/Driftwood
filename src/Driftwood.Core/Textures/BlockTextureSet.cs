@@ -218,6 +218,20 @@ public static class BlockTextureSet
         new("raw_chicken", "textures/item/chicken.png",           true, "textures/item/raw_chicken.png"),
         new("cooked_chicken", "textures/item/cooked_chicken.png", true),
 
+        // ⛔ THE SIXTEEN POWDERS, AND THEY BELONG HERE RATHER THAN AT THE END. This array is indexed
+        // by the same numbers StarterBlocks hands out, so its order IS the numbering — and the dyes
+        // first went in after the tools while LayerFirstDye said 112 and LayerFirstTool said 128.
+        // Every check passed: the count was right, every tile was painted, every cutout had holes.
+        // What was wrong was invisible from here — a pack's wooden pickaxe would have landed on
+        // white dye and its dye on a tool. ⚠ Appending to this array is not the same as appending to
+        // the layer numbers, and only reading both together says so.
+        .. DyeRows(),
+
+        // What the dark leaves behind.
+        new("string",      "textures/item/string.png",            true),
+        new("bone",        "textures/item/bone.png",              true),
+        new("rotten_flesh", "textures/item/rotten_flesh.png",     true),
+
         // Six tiers of four heads, tier-major. Copper tooling has no counterpart to look up, so
         // those four keep our own art rather than being pointed at somebody else's nearest thing —
         // an empty path is the table saying so out loud.
@@ -245,9 +259,6 @@ public static class BlockTextureSet
         new("stormglass_axe", "textures/item/diamond_axe.png",    true),
         new("stormglass_shovel", "textures/item/diamond_shovel.png", true),
         new("stormglass_sword", "textures/item/diamond_sword.png", true),
-
-        // And the sixteen powders, on the same terms as the wools they colour.
-        .. DyeRows(),
     ];
 
     /// <summary>One row per colour of wool, off the colour table rather than written out.</summary>
@@ -756,6 +767,14 @@ public static class BlockTextureSet
             StarterBlocks.LayerFeather => TileGen.IconFeather(1086, 238, 240, 244),
             StarterBlocks.LayerEgg => TileGen.IconEgg(1087, 232, 220, 198),
             StarterBlocks.LayerShears => TileGen.IconShears(1088, 206, 208, 214),
+
+            // What the dark leaves behind. ⚠ Rotten flesh is a meat cut in a spoiled palette rather
+            // than a drawing of its own — it is the same thing off a different animal, which is
+            // exactly what the shape argument for the meats says it should look like.
+            StarterBlocks.LayerString => TileGen.IconSkein(1094, 238, 238, 236),
+            StarterBlocks.LayerBone => TileGen.IconBone(1095, 234, 232, 216),
+            StarterBlocks.LayerRottenFlesh =>
+                TileGen.IconMeat(1096, 128, 78, 74, TileGen.MeatShape.Cut, cooked: false),
 
             _ => Wool(layer) ?? Meat(layer) ?? Dye(layer) ?? Tool(layer),
         };

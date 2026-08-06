@@ -292,6 +292,11 @@ public static class StarterRecipes
         LooseAt("blue dye", "dye_blue", 2, CraftStation.Bench, "azurite");
         LooseAt("black dye", "dye_black", 1, CraftStation.Bench, "#coals");
 
+        // ⛳ A second white, ground out of a bone. Two sources for one colour is not redundancy: a
+        // marshlily is a summer afternoon and a bone is a night that went badly, and white is the
+        // colour half the palette is mixed with — so the branch a player can reach matters.
+        LooseAt("white dye from bone", "dye_white", 3, CraftStation.Bench, "bone");
+
         // ⛳ Green is MIXED rather than found, and that is a deliberate difference from the
         // reference — which smelts a cactus, in a desert we do not have. Blue and yellow is what
         // green is, so the tree stays a tree and the world does not have to grow a seventh source.
@@ -325,6 +330,10 @@ public static class StarterRecipes
                 $"{dye.Name.Replace('_', ' ')} carpet", $"carpet_{dye.Name}", 3, ["MM"],
                 $"wool_{dye.Name}", mirrored: false, station: CraftStation.Bench);
         }
+
+        // ⛳ Four threads woven back into a fleece — the other way a player gets wool, and the reason
+        // a cellar full of spiders is worth clearing rather than avoiding.
+        Shaped("wool from string", "wool_white", 1, ["MM", "MM"], "string", station: CraftStation.Bench);
 
         // ⛳ Two blades on a pivot, drawn as a diagonal because that is what a pair of shears is.
         // ⚠ At a bench rather than in the hands, though it would fit in a player's two-by-two: every

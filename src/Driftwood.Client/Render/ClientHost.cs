@@ -1015,6 +1015,18 @@ public sealed class ClientHost : IDisposable
     /// fixed number of seconds instead would be a guess about a worker pool. Asking again while
     /// there is room is neither, and it is also the shape a real spawner wants.
     /// </remarks>
+    /// <summary>How many hostiles the dark is allowed to hold at once.</summary>
+    /// <remarks>
+    /// ⚠ <b>Well under the herd's twelve.</b> Each one is a thing that chases, and eight of them
+    /// converging is not a harder night, it is a night nobody survives to learn from. It is also the
+    /// number that keeps a torch worth lighting: clearing the ground round a house actually empties
+    /// it, which a cap of thirty never would.
+    /// </remarks>
+    private const int HostileCount = 6;
+
+    /// <summary>Sky light at or below which something will spawn in a cell. The genre's own line.</summary>
+    private const int SpawnDarkness = 7;
+
     private void TopUpCreatures(float dt)
     {
         if (_creatureRenderer is null || _creatureRenderer.Count == 0 || !_spawned) return;
@@ -1022,29 +1034,114 @@ public sealed class ClientHost : IDisposable
         _herd ??= new CreatureHerd(_seed.Derive("creatures"));
 
         _creatureTopUp -= dt;
-        if (_creatureTopUp > 0f || _herd.Count >= HerdSize) return;
+        if (_creatureTopUp > 0f) return;
 
         _creatureTopUp = 1f;
+
+        TopUpBeasts();
+        TopUpHostiles();
+    }
+
+    /// <summary>Keeps a herd of animals about, wherever there is ground.</summary>
+    private void TopUpBeasts()
+    {
+        if (_creatureRenderer is null || _herd is null) return;
+
+        var beasts = 0;
+        foreach (var creature in _herd.All) if (!creature.Hostile) beasts++;
+        if (beasts >= HerdSize) return;
 
         // The beasts, not the hostiles: the first thing anybody meets in a field should be a cow.
         // ⛳ Each one carries the size its own mesh came out at, because that is the box a blow has
         // to land inside — measured off the model rather than written down beside it.
-        var kinds = new List<SpawnKind>();
-
-        foreach (var kind in CreatureSet.All)
-        {
-            if (kind.Family != CreatureFamily.Beast) continue;
-            if (!_creatureRenderer.TryMeasure(kind.Name, out var size)) continue;
-            kinds.Add(new SpawnKind(kind.Name, size));
-        }
-
+        var kinds = KindsOf(CreatureFamily.Beast);
         if (kinds.Count == 0) return;
 
         var before = _herd.Count;
-        _herd.Spawn(SolidForCreature, kinds, _player.Position, HerdSize - before);
+        _herd.Spawn(SolidForCreature, kinds, _player.Position, HerdSize - beasts);
 
         if (_herd.Count == before) return;
-        Console.WriteLine($"creatures   {_herd.Count} of {HerdSize} standing, {kinds.Count} kinds to draw from");
+        Console.WriteLine($"creatures   {beasts + _herd.Count - before} of {HerdSize} standing, {kinds.Count} kinds to draw from");
+    }
+
+    /// <summary>
+    /// And puts hostiles wherever the light has gone.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ <b>Darkness rather than the clock, which is the whole of the design.</b> A cave at
+    /// noon is as dangerous as a field at midnight, and a well-lit field at midnight is not dangerous
+    /// at all — so a torch is a decision about safety rather than about seeing, and the night is
+    /// something a player can build their way out of. Asking the clock instead would make lighting a
+    /// house pointless and a mineshaft free.</para>
+    /// <para>⚠ <b>Never within twelve blocks.</b> Something appearing beside you is a jump scare
+    /// rather than a threat, and it is also unfair — there is nothing to react to.</para>
+    /// </remarks>
+    private void TopUpHostiles()
+    {
+        if (_creatureRenderer is null || _herd is null) return;
+
+        var hostiles = 0;
+        foreach (var creature in _herd.All) if (creature.Hostile) hostiles++;
+        if (hostiles >= HostileCount) return;
+
+        var kinds = KindsOf(CreatureFamily.Hostile);
+        if (kinds.Count == 0) return;
+
+        _herd.Spawn(
+            SolidForCreature, kinds, _player.Position, HostileCount - hostiles,
+            where: Dark, minRadius: 12f);
+    }
+
+    /// <summary>True where a creature's feet would stand in the dark.</summary>
+    /// <remarks>
+    /// ⚠ <b>Sky light and block light both, and taken as the brighter.</b> A torch has to actually
+    /// clear the ground round it, and sunlight has to actually clear a field — a test on either one
+    /// alone leaves the other kind of light doing nothing.
+    /// </remarks>
+    private bool Dark(int x, int y, int z)
+    {
+        var packed = _streamer.World.GetLight(x, y, z);
+
+        // ⚠ Sky light is what a cell WOULD get at noon, so it has to be scaled by how far up the
+        // sun actually is. Read raw it says a field is bright at midnight, and nothing would ever
+        // spawn above ground.
+        var sky = LightValue.Sky(packed) * Daylight;
+
+        var block = Math.Max(
+            LightValue.Red(packed), Math.Max(LightValue.Green(packed), LightValue.Blue(packed)));
+
+        return MathF.Max(sky, block) <= SpawnDarkness;
+    }
+
+    /// <summary>
+    /// How much of the day is on, 0 at night to 1 with the sun properly up.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ Off the sun's <em>elevation</em> rather than off the clock, which is the same call the sky
+    /// gradient makes — sunrise and sunset are then one rule read twice rather than two numbers that
+    /// can disagree about when the day starts.
+    /// </remarks>
+    private float Daylight => Math.Clamp(_skyState.SunDirection.Y * 4f, 0f, 1f);
+
+    /// <summary>True where a cell is standing in real, unobstructed daylight.</summary>
+    private bool Sunlit(int x, int y, int z) =>
+        Daylight > 0.85f
+        && LightValue.Sky(_streamer.World.GetLight(x, y, z)) >= LightValue.Max;
+
+    /// <summary>Every kind of one family we can actually draw, with the size its own mesh has.</summary>
+    private List<SpawnKind> KindsOf(CreatureFamily family)
+    {
+        var kinds = new List<SpawnKind>();
+        if (_creatureRenderer is null) return kinds;
+
+        foreach (var kind in CreatureSet.All)
+        {
+            if (kind.Family != family) continue;
+            if (!_creatureRenderer.TryMeasure(kind.Name, out var size)) continue;
+            kinds.Add(new SpawnKind(kind.Name, size, family == CreatureFamily.Hostile));
+        }
+
+        return kinds;
     }
 
     private void BuildWorld()
@@ -3544,7 +3641,19 @@ public sealed class ClientHost : IDisposable
         TopUpCreatures(dt);
         if (_herd is null) return;
 
-        _herd.Update(dt, SolidForCreature);
+        // ⚠ The body's feet, not the eye. A hostile aims at where somebody is standing, and giving
+        // it the camera would make it chase a point two blocks in the air in third person.
+        _herd.Update(dt, SolidForCreature, _walking ? _player.Position : null, Sunlit);
+
+        foreach (var blow in _herd.TakeAttacks())
+        {
+            _vitals.Hurt(blow.HalfHearts);
+
+            _audio?.Play(Pick(CreatureSounds.Blows), blow.Position, 0.62f, Wobble());
+
+            var cry = CreatureSounds.AngryFor(blow.Kind);
+            if (cry.Length > 0) _audio?.Play(cry, blow.Position, 0.8f, 1.1f);
+        }
 
         foreach (var creature in _herd.All)
         {

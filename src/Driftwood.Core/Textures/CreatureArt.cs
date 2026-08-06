@@ -55,6 +55,22 @@ public static class CreatureArt
         ["sheep"] = new((222, 218, 208), (198, 192, 180), (96, 82, 74), (78, 66, 60), 0.30f, 0.09f),
 
         ["chicken"] = new((232, 228, 216), (206, 198, 182), (226, 168, 62), (198, 54, 48), 0.16f, 0.05f),
+
+        // ⛳ THE HOSTILES, and the palette is where they are told apart. All three wear the same two
+        // nets the beasts do — that is the point of a net — so if they read as one another it is
+        // because the colours failed, not the geometry. Grain is turned up on all of them: a rotted
+        // or bony surface is the one place a coarse coat is the right answer.
+        //
+        // Sickly green over torn cloth, and a face darker than the rest of it.
+        ["zombie"] = new((74, 116, 74), (46, 72, 108), (52, 84, 56), (38, 60, 40), 0.34f, 0.13f),
+
+        // Bone against the shadow inside it. ⚠ Not white: a white skeleton at night is a white
+        // silhouette on black, which is the one thing that reads as a hole in the world rather than
+        // as a creature standing in it.
+        ["skeleton"] = new((196, 194, 186), (150, 148, 140), (44, 44, 44), (168, 166, 158), 0.24f, 0.11f),
+
+        // Near-black with the one thing every drawing of a spider has: eyes that are not black.
+        ["spider"] = new((42, 34, 32), (26, 20, 20), (140, 30, 26), (168, 40, 34), 0.30f, 0.10f),
     };
 
     /// <summary>True when we have colours for this creature.</summary>

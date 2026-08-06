@@ -341,6 +341,18 @@ public static class StarterItems
         Loose(items, "feather", "feather", StarterBlocks.LayerFeather);
         Loose(items, "egg", "egg", StarterBlocks.LayerEgg);
 
+        // And what the dark leaves. ⚠ Rotten flesh is food, which is a joke the genre makes and a
+        // real decision here: it is worth one half-heart against a cooked steak's six, so a player
+        // who fought their way through a night has something and not much.
+        Loose(items, "string", "string", StarterBlocks.LayerString);
+        Loose(items, "bone", "bone", StarterBlocks.LayerBone);
+
+        items.Register(new ItemType
+        {
+            Name = "rotten_flesh", Label = "rotten flesh",
+            IconLayer = StarterBlocks.LayerRottenFlesh, Feeds = 1,
+        });
+
         RegisterMeats(items);
         RegisterTools(items);
 
@@ -468,7 +480,15 @@ public static class StarterItems
 
         new CreatureDrops.Rule("chicken", DropTrigger.Killed, "feather", 0, 2),
         new CreatureDrops.Rule("chicken", DropTrigger.Killed, "raw_chicken", 1, 1),
-        new CreatureDrops.Rule("chicken", DropTrigger.Shed, "egg", 1, 1));
+        new CreatureDrops.Rule("chicken", DropTrigger.Shed, "egg", 1, 1),
+
+        // ⛳ And the three the dark gives up, which are the last components the recipe tree was
+        // waiting on. String and bone were named in the plan as two of the five that unblock the
+        // most, and until something hostile stood in the world neither could be obtained at all —
+        // which the reachability walk said out loud rather than quietly letting them pass.
+        new CreatureDrops.Rule("spider", DropTrigger.Killed, "string", 0, 2),
+        new CreatureDrops.Rule("skeleton", DropTrigger.Killed, "bone", 1, 3),
+        new CreatureDrops.Rule("zombie", DropTrigger.Killed, "rotten_flesh", 1, 2));
 
     private static BlockDrops.Rule[] Written(BlockRegistry blocks, ItemRegistry items) =>
     [

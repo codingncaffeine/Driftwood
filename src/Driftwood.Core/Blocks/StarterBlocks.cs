@@ -181,8 +181,13 @@ public static class StarterBlocks
     /// <summary>The sixteen dye powders, in <see cref="Colours"/> order.</summary>
     public const ushort LayerFirstDye = 112;
 
+    // What the dark leaves behind.
+    public const ushort LayerString = 128;
+    public const ushort LayerBone = 129;
+    public const ushort LayerRottenFlesh = 130;
+
     /// <summary>The tool icons: one palette per tier, four heads each, tier-major.</summary>
-    public const ushort LayerFirstTool = 128;
+    public const ushort LayerFirstTool = 131;
 
     /// <summary>One of the sixteen: our name for it, and what it looks like.</summary>
     /// <param name="Pack">

@@ -5010,10 +5010,52 @@ public static class WorldAudit
     /// <para>Cutout layers are checked for holes for the opposite reason: leaves with no
     /// transparency render as a solid green cube, which looks deliberate.</para>
     /// </remarks>
+    /// <summary>
+    /// A handful of layers pinned by name, so the table's order and the constants cannot drift.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>WRITTEN BECAUSE THEY DID DRIFT, AND EVERY OTHER TEXTURE CHECK PASSED IT.</b>
+    /// <c>BlockTextureSet.Layers</c> is indexed by the same numbers <c>StarterBlocks</c> hands out,
+    /// so its order <em>is</em> the numbering — and the sixteen dyes went in at the end of the array
+    /// while <c>LayerFirstDye</c> said 112 and <c>LayerFirstTool</c> said 128. The count was right,
+    /// every tile was painted, every cutout had holes; what was wrong was that a pack importing a
+    /// wooden pickaxe would have painted it onto white dye and its dye onto a tool. ⚠ One at each end
+    /// of every run, which catches an insertion anywhere without listing a hundred and fifty rows.
+    /// </remarks>
+    private static readonly (ushort Layer, string Name)[] PinnedLayers =
+    [
+        (StarterBlocks.LayerStone, "stone"),
+        (StarterBlocks.LayerBlastFrontLit, "blast_front_lit"),
+        (StarterBlocks.LayerEmberbloom, "emberbloom"),
+        (StarterBlocks.LayerFirstWool, "wool_white"),
+        (StarterBlocks.LayerFirstIcon, "stick"),
+        (StarterBlocks.LayerShears, "shears"),
+        (StarterBlocks.LayerFirstMeat, "raw_beef"),
+        (StarterBlocks.LayerFirstDye, "dye_white"),
+        (StarterBlocks.LayerBone, "bone"),
+        (StarterBlocks.LayerFirstTool, "wood_pickaxe"),
+        ((ushort)(StarterBlocks.LayerCount - 1), "stormglass_sword"),
+    ];
+
     private static List<string> TextureSelfTest()
     {
         var faults = new List<string>();
         var built = BlockTextureSet.Build(packPath: null);
+
+        if (BlockTextureSet.Layers.Length != StarterBlocks.LayerCount)
+            faults.Add(
+                $"the layer table has {BlockTextureSet.Layers.Length} rows "
+                + $"against {StarterBlocks.LayerCount} layers");
+
+        foreach (var (layer, expected) in PinnedLayers)
+        {
+            if (layer >= BlockTextureSet.Layers.Length) continue;
+
+            var actual = BlockTextureSet.Layers[layer].Name;
+            if (actual == expected) continue;
+
+            faults.Add($"layer {layer} should be '{expected}' and the table calls it '{actual}'");
+        }
 
         for (var layer = 0; layer < built.Tiles.Length; layer++)
         {

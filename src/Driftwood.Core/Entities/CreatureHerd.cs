@@ -10,7 +10,10 @@ namespace Driftwood.Core.Entities;
 /// than looked up per frame because a herd is stepped sixty times a second and a skeleton never
 /// changes shape.
 /// </remarks>
-public readonly record struct SpawnKind(string Name, Vector3 Size);
+public readonly record struct SpawnKind(string Name, Vector3 Size, bool Hostile = false);
+
+/// <summary>One blow a creature landed on the player, for whoever turns that into damage.</summary>
+public readonly record struct CreatureAttack(string Kind, Vector3 Position, int HalfHearts);
 
 /// <summary>One animal in the world: what it is, where it is, and which way it is pointing.</summary>
 public sealed class Creature
@@ -19,6 +22,20 @@ public sealed class Creature
 
     /// <summary>How big it stands, in blocks. What a blow has to land inside.</summary>
     public required Vector3 Size { get; init; }
+
+    /// <summary>True for anything that comes at you rather than away.</summary>
+    /// <remarks>
+    /// ⚠ Carried on the creature rather than looked up per step. It is decided once, at the spawn
+    /// that placed it, and a per-frame lookup into a table by string is the sort of thing that costs
+    /// nothing until there are two hundred of them.
+    /// </remarks>
+    public required bool Hostile { get; init; }
+
+    /// <summary>Seconds until it may swing again.</summary>
+    public float Swings { get; set; }
+
+    /// <summary>Seconds of standing in the sun it has taken. Only for the kinds that burn.</summary>
+    public float Burning { get; set; }
 
     public Vector3 Position { get; set; }
 
@@ -229,6 +246,34 @@ public sealed class CreatureHerd
     /// <summary>Seconds a dead one takes to go over before it is taken out of the world.</summary>
     public const float DyingSeconds = 0.55f;
 
+    /// <summary>Blocks a second a hostile closes at. Slower than a player, faster than a walk.</summary>
+    /// <remarks>
+    /// ⚠ <b>Below the player's 4.3 and above their sneak.</b> Something that could outrun you is
+    /// something you can only fight, and the whole texture of a night in this genre is that running
+    /// is a real option — so a hostile catches anyone who dithers and nobody who leaves.
+    /// </remarks>
+    public const float HuntSpeed = 3.0f;
+
+    /// <summary>How far off one notices somebody, in blocks.</summary>
+    public const float SightRange = 16f;
+
+    /// <summary>And how near it has to be to land a blow.</summary>
+    /// <remarks>
+    /// ⚠ Measured between middles rather than between surfaces, so it has to allow for half a
+    /// creature and half a player. Two and a quarter is about a pace closer than the player's own
+    /// reach, which is what makes backing away a defence.
+    /// </remarks>
+    public const float StrikeRange = 2.25f;
+
+    /// <summary>Seconds between blows.</summary>
+    public const float StrikeEvery = 1.1f;
+
+    /// <summary>Seconds of full daylight before one that burns starts taking damage.</summary>
+    public const float ScorchSeconds = 1.5f;
+
+    /// <summary>Half-hearts a second the sun costs one that burns in it.</summary>
+    public const float ScorchRate = 1.6f;
+
     /// <summary>Degrees a second it can turn. Fast enough to look intentional, slow enough to see.</summary>
     public const float TurnSpeed = 140f;
 
@@ -262,6 +307,7 @@ public sealed class CreatureHerd
 
     private readonly List<Creature> _creatures = [];
     private readonly List<CreatureDeath> _dead = [];
+    private readonly List<CreatureAttack> _attacks = [];
     private readonly Random _random;
 
     public CreatureHerd(int seed) => _random = new Random(seed);
@@ -278,7 +324,15 @@ public sealed class CreatureHerd
     /// first guess is inside a hill puts nothing in the world and looks exactly like a renderer that
     /// draws nothing, which is a day of looking in the wrong place.
     /// </remarks>
-    public int Spawn(Func<int, int, int, bool> solid, IReadOnlyList<SpawnKind> kinds, Vector3 near, int count)
+    /// <param name="where">
+    /// An extra test the cell a creature would stand in has to pass, or null for anywhere with
+    /// ground. ⛳ This is how a hostile is placed in the dark: the caller decides what dark means and
+    /// the herd never learns what light is, which is the same posture that keeps the whole of this
+    /// file runnable under <c>--audit</c> with no world at all.
+    /// </param>
+    public int Spawn(
+        Func<int, int, int, bool> solid, IReadOnlyList<SpawnKind> kinds, Vector3 near, int count,
+        Func<int, int, int, bool>? where = null, float minRadius = 4f)
     {
         if (kinds.Count == 0) return 0;
 
@@ -288,12 +342,13 @@ public sealed class CreatureHerd
         {
             // Out in a widening ring, so a crowded spawn spreads rather than stacking.
             var angle = (float)(_random.NextDouble() * Math.Tau);
-            var radius = 4f + attempt * 0.6f;
+            var radius = minRadius + attempt * 0.6f;
 
             var x = (int)MathF.Floor(near.X + MathF.Cos(angle) * radius);
             var z = (int)MathF.Floor(near.Z + MathF.Sin(angle) * radius);
 
             if (!TryGround(solid, x, z, (int)near.Y + 24, out var y)) continue;
+            if (where is not null && !where(x, (int)y, z)) continue;
 
             var kind = kinds[placed % kinds.Count];
 
@@ -301,6 +356,7 @@ public sealed class CreatureHerd
             {
                 Kind = kind.Name,
                 Size = kind.Size,
+                Hostile = kind.Hostile,
                 MaxHealth = CreatureVitals.HealthFor(kind.Name),
                 Health = CreatureVitals.HealthFor(kind.Name),
                 Position = new Vector3(x + 0.5f, y, z + 0.5f),
@@ -475,7 +531,14 @@ public sealed class CreatureHerd
     /// there is no ground to put it on. ⚠ <b>The refusal turns rather than stopping</b>, so an animal
     /// that walks into a cliff wanders off along it instead of standing there pressing into the rock.
     /// </remarks>
-    public void Update(float dt, Func<int, int, int, bool> solid)
+    /// <param name="player">Where the player's feet are, or null when nobody is in the world.</param>
+    /// <param name="sunlit">
+    /// Whether a cell is standing in full daylight. Null means nothing burns — which is what the
+    /// headless checks pass, and what a world at night amounts to.
+    /// </param>
+    public void Update(
+        float dt, Func<int, int, int, bool> solid,
+        Vector3? player = null, Func<int, int, int, bool>? sunlit = null)
     {
         // ⛔ The dead are swept HERE and never inside Hurt, because a fall calls Hurt from inside the
         // walk below — and taking a creature out of the list being walked is how a herd that loses
@@ -527,16 +590,20 @@ public sealed class CreatureHerd
 
             if (Fall(creature, dt, solid)) continue;
 
+            Scorch(creature, dt, sunlit);
+            var hunting = Hunt(creature, dt, player);
+
             creature.Thinks -= dt;
 
             if (creature.Thinks <= 0f)
             {
                 creature.Thinks = 2f + (float)_random.NextDouble() * 5f;
 
-                // ⚠ A frightened animal keeps running and keeps its heading. Re-deciding on the
-                // ordinary clock is what turned a bolting cow back toward whoever hit it, every few
-                // seconds, which reads as an animal that wants another go rather than one fleeing.
-                if (creature.FleeFor <= 0f)
+                // ⚠ A frightened animal keeps running and keeps its heading, and so does one that
+                // has seen you. Re-deciding on the ordinary clock is what turned a bolting cow back
+                // toward whoever hit it every few seconds, which reads as an animal that wants
+                // another go rather than one fleeing.
+                if (creature.FleeFor <= 0f && !hunting)
                 {
                     creature.Moving = _random.NextDouble() < 0.6;
                     creature.WantsYaw = (float)(_random.NextDouble() * 360.0);
@@ -545,7 +612,7 @@ public sealed class CreatureHerd
 
             // Turn the short way round, so a creature wanting to face 350 from 10 turns twenty
             // degrees rather than three hundred and forty.
-            var panicking = creature.FleeFor > 0f;
+            var panicking = creature.FleeFor > 0f || hunting;
             var difference = Wrap(creature.WantsYaw - creature.Yaw);
             var step = MathF.Min(
                 MathF.Abs(difference), (panicking ? PanicTurnSpeed : TurnSpeed) * dt);
@@ -555,7 +622,8 @@ public sealed class CreatureHerd
 
             var yaw = float.DegreesToRadians(creature.Yaw);
             var ahead = new Vector3(MathF.Cos(yaw), 0f, MathF.Sin(yaw));
-            var wanted = creature.Position + ahead * ((panicking ? PanicSpeed : WalkSpeed) * dt);
+            var speed = hunting ? HuntSpeed : creature.FleeFor > 0f ? PanicSpeed : WalkSpeed;
+            var wanted = creature.Position + ahead * (speed * dt);
 
             var x = (int)MathF.Floor(wanted.X);
             var z = (int)MathF.Floor(wanted.Z);
@@ -577,6 +645,94 @@ public sealed class CreatureHerd
 
             creature.Thinks = panicking ? 0.4f : 1f + (float)_random.NextDouble() * 2f;
         }
+    }
+
+    /// <summary>
+    /// Points a hostile at whoever is in the world, and lets it swing when it gets there.
+    /// </summary>
+    /// <returns>True while it has somebody in sight, which is what makes it move at hunting pace.</returns>
+    /// <remarks>
+    /// ⚠ <b>Sight is a distance and nothing else — no line of sight, no light level.</b> Both would
+    /// be right and neither is cheap: a ray per hostile per frame against a voxel world, for a
+    /// creature that will walk into the wall between you anyway because there is no path-finding
+    /// here yet. Sixteen blocks is short enough that a wall usually means it loses you by running
+    /// out of range, and the honest note is that it does not currently need to see you.
+    /// </remarks>
+    private bool Hunt(Creature creature, float dt, Vector3? player)
+    {
+        creature.Swings = MathF.Max(0f, creature.Swings - dt);
+
+        if (!creature.Hostile || player is not { } target) return false;
+
+        var toward = target - creature.Position;
+        toward.Y = 0f;
+
+        var range = toward.Length();
+        if (range > SightRange || range < 1e-4f) return false;
+
+        creature.WantsYaw = float.RadiansToDegrees(MathF.Atan2(toward.Z, toward.X));
+        creature.Moving = true;
+
+        // ⚠ Held short so the ordinary re-think cannot fire mid-chase and send it wandering. The
+        // heading is rewritten every step anyway; this is what stops the *decision to move* being
+        // taken away from it by a clock that knows nothing about the player.
+        creature.Thinks = 0.5f;
+
+        // ⛔ Vertically as well as horizontally. Measured flat, a hostile at the bottom of a shaft
+        // is "next to" a player standing at the top of it and hits them through the floor.
+        var height = MathF.Abs(target.Y - creature.Position.Y);
+
+        if (range <= StrikeRange && height <= 2f && creature.Swings <= 0f)
+        {
+            creature.Swings = StrikeEvery;
+            _attacks.Add(new CreatureAttack(creature.Kind, creature.Middle, CreatureVitals.DamageFor(creature.Kind)));
+        }
+
+        return true;
+    }
+
+    /// <summary>Sets fire to the kinds the sun does not agree with.</summary>
+    /// <remarks>
+    /// ⛳ <b>Why this is worth having at all:</b> it is what makes daylight a resource rather than a
+    /// backdrop. Without it a night's worth of hostiles simply accumulates and the morning changes
+    /// nothing — with it, the world clears itself and going out at dawn is a different activity from
+    /// going out at dusk. ⚠ There is a grace period, so one step through a doorway is survivable and
+    /// a creature caught in the open is not.
+    /// </remarks>
+    private void Scorch(Creature creature, float dt, Func<int, int, int, bool>? sunlit)
+    {
+        if (sunlit is null || !CreatureVitals.BurnsInDaylight(creature.Kind)) return;
+
+        var x = (int)MathF.Floor(creature.Position.X);
+        var y = (int)MathF.Floor(creature.Position.Y + 0.5f);
+        var z = (int)MathF.Floor(creature.Position.Z);
+
+        if (!sunlit(x, y, z))
+        {
+            creature.Burning = 0f;
+            return;
+        }
+
+        creature.Burning += dt;
+        if (creature.Burning < ScorchSeconds) return;
+
+        // ⚠ Accumulated rather than rounded per step: at sixty frames a second every step's worth of
+        // damage rounds to zero and a creature stands in the sun for ever. The remainder is kept in
+        // the same clock the grace period used, which is why it is wound back rather than cleared.
+        var due = (int)((creature.Burning - ScorchSeconds) * ScorchRate);
+        if (due <= 0) return;
+
+        creature.Burning -= due / ScorchRate;
+        Hurt(creature, due, creature.Middle + new Vector3(0f, 4f, 0f));
+    }
+
+    /// <summary>Every blow landed on the player since this was last asked, and forgets them.</summary>
+    public List<CreatureAttack> TakeAttacks()
+    {
+        if (_attacks.Count == 0) return [];
+        var taken = new List<CreatureAttack>(_attacks);
+        _attacks.Clear();
+        return taken;
     }
 
     /// <summary>
@@ -702,6 +858,111 @@ public sealed class CreatureHerd
 
         faults.AddRange(ValidateFalling());
         faults.AddRange(ValidateFighting());
+        faults.AddRange(ValidateHunting());
+
+        return faults;
+    }
+
+    /// <summary>
+    /// Checks a hostile comes at somebody, hits them when it arrives, and burns in the sun.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>Every arm has a beast beside it, and that pairing is the whole check.</b> "It moved
+    /// toward the player" is also true of an animal that happened to wander that way, and "it landed
+    /// a blow" is also true of a table that hits regardless of range — so the same run puts a cow at
+    /// the same distance and asserts it does neither, and the range gate is asked from too far away
+    /// as well as from close to.
+    /// </remarks>
+    private static List<string> ValidateHunting()
+    {
+        var faults = new List<string>();
+
+        static bool Flat(int x, int y, int z) => y < 64;
+
+        var hunter = new SpawnKind("zombie", new Vector3(0.63f, 2.0f, 0.63f), Hostile: true);
+        var grazer = new SpawnKind("cow", new Vector3(0.75f, 1.56f, 1.50f));
+
+        var herd = new CreatureHerd(23);
+        herd.Spawn(Flat, [hunter], new Vector3(0f, 64f, 0f), 1);
+        herd.Spawn(Flat, [grazer], new Vector3(0f, 64f, 0f), 1);
+        if (herd.Count != 2) return ["two creatures would not stand up for the hunting check"];
+
+        var zombie = herd.All[0];
+        var cow = herd.All[1];
+
+        var player = new Vector3(0.5f, 64f, 0.5f);
+
+        zombie.Position = new Vector3(0.5f, 64f, 10.5f);
+        cow.Position = new Vector3(6.5f, 64f, 10.5f);
+        zombie.Moving = cow.Moving = false;
+
+        var zombieWas = Vector3.Distance(zombie.Position, player);
+        var cowWas = Vector3.Distance(cow.Position, player);
+
+        // Five seconds. It has ten blocks to cross at three a second, so a shorter run measures how
+        // fast it walks rather than whether it swings — the first pass asked for two blows in three
+        // seconds and got one, because the creature spent most of them still on its way over.
+        for (var i = 0; i < 300; i++) herd.Update(1f / 60f, Flat, player);
+
+        var zombieNow = Vector3.Distance(zombie.Position, player);
+        if (zombieNow > zombieWas - 4f)
+            faults.Add($"a hostile ten blocks off closed only {zombieWas - zombieNow:F1} blocks in three seconds");
+
+        // ⚠ The beast arm. A herd that walked everything toward the player would pass the arm above.
+        var cowNow = Vector3.Distance(cow.Position, player);
+        if (cowNow < cowWas - 5f)
+            faults.Add($"a cow closed {cowWas - cowNow:F1} blocks on the player, so beasts are hunting too");
+
+        // It arrived, so it must have swung. Three seconds is at least two blows at 1.1 s apart.
+        var landed = herd.TakeAttacks();
+        if (landed.Count < 2)
+            faults.Add($"a hostile that reached the player landed {landed.Count} blows in five seconds");
+
+        if (landed.Count > 0 && landed[0].HalfHearts != CreatureVitals.DamageFor("zombie"))
+            faults.Add($"a zombie's blow was worth {landed[0].HalfHearts}");
+
+        if (landed.Any(a => a.Kind == "cow")) faults.Add("a cow attacked the player");
+
+        // ⛔ THE RANGE CONTROL. Held at the far edge of its sight, it must chase and never connect —
+        // without this arm a table that swung every step whatever the distance passes everything.
+        var far = new CreatureHerd(29);
+        far.Spawn(Flat, [hunter], new Vector3(0f, 64f, 0f), 1);
+        var distant = far.All[0];
+        distant.Position = new Vector3(0.5f, 64f, 14.5f);
+        distant.Moving = false;
+
+        for (var i = 0; i < 60; i++)
+        {
+            // Held where it is, so only the distance is being tested rather than how fast it walks.
+            distant.Position = new Vector3(0.5f, 64f, 14.5f);
+            far.Update(1f / 60f, Flat, player);
+        }
+
+        if (far.TakeAttacks().Count != 0)
+            faults.Add("a hostile fourteen blocks away landed a blow");
+
+        // And the sun. ⛔ Paired with the same creature under cover, or "it lost health" is equally
+        // true of one that is simply taking damage from something else entirely.
+        var noon = new CreatureHerd(31);
+        noon.Spawn(Flat, [hunter, grazer], new Vector3(0f, 64f, 0f), 2);
+        if (noon.Count != 2) return [.. faults, "nothing stood up for the daylight check"];
+
+        var scorched = noon.All[0];
+        var sheltered = noon.All[1];
+        var before = (scorched.Health, sheltered.Health);
+
+        // ⛔ THE WHOLE WORLD IS IN THE SUN, AND THE FIRST VERSION OF THIS LIT ONLY THE ZOMBIE'S
+        // COLUMN — which meant the cow was safe because it was standing somewhere shaded rather than
+        // because cows do not burn. Control-tested: with the kind filter deliberately deleted the
+        // check went GREEN, because the case it claims to catch could not happen in the world it
+        // built. Lighting everything is what makes the cow's survival a claim about the table.
+        for (var i = 0; i < 300; i++) noon.Update(1f / 60f, Flat, null, (_, _, _) => true);
+
+        if (scorched.Health >= before.Item1)
+            faults.Add("a zombie stood in five seconds of daylight and took no damage");
+
+        if (sheltered.Health < before.Item2)
+            faults.Add("a cow standing in the same sun was burned by it");
 
         return faults;
     }

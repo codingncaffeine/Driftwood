@@ -1675,6 +1675,78 @@ public static class TileGen
         return t;
     }
 
+    /// <summary>A skein of thread: a loose coil with a tail hanging off it.</summary>
+    /// <remarks>
+    /// ⚠ <b>A ring rather than a ball.</b> A filled disc of white is a snowball, a pearl or an egg
+    /// depending on what else is in the row — the hole in the middle is the only thing that says
+    /// this is something wound rather than something solid.
+    /// </remarks>
+    public static byte[] IconSkein(int seed, byte r, byte g, byte b)
+    {
+        var t = new byte[BytesPerTile];
+        const float Centre = (Size - 1) / 2f;
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var dx = (x - Centre) / 5.4f;
+            var dy = (y - Centre + 1f) / 4.8f;
+            var reach = dx * dx + dy * dy;
+
+            // The coil, and the tail that runs down out of it. The tail touches the ring, so the
+            // whole icon is one piece of ink — which is what the audit's island count asks for.
+            var onRing = reach is <= 1f and >= 0.30f;
+            var onTail = x is >= 7 and <= 8 && y >= (int)Centre && y <= 14;
+
+            if (!onRing && !onTail) continue;
+
+            // ⚠ Banded along the coil rather than speckled. Thread is wound, so what reads at this
+            // size is the winding — a noise field would make it wool, which is a different item.
+            var wind = (x + y * 2) % 4 switch { 0 => 20, 1 => 4, 2 => -14, _ => -30 };
+            var lift = (int)((Centre - x) * 1.1f + (Centre - y) * 1.4f);
+
+            var d = wind + lift + (int)((Noise(x, y, seed) * 2f - 1f) * 5f);
+            Put(t, x, y, Clamp(r + d), Clamp(g + d), Clamp(b + d), 255);
+        }
+
+        return t;
+    }
+
+    /// <summary>A bone: a shaft on the diagonal with a knob at each end.</summary>
+    /// <remarks>
+    /// ⚠ <b>Two lumps per end, offset across the shaft.</b> One circle apiece comes out a cotton
+    /// bud; it is the pair that says the end of a bone. Drawn against distances rather than stepped
+    /// along the diagonal, for the reason the feather and the shears both had to learn.
+    /// </remarks>
+    public static byte[] IconBone(int seed, byte r, byte g, byte b)
+    {
+        var t = new byte[BytesPerTile];
+
+        const float X0 = 3.5f, Y0 = 12.5f, X1 = 12.5f, Y1 = 3.5f;
+        const float Across = 1.6f;
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var shaft = ToSegment(x, y, X0, Y0, X1, Y1) - 1.3f;
+
+            var ends = MathF.Min(
+                MathF.Min(Blob(x, y, X0 + Across, Y0 + Across), Blob(x, y, X0 - Across, Y0 - Across)),
+                MathF.Min(Blob(x, y, X1 + Across, Y1 + Across), Blob(x, y, X1 - Across, Y1 - Across)));
+
+            var nearest = MathF.Min(shaft, ends);
+            if (nearest > 0f) continue;
+
+            var d = (int)(nearest * 22f) + (int)((Noise(x, y, seed) * 2f - 1f) * 6f);
+            Put(t, x, y, Clamp(r + d), Clamp(g + d), Clamp(b + d), 255);
+        }
+
+        return t;
+
+        static float Blob(int x, int y, float cx, float cy) =>
+            MathF.Sqrt((x - cx) * (x - cx) + (y - cy) * (y - cy)) - 1.9f;
+    }
+
     /// <summary>A cured hide: a rounded piece with a darker edge and a couple of creases.</summary>
     public static byte[] IconLeather(int seed, byte r, byte g, byte b)
     {
