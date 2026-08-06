@@ -165,7 +165,7 @@ public sealed class SupportTable
 
         void Seed(int cx, int cy, int cz)
         {
-            if (cy < 0 || cy >= Gen.TerrainGenerator.WorldHeight) return;
+            if (!Gen.TerrainGenerator.InWorld(cy)) return;
 
             // Unloaded space reads as air, so a cell whose chunk is not here would look unsupported
             // and be "cleared" — which would create the chunk to write air into it.

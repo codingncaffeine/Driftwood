@@ -20,7 +20,75 @@ namespace Driftwood.Core.Gen;
 public sealed class TerrainGenerator
 {
     public const int SeaLevel = 62;
-    public const int WorldHeight = 128;
+
+    /// <summary>One past the highest cell there is.</summary>
+    public const int WorldTop = 128;
+
+    /// <summary>
+    /// The lowest cell there is, and the floor the world is built on.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛔ <b>The world grew DOWNWARD and never upward, and that is the whole constraint.</b> A
+    /// chunk is a pure function of seed and position, so raising <see cref="SeaLevel"/> or shifting
+    /// the surface would regenerate every existing world's terrain — the player's edits survive as a
+    /// diff and would end up floating in the air or buried in rock. Going down instead leaves
+    /// everything at and above y 0 bit-identical, and the only cell whose meaning changed is the
+    /// bedrock that used to be at y 0 and is now ordinary rock with 192 blocks under it.</para>
+    /// <para>⛳ <see cref="World.ChunkPos.FromWorld"/> already arithmetic-shifts, so negative
+    /// coordinates floor correctly and a chunk index below zero is not a special case anywhere.</para>
+    /// </remarks>
+    public const int WorldBottom = -256;
+
+    /// <summary>How many cells tall the world is. Not an upper bound — see <see cref="WorldTop"/>.</summary>
+    public const int WorldHeight = WorldTop - WorldBottom;
+
+    /// <summary>Lowest chunk layer, inclusive.</summary>
+    public const int ChunkBottom = WorldBottom >> Chunk.SizeLog2;
+
+    /// <summary>One past the highest chunk layer.</summary>
+    public const int ChunkTop = WorldTop >> Chunk.SizeLog2;
+
+    /// <summary>Chunk layers in a full column.</summary>
+    public const int ChunksTall = ChunkTop - ChunkBottom;
+
+    /// <summary>
+    /// Where the ordinary underground stops and the deep begins.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>Everything at or above this is generated exactly as it was before the world got deeper.</b>
+    /// Ore bands, rock intrusions and caves above y 0 are untouched, so an existing world keeps every
+    /// vein it had; the deep gets its own bands rather than a re-spreading of the old ones, which is
+    /// what makes this change additive rather than a reshuffle of somebody's mine.
+    /// </remarks>
+    public const int DeepFloor = 0;
+
+    /// <summary>
+    /// The four bands under the sky, and why there are four of them.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ <b>Measured against the genre rather than picked.</b> The reference world is 384 cells
+    /// tall with about 126 of them under sea level; ours is 384 tall with <b>318</b> under it, because
+    /// all of the extra was spent downward. That is two and a half times the standard dig.</para>
+    /// <para>⛔ <b>The number follows the bands, not the other way round.</b> Depth is nearly free at
+    /// runtime — the streamer loads two chunk layers above and below the viewer whatever the world's
+    /// height — so the real limit is whether each band reads as a <em>place</em> rather than as a
+    /// longer walk to the same rewards. Four of them, each with its own rock, its own ores and its
+    /// own reason to be frightening:</para>
+    /// <list type="table">
+    /// <item><term>62 .. 128</term><description>surface and sky</description></item>
+    /// <item><term>0 .. 62</term><description>the ordinary underground — caves, coal, iron, copper</description></item>
+    /// <item><term>−64 .. 0</term><description>the deep — deepstone, gold, stormglass, azurite</description></item>
+    /// <item><term>−160 .. −64</term><description>the hollows — big caverns, the first lava, water pockets</description></item>
+    /// <item><term>−256 .. −160</term><description>the Emberdeep — lava rivers, and the core at the bottom</description></item>
+    /// </list>
+    /// </remarks>
+    public const int HollowsTop = -64;
+
+    /// <summary>Where the Emberdeep begins — lava commoner and runnier the further down.</summary>
+    public const int EmberdeepTop = -160;
+
+    /// <summary>True for a cell in the world at all.</summary>
+    public static bool InWorld(int wy) => wy >= WorldBottom && wy < WorldTop;
 
     /// <summary>
     /// Trees are rolled once per cell of this grid. Tight on purpose: at 7 the crowns never
@@ -166,7 +234,7 @@ public sealed class TerrainGenerator
     /// like "44 blocks of relief" would otherwise deliver about 17.</para>
     /// </remarks>
     public int SurfaceHeight(int wx, int wz) =>
-        Math.Clamp((int)MathF.Round(RawHeight(wx, wz) + _heightBias), 1, WorldHeight - 8);
+        Math.Clamp((int)MathF.Round(RawHeight(wx, wz) + _heightBias), 1, WorldTop - 8);
 
     /// <summary>
     /// Surface height before the ocean-coverage bias is applied. Kept separate because the
@@ -214,11 +282,12 @@ public sealed class TerrainGenerator
             for (var y = 0; y < Chunk.Size; y++)
             {
                 var wy = oy + y;
-                if (wy >= WorldHeight) break;
+                if (wy >= WorldTop) break;
+                if (wy < WorldBottom) continue;
 
                 ushort id;
 
-                if (wy == 0)
+                if (wy == WorldBottom)
                 {
                     id = _ids.Bedrock;
                 }
@@ -235,13 +304,8 @@ public sealed class TerrainGenerator
                     else if (beach && depth <= 7) id = _ids.Sandstone;   // every beach stands on it
                     else id = RockAt(wx, wy, wz);
 
-                    // Caves cut through everything but bedrock and the seabed. Two independent
-                    // fields intersected gives connected tunnels; a single field gives flat sheets.
-                    if (wy > 1 && depth > 1 && IsCave(wx, wy, wz))
-                    {
-                        // Do not drain the ocean into a cave system.
-                        id = wy <= SeaLevel && surface <= SeaLevel ? id : (ushort)0;
-                    }
+                    // Caves cut through everything but bedrock and the seabed.
+                    if (Carved(wx, wy, wz, surface)) id = 0;
 
                     if (IsRock(id)) id = OreAt(wx, wy, wz, id);
                 }
@@ -251,6 +315,87 @@ public sealed class TerrainGenerator
         }
 
         chunk.RecountSolid();
+    }
+
+    /// <summary>
+    /// True when a cell inside the terrain has been hollowed out by a cave.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>One statement of the rule, because two callers ask it.</b> Generation asks it to decide
+    /// what a cell holds; <see cref="SkyLightAt"/> asks it to decide whether a beam gets past. Written
+    /// twice, the two would agree until somebody changed one of them — and the symptom would be a
+    /// chunk lit for a world it is not in, which is invisible in every census and every timing.
+    /// <para>Never the top two blocks of a column, never the two lowest cells of the world, and never
+    /// under the open sea: a cave that breached the sea floor would drain the ocean into it.</para>
+    /// </remarks>
+    public bool Carved(int wx, int wy, int wz, int surface)
+    {
+        if (wy <= WorldBottom + 1) return false;
+        if (surface - wy <= 1) return false;
+        if (wy <= SeaLevel && surface <= SeaLevel) return false;
+        return IsCave(wx, wy, wz);
+    }
+
+    /// <summary>
+    /// Sky light in a cell, worked out from the generator alone — no chunks, no loaded world.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ <b>This is what lets the streamer stop loading full columns.</b> Sunlight is seeded by
+    /// walking a column down from the top of the world, so a chunk 200 blocks under the surface used
+    /// to need every chunk above it in memory to know how bright its ceiling was. It does not: the
+    /// answer is a pure function of the seed, and this is it.</para>
+    /// <para><b>It is O(1) for land and O(ocean depth) for sea, which is the whole reason it is
+    /// affordable.</b> The walk stops at the first cell that stops the beam, and the top block of a
+    /// column is never carved — <see cref="Carved"/> refuses the top two — so any query below the
+    /// surface returns after exactly one step. Only a column that is under water walks at all, and
+    /// only as far as the seabed.</para>
+    /// <para>⚠ <b>It does not know about player edits</b>, so a shaft dug from the surface down to the
+    /// deep reads as solid rock here. That is survivable and self-correcting: the chunks a shaft
+    /// passes through are loaded whenever the player is in it, and a loaded chunk's real light is
+    /// preferred to this. Anything this gets wrong is corrected the moment the chunk above arrives.
+    /// </para>
+    /// </remarks>
+    public int SkyLightAt(int wx, int wy, int wz)
+    {
+        if (wy >= WorldTop) return Lighting.LightValue.Max;
+        if (wy < WorldBottom) return 0;
+
+        var surface = SurfaceHeight(wx, wz);
+
+        // Above both the ground and the sea there is nothing but air, and air costs a full beam
+        // nothing — straight down is the one direction light does not weaken in.
+        var highest = Math.Max(surface, SeaLevel);
+        if (wy > highest) return Lighting.LightValue.Max;
+
+        var level = Lighting.LightValue.Max;
+
+        for (var y = highest; y >= wy; y--)
+        {
+            int loss;
+
+            if (y > surface)
+            {
+                loss = y <= SeaLevel ? 1 : 0;       // a metre of water, or air over a shore
+            }
+            else
+            {
+                // Everything the generator puts in the ground is opaque, so an uncarved cell ends
+                // the beam outright and there is nothing left to walk for.
+                if (!Carved(wx, y, wz, surface)) return 0;
+                loss = 0;
+            }
+
+            // ⛔ Deliberately the same arithmetic LightEngine.Attenuate uses one step downward, not a
+            // second rule that happens to agree — two formulas for one physical step is how a seeded
+            // plane and a flooded column end up differing by a level along a seam.
+            level = level == Lighting.LightValue.Max && loss == 0
+                ? Lighting.LightValue.Max
+                : level - 1 - loss;
+
+            if (level <= 0) return 0;
+        }
+
+        return level;
     }
 
     private bool IsCave(int x, int y, int z)
@@ -270,8 +415,40 @@ public sealed class TerrainGenerator
     /// band and grow each one — which is how a designer sets "iron should be twice as common as
     /// gold" and gets it. The census in <c>--audit</c> is what keeps either method honest.</para>
     /// </remarks>
+    /// <summary>An ore and the depths it forms between, inclusive.</summary>
+    public readonly record struct OreBand(BlockId Ore, string Name, int Low, int High);
+
+    /// <summary>
+    /// The depths every ore forms at, declared once so a census can weigh a vein against the rock it
+    /// could actually have formed in.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>Written down because "percent of rock" needs a denominator that covers the same cells as
+    /// its numerator.</b> Iron forms between y 4 and y 58; measuring it against every rock in a
+    /// 384-tall world divides it by how deep the world is, and the day the world got three times
+    /// deeper six correct ore bands went red at once without a vein moving. The four that reach the
+    /// bedrock say so by starting at <see cref="WorldBottom"/> — that is the deep gradient in
+    /// <see cref="DeepOreAt"/>, and it is the whole reason a descent is worth making.
+    /// </remarks>
+    public static OreBand[] OreBands(StarterBlocks.Ids ids) =>
+    [
+        new(ids.CoalOre, "coal", 4, 92),
+        new(ids.CopperOre, "copper", 8, 72),
+        new(ids.IronOre, "iron", 4, 58),
+        new(ids.GoldOre, "gold", WorldBottom, 32),
+        new(ids.AzuriteOre, "azurite", WorldBottom, 30),
+        new(ids.StormglassOre, "stormglass", WorldBottom, 16),
+        new(ids.Emberstone, "emberstone", WorldBottom, 40),
+    ];
+
     private ushort OreAt(int x, int y, int z, ushort rock)
     {
+        // ⛳ The deep has its own bands, and every one of them is gated on y < DeepFloor so that not
+        // one cell at or above y 0 can reach them. That is what makes 250 blocks of new underground
+        // ADDITIVE: an existing world keeps every vein it had, because the code that decides those
+        // veins is the code below this block and it has not been touched.
+        if (y < DeepFloor) return DeepOreAt(x, y, z, rock);
+
         // Deepest and rarest first, because the first match wins and a cell that qualifies for two
         // veins should become the one worth walking to. Caves are carved before ore is assigned, so
         // a vein only ever forms in rock that survived — which is why a seam shows up in a cave wall
@@ -302,6 +479,44 @@ public sealed class TerrainGenerator
             return _ids.CoalOre;
         if (Noise.Fbm3(x / 14f, y / 14f, z / 14f, _seedGravel, 2) > 0.50f)
             return _ids.Gravel;
+
+        return rock;
+    }
+
+    /// <summary>
+    /// What the deep is made of — the ore bands below y 0, which no existing world has ever seen.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ <b>A gradient rather than a set of bands with edges.</b> Every threshold slides with
+    /// depth, so a hundred blocks down is a different place from two hundred rather than the same
+    /// place with a different label, and there is no line anywhere for a player to notice crossing.
+    /// The rate of a threshold goes as roughly <c>exp(-26 * t)</c>, so the eight-hundredths
+    /// emberstone travels is about a factor of eight, not a nudge.</para>
+    /// <para>The shallow metals — iron, copper, coal — are deliberately absent. Descending should be
+    /// about the things that are only down here; a deep full of coal is a longer walk to the same
+    /// rewards, which is the failure mode a bigger world has and a deeper one should not.</para>
+    /// </remarks>
+    private ushort DeepOreAt(int x, int y, int z, ushort rock)
+    {
+        // 0 at the floor of the ordinary underground, 1 at the bedrock.
+        var deepness = Math.Clamp((DeepFloor - y) / (float)(DeepFloor - WorldBottom), 0f, 1f);
+
+        // ⚠ Measured, not chosen. Rate goes as roughly exp(-26 * threshold), so a hundredth is a
+        // third: the first pass gave stormglass 0.257% of the rock it can form in against gold's
+        // 0.282% — an ore that is meant to be the rarest thing in the game arriving at the same rate
+        // as the metal two rungs above it. Every number below was walked back until the ladder had
+        // margin rather than a rounding error.
+        if (Noise.Fbm3(x / 6f, y / 6f, z / 6f, _seedDiamond, 2) > 0.545f - 0.015f * deepness)
+            return _ids.StormglassOre;
+        if (Noise.Fbm3(x / 7f, y / 7f, z / 7f, _seedAzurite, 2) > 0.535f - 0.025f * deepness)
+            return _ids.AzuriteOre;
+        if (Noise.Fbm3(x / 7f, y / 7f, z / 7f, _seedGold, 2) > 0.535f - 0.025f * deepness)
+            return _ids.GoldOre;
+
+        // Emberstone is the one that says how deep you are. It already glows warm and already lived
+        // down here, and it is what the Emberdeep is named after.
+        if (Noise.Fbm3(x / 7f, y / 7f, z / 7f, _seedEmber, 2) > 0.53f - 0.09f * deepness)
+            return _ids.Emberstone;
 
         return rock;
     }
@@ -434,6 +649,12 @@ public sealed class TerrainGenerator
     public void DecorateChunk(Chunk chunk, int reach)
     {
         var (ox, oy, oz) = chunk.Position.Origin;
+
+        // ⛳ Nothing decorates the deep, and it is worth the two lines. SurfaceHeight is clamped to at
+        // least 1 and the longest vine hangs five below a trunk's base, so no tree, tuft or flower can
+        // reach a cell below y −5. Six of the world's ten chunk layers are under that line and each of
+        // them used to pay a full search over eighty-one tree cells to find nothing.
+        if (oy + Chunk.Size <= -5) return;
 
         var cellMinX = FloorDiv(ox - reach, TreeGrid);
         var cellMaxX = FloorDiv(ox + Chunk.Size - 1 + reach, TreeGrid);

@@ -53,10 +53,9 @@ public static class WorldAudit
         var world = new VoxelWorld(registry);
 
         var half = chunksAcross / 2;
-        var chunksTall = TerrainGenerator.WorldHeight / Chunk.Size;
 
-        var positions = new List<ChunkPos>(chunksAcross * chunksAcross * chunksTall);
-        for (var cy = 0; cy < chunksTall; cy++)
+        var positions = new List<ChunkPos>(chunksAcross * chunksAcross * TerrainGenerator.ChunksTall);
+        for (var cy = TerrainGenerator.ChunkBottom; cy < TerrainGenerator.ChunkTop; cy++)
         for (var cz = -half; cz < chunksAcross - half; cz++)
         for (var cx = -half; cx < chunksAcross - half; cx++)
             positions.Add(new ChunkPos(cx, cy, cz));
@@ -143,6 +142,27 @@ public static class WorldAudit
         Array.Fill(minY, int.MaxValue);
         Array.Fill(maxY, int.MinValue);
 
+        // ⛔ Rock BY HEIGHT, because "percent of rock" needs a denominator that covers the same
+        // cells as its numerator. An ore that only forms between y 4 and y 58 measured against every
+        // rock in a 384-tall world is not a rate, it is a rate divided by how deep the world happens
+        // to be — and the day the world got three times deeper, six perfectly correct ore bands went
+        // red at once and none of them had moved a block.
+        // Rock, and everything that replaced rock — an ore or a gravel pocket occupies a cell the
+        // vein could have been rolled into, so it belongs in the denominator as much as the stone
+        // beside it does.
+        var isRock = new bool[registry.Count];
+        foreach (var block in ids.Rock) isRock[block.Value] = true;
+        foreach (var block in ids.Ores) isRock[block.Value] = true;
+        isRock[ids.Gravel.Value] = true;
+
+        var rockByY = new long[TerrainGenerator.WorldHeight];
+
+        // The same census split at y 0, because the world has two undergrounds now and one number
+        // describes neither. Deepstone is a minority intrusion above the line and the whole of the
+        // rock below it; a single share reads as "correct" for a world that is either.
+        var shallowCounts = new long[registry.Count];
+        var deepCounts = new long[registry.Count];
+
         foreach (var chunk in chunks)
         {
             var (_, oy, _) = chunk.Position.Origin;
@@ -156,7 +176,19 @@ public static class WorldAudit
                 var wy = oy + y;
                 if (wy < minY[id]) minY[id] = wy;
                 if (wy > maxY[id]) maxY[id] = wy;
+
+                if (isRock[id]) rockByY[wy - TerrainGenerator.WorldBottom]++;
+                if (wy >= TerrainGenerator.DeepFloor) shallowCounts[id]++; else deepCounts[id]++;
             }
+        }
+
+        long RockBetween(int low, int high)
+        {
+            long total = 0;
+            var from = Math.Max(low, TerrainGenerator.WorldBottom);
+            var to = Math.Min(high, TerrainGenerator.WorldTop - 1);
+            for (var y = from; y <= to; y++) total += rockByY[y - TerrainGenerator.WorldBottom];
+            return total;
         }
 
         long totalBlocks = 0;
@@ -258,8 +290,13 @@ public static class WorldAudit
         Check("iron spawned", counts[ids.IronOre.Value] > 0, $"iron {counts[ids.IronOre.Value]:N0}");
         Check("iron is deep", maxY[ids.IronOre.Value] <= 58, $"max y {maxY[ids.IronOre.Value]}");
         Check("trees planted", counts[ids.Log.Value] > 0, $"log {counts[ids.Log.Value]:N0}, leaves {counts[ids.Leaves.Value]:N0}");
-        Check("bedrock floor", counts[ids.Bedrock.Value] > 0 && maxY[ids.Bedrock.Value] == 0, $"y {minY[ids.Bedrock.Value]}..{maxY[ids.Bedrock.Value]}");
-        Check("caves opened", minY[0] <= 2, $"lowest air at y {minY[0]}");
+        Check("bedrock floor",
+            counts[ids.Bedrock.Value] > 0 && maxY[ids.Bedrock.Value] == TerrainGenerator.WorldBottom,
+            $"y {minY[ids.Bedrock.Value]}..{maxY[ids.Bedrock.Value]} (want {TerrainGenerator.WorldBottom})");
+
+        // ⛳ Air at the bottom of the world, not near y 0. The old floor is 256 blocks up now, and a
+        // check that still asked about y 2 would pass on a world with no deep in it at all.
+        Check("caves opened", minY[0] <= TerrainGenerator.WorldBottom + 4, $"lowest air at y {minY[0]}");
         Check("geometry produced", tris > 0, $"{tris:N0} tris");
 
         // Relief and mix gates. A world can pass every "does this block exist" check above and
@@ -287,6 +324,9 @@ public static class WorldAudit
 
         var streamingMatches = StreamingMatchesBatch(seed, registry, ids, oceanCoverage, out var streamDetail);
         Check("streamed == batch meshes", streamingMatches, streamDetail);
+
+        var verticalOk = VerticalStreamingPays(seed, registry, ids, oceanCoverage, out var verticalDetail);
+        Check("the deep costs less than the surface", verticalOk, verticalDetail);
 
         var frustumFaults = Frustum.SelfTest();
         Check("frustum culls correctly", frustumFaults.Count == 0,
@@ -536,28 +576,48 @@ public static class WorldAudit
         // and it stops being a reward. A floor-only check passes a world where one stone block
         // in fifty is coal, which is how the first calibration pass slipped through.
         //
-        // Measured against all rock rather than against stone alone. Once ore could form in
-        // deepstone and in the three intrusions, "percent of stone" was counting a numerator the
-        // denominator no longer covered — the classic way a rate drifts without anything looking
-        // wrong. See the block census above for the split.
-        double rock = 0;
-        foreach (var block in ids.Rock) rock += counts[block.Value];
+        // ⛔ EACH ORE AGAINST THE ROCK IN ITS OWN BAND, and the denominator is the whole check.
+        // "Percent of all rock" was measuring a rate divided by how deep the world happens to be:
+        // the day it went from 128 cells tall to 384, six correct ore bands went red at once and not
+        // one vein had moved. The bands come from the generator's own table rather than from numbers
+        // restated here, so a band that changes in one place cannot go on passing in the other.
+        var bands = TerrainGenerator.OreBands(ids);
+        var rates = new Dictionary<string, double>();
 
-        double Rate(BlockId ore) => counts[ore.Value] * 100.0 / rock;
+        foreach (var band in bands)
+        {
+            var denominator = RockBetween(band.Low, band.High);
+            var pct = denominator == 0 ? 0 : counts[band.Ore.Value] * 100.0 / denominator;
+            rates[band.Name] = pct;
+        }
 
-        var coalPct = Rate(ids.CoalOre);
-        var copperPct = Rate(ids.CopperOre);
-        var ironPct = Rate(ids.IronOre);
-        var goldPct = Rate(ids.GoldOre);
-        var azuritePct = Rate(ids.AzuriteOre);
-        var stormglassPct = Rate(ids.StormglassOre);
+        // ⛳ The observed depths must lie inside the declared ones, or the table above is describing
+        // a generator that no longer exists — and a table that claims a wider band than the code
+        // produces makes every denominator too big and every rate quietly too low.
+        var strayed = bands
+            .Where(b => counts[b.Ore.Value] > 0
+                     && (minY[b.Ore.Value] < b.Low || maxY[b.Ore.Value] > b.High))
+            .Select(b => $"{b.Name} found at y {minY[b.Ore.Value]}..{maxY[b.Ore.Value]}, declared {b.Low}..{b.High}")
+            .ToArray();
 
-        Check("coal rate in band", coalPct is > 0.30 and < 1.20, $"{coalPct:F3}% of rock (want 0.30-1.20)");
-        Check("copper rate in band", copperPct is > 0.20 and < 0.90, $"{copperPct:F3}% of rock (want 0.20-0.90)");
-        Check("iron rate in band", ironPct is > 0.15 and < 0.70, $"{ironPct:F3}% of rock (want 0.15-0.70)");
-        Check("gold rate in band", goldPct is > 0.04 and < 0.30, $"{goldPct:F3}% of rock (want 0.04-0.30)");
-        Check("azurite rate in band", azuritePct is > 0.03 and < 0.28, $"{azuritePct:F3}% of rock (want 0.03-0.28)");
-        Check("stormglass rate in band", stormglassPct is > 0.015 and < 0.12, $"{stormglassPct:F3}% of rock (want 0.015-0.12)");
+        Check("ore bands are what the generator says", strayed.Length == 0,
+            strayed.Length == 0
+                ? $"{bands.Length} ores, every one inside its declared depths"
+                : string.Join("; ", strayed));
+
+        var coalPct = rates["coal"];
+        var copperPct = rates["copper"];
+        var ironPct = rates["iron"];
+        var goldPct = rates["gold"];
+        var azuritePct = rates["azurite"];
+        var stormglassPct = rates["stormglass"];
+
+        Check("coal rate in band", coalPct is > 0.30 and < 1.60, $"{coalPct:F3}% of rock in band (want 0.30-1.60)");
+        Check("copper rate in band", copperPct is > 0.20 and < 1.20, $"{copperPct:F3}% of rock in band (want 0.20-1.20)");
+        Check("iron rate in band", ironPct is > 0.15 and < 0.90, $"{ironPct:F3}% of rock in band (want 0.15-0.90)");
+        Check("gold rate in band", goldPct is > 0.04 and < 0.40, $"{goldPct:F3}% of rock in band (want 0.04-0.40)");
+        Check("azurite rate in band", azuritePct is > 0.03 and < 0.38, $"{azuritePct:F3}% of rock in band (want 0.03-0.38)");
+        Check("stormglass rate in band", stormglassPct is > 0.015 and < 0.20, $"{stormglassPct:F3}% of rock in band (want 0.015-0.20)");
 
         // The ladder, which is the check the individual bands cannot make. Every tier could sit
         // inside its own band and still come out in the wrong order, and the order is the whole
@@ -570,17 +630,27 @@ public static class WorldAudit
         Check("the ore ladder holds", ladder,
             $"coal {coalPct:F2} > copper {copperPct:F2} > iron {ironPct:F2} > gold {goldPct:F2}/azurite {azuritePct:F2} > stormglass {stormglassPct:F3}");
 
-        // Rock variety. One uniform grey underground is the failure this catches, and it looks
-        // exactly like a working world in every other check here.
-        var deepPct = counts[ids.Deepstone.Value] * 100.0 / rock;
-        Check("deepstone owns the depths", deepPct is > 10.0 and < 50.0 && maxY[ids.Deepstone.Value] < 30,
-            $"{deepPct:F1}% of rock (want 10-50), top at y {maxY[ids.Deepstone.Value]} (want under 30)");
+        // Rock variety, asked twice because the world now has two undergrounds and one number
+        // cannot describe both. Above y 0 the failure is a uniform grey cavern nobody can navigate;
+        // below it the failure is the opposite — a deep that is not made of anything in particular.
+        double shallowRock = RockBetween(TerrainGenerator.DeepFloor, TerrainGenerator.WorldTop - 1);
+        double deepRock = RockBetween(TerrainGenerator.WorldBottom, TerrainGenerator.DeepFloor - 1);
+
+        double Shallow(BlockId block) => shallowRock == 0 ? 0 : shallowCounts[block.Value] * 100.0 / shallowRock;
+
+        var deepPct = deepRock == 0 ? 0 : deepCounts[ids.Deepstone.Value] * 100.0 / deepRock;
+        Check("the deep is deepstone", deepPct > 80.0,
+            $"{deepPct:F1}% of rock below y {TerrainGenerator.DeepFloor} (want over 80)");
+
+        var shallowDeepPct = Shallow(ids.Deepstone);
+        Check("deepstone owns the depths", shallowDeepPct is > 3.0 and < 50.0 && maxY[ids.Deepstone.Value] < 30,
+            $"{shallowDeepPct:F1}% of rock above y 0 (want 3-50), top at y {maxY[ids.Deepstone.Value]} (want under 30)");
 
         var intrusions = new[] { ids.Coralstone, ids.Driftstone, ids.Saltstone }
-            .Select(b => (Name: registry[b].Name, Pct: Rate(b))).ToArray();
+            .Select(b => (Name: registry[b].Name, Pct: Shallow(b))).ToArray();
 
-        Check("intrusions break up the rock", Array.TrueForAll(intrusions, i => i.Pct is > 1.0 and < 8.0),
-            string.Join(", ", intrusions.Select(i => $"{i.Name} {i.Pct:F2}%")) + " of rock (want 1-8 each)");
+        Check("intrusions break up the rock", Array.TrueForAll(intrusions, i => i.Pct is > 1.0 and < 12.0),
+            string.Join(", ", intrusions.Select(i => $"{i.Name} {i.Pct:F2}%")) + " of rock above y 0 (want 1-12 each)");
 
         // Snow is gated on where it lies, not on how much of it there is.
         //
@@ -718,9 +788,9 @@ public static class WorldAudit
         Check("block light is coloured", light.ColouredCells > 0,
             $"{light.ColouredCells:N0} cells where the channels differ");
 
-        var emberPct = Rate(ids.Emberstone);
-        Check("emberstone rate in band", emberPct is > 0.05 and < 0.40,
-            $"{emberPct:F3}% of rock (want 0.05-0.40)");
+        var emberPct = rates["emberstone"];
+        Check("emberstone rate in band", emberPct is > 0.05 and < 0.60,
+            $"{emberPct:F3}% of rock in band (want 0.05-0.60)");
 
         var lightingConverges = LightingIsOrderIndependent(seed, registry, ids, oceanCoverage, out var lightDetail);
         Check("light ignores load order", lightingConverges, lightDetail);
@@ -988,12 +1058,11 @@ public static class WorldAudit
             engine.LightColumn(incremental, cx, cz);
         }
 
-        var chunksTall = TerrainGenerator.WorldHeight / Chunk.Size;
         var compared = 0;
 
         for (var cz = -radius; cz <= radius; cz++)
         for (var cx = -radius; cx <= radius; cx++)
-        for (var cy = 0; cy < chunksTall; cy++)
+        for (var cy = TerrainGenerator.ChunkBottom; cy < TerrainGenerator.ChunkTop; cy++)
         {
             var pos = new ChunkPos(cx, cy, cz);
             if (!batch.TryGetChunk(pos, out var a) || !incremental.TryGetChunk(pos, out var b)) continue;
@@ -1191,11 +1260,10 @@ public static class WorldAudit
     {
         var world = new VoxelWorld(registry);
         var generator = new TerrainGenerator(seed, ids, oceanCoverage);
-        var chunksTall = TerrainGenerator.WorldHeight / Chunk.Size;
 
         for (var cz = -radius; cz <= radius; cz++)
         for (var cx = -radius; cx <= radius; cx++)
-        for (var cy = 0; cy < chunksTall; cy++)
+        for (var cy = TerrainGenerator.ChunkBottom; cy < TerrainGenerator.ChunkTop; cy++)
         {
             var chunk = world.GetOrCreateChunk(new ChunkPos(cx, cy, cz));
             generator.GenerateChunk(chunk);
@@ -3070,7 +3138,7 @@ public static class WorldAudit
             // empty. Counted over the whole column, with a floor well under what any real one holds —
             // measured at 53 to 66 across the five test seeds, and gated at 8.
             var column = 0;
-            for (var y = 1; y < TerrainGenerator.WorldHeight; y++)
+            for (var y = TerrainGenerator.WorldBottom; y < TerrainGenerator.WorldTop; y++)
                 if (streamer.World.GetBlock(untouched.X, y, untouched.Z) != BlockId.Air) column++;
 
             if (column < 8)
@@ -5899,7 +5967,7 @@ public static class WorldAudit
 
         bool TryClaim(int wx, int wy, int wz)
         {
-            if (wy < 0 || wy >= TerrainGenerator.WorldHeight) return false;
+            if (!TerrainGenerator.InWorld(wy)) return false;
             if (world.GetBlock(wx, wy, wz) != ids.Leaves) return false;
 
             var pos = ChunkPos.FromWorld(wx, wy, wz);
@@ -6095,7 +6163,7 @@ public static class WorldAudit
         var minCrown = int.MaxValue;
         var maxCrown = int.MinValue;
 
-        var top = TerrainGenerator.WorldHeight - 1;
+        var top = TerrainGenerator.WorldTop - 1;
 
         foreach (var (wx, wz) in columns)
         {
@@ -6150,6 +6218,74 @@ public static class WorldAudit
     /// a handful of large quads, while the correct broken surface needs more. Verified: forcing the
     /// streamer to mesh without waiting reports 4788 verts against 4792.</para>
     /// </remarks>
+    /// <summary>
+    /// Loads the world round a viewer on the grass and round one in the Emberdeep, and compares the
+    /// bill.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛔ <b>This is the check vertical streaming exists for, and it needs both halves or it
+    /// passes a streamer that loads nothing.</b> The claim is not "fewer chunks" — a broken streamer
+    /// loads zero and wins. It is that the deep costs <em>less</em> than the surface <b>and</b> that
+    /// the chunk the viewer is standing in is loaded in both, which is the positive control.</para>
+    /// <para>The number that matters: a full-column streamer loads the same chunks wherever the
+    /// viewer stands, so the ratio it reports is exactly 1.00 — and that is what this failed at
+    /// before the two rings landed. In a 384-tall world full columns would be twelve layers of every
+    /// column in the ring, which is where the third comparison comes from.</para>
+    /// </remarks>
+    private static bool VerticalStreamingPays(
+        WorldSeed seed, BlockRegistry registry, StarterBlocks.Ids ids, float oceanCoverage, out string detail)
+    {
+        const int radius = 6;
+
+        var generator = new TerrainGenerator(seed, ids, oceanCoverage);
+        var surfaceY = generator.SurfaceHeight(0, 0) + 2;
+        var deepY = TerrainGenerator.EmberdeepTop - 8;
+
+        var (surfaceChunks, surfaceHeld) = LoadAround(new Vector3(0.5f, surfaceY, 0.5f));
+        var (deepChunks, deepHeld) = LoadAround(new Vector3(0.5f, deepY, 0.5f));
+
+        // What the old streamer would have cost: every column in the load ring, twelve layers of it.
+        var reach = radius + 3;
+        var columns = 0;
+        for (var dz = -reach; dz <= reach; dz++)
+        for (var dx = -reach; dx <= reach; dx++)
+            if (dx * dx + dz * dz <= reach * reach) columns++;
+
+        var fullColumns = columns * TerrainGenerator.ChunksTall;
+        var ratio = surfaceChunks == 0 ? 1.0 : deepChunks / (double)surfaceChunks;
+
+        detail = $"surface {surfaceChunks:N0} chunks, deep {deepChunks:N0} ({ratio:F2}x), "
+               + $"full columns would be {fullColumns:N0}; the viewer's own chunk is loaded "
+               + (surfaceHeld && deepHeld ? "in both" : surfaceHeld ? "only on the surface" : "nowhere");
+
+        return surfaceHeld && deepHeld && ratio < 0.7 && surfaceChunks < fullColumns;
+
+        (int Count, bool Held) LoadAround(Vector3 viewer)
+        {
+            using var streamer = new WorldStreamer(
+                registry, new TerrainGenerator(seed, ids, oceanCoverage), radius);
+
+            streamer.Update(viewer);
+
+            var watch = Stopwatch.StartNew();
+            while (watch.ElapsedMilliseconds < 30_000)
+            {
+                streamer.PromoteReadyChunks();
+                while (streamer.TryDequeueMesh(out _)) { }
+
+                if (streamer.PendingGenerate == 0 && streamer.PendingLight == 0
+                    && streamer.PendingMesh == 0) break;
+
+                Thread.Sleep(2);
+            }
+
+            var here = ChunkPos.FromWorld(
+                (int)MathF.Floor(viewer.X), (int)MathF.Floor(viewer.Y), (int)MathF.Floor(viewer.Z));
+
+            return (streamer.LoadedChunks, streamer.World.TryGetChunk(here, out _));
+        }
+    }
+
     private static bool StreamingMatchesBatch(
         WorldSeed seed, BlockRegistry registry, StarterBlocks.Ids ids, float oceanCoverage, out string detail)
     {
@@ -6157,6 +6293,7 @@ public static class WorldAudit
         const int settleTimeoutMs = 30_000;
 
         var produced = new Dictionary<ChunkPos, (int Verts, int Indices)>();
+        var loaded = new HashSet<ChunkPos>();
 
         using (var streamer = new WorldStreamer(registry, new TerrainGenerator(seed, ids, oceanCoverage), radius))
         {
@@ -6194,25 +6331,22 @@ public static class WorldAudit
                 detail = "streamer produced no meshes";
                 return false;
             }
+
+            // ⛔ EXACTLY THE SET THE STREAMER HELD, and this is the whole correctness of the check.
+            // The reference used to be "the produced chunks and their neighbours", which was the same
+            // set back when the streamer loaded full columns. It is not any more: a chunk at the
+            // bottom of the vertical band has a neighbour under it that nothing ever asked for, and a
+            // reference built with that neighbour present is lit by emitters the streamed world
+            // cannot see. Measured: chunk (0,−2,0) came back 9,372 verts against 9,684, and nothing
+            // whatever was wrong with the streaming.
+            foreach (var chunk in streamer.World.Chunks) loaded.Add(chunk.Position);
         }
 
-        // Reference world: everything the streamed chunks could sample, generated up front.
+        // Reference world: the same chunks, generated up front rather than as the player walked.
         var batchWorld = new VoxelWorld(registry);
         var batchGenerator = new TerrainGenerator(seed, ids, oceanCoverage);
-        var chunksTall = TerrainGenerator.WorldHeight / Chunk.Size;
 
-        var needed = new HashSet<ChunkPos>();
-        foreach (var pos in produced.Keys)
-        for (var dy = -1; dy <= 1; dy++)
-        for (var dz = -1; dz <= 1; dz++)
-        for (var dx = -1; dx <= 1; dx++)
-        {
-            var n = pos.Offset(dx, dy, dz);
-            if (n.Y < 0 || n.Y >= chunksTall) continue;
-            needed.Add(n);
-        }
-
-        foreach (var pos in needed)
+        foreach (var pos in loaded)
         {
             var chunk = batchWorld.GetOrCreateChunk(pos);
             batchGenerator.GenerateChunk(chunk);
@@ -6448,7 +6582,7 @@ public static class WorldAudit
         for (var z = minBlock; z <= maxBlock; z += 4)
         for (var x = minBlock; x <= maxBlock; x += 4)
         {
-            for (var y = TerrainGenerator.WorldHeight - 1; y >= 0; y--)
+            for (var y = TerrainGenerator.WorldTop - 1; y >= TerrainGenerator.WorldBottom; y--)
             {
                 // Down to the first block that hides what is under it, not the first that is not
                 // air. Anything standing on the ground — a tuft of grass, a canopy, a curtain of

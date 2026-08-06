@@ -38,6 +38,18 @@ public sealed class LightEngine
     private readonly byte[] _attenuation;
     private readonly ushort[] _emission;
 
+    /// <summary>
+    /// Answers "how much sunlight falls into this cell" for chunks whose column is not all loaded.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>This is what let the streamer stop loading full columns.</b> Sunlight is seeded by walking
+    /// a column down from the top of the world, so lighting a chunk two hundred blocks under the
+    /// surface used to require every chunk above it to be in memory. It does not — the answer is a
+    /// pure function of the seed, and <see cref="TerrainGenerator.SkyLightAt"/> is it.
+    /// <para>Null for the batch paths, which have the whole region in hand and walk it directly.</para>
+    /// </remarks>
+    private readonly TerrainGenerator? _sky;
+
     private readonly Queue<Node>[] _additions;
     private readonly Queue<Removal> _removals = new();
 
@@ -53,10 +65,11 @@ public sealed class LightEngine
     private readonly record struct Node(int X, int Y, int Z);
     private readonly record struct Removal(int X, int Y, int Z, int Level);
 
-    public LightEngine(BlockRegistry registry)
+    public LightEngine(BlockRegistry registry, TerrainGenerator? sky = null)
     {
         _attenuation = registry.BuildLightAttenuationTable();
         _emission = registry.BuildLightEmissionTable();
+        _sky = sky;
 
         _additions = new Queue<Node>[ChannelCount];
         for (var c = 0; c < ChannelCount; c++) _additions[c] = new Queue<Node>();
@@ -148,27 +161,141 @@ public sealed class LightEngine
     /// Seeds and floods one column of chunks. The streamer calls this once every chunk in the
     /// column has generated and its neighbours are in place.
     /// </summary>
+    /// <remarks>
+    /// Top down, so each chunk's ceiling is answered by the chunk above it rather than by the
+    /// generator. Kept as the batch entry point and as the thing the order-independence check
+    /// compares against <see cref="LightAll"/>.
+    /// </remarks>
     public void LightColumn(VoxelWorld world, int cx, int cz)
     {
+        for (var cy = TerrainGenerator.ChunkTop - 1; cy >= TerrainGenerator.ChunkBottom; cy--)
+            LightChunk(world, new ChunkPos(cx, cy, cz));
+    }
+
+    /// <summary>
+    /// Seeds and floods one chunk, with no requirement that anything above it is loaded.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ <b>The unit of lighting is a chunk rather than a column, and that is what makes a deep
+    /// world affordable.</b> A column is ten chunks tall now; lighting one because the player stepped
+    /// over a seam meant lighting nine they will never see. The thing that made a column the unit was
+    /// sunlight — it is seeded by walking down from the top of the world — and the sky-inflow plane
+    /// is what removes that requirement.</para>
+    /// <para>Light already standing in the neighbours is re-offered through the shell, or a cave
+    /// mouth one block over a seam stays black: those cells were drained from the queue when their
+    /// own chunk was lit and this one did not exist yet. Six faces now, not four — a chunk has
+    /// neighbours above and below it, and the one below is the common case, because a chunk is
+    /// almost always lit before the ground under it is.</para>
+    /// </remarks>
+    public void LightChunk(VoxelWorld world, ChunkPos pos)
+    {
+        if (!world.TryGetChunk(pos, out var chunk)) return;
+
         ResetChunkCache();
         LastCellsVisited = 0;
-        SeedColumn(world, cx, cz);
 
-        // Light already standing in the neighbours has to be re-offered to the new column, or a
-        // cave mouth one block over the seam stays black. The column's own seeding cannot find it:
-        // those cells were drained from the queue when their column was lit and this one did not
-        // exist yet.
-        EnqueueShell(world, cx, cz);
+        // From nothing, so re-lighting a chunk is the same operation as lighting it. What was
+        // standing in it either gets re-derived from the ceiling or re-offered from the shell.
+        Array.Clear(chunk.RawLight);
+        chunk.Dirty = true;
 
-        var chunksTall = TerrainGenerator.WorldHeight / Chunk.Size;
-        for (var cy = 0; cy < chunksTall; cy++)
-            if (world.TryGetChunk(new ChunkPos(cx, cy, cz), out var chunk)) SeedEmitters(world, chunk);
+        SeedChunkSky(world, chunk);
+        SeedEmitters(world, chunk);
+        EnqueueChunkShell(world, pos);
 
         FloodAll(world);
         ReleaseBulkCapacity();
 
-        for (var cy = 0; cy < chunksTall; cy++)
-            if (world.TryGetChunk(new ChunkPos(cx, cy, cz), out var chunk)) chunk.Lit = true;
+        chunk.Lit = true;
+    }
+
+    /// <summary>
+    /// Hands each of a chunk's 1,024 world columns the sunlight arriving at its ceiling, and walks
+    /// it down through the chunk.
+    /// </summary>
+    private void SeedChunkSky(VoxelWorld world, Chunk chunk)
+    {
+        var (ox, oy, oz) = chunk.Position.Origin;
+        var ceiling = oy + Chunk.Size;
+
+        for (var lz = 0; lz < Chunk.Size; lz++)
+        for (var lx = 0; lx < Chunk.Size; lx++)
+        {
+            var wx = ox + lx;
+            var wz = oz + lz;
+
+            var level = SkyInflow(world, wx, ceiling, wz);
+            if (level <= 0) continue;
+
+            for (var ly = Chunk.Size - 1; ly >= 0; ly--)
+            {
+                var wy = oy + ly;
+                var loss = _attenuation[BlockAt(world, wx, wy, wz)];
+                if (loss >= LightValue.Max) break;       // opaque: everything below stays dark
+
+                // ⛔ Deliberately the same arithmetic the flood uses one step downward.
+                level = Attenuate(level, loss, ChannelSky, down: true);
+                if (level <= 0) break;
+
+                SetChannel(world, wx, wy, wz, ChannelSky, level);
+                _additions[ChannelSky].Enqueue(new Node(wx, wy, wz));
+            }
+        }
+    }
+
+    /// <summary>Sunlight arriving at a cell from above, asked of the world first and the seed second.</summary>
+    /// <remarks>
+    /// ⚠ <b>The loaded chunk wins, and only when it is lit.</b> A chunk that is present but dark has
+    /// no answer yet — reading it would seed the chunk below with zero and leave it dark for good,
+    /// since nothing re-lights a chunk that has already been lit. Falling back to the generator is
+    /// safe in the other direction: the flood carries the real answer down when the chunk above
+    /// lights, and light arriving later only ever brightens.
+    /// </remarks>
+    private int SkyInflow(VoxelWorld world, int wx, int wy, int wz)
+    {
+        if (wy >= TerrainGenerator.WorldTop) return LightValue.Max;
+
+        var pos = ChunkPos.FromWorld(wx, wy, wz);
+        if (world.TryGetChunk(pos, out var above) && above.Lit)
+        {
+            return LightValue.Sky(
+                above.GetLight(wx & Chunk.SizeMask, wy & Chunk.SizeMask, wz & Chunk.SizeMask));
+        }
+
+        return _sky?.SkyLightAt(wx, wy, wz) ?? 0;
+    }
+
+    /// <summary>Re-offers the light standing in the one-block shell around a chunk, all six faces.</summary>
+    private void EnqueueChunkShell(VoxelWorld world, ChunkPos pos)
+    {
+        var (ox, oy, oz) = pos.Origin;
+        const int last = Chunk.Size - 1;
+
+        Face(pos.Offset(0, 0, -1), (a, b) => (ox + a, oy + b, oz - 1));
+        Face(pos.Offset(0, 0, 1), (a, b) => (ox + a, oy + b, oz + Chunk.Size));
+        Face(pos.Offset(-1, 0, 0), (a, b) => (ox - 1, oy + a, oz + b));
+        Face(pos.Offset(1, 0, 0), (a, b) => (ox + Chunk.Size, oy + a, oz + b));
+        Face(pos.Offset(0, -1, 0), (a, b) => (ox + a, oy - 1, oz + b));
+        Face(pos.Offset(0, 1, 0), (a, b) => (ox + a, oy + Chunk.Size, oz + b));
+
+        void Face(ChunkPos neighbour, Func<int, int, (int X, int Y, int Z)> cell)
+        {
+            // Asked once per face rather than once per cell. Most chunks at the edge of the loaded
+            // set have three or four absent neighbours, and a thousand dictionary misses each is
+            // most of what lighting a boundary chunk would otherwise cost.
+            if (!world.TryGetChunk(neighbour, out var chunk) || !chunk.Lit) return;
+
+            for (var a = 0; a <= last; a++)
+            for (var b = 0; b <= last; b++)
+            {
+                var (x, y, z) = cell(a, b);
+                var light = GetLight(world, x, y, z);
+                if (light == 0) continue;
+
+                for (var channel = 0; channel < ChannelCount; channel++)
+                    if (Channel(light, channel) > 0) _additions[channel].Enqueue(new Node(x, y, z));
+            }
+        }
     }
 
     /// <summary>
@@ -187,7 +314,7 @@ public sealed class LightEngine
     /// </remarks>
     public void UpdateBlock(VoxelWorld world, int wx, int wy, int wz)
     {
-        if (wy < 0 || wy >= TerrainGenerator.WorldHeight) return;
+        if (!TerrainGenerator.InWorld(wy)) return;
         ResetChunkCache();
         ResetCounters();
 
@@ -230,7 +357,7 @@ public sealed class LightEngine
             {
                 var n = Faces.Normals[face];
                 var ny = wy + n.Y;
-                if (ny < 0 || ny >= TerrainGenerator.WorldHeight) continue;
+                if (!TerrainGenerator.InWorld(ny)) continue;
                 _additions[channel].Enqueue(new Node(wx + n.X, ny, wz + n.Z));
             }
         }
@@ -257,11 +384,9 @@ public sealed class LightEngine
     /// </remarks>
     private void SeedColumn(VoxelWorld world, int cx, int cz)
     {
-        var chunksTall = TerrainGenerator.WorldHeight / Chunk.Size;
-
         // Start from nothing so re-lighting a column is the same operation as lighting it. What
         // was standing in it either gets re-derived here or re-offered from the shell.
-        for (var cy = 0; cy < chunksTall; cy++)
+        for (var cy = TerrainGenerator.ChunkBottom; cy < TerrainGenerator.ChunkTop; cy++)
         {
             if (!world.TryGetChunk(new ChunkPos(cx, cy, cz), out var chunk)) continue;
             Array.Clear(chunk.RawLight);
@@ -270,7 +395,7 @@ public sealed class LightEngine
 
         var ox = cx * Chunk.Size;
         var oz = cz * Chunk.Size;
-        var top = TerrainGenerator.WorldHeight - 1;
+        var top = TerrainGenerator.WorldTop - 1;
 
         for (var lz = 0; lz < Chunk.Size; lz++)
         for (var lx = 0; lx < Chunk.Size; lx++)
@@ -279,7 +404,7 @@ public sealed class LightEngine
             var wz = oz + lz;
             var level = LightValue.Max;
 
-            for (var wy = top; wy >= 0; wy--)
+            for (var wy = top; wy >= TerrainGenerator.WorldBottom; wy--)
             {
                 var loss = _attenuation[BlockAt(world, wx, wy, wz)];
                 if (loss >= LightValue.Max) break;   // opaque: everything below stays dark
@@ -301,9 +426,9 @@ public sealed class LightEngine
     {
         var ox = cx * Chunk.Size;
         var oz = cz * Chunk.Size;
-        var top = TerrainGenerator.WorldHeight - 1;
+        var top = TerrainGenerator.WorldTop - 1;
 
-        for (var wy = 0; wy <= top; wy++)
+        for (var wy = TerrainGenerator.WorldBottom; wy <= top; wy++)
         for (var i = 0; i < Chunk.Size; i++)
         {
             Offer(ox + i, wy, oz - 1);
@@ -383,7 +508,7 @@ public sealed class LightEngine
                 var nx = node.X + n.X;
                 var ny = node.Y + n.Y;
                 var nz = node.Z + n.Z;
-                if (ny < 0 || ny >= TerrainGenerator.WorldHeight) continue;
+                if (!TerrainGenerator.InWorld(ny)) continue;
 
                 LastNeighbourTests++;
                 var loss = _attenuation[BlockAt(world, nx, ny, nz)];
@@ -417,7 +542,7 @@ public sealed class LightEngine
                 var nx = node.X + n.X;
                 var ny = node.Y + n.Y;
                 var nz = node.Z + n.Z;
-                if (ny < 0 || ny >= TerrainGenerator.WorldHeight) continue;
+                if (!TerrainGenerator.InWorld(ny)) continue;
 
                 LastNeighbourTests++;
                 var level = Channel(GetLight(world, nx, ny, nz), channel);
@@ -505,7 +630,7 @@ public sealed class LightEngine
 
     private ushort GetLight(VoxelWorld world, int wx, int wy, int wz)
     {
-        if (wy < 0 || wy >= TerrainGenerator.WorldHeight) return 0;
+        if (!TerrainGenerator.InWorld(wy)) return 0;
 
         var chunk = ChunkAt(world, wx, wy, wz);
         return chunk?.GetLight(wx & Chunk.SizeMask, wy & Chunk.SizeMask, wz & Chunk.SizeMask) ?? 0;

@@ -29,7 +29,6 @@ public sealed class WorldStreamer : IDisposable
     private readonly TerrainGenerator _generator;
     private readonly BlockRegistry _registry;
     private readonly BlockTinter _tinter;
-    private readonly int _chunksTall;
     private readonly int _meshRadius;
 
     // Squared chunk distances, not radii. Each ring has to clear the one inside it by more than a
@@ -41,16 +40,59 @@ public sealed class WorldStreamer : IDisposable
     private readonly int _loadLimit;
     private readonly int _dropLimit;
 
+    /// <summary>Squared chunk distance for the ball of chunks round the viewer's own position.</summary>
+    private readonly int _deepLimit;
+
+    /// <summary>
+    /// Chunk layers above and below the viewer's own that count as near.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>Not the same number as the horizontal ring, and it must never share one.</b> The obvious
+    /// change — make the ring distances three-dimensional — makes the loaded set about six times
+    /// bigger rather than smaller: twelve chunks is 384 blocks and the whole world is only 320 tall,
+    /// so "within twelve chunks vertically" is every chunk there is. You can see 384 blocks along the
+    /// ground and about eight down a hole, and those are different quantities.
+    /// </remarks>
+    private const int VerticalBand = 2;
+
+    /// <summary>Wider than <see cref="VerticalBand"/>, so hopping over a seam does not thrash.</summary>
+    private const int VerticalDropBand = VerticalBand + 2;
+
+    /// <summary>
+    /// How far under its own surface the viewer has to be before the horizon stops being loaded.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>This is what makes the deep cheaper than the surface rather than dearer.</b> There are
+    /// exactly two things a player can see — the terrain surface out to the full ring, and the room
+    /// they are standing in — and once they are a hundred blocks underground the first of those is
+    /// not one of them.
+    /// </remarks>
+    private const int SurfaceRingDepth = 96;
+
+    /// <summary>
+    /// The chunk layers each column's terrain surface can occupy, worked out once per column.
+    /// </summary>
+    /// <remarks>
+    /// Free to ask: <see cref="TerrainGenerator.SurfaceHeight"/> is a pure function of x and z and
+    /// needs no chunk to exist. Nine samples over the chunk's own footprint, widened by a layer each
+    /// way — terrain's fastest octave has a 38-block wavelength and four blocks of amplitude, so a
+    /// sample every sixteen blocks cannot miss more than that and the margin covers it twice over.
+    /// </remarks>
+    private readonly Dictionary<(int X, int Z), (int Low, int High)> _surfaceBand = [];
+
+    /// <summary>False once the viewer is deep enough that the horizon is rock.</summary>
+    private bool _surfaceRing = true;
+
     private readonly VoxelWorld _world;
 
     /// <summary>Positions whose terrain is complete and safe for a neighbour to sample.</summary>
     private readonly ConcurrentDictionary<ChunkPos, bool> _generated = new();
 
-    /// <summary>Columns whose light has been computed, keyed by chunk (x, z).</summary>
-    private readonly ConcurrentDictionary<(int X, int Z), bool> _litColumns = new();
+    /// <summary>Chunks whose light has been computed.</summary>
+    private readonly ConcurrentDictionary<ChunkPos, bool> _litChunks = new();
 
     private readonly ConcurrentQueue<ChunkPos> _generateQueue = new();
-    private readonly ConcurrentQueue<(int X, int Z)> _lightQueue = new();
+    private readonly ConcurrentQueue<ChunkPos> _lightQueue = new();
     private readonly ConcurrentQueue<(int X, int Y, int Z)> _editQueue = new();
     private readonly ConcurrentQueue<ChunkPos> _meshQueue = new();
     private readonly ConcurrentQueue<ChunkMeshData> _finishedMeshes = new();
@@ -58,7 +100,7 @@ public sealed class WorldStreamer : IDisposable
 
     // Main-thread bookkeeping: what has already been asked for, so nothing is queued twice.
     private readonly HashSet<ChunkPos> _requested = [];
-    private readonly HashSet<(int X, int Z)> _lightRequested = [];
+    private readonly HashSet<ChunkPos> _lightRequested = [];
     private readonly HashSet<ChunkPos> _meshRequested = [];
 
     /// <summary>
@@ -87,7 +129,7 @@ public sealed class WorldStreamer : IDisposable
     /// </summary>
     private readonly SemaphoreSlim _lightWork = new(0);
 
-    private ChunkPos _lastCentre = new(int.MinValue, 0, int.MinValue);
+    private ChunkPos _lastCentre = new(int.MinValue, int.MinValue, int.MinValue);
     private int _generatingCount;
     private int _lightingCount;
     private int _meshingCount;
@@ -133,7 +175,12 @@ public sealed class WorldStreamer : IDisposable
         _loadLimit = Square(_meshRadius + 3f);
         _dropLimit = Square(_meshRadius + 5f);
 
-        _chunksTall = TerrainGenerator.WorldHeight / Chunk.Size;
+        // The ball round the viewer reaches as far as the drop ring, so nothing inside it can be
+        // dropped for being vertically out of band and then immediately wanted again — but never
+        // further than the horizontal ring itself, because a small world would otherwise load the
+        // whole of it twice over.
+        _deepLimit = Square(Math.Min(_meshRadius + 5f, 6f));
+
         _world = new VoxelWorld(registry);
 
         var count = workerCount > 0 ? workerCount : Math.Max(1, Environment.ProcessorCount - 3);
@@ -155,7 +202,7 @@ public sealed class WorldStreamer : IDisposable
     /// </remarks>
     public void EditBlock(int wx, int wy, int wz, BlockId id)
     {
-        if (wy < 0 || wy >= TerrainGenerator.WorldHeight) return;
+        if (!TerrainGenerator.InWorld(wy)) return;
 
         var pos = ChunkPos.FromWorld(wx, wy, wz);
         if (!_world.TryGetChunk(pos, out _)) return;
@@ -177,7 +224,7 @@ public sealed class WorldStreamer : IDisposable
     /// </remarks>
     public void TouchBlock(int wx, int wy, int wz)
     {
-        if (wy < 0 || wy >= TerrainGenerator.WorldHeight) return;
+        if (!TerrainGenerator.InWorld(wy)) return;
         if (!_world.TryGetChunk(ChunkPos.FromWorld(wx, wy, wz), out _)) return;
 
         _editQueue.Enqueue((wx, wy, wz));
@@ -216,7 +263,7 @@ public sealed class WorldStreamer : IDisposable
 
         void Fix(int x, int y, int z)
         {
-            if (y < 0 || y >= TerrainGenerator.WorldHeight) return;
+            if (!TerrainGenerator.InWorld(y)) return;
             if (!_world.TryGetChunk(ChunkPos.FromWorld(x, y, z), out _)) return;
             if (!table.TryRewire(_world, x, y, z, out var become)) return;
 
@@ -232,17 +279,94 @@ public sealed class WorldStreamer : IDisposable
     /// </summary>
     public void Update(Vector3 viewer)
     {
-        var centre = ChunkPos.FromWorld(
-            (int)MathF.Floor(viewer.X), 0, (int)MathF.Floor(viewer.Z));
+        var bx = (int)MathF.Floor(viewer.X);
+        var by = (int)MathF.Floor(viewer.Y);
+        var bz = (int)MathF.Floor(viewer.Z);
 
-        if (centre.X == _lastCentre.X && centre.Z == _lastCentre.Z) return;
+        var centre = ChunkPos.FromWorld(
+            bx, Math.Clamp(by, TerrainGenerator.WorldBottom, TerrainGenerator.WorldTop - 1), bz);
+
+        // Whether there is a horizon worth loading. Asked of the generator rather than of the world,
+        // so it costs three noise stacks and needs nothing to be loaded to answer it.
+        var horizon = by > _generator.SurfaceHeight(bx, bz) - SurfaceRingDepth;
+
+        if (centre == _lastCentre && horizon == _surfaceRing) return;
+
         _lastCentre = centre;
+        _surfaceRing = horizon;
 
         QueueGeneration(centre);
         DropDistant(centre);
     }
 
     private static int Square(float radius) => (int)MathF.Ceiling(radius * radius);
+
+    /// <summary>
+    /// Squared horizontal distance at which a chunk counts, or -1 when it is not wanted at all.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ <b>Two rings, not one, and that is the whole of vertical streaming.</b> There are
+    /// exactly two things a player can see: the terrain surface, out to the full ring — which across
+    /// a 384-block horizon spans about four chunk layers and no more — and the room they are standing
+    /// in, which underground is a handful of blocks in every direction. Everything else in a
+    /// 384-tall world is rock nobody will ever look at.</para>
+    /// <para>The vertical extent of the surface ring comes from the generator's own height field, so
+    /// a column knows which layers its terrain occupies without a single chunk existing. Deep enough
+    /// underground the surface ring is dropped altogether and only the ball is left, which is why
+    /// standing in the Emberdeep costs about a third of standing in a field.</para>
+    /// </remarks>
+    private int RingDistance(ChunkPos pos, ChunkPos centre)
+    {
+        var dx = pos.X - centre.X;
+        var dz = pos.Z - centre.Z;
+        var d2 = dx * dx + dz * dz;
+
+        if (d2 <= _deepLimit && Math.Abs(pos.Y - centre.Y) <= VerticalBand) return d2;
+        if (!_surfaceRing) return -1;
+
+        var (low, high) = SurfaceBand(pos.X, pos.Z);
+        return pos.Y >= low && pos.Y <= high ? d2 : -1;
+    }
+
+    /// <summary>The same question with a margin on it, so walking a seam does not thrash.</summary>
+    private bool WorthKeeping(ChunkPos pos, ChunkPos centre)
+    {
+        var dx = pos.X - centre.X;
+        var dz = pos.Z - centre.Z;
+        var d2 = dx * dx + dz * dz;
+        if (d2 > _dropLimit) return false;
+
+        if (d2 <= _deepLimit && Math.Abs(pos.Y - centre.Y) <= VerticalDropBand) return true;
+        if (!_surfaceRing) return false;
+
+        var (low, high) = SurfaceBand(pos.X, pos.Z);
+        return pos.Y >= low - 1 && pos.Y <= high + 1;
+    }
+
+    private (int Low, int High) SurfaceBand(int cx, int cz)
+    {
+        if (_surfaceBand.TryGetValue((cx, cz), out var band)) return band;
+
+        var ox = cx * Chunk.Size;
+        var oz = cz * Chunk.Size;
+        var min = int.MaxValue;
+        var max = int.MinValue;
+
+        for (var i = 0; i < 3; i++)
+        for (var j = 0; j < 3; j++)
+        {
+            var h = _generator.SurfaceHeight(
+                ox + Math.Min(i * (Chunk.Size / 2), Chunk.SizeMask),
+                oz + Math.Min(j * (Chunk.Size / 2), Chunk.SizeMask));
+
+            if (h < min) min = h;
+            if (h > max) max = h;
+        }
+
+        band = ((min >> Chunk.SizeLog2) - 1, (max >> Chunk.SizeLog2) + 1);
+        _surfaceBand[(cx, cz)] = band;
+        return band;
+    }
 
     private void QueueGeneration(ChunkPos centre)
     {
@@ -253,13 +377,16 @@ public sealed class WorldStreamer : IDisposable
         for (var dz = -reach; dz <= reach; dz++)
         for (var dx = -reach; dx <= reach; dx++)
         {
-            var d2 = dx * dx + dz * dz;
-            if (d2 > _loadLimit) continue;
+            if (dx * dx + dz * dz > _loadLimit) continue;
 
-            for (var cy = 0; cy < _chunksTall; cy++)
+            for (var cy = TerrainGenerator.ChunkBottom; cy < TerrainGenerator.ChunkTop; cy++)
             {
                 var pos = new ChunkPos(centre.X + dx, cy, centre.Z + dz);
+
+                var d2 = RingDistance(pos, centre);
+                if (d2 < 0 || d2 > _loadLimit) continue;
                 if (!_requested.Add(pos)) continue;
+
                 wanted.Add((pos, d2));
             }
         }
@@ -275,33 +402,50 @@ public sealed class WorldStreamer : IDisposable
 
     private void DropDistant(ChunkPos centre)
     {
-        var limit = _dropLimit;
         List<ChunkPos>? stale = null;
 
         foreach (var pos in _requested)
         {
-            var dx = pos.X - centre.X;
-            var dz = pos.Z - centre.Z;
-            if (dx * dx + dz * dz <= limit) continue;
+            if (WorthKeeping(pos, centre)) continue;
             (stale ??= []).Add(pos);
         }
 
-        if (stale is null) return;
-
-        foreach (var pos in stale)
+        if (stale is not null)
         {
-            _requested.Remove(pos);
-            _meshRequested.Remove(pos);
-            _generated.TryRemove(pos, out _);
-            _world.RemoveChunk(pos);
-            _dropped.Enqueue(pos);
+            foreach (var pos in stale)
+            {
+                _requested.Remove(pos);
+                _meshRequested.Remove(pos);
+                _generated.TryRemove(pos, out _);
+                _world.RemoveChunk(pos);
+                _dropped.Enqueue(pos);
 
-            // Forgetting a column's light along with its blocks matters: coming back, the column
-            // is regenerated from scratch and has to be re-lit from scratch. Leaving the flag set
-            // would leave the chunk dark for good.
-            _lightRequested.Remove((pos.X, pos.Z));
-            _litColumns.TryRemove((pos.X, pos.Z), out _);
+                // Forgetting a chunk's light along with its blocks matters: coming back, it is
+                // regenerated from scratch and has to be re-lit from scratch. Leaving the flag set
+                // would leave it dark for good.
+                _lightRequested.Remove(pos);
+                _litChunks.TryRemove(pos, out _);
+            }
         }
+
+        // The height cache grows with every column ever considered, and a long walk considers a lot
+        // of them. Pruned against the drop ring rather than the load ring so a step back and forth
+        // does not re-sample the same nine heights.
+        if (_surfaceBand.Count <= 4096) return;
+
+        var far = _dropLimit + _dropLimit;
+        List<(int X, int Z)>? cold = null;
+
+        foreach (var (cx, cz) in _surfaceBand.Keys)
+        {
+            var dx = cx - centre.X;
+            var dz = cz - centre.Z;
+            if (dx * dx + dz * dz <= far) continue;
+            (cold ??= []).Add((cx, cz));
+        }
+
+        if (cold is null) return;
+        foreach (var key in cold) _surfaceBand.Remove(key);
     }
 
     private async Task WorkerLoop()
@@ -374,7 +518,7 @@ public sealed class WorldStreamer : IDisposable
     /// </summary>
     private async Task LightLoop()
     {
-        var lighter = new LightEngine(_registry);
+        var lighter = new LightEngine(_registry, _generator);
         var token = _cancel.Token;
 
         while (!token.IsCancellationRequested)
@@ -405,13 +549,13 @@ public sealed class WorldStreamer : IDisposable
                 continue;
             }
 
-            if (!_lightQueue.TryDequeue(out var column)) continue;
+            if (!_lightQueue.TryDequeue(out var chunk)) continue;
 
             Interlocked.Increment(ref _lightingCount);
             try
             {
-                lighter.LightColumn(_world, column.X, column.Z);
-                _litColumns[column] = true;
+                lighter.LightChunk(_world, chunk);
+                _litChunks[chunk] = true;
             }
             finally
             {
@@ -433,36 +577,41 @@ public sealed class WorldStreamer : IDisposable
 
     private void PromoteToLighting()
     {
-        var limit = _lightLimit;
+        List<ChunkPos>? ready = null;
 
         foreach (var pos in _requested)
         {
-            if (pos.Y != 0) continue;   // one entry per column, not per chunk
+            if (_lightRequested.Contains(pos)) continue;
 
-            var column = (pos.X, pos.Z);
-            if (_lightRequested.Contains(column)) continue;
+            var d2 = RingDistance(pos, _lastCentre);
+            if (d2 < 0 || d2 > _lightLimit) continue;
 
-            var dx = pos.X - _lastCentre.X;
-            var dz = pos.Z - _lastCentre.Z;
-            if (dx * dx + dz * dz > limit) continue;
+            if (!NeighbourhoodGenerated(pos)) continue;
 
-            if (!ColumnNeighbourhoodGenerated(pos.X, pos.Z)) continue;
+            (ready ??= []).Add(pos);
+        }
 
-            _lightRequested.Add(column);
-            _lightQueue.Enqueue(column);
+        if (ready is null) return;
+
+        // ⛳ Top down. A chunk's ceiling is answered by the chunk above it when that one is already
+        // lit and by the generator when it is not — both are correct, since light arriving later
+        // only ever brightens and the flood carries it down — but the first needs no second pass.
+        ready.Sort(static (a, b) => b.Y.CompareTo(a.Y));
+
+        foreach (var pos in ready)
+        {
+            _lightRequested.Add(pos);
+            _lightQueue.Enqueue(pos);
             _lightWork.Release();
         }
     }
 
     private void PromoteToMeshing()
     {
-        var limit = _meshLimit;
-
         foreach (var pos in _requested)
         {
-            var dx = pos.X - _lastCentre.X;
-            var dz = pos.Z - _lastCentre.Z;
-            if (dx * dx + dz * dz > limit) continue;
+            var d2 = RingDistance(pos, _lastCentre);
+            if (d2 < 0 || d2 > _meshLimit) continue;
 
             if (!NeighboursLit(pos)) continue;
 
@@ -484,35 +633,42 @@ public sealed class WorldStreamer : IDisposable
         }
     }
 
-    /// <summary>True when a column and its eight neighbours have all finished generating.</summary>
+    /// <summary>True when a chunk and its twenty-six neighbours have all finished generating.</summary>
     /// <remarks>
-    /// Lighting reads a one-block shell around the column it is lighting, so the neighbours have to
-    /// be there — not lit, just present. Requiring them lit as well would deadlock: each column
-    /// would be waiting on the others.
+    /// Lighting reads a one-block shell around the chunk it is lighting, so the neighbours have to
+    /// be there — not lit, just present. Requiring them lit as well would deadlock: each would be
+    /// waiting on the others.
     /// </remarks>
-    private bool ColumnNeighbourhoodGenerated(int cx, int cz)
-    {
-        for (var dz = -1; dz <= 1; dz++)
-        for (var dx = -1; dx <= 1; dx++)
-        for (var cy = 0; cy < _chunksTall; cy++)
-        {
-            if (!_generated.ContainsKey(new ChunkPos(cx + dx, cy, cz + dz))) return false;
-        }
-
-        return true;
-    }
+    private bool NeighbourhoodGenerated(ChunkPos pos) => Neighbourhood(pos, _generated);
 
     /// <summary>
-    /// True when every cell the mesher will sample is settled — generated and lit. Positions above
-    /// or below the world count as ready: they are permanently empty, so waiting on them would
-    /// stall the top and bottom slabs forever.
+    /// True when every cell the mesher will sample is settled — generated and lit.
     /// </summary>
-    private bool NeighboursLit(ChunkPos pos)
+    private bool NeighboursLit(ChunkPos pos) => Neighbourhood(pos, _litChunks);
+
+    /// <remarks>
+    /// ⛔ <b>A neighbour that was never asked for counts as ready, and without that rule vertical
+    /// streaming deadlocks.</b> Every chunk on the top or bottom face of the loaded band has a
+    /// neighbour beyond it that nothing will ever request; waiting for it means that chunk is never
+    /// lit, never meshed, and shows up as a missing slab of world. Positions outside the world count
+    /// the same way and always did — they are permanently empty.
+    /// <para>Safe because <see cref="QueueGeneration"/> fills <see cref="_requested"/> for the whole
+    /// wanted set before anything is promoted, so "not requested" means "outside the set" rather than
+    /// "not asked for yet". A neighbour that becomes wanted later can only make this chunk brighter,
+    /// which the flood carries in on its own.</para>
+    /// </remarks>
+    private bool Neighbourhood<T>(ChunkPos pos, System.Collections.Concurrent.ConcurrentDictionary<ChunkPos, T> done)
     {
+        for (var dy = -1; dy <= 1; dy++)
         for (var dz = -1; dz <= 1; dz++)
         for (var dx = -1; dx <= 1; dx++)
         {
-            if (!_litColumns.ContainsKey((pos.X + dx, pos.Z + dz))) return false;
+            var n = pos.Offset(dx, dy, dz);
+            if (n.Y < TerrainGenerator.ChunkBottom || n.Y >= TerrainGenerator.ChunkTop) continue;
+            if (done.ContainsKey(n)) continue;
+            if (!_requested.Contains(n)) continue;
+
+            return false;
         }
 
         return true;
