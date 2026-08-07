@@ -5334,11 +5334,22 @@ public sealed class ClientHost : IDisposable
     /// </summary>
     /// <remarks>
     /// Only while walking. The fly camera is an inspection tool and a tool that can drown you is a
-    /// worse one; nothing is simulated for it and the bar stays where it was.
+    /// worse one, so nothing is simulated for it.
+    /// ⛔⛔ <b>But the bar used to STAY WHERE IT WAS, and that is a bar that lies.</b> Reported by the
+    /// user: the bubbles were <i>"not reducing while you're in the water"</i> and <i>"should disappear
+    /// entirely when you leave the water but they don't"</i>. Both are the same state — air stopped
+    /// half spent the moment the body stopped being stepped, so it never went down, never came back,
+    /// and the row sat on screen for the rest of the session showing a number that had stopped meaning
+    /// anything. The lungs are simply full while nothing is being simulated, which is the honest
+    /// reading of "you cannot drown right now" and which the bar already knows how to hide on.
     /// </remarks>
     private void StepVitals(float dt)
     {
-        if (_bench is not null || !_walking || !_spawned) return;
+        if (_bench is not null || !_walking || !_spawned)
+        {
+            _vitals.CatchBreath();
+            return;
+        }
 
         var what = _vitals.Update(_streamer.World, _player, dt);
 
@@ -7176,6 +7187,15 @@ public sealed class ClientHost : IDisposable
         // until the day the world got three times taller and stopped lining up with them.
         if (_tipStage is > 0 and < 5 && _uiCheckFrame < 118) StepTooltipProbe(size);
 
+        // ⚠ Polled every frame and ended by the clock rather than by a frame number, then the window
+        // is closed from here. Written into the switch below it would be a window in FRAMES around a
+        // claim about SECONDS, which at five thousand frames a second measures nothing at all.
+        if (_airStage > 0)
+        {
+            StepAirProbe();
+            if (_airStage == 5) { JudgeUi(); _window.Close(); }
+        }
+
         // A few frames to let the world stream in, then each screen in turn.
         switch (_uiCheckFrame)
         {
@@ -7418,14 +7438,133 @@ public sealed class ClientHost : IDisposable
             case 340:
                 SampleUi(size, "furnace");
                 ProbeFireBook(size);
-                break;
 
-            case 341: JudgeUi(); _window.Close(); break;
+                // ⛳ Started here and POLLED to its own end, because what follows is measured in
+                // seconds of game time and this script is written in frames.
+                CloseScreen();
+                _airStage = 1;
+                break;
         }
     }
 
     /// <summary>What the fire's book came to: rows laid out, and rows that reached the screen.</summary>
     private (int Page, int Foods, int Drawn, bool Loaded) _uiFire = (-1, -1, -1, false);
+
+    private int _airStage;
+    private double _airDeadline;
+    private int _airFrom = -1;
+    private int _airTo = -1;
+    private double _airTook = -1;
+
+    /// <summary>
+    /// Watches breath come back to full through the client's own loop, in seconds of game time.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛔⛔ <b>Reported by the user after the first fix: the bubbles <i>"should disappear
+    /// entirely when you leave the water but they don't"</i>.</b> The bar is hidden by breath reaching
+    /// its maximum, so a refill that stalls even one tick short leaves it on screen for the rest of
+    /// the session — and every check in the project was green, because the audit drives
+    /// <c>PlayerVitals.Update</c> directly in a pool it builds itself and never once goes through
+    /// <c>StepVitals</c>, the frame loop, or the client's own <c>dt</c>.</para>
+    /// <para>⛳ <b>Watched in SECONDS, polled, never over a fixed number of frames.</b> At the five
+    /// thousand frames a second this runs at, forty frames is eight milliseconds and a tick of air is
+    /// sixteen — a frame-counted window would measure the frame rate and call a stalled bar healthy.
+    /// </para>
+    /// </remarks>
+    private void StepAirProbe()
+    {
+        switch (_airStage)
+        {
+            // Half a lungful, put in the way a save does, then left alone on dry land.
+            case 1:
+                _vitals.Restore(PlayerVitals.MaxHealth, PlayerVitals.MaxBreath / 2);
+                _airFrom = _vitals.Breath;
+                _airDeadline = _elapsed + 6.0;
+                _airStage = 2;
+                break;
+
+            case 2 when _vitals.Breath >= PlayerVitals.MaxBreath || _elapsed >= _airDeadline:
+                _airTo = _vitals.Breath;
+                _airTook = _elapsed - (_airDeadline - 6.0);
+
+                Console.WriteLine(
+                    $"ui-check    air back   {_airFrom} to {_airTo} of {PlayerVitals.MaxBreath} in "
+                    + $"{_airTook:F2}s of game time, submerged {_vitals.Submerged}");
+                Console.Out.Flush();
+
+                // ⛳⛳ AND NOW THE HALF NOTHING HAS EVER DRIVEN: a head actually under water, in the
+                // real client, through the real frame loop. Every drowning check in the project builds
+                // its own pool and calls PlayerVitals.Update by hand — which is the shape of check
+                // this project has been caught by twice.
+                Sink();
+                _airDivedFrom = _vitals.Breath;
+                _airDeadline = _elapsed + 3.0;
+                _airStage = 3;
+                break;
+
+            case 3 when _elapsed >= _airDeadline:
+                _airDivedTo = _vitals.Breath;
+                _airSubmerged = _vitals.Submerged;
+
+                Console.WriteLine(
+                    $"ui-check    air under  {_airDivedFrom} to {_airDivedTo} of "
+                    + $"{PlayerVitals.MaxBreath} after 3s under water, submerged {_airSubmerged}");
+                Console.Out.Flush();
+
+                // ⛳⛳ AND THE STATE THE USER WAS ACTUALLY IN: a body that is not being simulated,
+                // still under water, with the air already half spent. The bar used to freeze exactly
+                // there and stay for the session. Held for a real second of game time, because the
+                // claim is about what happens over time and this loop runs at thousands of frames.
+                _walking = false;
+                _airDeadline = _elapsed + 1.0;
+                _airStage = 4;
+                break;
+
+            case 4 when _elapsed >= _airDeadline:
+                _airUnsimulated = _vitals.Breath;
+                _walking = true;
+                _airStage = 5;
+
+                Console.WriteLine(
+                    $"ui-check    air unsim  {_airDivedTo} to {_airUnsimulated} of "
+                    + $"{PlayerVitals.MaxBreath} after a second under water with the body not stepped");
+                Console.Out.Flush();
+                break;
+        }
+    }
+
+    private int _airDivedFrom = -1;
+    private int _airDivedTo = -1;
+    private int _airUnsimulated = -1;
+    private bool _airSubmerged;
+
+    /// <summary>Campfire dinners drawn, read while the fire was still standing.</summary>
+    private int _cookingSeen = -1;
+
+    /// <summary>
+    /// Buries the body in a sealed box of water, so the head is genuinely under.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>Sealed, and the shell is why.</b> Water dropped into open air is a cell the flow engine
+    /// quite correctly drains, so a probe that placed a few blocks and looked a second later would be
+    /// measuring how fast a puddle disappears. Stone all the way round gives it nowhere to go.
+    /// </remarks>
+    private void Sink()
+    {
+        var at = _player.Position;
+        var (x, y, z) = ((int)MathF.Floor(at.X), (int)MathF.Floor(at.Y), (int)MathF.Floor(at.Z));
+
+        var stone = _registry.ByName("stone").Id;
+        var water = _registry.ByName("water").Id;
+
+        for (var dy = -1; dy <= 4; dy++)
+        for (var dz = -2; dz <= 2; dz++)
+        for (var dx = -2; dx <= 2; dx++)
+        {
+            var shell = dy is -1 or 4 || dz is -2 or 2 || dx is -2 or 2;
+            _streamer.EditBlock(x + dx, y + dy, z + dz, shell ? stone : water);
+        }
+    }
 
     /// <summary>
     /// Builds a real furnace beside the player and opens it, with something to cook in hand.
@@ -7526,6 +7665,11 @@ public sealed class ClientHost : IDisposable
         }
 
         _uiFire = (page, foods, drawn, loaded);
+
+        // ⛔ Read HERE, while the campfire still exists. The air probe that runs after this seals the
+        // player into a box of stone and water and buries the fire doing it, so taken at the end this
+        // read zero and fired — a check measuring a subject another check had already demolished.
+        _cookingSeen = CookingDrawn;
 
         Console.WriteLine(
             $"ui-check    fire book  {page} rows laid out of {_hudScreen.Recipes.Count}, {foods} of them "
@@ -8785,8 +8929,37 @@ public sealed class ClientHost : IDisposable
         // ⚠ A COUNTER, and said as one. It proves the campfire's dinner was enumerated, its kind
         // resolved and its transform built without throwing — not that a steak is on the screen.
         // The breath bar next to it is the measurement that earned the stronger word.
-        if (CookingDrawn <= 0)
+        // ⛔ Read where the fire still EXISTS. Taken at the end it read zero and fired, correctly:
+        // the air probe seals the player into a box of stone and water and buries the campfire doing
+        // it. A check that runs after another one has demolished its subject is measuring the wrong
+        // thing, and the honest answer is to read it before rather than to loosen it.
+        if (_cookingSeen <= 0)
             faults.Add("a lit campfire with meat on it drew nothing on the fire");
+
+        // ── Air, driven through the client's own loop rather than through a fixture ──────────────
+        //
+        // ⛔⛔ EVERY DROWNING CHECK IN THIS PROJECT BUILDS ITS OWN POOL AND CALLS PlayerVitals.Update
+        // BY HAND. None of them goes through StepVitals, the frame loop, or the client's own dt —
+        // which is the shape of check this project has now been caught by three times.
+        if (_airTo < PlayerVitals.MaxBreath)
+            faults.Add(
+                $"breath stopped at {_airTo} of {PlayerVitals.MaxBreath} on dry land after "
+                + $"{_airTook:F1}s, so the bubbles never leave the screen");
+
+        if (!_airSubmerged)
+            faults.Add("a head sealed inside a box of water was not submerged, so nothing was measured");
+        else if (_airDivedTo >= _airDivedFrom)
+            faults.Add(
+                $"three seconds under water took breath from {_airDivedFrom} to {_airDivedTo} — it is "
+                + "not being spent at all");
+
+        // ⛳ AND THE STATE THE USER WAS IN. A body that is not being simulated used to leave the air
+        // exactly where it stood: not going down under water, not coming back on land, and the row
+        // stuck on screen showing a number that had stopped meaning anything.
+        if (_airUnsimulated < PlayerVitals.MaxBreath)
+            faults.Add(
+                $"with the body not being stepped the air sat at {_airUnsimulated} of "
+                + $"{PlayerVitals.MaxBreath} under water, so the bar freezes half spent and stays");
 
         UiCheckFailed = faults.Count > 0;
 

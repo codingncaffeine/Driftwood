@@ -233,6 +233,30 @@ public sealed class PlayerVitals
         return whole;
     }
 
+    /// <summary>
+    /// Fills the lungs, for whenever the body is not being simulated at all.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛔⛔ <b>A frozen bar is worse than no bar, and this is the second thing the user reported
+    /// about the bubbles: they <i>"should disappear entirely when you leave the water but they
+    /// don't"</i> and were <i>"not reducing while you're in the water"</i>.</b> Both are one state.
+    /// The client does not step vitals for the fly camera — quite rightly, an inspection tool that can
+    /// drown you is a worse inspection tool — and the note on that guard said outright that <i>the bar
+    /// stays where it was</i>. So air stopped half spent: it did not go down under water, it did not
+    /// come back on land, and the bar sat there for the rest of the session showing whatever fraction
+    /// it had reached when the body stopped being simulated.</para>
+    /// <para>⛳ <b>Full rather than hidden by some other flag.</b> "You cannot drown right now" and
+    /// "your lungs are full" are the same fact, and saying it in the one number the bar already reads
+    /// means nothing else has to learn about the fly camera — the bar hides itself, because a full
+    /// lungful is exactly what it hides on.</para>
+    /// </remarks>
+    public void CatchBreath()
+    {
+        Breath = MaxBreath;
+        _breathCarry = 0.0;
+        _drowningFor = 0f;
+    }
+
     /// <summary>Half-hearts remaining, 0 to <see cref="MaxHealth"/>.</summary>
     public int Health { get; private set; } = MaxHealth;
 

@@ -3556,7 +3556,16 @@ public static class WorldAudit
 
             if (backWorn.At((int)EquipSlot.Offhand).Count != 8) faults.Add("what was in the other hand did not come back");
             if (backVitals.Health != 13) faults.Add($"health came back as {backVitals.Health}");
-            if (backVitals.Breath != 220) faults.Add($"breath came back as {backVitals.Breath}");
+            // ⛔ FULL, from a world written holding 220. This states a decision rather than a value:
+            // a breath count is ticks against a maximum the file does not record, so the day a lungful
+            // went from 300 to 900 every existing world opened a third full, on dry land, with the
+            // bubbles showing and no way for anybody to guess why. Reported exactly that way — they
+            // "started at looking over half gone". There is no reading of that field that survives the
+            // constant changing, and air refills in under four seconds anyway.
+            if (backVitals.Breath != PlayerVitals.MaxBreath)
+                faults.Add(
+                    $"a world written holding 220 ticks of air came back with {backVitals.Breath} of "
+                    + $"{PlayerVitals.MaxBreath} rather than a full lungful");
             if (backUnlocks.Announced != 2) faults.Add($"{backUnlocks.Announced} unlocks came back of 2");
             if (Math.Abs(into.Position.X - 1.5f) > 0.001f) faults.Add("the player came back somewhere else");
 
@@ -4985,15 +4994,35 @@ public static class WorldAudit
         // steps at exactly one sixtieth — where Ceiling(1.0) is 1 and the wrong rate is accidentally
         // the right one. What is claimed is that AIR IS SPENT IN SECONDS, and the only way to state
         // that is to run the same dive at two frame rates and get the same answer in seconds.
-        var fast = Drown(1f / 500f);
+        // ⛔ FIVE THOUSAND, because that is what --bench actually measures on this machine and 500 is
+        // not close enough to it to be evidence. A rate that survives 500 and dies at 5,000 is a rate
+        // nobody would find from the check while every player found it in the water.
+        var fast = Drown(1f / 5000f);
+        var mid = Drown(1f / 500f);
         var slow = Drown(1f / 30f);
 
-        if (fast < 0f || slow < 0f)
-            faults.Add("a dive never ran the breath out at all, so the rate could not be measured");
-        else if (MathF.Abs(fast - slow) > 1f)
+        if (fast < 0f || mid < 0f || slow < 0f)
             faults.Add(
-                $"breath lasted {fast:F2}s at 500 fps and {slow:F2}s at 30 fps — it is being spent "
-                + "per FRAME rather than per second, so it empties as fast as the machine draws");
+                $"a dive never ran the breath out at all — {fast:F2}s at 5000 fps, {mid:F2}s at 500, "
+                + $"{slow:F2}s at 30 — so the rate could not be measured");
+        else if (MathF.Abs(fast - slow) > 1f || MathF.Abs(mid - slow) > 1f)
+            faults.Add(
+                $"breath lasted {fast:F2}s at 5000 fps, {mid:F2}s at 500 and {slow:F2}s at 30 — it is "
+                + "being spent per FRAME rather than per second, so it empties as fast as the machine draws");
+
+        // ⛔⛔ AND THAT IT COMES BACK, at the same three rates. Reported by the user: the bubbles
+        // "should disappear entirely when you leave the water but they don't". The bar is hidden by
+        // breath reaching its maximum, so a refill that stalls one tick short leaves it on screen for
+        // ever — and every drain check in this file would still be green.
+        foreach (var (rate, name) in ((float, string)[])[(1f / 5000f, "5000"), (1f / 500f, "500"), (1f / 30f, "30")])
+        {
+            var back = Surface(rate);
+            if (back < 0f)
+                faults.Add($"at {name} fps breath never came back to full out of the water, so the "
+                         + "bubbles never leave the screen");
+            else if (back > 6f)
+                faults.Add($"at {name} fps breath took {back:F2}s to come back, which is not relief");
+        }
 
         // And surfacing gives it back faster than it went.
         var refilled = -1;
@@ -5066,6 +5095,35 @@ public static class WorldAudit
                 air.Update(pool, diver, step);
 
                 if (air.Breath == 0) return i * step;
+            }
+
+            return -1f;
+        }
+
+        // ⛳ Emptied under water, then stood on dry land and watched until it is FULL — not until it
+        // has moved. "It is coming back" is true of a refill that stops one tick short, and one tick
+        // short is exactly the state that keeps the bar on screen for the rest of the session.
+        float Surface(float step)
+        {
+            var diver = new PlayerBody(registry);
+            var air = new PlayerVitals(registry);
+            diver.Teleport(new Vector3(0.5f, 11f, 0.5f));
+
+            for (var i = 0; i < (int)(30f / step) && air.Breath > 0; i++)
+            {
+                diver.Step(pool, step, Vector3.Zero, false, false, false);
+                air.Update(pool, diver, step);
+            }
+
+            if (air.Breath != 0) return -1f;
+
+            // High and dry, in the world the rest of this check uses.
+            diver.Teleport(new Vector3(0.5f, 40f, 0.5f));
+
+            for (var i = 0; i < (int)(30f / step); i++)
+            {
+                air.Update(world, diver, step);
+                if (air.Breath >= PlayerVitals.MaxBreath) return i * step;
             }
 
             return -1f;

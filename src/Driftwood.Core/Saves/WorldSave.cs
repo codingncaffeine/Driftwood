@@ -713,6 +713,20 @@ public static class WorldSave
             ? from.ReadInt32()
             : PlayerVitals.MaxFood;
 
-        into.Vitals.Restore(health, breath, food);
+        // ⛔⛔ AIR COMES BACK FULL, and the saved number is deliberately not used.
+        //
+        // Reported by the user, of a world opened after a lungful went from 300 ticks to 900: the
+        // bubbles "started at looking over half gone". They had. A breath count is a number of ticks
+        // against a maximum the FILE does not record, so a world written when a lungful was 300 reads
+        // back as 300 of 900 — a third of a bar, on a player standing on dry land, for no reason they
+        // could see and with no way to guess it. There is no reading of that field that survives the
+        // constant changing, and there never will be.
+        //
+        // ⛳ Full is also the right answer on its own terms. Air is fifteen seconds of a resource that
+        // refills in under four; it is not a thing worth carrying across a session, and nobody should
+        // open a save already drowning. ⚠ The field is still READ, so the section stays the length the
+        // writer wrote and anything added after it lands where it should.
+        _ = breath;
+        into.Vitals.Restore(health, PlayerVitals.MaxBreath, food);
     }
 }
