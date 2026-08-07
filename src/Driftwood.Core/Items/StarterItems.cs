@@ -319,6 +319,23 @@ public static class StarterItems
             },
         });
 
+        items.Register(new ItemType
+        {
+            Name = "smoker", Label = "smoker", IconLayer = StarterBlocks.LayerSmokerFront,
+            DrawsAsBlock = true,
+            Places = new Placeable
+            {
+                Label = "smoker",
+                Kind = PlacementKind.Facing,
+                Variants = StarterBlocks.Smokers(blocks, lit: false),
+            },
+        });
+
+        // ⛳ A barrel takes no facing at all, which is the one way it differs from every station
+        // registered above it: a chest and three smelters all have a front, and a barrel opens
+        // upward, so there is nothing to point.
+        Block(items, blocks, "barrel", "barrel", StarterBlocks.LayerBarrelSide);
+
         // Loose things: nothing puts these down, and half the recipe tree is made of them.
         Loose(items, "stick", "stick", StarterBlocks.LayerStick, burn: 5f);
         Loose(items, "coal", "coal", StarterBlocks.LayerCoal, burn: 80f);
@@ -602,6 +619,14 @@ public static class StarterItems
         new BlockDrops.Rule("blast_furnace_west_lit", "blast_furnace"),
         new BlockDrops.Rule("blast_furnace_south_lit", "blast_furnace"),
         new BlockDrops.Rule("blast_furnace_north_lit", "blast_furnace"),
+
+        // ⚠ And the smoker's, which is the same rule a third time: a burning station and a cold one
+        // are the same object, so breaking either has to leave exactly one of it. Missing these is
+        // how a player loses a station by breaking it while something was cooking.
+        new BlockDrops.Rule("smoker_east_lit", "smoker"),
+        new BlockDrops.Rule("smoker_west_lit", "smoker"),
+        new BlockDrops.Rule("smoker_south_lit", "smoker"),
+        new BlockDrops.Rule("smoker_north_lit", "smoker"),
 
         // And a fire that has gone out is still a campfire. The item places the lit pair, so it is
         // the other two that need saying — the same shape of rule, from the other side.

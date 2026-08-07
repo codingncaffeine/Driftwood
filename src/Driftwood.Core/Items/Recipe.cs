@@ -264,6 +264,14 @@ public enum FurnaceKind
 
     /// <summary>A blast furnace. Ore only, in half the time.</summary>
     Blast,
+
+    /// <summary>A smoker. Food only, in half the time.</summary>
+    /// <remarks>
+    /// ⛳ The same machine as the blast furnace one axis over, which is exactly why this is an enum
+    /// and not a bool: a specialised smelter is "one kind of work, twice as fast", and the kind is
+    /// the only thing that varies between them.
+    /// </remarks>
+    Smoker,
 }
 
 /// <summary>What each kind of smelter will take, and how fast.</summary>
@@ -271,13 +279,27 @@ public static class FurnaceKinds
 {
     /// <summary>How long a smelt takes here, against what the recipe says on its own.</summary>
     /// <remarks>
-    /// ⚠ <b>Half, and that is the whole of what a blast furnace is for.</b> It costs five iron and
-    /// a furnace and it takes nothing but ore, so what it gives back has to be worth walking to —
-    /// and the genre's answer, which is the right one, is that it is simply twice as quick.
+    /// ⚠ <b>Half, and that is the whole of what a specialised smelter is for.</b> A blast furnace
+    /// costs five iron and a furnace and takes nothing but ore; a smoker costs four logs and a
+    /// furnace and takes nothing but food. What each gives back has to be worth walking to, and the
+    /// genre's answer — which is the right one — is that it is simply twice as quick.
     /// </remarks>
-    public static float SpeedOf(FurnaceKind kind) => kind == FurnaceKind.Blast ? 0.5f : 1f;
+    public static float SpeedOf(FurnaceKind kind) => kind == FurnaceKind.Furnace ? 1f : 0.5f;
+
+    /// <summary>What one kind will take, or null for the furnace, which takes everything.</summary>
+    /// <remarks>
+    /// ⛔ Written as "which work does this kind do" rather than as a chain of ifs, because the chain
+    /// is what a third kind breaks: the old test was <c>kind != Blast || work == Ore</c>, which is
+    /// true of a smoker for every job in the game and would have made it a plain furnace that
+    /// happens to be quicker at everything.
+    /// </remarks>
+    public static SmeltWork? Only(FurnaceKind kind) => kind switch
+    {
+        FurnaceKind.Blast => SmeltWork.Ore,
+        FurnaceKind.Smoker => SmeltWork.Food,
+        _ => null,
+    };
 
     /// <summary>True when a smelter of this kind will do this job at all.</summary>
-    public static bool Takes(FurnaceKind kind, SmeltWork work) =>
-        kind != FurnaceKind.Blast || work == SmeltWork.Ore;
+    public static bool Takes(FurnaceKind kind, SmeltWork work) => Only(kind) is not { } only || work == only;
 }

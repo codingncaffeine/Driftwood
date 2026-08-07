@@ -2738,10 +2738,38 @@ public static class WorldAudit
         var refused = SmeltRun(sand, 1, FurnaceKind.Blast);
         if (refused >= 0f) faults.Add("a blast furnace with sand in it smelted it anyway");
 
+        // ⛳ AND THE SMOKER, which is the same claim on a different axis — and the pair with the
+        // blast furnace is what makes either mean anything. ⛔ The old test for "will this smelter
+        // take this job" was `kind != Blast || work == Ore`, which is TRUE OF A SMOKER FOR EVERY JOB
+        // IN THE GAME: it would have been a plain furnace that happened to be twice as fast at
+        // melting sand, and every check above would have passed it. So each specialised kind is
+        // asked for the thing it takes AND for the thing the other one takes.
+        var meat = items.ByName("raw_beef").Id;
+
+        if (book.SmeltFor(meat, FurnaceKind.Smoker) is null)
+            faults.Add("a smoker will not cook meat, which is the only thing it is for");
+        if (book.SmeltFor(meat, FurnaceKind.Blast) is not null)
+            faults.Add("a blast furnace cooked a steak");
+        if (book.SmeltFor(iron, FurnaceKind.Smoker) is not null)
+            faults.Add("a smoker reduced an ore, so it is a furnace with a different picture");
+        if (book.SmeltFor(sand, FurnaceKind.Smoker) is not null)
+            faults.Add("a smoker melted sand");
+        if (book.SmeltFor(meat, FurnaceKind.Furnace) is null)
+            faults.Add("a plain furnace will not cook meat, so refusing it above proves nothing");
+
+        var cooked = SmeltRun(meat, 4, FurnaceKind.Smoker);
+        var overFire = SmeltRun(meat, 4, FurnaceKind.Furnace);
+
+        if (cooked < 0f || overFire < 0f) faults.Add("a smelter never finished four steaks");
+        else if (cooked > overFire * 0.6f)
+            faults.Add($"a smoker took {cooked:F2}s over four steaks where a furnace took "
+                     + $"{overFire:F2}s — it is meant to be half");
+
         detail = $"{Ore} ore into {Ore} ingots in {doneAfter:F0}s on {burnt} planks of {perFuel:F0}s; "
                + "idle burns nothing, unfuelled makes no progress, a full one stops, and the flame is "
                + $"reported both ways. A blast furnace does the same four in {blast:F0}s against "
-               + $"{plain:F0}s and will not touch sand";
+               + $"{plain:F0}s and will not touch sand; a smoker does four steaks in {cooked:F0}s "
+               + $"against {overFire:F0}s and will not touch ore";
 
         return faults;
     }
@@ -5445,7 +5473,15 @@ public static class WorldAudit
         // now, so "the last one" is a fact about the shield rather than about whatever is newest.
         (StarterBlocks.LayerFirstArmour, "leather_helmet"),
         ((ushort)(StarterBlocks.LayerShield - 1), "stormglass_boots"),
-        ((ushort)(StarterBlocks.LayerCount - 1), "shield"),
+        (StarterBlocks.LayerShield, "shield"),
+
+        // ⛳ THE "LAST LAYER" PIN HAS NOW FIRED THREE TIMES IN ONE SESSION and it is right every
+        // time: it is a true statement about a table until something is appended, which is what
+        // makes it the one pin that catches an append at all. The rule that came out of it is to
+        // pin the OLD end by its own constant on the way past — as smoke and the shield are above —
+        // so the moving claim only ever covers the newest run.
+        (StarterBlocks.LayerSmokerTop, "smoker_top"),
+        ((ushort)(StarterBlocks.LayerCount - 1), "barrel_side"),
     ];
 
     private static List<string> TextureSelfTest()

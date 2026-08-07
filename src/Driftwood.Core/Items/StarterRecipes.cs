@@ -204,6 +204,16 @@ public static class StarterRecipes
         // makes it a second, deliberate visit to the fire rather than a thing found in a wall.
         Shaped("blast furnace", "blast_furnace", 1, ["III", "IFI", "MMM"], "smooth_stone");
 
+        // ⛳ A furnace boxed in timber. It costs four logs and the furnace you already built, which
+        // puts it a long way below the blast furnace on purpose — one is a trip underground and the
+        // other is a walk to a tree, and what separates them is which half of the game they serve.
+        Shaped("smoker", "smoker", 1, [" W ", "WFW", " W "]);
+
+        // ⛳ A barrel: six planks round a hole with a lid of slabs. It holds what a chest holds and
+        // opens upward, so it is the container for a cellar with a low ceiling — and it is cheaper
+        // than a chest because being able to reach it is a condition rather than a given.
+        Shaped("barrel", "barrel", 1, ["PSP", "P P", "PSP"]);
+
         // Light. Either coal will do — the one that comes out of the ground and the one that comes
         // out of a furnace are the same thing on the end of a stick.
         Shaped("torch", "torch", 4, ["C", "S"]);

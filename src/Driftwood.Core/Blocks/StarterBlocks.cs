@@ -312,7 +312,26 @@ public static class StarterBlocks
     public const ushort LayerShield =
         LayerFirstArmour + ArmourPieceCount * ArmourMaterialCount;
 
-    public const int LayerCount = LayerShield + 1;
+    /// <summary>
+    /// The smoker: the third smelter, and the one that is told apart by its MATERIAL.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ A furnace is grey cobble with an arch and a blast furnace is dark brick with a letterbox —
+    /// two stations already distinguished by shape as well as shade, per the note on
+    /// <see cref="Textures.TileGen.Hearth"/>. A third grey box would have run that argument out of
+    /// road, so this one is made of timber: it is a different colour from ten blocks away, which is
+    /// what "told apart in a row along a wall" actually asks for.
+    /// </remarks>
+    public const ushort LayerSmokerTop = LayerShield + 1;
+    public const ushort LayerSmokerSide = LayerShield + 2;
+    public const ushort LayerSmokerFront = LayerShield + 3;
+    public const ushort LayerSmokerFrontLit = LayerShield + 4;
+
+    /// <summary>The barrel: a chest that opens upward, so it has a lid and a stave.</summary>
+    public const ushort LayerBarrelTop = LayerShield + 5;
+    public const ushort LayerBarrelSide = LayerShield + 6;
+
+    public const int LayerCount = LayerBarrelSide + 1;
 
     public sealed record Ids(
         BlockId Stone,
@@ -839,6 +858,46 @@ public static class StarterBlocks
                     Placeable.Facings[i]),
             });
 
+        // ⛳ The third smelter, and the one #58 said was blocked on content rather than on a system:
+        // a smoker with nothing edible in the game is a station that opens an empty list. There are
+        // eight meats now, so it has work. Same machine as the blast furnace one axis over — food
+        // only, in half the time — which is the shape of a specialised smelter and the reason
+        // FurnaceKind is an enum rather than a bool.
+        for (var i = 0; i < Placeable.Facings.Length; i++)
+        foreach (var lit in (bool[])[false, true])
+            registry.Register(new BlockType
+            {
+                Name = $"smoker_{FacingNames[i]}{(lit ? "_lit" : "")}",
+                Hardness = 3.5f, Crafted = true, Use = BlockUse.Furnace,
+                HarvestClass = ToolClass.Axe, HarvestTier = 0,
+                Sounds = SoundMaterial.Wood,
+
+                // Warmer and softer than either stone smelter: a cooking fire behind boards.
+                LightEmission = lit ? LightValue.PackBlock(13, 8, 3) : (ushort)0,
+
+                // ⚠ The heaviest smoke of the three, and on purpose — it is the one whose whole
+                // point is that something is cooking in it, and a kitchen chimney is what says so
+                // from across a field.
+                SmokeScale = lit ? 0.72f : 0f, SmokeHeight = 1.05f,
+                Model = BlockModel.CubeFacing(
+                    LayerSmokerTop, LayerSmokerSide, LayerSmokerTop,
+                    lit ? LayerSmokerFrontLit : LayerSmokerFront,
+                    Placeable.Facings[i]),
+            });
+
+        // ⛳ A BARREL IS A CHEST THAT OPENS UPWARD, and that is the whole of it: one block, no
+        // facings, no partner, and it reads the same twenty-seven slots through the same ChestBank.
+        // The cheapest remaining station in #58 by a wide margin, and it earns its place by being
+        // the container you can put under a low ceiling — a chest needs a clear cell above its lid.
+        registry.Register(new BlockType
+        {
+            Name = "barrel",
+            Hardness = 2.5f, Crafted = true, Use = BlockUse.Chest,
+            HarvestClass = ToolClass.Axe, HarvestTier = 0,
+            Sounds = SoundMaterial.Wood,
+            Model = BlockModel.Cube(LayerBarrelTop, LayerBarrelSide, LayerBarrelTop),
+        });
+
         return new Ids(
             stone, dirt, grass, sand, water, gravel, log, leaves, planks, coal, iron, bedrock,
             emberstone, vine, deepstone, coralstone, driftstone, saltstone, copper, gold, stormglass,
@@ -1248,6 +1307,9 @@ public static class StarterBlocks
     public static BlockId[] BlastFurnaces(BlockRegistry registry, bool lit) =>
         Smelters(registry, "blast_furnace", lit);
 
+    /// <summary>And for the smoker.</summary>
+    public static BlockId[] Smokers(BlockRegistry registry, bool lit) => Smelters(registry, "smoker", lit);
+
     private static BlockId[] Smelters(BlockRegistry registry, string family, bool lit)
     {
         var ids = new BlockId[Placeable.Facings.Length];
@@ -1271,7 +1333,7 @@ public static class StarterBlocks
         var lighting = new BlockId[registry.Count];
         var cooling = new BlockId[registry.Count];
 
-        foreach (var family in (string[])["furnace", "blast_furnace"])
+        foreach (var family in (string[])["furnace", "blast_furnace", "smoker"])
         {
             var cold = Smelters(registry, family, lit: false);
             var hot = Smelters(registry, family, lit: true);
@@ -1295,6 +1357,7 @@ public static class StarterBlocks
         {
             foreach (var id in Furnaces(registry, lit)) kinds[id.Value] = FurnaceKind.Furnace;
             foreach (var id in BlastFurnaces(registry, lit)) kinds[id.Value] = FurnaceKind.Blast;
+            foreach (var id in Smokers(registry, lit)) kinds[id.Value] = FurnaceKind.Smoker;
         }
 
         return kinds;

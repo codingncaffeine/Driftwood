@@ -289,6 +289,15 @@ public static class BlockTextureSet
         .. ArmourRows(),
 
         new("shield",      "textures/item/shield.png",            true),
+
+        // The third smelter and the second container, appended for the same reason everything since
+        // the fluids has been: this array's order IS the layer numbering.
+        new("smoker_top",  "textures/block/smoker_top.png",       false),
+        new("smoker_side", "textures/block/smoker_side.png",      false),
+        new("smoker_front", "textures/block/smoker_front.png",    false),
+        new("smoker_front_lit", "textures/block/smoker_front_on.png", false),
+        new("barrel_top",  "textures/block/barrel_top.png",       false),
+        new("barrel_side", "textures/block/barrel_side.png",      false),
     ];
 
     /// <summary>
@@ -882,6 +891,23 @@ public static class BlockTextureSet
             // Timber with an iron boss and an iron rim: the two materials it is made of, both
             // visible, which is what makes the recipe legible from the picture.
             StarterBlocks.LayerShield => TileGen.IconShield(1104, 152, 118, 70, 190, 190, 198),
+
+            // ⛳ THE SMOKER IS TIMBER, and that is the whole design of its art. The furnace is grey
+            // cobble with an arch and the blast furnace dark brick with a letterbox; a third grey
+            // box would have to be told apart by shade alone, which survives neither a wall at
+            // distance nor a sixteen-pixel slot. Its mouth is an arch, like the furnace it is a
+            // specialisation of, because the two do the same job on different things.
+            StarterBlocks.LayerSmokerTop => TileGen.Scored(1105, TileGen.Planks(1106, 146, 108, 62)),
+            StarterBlocks.LayerSmokerSide => TileGen.Planks(1106, 146, 108, 62),
+            StarterBlocks.LayerSmokerFront =>
+                TileGen.Hearth(1107, TileGen.Planks(1106, 146, 108, 62), lit: false),
+            StarterBlocks.LayerSmokerFrontLit =>
+                TileGen.Hearth(1108, TileGen.Planks(1106, 146, 108, 62), lit: true),
+
+            // A barrel: staves banded round with a lid on top. Darker than the bench's planks so a
+            // room with both in it reads as two things.
+            StarterBlocks.LayerBarrelTop => TileGen.Scored(1109, TileGen.Planks(1110, 128, 94, 54)),
+            StarterBlocks.LayerBarrelSide => TileGen.Panel(TileGen.Planks(1110, 128, 94, 54), 2, 34),
 
             _ => Wool(layer) ?? Meat(layer) ?? Dye(layer) ?? Armour(layer) ?? Tool(layer),
         };
