@@ -36,6 +36,17 @@ public enum ToolClass
     /// of those things are digging.
     /// </remarks>
     Shears,
+
+    /// <summary>
+    /// Turns ground over into something that will take a seed.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ The second class here whose work is not mining, after <see cref="Shears"/>, and it settles
+    /// the shape the first one only suggested: a tool class says what a tool is FOR, and digging is
+    /// one of several answers. A hoe breaks nothing faster than a hand and is the only way to make a
+    /// field.
+    /// </remarks>
+    Hoe,
 }
 
 /// <summary>

@@ -26,6 +26,16 @@ public enum BlockUse
 
     /// <summary>Swaps to this block's other state — lit or out, open or shut.</summary>
     Toggle,
+
+    /// <summary>
+    /// Opens the anvil: a worn thing, and the metal to mend it with.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ Its own answer rather than a grid station, because an anvil arranges nothing. It takes one
+    /// damaged thing and one material and hands the same thing back carrying whatever wear the
+    /// material could not pay off — a bespoke result no pattern can express.
+    /// </remarks>
+    Anvil,
 }
 
 /// <summary>Which fluid a block is, when it is one.</summary>

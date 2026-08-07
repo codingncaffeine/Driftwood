@@ -425,7 +425,71 @@ public static class StarterBlocks
         ("copper_block", "block of copper", "copper_ingot", 198, 124, 78),
     ];
 
-    public const int LayerCount = LayerFirstMetalBlock + MetalBlockCount;
+    /// <summary>
+    /// The anvil: one side, and a top per stage of wear.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>Three tops and one side, which is the format's own arrangement and not our invention.</b>
+    /// Measured off the user's packs: <c>anvil.png</c>, <c>anvil_top.png</c>,
+    /// <c>chipped_anvil_top.png</c> and <c>damaged_anvil_top.png</c>. The wear shows on the face you
+    /// strike, which is the only face you look at while using one.
+    /// </remarks>
+    public const ushort LayerAnvilSide = LayerFirstMetalBlock + MetalBlockCount;
+    public const ushort LayerAnvilTop = LayerAnvilSide + 1;
+    public const ushort LayerAnvilChipped = LayerAnvilSide + 2;
+    public const ushort LayerAnvilDamaged = LayerAnvilSide + 3;
+
+    /// <summary>How many stages an anvil goes through before it is gone.</summary>
+    public const int AnvilStages = 3;
+
+    /// <summary>
+    /// Farming: the ground it grows in, and the wheat that grows there.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>Dry and wet farmland are two blocks, not one with a flag.</b> The whole point of the wet
+    /// one is that it is visibly different — a player has to be able to see, from where they are
+    /// standing, whether their field is watered — and a flag nothing draws is a mechanic nobody can
+    /// find. It is also how the format ships it.
+    /// </remarks>
+    public const ushort LayerFarmland = LayerAnvilSide + 4;
+    public const ushort LayerFarmlandWet = LayerAnvilSide + 5;
+
+    /// <summary>
+    /// Wheat, one layer per stage of growth.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>Four stages rather than the reference's eight.</b> Eight is a lot of drawings for a
+    /// difference nobody reads at a glance — the stages that matter are "just planted", "coming up",
+    /// "nearly", and "take it". ⚠ The count is a constant rather than four names, because the growth
+    /// rule counts and a rule written against names is a rule that breaks when a fifth is drawn.
+    /// </remarks>
+    public const ushort LayerFirstWheat = LayerAnvilSide + 6;
+    public const int WheatStages = 4;
+
+    /// <summary>The four item icons farming and the anvil bring with them.</summary>
+    /// <remarks>
+    /// ⚠ Appended, like everything since the fluids, because <see cref="Textures.BlockTextureSet"/>'s
+    /// array order IS this numbering. ⛳ The hoe is one item rather than a rung on the tool ladder —
+    /// see the note in <c>StarterItems.Heads</c>, which is where changing that would break things.
+    /// </remarks>
+    public const ushort LayerHoe = LayerFirstWheat + WheatStages;
+    public const ushort LayerSeeds = LayerHoe + 1;
+    public const ushort LayerWheatItem = LayerHoe + 2;
+    public const ushort LayerBread = LayerHoe + 3;
+    public const ushort LayerBonemeal = LayerHoe + 4;
+
+    public const int LayerCount = LayerHoe + 5;
+
+    /// <summary>One anvil's name, by how worn it is and which way it lies.</summary>
+    /// <remarks>
+    /// ⚠ Built rather than written out, so the stage count is one constant and every table that
+    /// walks the stages — the block set, the drops, the wear rule — reads the same names.
+    /// </remarks>
+    public static string AnvilName(int stage, bool alongX) =>
+        $"anvil{(stage == 0 ? "" : stage == 1 ? "_chipped" : "_damaged")}_{(alongX ? "x" : "z")}";
+
+    /// <summary>And one stage of wheat.</summary>
+    public static string WheatName(int stage) => $"wheat_{stage}";
 
     public sealed record Ids(
         BlockId Stone,
@@ -570,6 +634,67 @@ public static class StarterBlocks
                 Sounds = SoundMaterial.Stone,
                 HarvestClass = ToolClass.Pickaxe, HarvestTier = 2,
                 TopLayer = layer, SideLayer = layer, BottomLayer = layer,
+            });
+        }
+
+        // ⛳ THE ANVIL, and it wears out. Three stages on one side texture, each its own pair of
+        // facings — the first thing in this game that degrades where it stands rather than in a
+        // pocket. ⚠ Two facings and not four: an anvil is symmetric end to end, so four ids would be
+        // four names for two shapes and a check that could never tell half of them apart. Exactly
+        // the campfire's argument.
+        for (var stage = 0; stage < AnvilStages; stage++)
+        for (var axis = 0; axis < 2; axis++)
+        {
+            var top = stage switch
+            {
+                0 => LayerAnvilTop,
+                1 => LayerAnvilChipped,
+                _ => LayerAnvilDamaged,
+            };
+
+            registry.Register(new BlockType
+            {
+                Name = AnvilName(stage, axis == 0),
+                Hardness = 5f, Crafted = true, Derived = stage > 0 || axis > 0,
+                Sounds = SoundMaterial.Stone,
+                HarvestClass = ToolClass.Pickaxe, HarvestTier = 2,
+                Use = BlockUse.Anvil,
+                Opaque = false,
+                SupportFace = Faces.NegY,
+                Model = BlockModel.Anvil(top, LayerAnvilSide, axis == 0),
+            });
+        }
+
+        // ⛳ FARMLAND, dry and wet. Not solid-through: it is a full block a pace shorter, which is
+        // what makes a tilled field read as tilled from across it and what stops a player walking a
+        // crop row without noticing they are on it.
+        registry.Register(new BlockType
+        {
+            Name = "farmland", Hardness = 0.6f, Crafted = true, Sounds = SoundMaterial.Gravel,
+            HarvestClass = ToolClass.Shovel,
+            Opaque = false,
+            Model = BlockModel.Layer(LayerFarmland, LayerFarmland, LayerDirt, 15f),
+        });
+
+        registry.Register(new BlockType
+        {
+            Name = "farmland_wet", Hardness = 0.6f, Crafted = true, Derived = true,
+            Sounds = SoundMaterial.Gravel, HarvestClass = ToolClass.Shovel,
+            Opaque = false,
+            Model = BlockModel.Layer(LayerFarmlandWet, LayerFarmlandWet, LayerDirt, 15f),
+        });
+
+        // ⛳ WHEAT, one block per stage. The stage IS the block id, which is the decision the whole
+        // growth system rests on: the world already stores block ids and already saves an edit, so
+        // a field halfway up costs nothing to keep and needs no bank, no timer and no save format.
+        for (var stage = 0; stage < WheatStages; stage++)
+        {
+            registry.Register(new BlockType
+            {
+                Name = WheatName(stage), Hardness = 0.05f, Crafted = true, Derived = stage > 0,
+                Solid = false, Opaque = false, Sounds = SoundMaterial.Plant,
+                SupportFace = Faces.NegY,
+                Model = BlockModel.Cross((ushort)(LayerFirstWheat + stage), tinted: false),
             });
         }
 

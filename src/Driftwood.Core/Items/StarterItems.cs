@@ -64,6 +64,17 @@ public static class StarterItems
         ("sword", ToolClass.Sword),
     ];
 
+    // ⛔⛔ THE HOE IS NOT A FIFTH HEAD, AND THAT IS A DECISION ABOUT THE TABLE ABOVE. Adding one
+    // would change ToolShapeCount, which LayerFirstFluid is computed from — so every layer after the
+    // tools renumbers, while the twenty-eight tool rows in BlockTextureSet.Layers are written out by
+    // hand and would not move with them. The count and the table would disagree silently: the exact
+    // failure the dyes had, where every texture check passed and a pack painted a pickaxe onto a dye.
+    //
+    // ⛳ And one hoe is the better design anyway. The ladder exists because a pickaxe of the wrong
+    // tier brings up NOTHING — that is what a tier means here. A hoe has no such gate: it turns dirt
+    // over, and turning dirt over faster is not a thing anybody wants. Seven of them would be seven
+    // recipes, seven icons and seven identical outcomes. It is one item, appended like any other.
+
     /// <summary>Seconds of burn one piece of timber is worth — one and a half smelts.</summary>
     public const float Timber = 15f;
 
@@ -360,6 +371,47 @@ public static class StarterItems
         Loose(items, "stormglass", "stormglass", StarterBlocks.LayerStormglass);
         Loose(items, "diamond", "diamond", StarterBlocks.LayerDiamond);
         Loose(items, "azurite", "azurite", StarterBlocks.LayerAzurite);
+        // ⛳ The anvil, which always goes down new: the two worn forms are what it BECOMES, and an
+        // item that could place a chipped one would let a player launder wear by picking it up.
+        items.Register(new ItemType
+        {
+            Name = "anvil", Label = "anvil", IconLayer = StarterBlocks.LayerAnvilTop,
+            DrawsAsBlock = true, MaxStack = 16,
+            Places = new Placeable
+            {
+                Label = "anvil",
+                Kind = PlacementKind.Axis,
+                Variants =
+                [
+                    blocks.ByName(StarterBlocks.AnvilName(0, true)).Id,
+                    blocks.ByName(StarterBlocks.AnvilName(0, false)).Id,
+                ],
+            },
+        });
+
+        // ⚠ Farmland places nothing. It is MADE by turning ground over with a hoe and never carried,
+        // which is why it has an item at all: something has to come back when it is dug up, and what
+        // comes back is dirt. Its rule is in BlockDrops, not here.
+        // ⚠ ONE hoe, and its durability is iron's because that is what it is made of. It carries no
+        // Tier and no MiningSpeed: a hoe brings up nothing and digs at the speed of a hand, so both
+        // of those would be numbers that never get read. See the note on StarterItems.Heads.
+        items.Register(new ItemType
+        {
+            Name = "hoe", Label = "hoe", IconLayer = StarterBlocks.LayerHoe,
+            Tool = ToolClass.Hoe, Durability = 251, MaxStack = 1,
+        });
+
+        Loose(items, "seeds", "seeds", StarterBlocks.LayerSeeds);
+        Loose(items, "wheat", "wheat", StarterBlocks.LayerWheatItem);
+        Loose(items, "bonemeal", "bone meal", StarterBlocks.LayerBonemeal);
+
+        // ⚠ Six half-hearts, which is a cooked steak. Bread costs three wheat and a field, and a
+        // steak costs an animal and a fire — two routes to the same meal is the point of farming.
+        items.Register(new ItemType
+        {
+            Name = "bread", Label = "bread", IconLayer = StarterBlocks.LayerBread, Feeds = 6,
+        });
+
         Loose(items, "clay_lump", "clay lump", StarterBlocks.LayerClayLump);
         Loose(items, "brick", "brick", StarterBlocks.LayerBrick);
 
@@ -628,7 +680,24 @@ public static class StarterItems
         // them is now a material: every colour in the game starts as something picked out of a
         // field, so a bloom that vanished when it was broken would be a dye source a player could
         // walk over and never obtain.
-        new BlockDrops.Rule("meadowgrass", null),
+        // ⛳ GRASS GIVES SEEDS, and it is the whole entry to farming. There is no other source and
+        // there should not be: the first field comes from walking through a meadow pulling up tufts,
+        // which is a thing a player does by accident on their first afternoon and can then use.
+        new BlockDrops.Rule("meadowgrass", "seeds"),
+
+        // ⚠ Tilled ground digs up as the dirt it was made from. Farmland has an item nowhere and
+        // needs none — it is a state of the ground rather than a thing to carry.
+        new BlockDrops.Rule("farmland", "dirt"),
+        new BlockDrops.Rule("farmland_wet", "dirt"),
+
+        // ⛔ THE THREE UNRIPE STAGES GIVE THE SEED BACK AND NOTHING ELSE. Without this a player who
+        // walks through their own field gets a full harvest from it, and waiting for the crop — the
+        // entire mechanic — buys nothing. The ripe one is handled in code, because it gives two
+        // different items and BlockDrops is one item per block.
+        new BlockDrops.Rule(StarterBlocks.WheatName(0), "seeds"),
+        new BlockDrops.Rule(StarterBlocks.WheatName(1), "seeds"),
+        new BlockDrops.Rule(StarterBlocks.WheatName(2), "seeds"),
+        new BlockDrops.Rule(StarterBlocks.WheatName(3), "wheat"),
         new BlockDrops.Rule("snow_layer", null),
         new BlockDrops.Rule("water", null),
         new BlockDrops.Rule("bedrock", null),

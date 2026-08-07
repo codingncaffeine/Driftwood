@@ -229,6 +229,27 @@ public static class StarterRecipes
         // sheets is at least the right picture for a ream.
         Shaped("paper", "paper", 3, ["P", "P", "P"], mirrored: false);
 
+        // ⛳ THE ANVIL, and the count is the user's own: three blocks of iron is twenty-seven ingots
+        // and the three across the waist are three, which is thirty. It is the most expensive single
+        // thing in the game by a wide margin, and it should be — it is what stops every tool being
+        // disposable.
+        Shaped("anvil", "anvil", 1, ["NNN", " I ", "III"]);
+
+        // ⛳ A hoe: a blade over a haft. Two iron rather than a ladder of seven — a hoe turns ground
+        // over and turning it over faster is not a thing anybody wants.
+        Shaped("hoe", "hoe", 1, ["II", " S", " S"]);
+
+        // ⛳ Bread, which is what a field is FOR. Three wheat in a row, the genre's own, and the one
+        // recipe in the game whose ingredient has to be grown rather than found or killed.
+        Shaped("bread", "bread", 1, ["MMM"], "wheat", station: CraftStation.Bench);
+
+        // ⛔ BONE MEAL REPLACES BONE-TO-DYE RATHER THAN SITTING BESIDE IT, and the duplicate-signature
+        // check is what settled that. Both were one bone loose at a bench, which is one arrangement
+        // with two answers — a fault by construction on a grid station. So the chain is the
+        // reference's own and it is better: a bone grinds to meal, and the meal is BOTH the white dye
+        // and the thing that makes a crop jump a stage. One grind, two uses, no ambiguity.
+        LooseAt("bone meal", "bonemeal", 3, CraftStation.Bench, "bone");
+
         // Light. Either coal will do — the one that comes out of the ground and the one that comes
         // out of a furnace are the same thing on the end of a stick.
         Shaped("torch", "torch", 4, ["C", "S"]);
@@ -320,7 +341,7 @@ public static class StarterRecipes
         // ⛳ A second white, ground out of a bone. Two sources for one colour is not redundancy: a
         // marshlily is a summer afternoon and a bone is a night that went badly, and white is the
         // colour half the palette is mixed with — so the branch a player can reach matters.
-        LooseAt("white dye from bone", "dye_white", 3, CraftStation.Bench, "bone");
+        LooseAt("white dye from bone meal", "dye_white", 1, CraftStation.Bench, "bonemeal");
 
         // ⛳ Green is MIXED rather than found, and that is a deliberate difference from the
         // reference — which smelts a cactus, in a desert we do not have. Blue and yellow is what
@@ -505,6 +526,7 @@ public static class StarterRecipes
         'G' => "glass",
         'A' => "azurite",
         'Z' => "stormglass",
+        'N' => "iron_block",
         _ => throw new InvalidOperationException($"recipe '{recipe}' uses unknown key '{key}'"),
     };
 }

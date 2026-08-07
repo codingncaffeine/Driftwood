@@ -373,7 +373,50 @@ public static class BlockTextureSet
 
         // The three metals packed away. Their names are the genre's own, so the mapping is direct.
         .. MetalBlockRows(),
+
+        // ⛳ The anvil's three stages of wear on one side texture, which is the format's own
+        // arrangement — the damage shows on the face you strike and nowhere else.
+        new("anvil_side",  "textures/block/anvil.png",            false),
+        new("anvil_top",   "textures/block/anvil_top.png",        false),
+        new("anvil_chipped", "textures/block/chipped_anvil_top.png", false),
+        new("anvil_damaged", "textures/block/damaged_anvil_top.png", false),
+
+        // Tilled ground, dry and watered.
+        new("farmland",    "textures/block/farmland.png",         false),
+        new("farmland_wet", "textures/block/farmland_moist.png",  false),
+
+        // ⚠ Wheat's stages, and OURS ARE FOUR WHERE THE PACK'S ARE EIGHT. The rows are spread across
+        // the pack's eight so a field still reads as growing rather than as four copies of stage 0.
+        .. WheatRows(),
+
+        // What farming and the anvil are carried in a pocket as.
+        new("hoe",         "textures/item/iron_hoe.png",          true),
+        new("seeds",       "textures/item/wheat_seeds.png",       true, "textures/item/seeds_wheat.png"),
+        new("wheat",       "textures/item/wheat.png",             true),
+        new("bread",       "textures/item/bread.png",             true),
+        new("bonemeal",    "textures/item/bone_meal.png",         true, "textures/item/dye_powder_white.png"),
     ];
+
+    /// <summary>One row per stage of wheat, spread across the pack's own eight.</summary>
+    /// <remarks>
+    /// ⛔ <b>Spread, not truncated.</b> Ours are four and every pack paints eight; taking the first
+    /// four would give a field that never looks more than a third grown, because the pack's stages
+    /// 0-3 are all seedlings. Stage n of ours is stage <c>n * 7 / 3</c> of theirs, which lands on
+    /// 0, 2, 4 and 7 — a sprout, a shoot, a stalk and a ripe ear.
+    /// </remarks>
+    private static BlockTextureLayer[] WheatRows()
+    {
+        var rows = new BlockTextureLayer[StarterBlocks.WheatStages];
+
+        for (var s = 0; s < rows.Length; s++)
+        {
+            var theirs = s * 7 / (StarterBlocks.WheatStages - 1);
+            rows[s] = new BlockTextureLayer(
+                StarterBlocks.WheatName(s), $"textures/block/wheat_stage{theirs}.png", true);
+        }
+
+        return rows;
+    }
 
     /// <summary>One row per metal storage block, off the block table rather than written out.</summary>
     private static BlockTextureLayer[] MetalBlockRows()
@@ -1133,9 +1176,57 @@ public static class BlockTextureSet
             StarterBlocks.LayerBarrelTop => TileGen.Scored(1109, TileGen.Planks(1110, 128, 94, 54)),
             StarterBlocks.LayerBarrelSide => TileGen.Panel(TileGen.Planks(1110, 128, 94, 54), 2, 34),
 
-            _ => MetalBlock(layer) ?? Wool(layer) ?? Meat(layer) ?? Dye(layer)
+            // ⛳ The anvil is dark worked iron. Its face is scored where it has been struck, and each
+            // stage takes more of it — which is the same Scored/Panel vocabulary the stations use.
+            StarterBlocks.LayerAnvilSide => TileGen.Panel(TileGen.Speckle(1130, 74, 74, 80, 9, 0.4f), 3, 30),
+            StarterBlocks.LayerAnvilTop => TileGen.Speckle(1131, 96, 96, 102, 7, 0.3f),
+            StarterBlocks.LayerAnvilChipped => TileGen.Ore(
+                1132, TileGen.Speckle(1131, 96, 96, 102, 7, 0.3f), 58, 56, 54, 4),
+            StarterBlocks.LayerAnvilDamaged => TileGen.Ore(
+                1133, TileGen.Speckle(1131, 90, 90, 96, 9, 0.35f), 48, 44, 42, 9),
+
+            // ⛳ Tilled ground is dirt turned over: same colour, combed into rows. Wet is the same
+            // tile darkened, because that is what wet earth is and a player has to tell them apart
+            // from standing height across a field.
+            StarterBlocks.LayerFarmland => TileGen.Scored(1134, TileGen.Speckle(1002, 118, 85, 57, 18, 0.5f)),
+            StarterBlocks.LayerFarmlandWet => TileGen.Scored(1135, TileGen.Speckle(1002, 78, 54, 34, 14, 0.5f)),
+
+            // ⚠ The hoe borrows IconTool's shovel shape — a blade on a haft is the same silhouette
+            // at sixteen pixels, and drawing a fifth tool shape to be told apart from a shovel it is
+            // never held beside would be a drawing nobody can read either way.
+            StarterBlocks.LayerHoe => TileGen.IconTool(1150, 2, 196, 196, 202),
+
+            StarterBlocks.LayerSeeds => TileGen.IconSkein(1151, 150, 176, 96),
+            StarterBlocks.LayerWheatItem => TileGen.Wheat(1152, 14, 214, 186, 74, eared: true),
+            StarterBlocks.LayerBread => TileGen.IconMeat(1153, 186, 138, 82, TileGen.MeatShape.Cut, cooked: true),
+            StarterBlocks.LayerBonemeal => TileGen.IconSkein(1154, 236, 236, 224),
+
+            _ => Wheat(layer) ?? MetalBlock(layer) ?? Wool(layer) ?? Meat(layer) ?? Dye(layer)
                  ?? Armour(layer) ?? Shield(layer) ?? Tool(layer),
         };
+    }
+
+    /// <summary>One stage of wheat, or null when this layer is not one.</summary>
+    /// <remarks>
+    /// ⛳ <b>Taller and yellower as it goes.</b> The two things that read across a field are height
+    /// and colour: a seedling is a short green tuft and a ripe ear is a tall gold one, and a player
+    /// standing at the edge of a field has to be able to see which rows are ready without walking
+    /// them. Drawn as blades from the ground up so the silhouette grows rather than the tile filling.
+    /// </remarks>
+    private static byte[]? Wheat(int layer)
+    {
+        var stage = layer - StarterBlocks.LayerFirstWheat;
+        if (stage < 0 || stage >= StarterBlocks.WheatStages) return null;
+
+        var t = stage / (float)(StarterBlocks.WheatStages - 1);
+
+        return TileGen.Wheat(
+            1140 + stage,
+            height: (int)MathF.Round(float.Lerp(5f, 15f, t)),
+            r: (byte)float.Lerp(96f, 214f, t),
+            g: (byte)float.Lerp(140f, 186f, t),
+            b: (byte)float.Lerp(62f, 74f, t),
+            eared: stage == StarterBlocks.WheatStages - 1);
     }
 
     /// <summary>One metal packed into a block, or null when this layer is not one.</summary>

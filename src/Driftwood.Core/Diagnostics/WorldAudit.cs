@@ -1056,6 +1056,16 @@ public static class WorldAudit
                   + $"shield, and {Armour.Survive(10, 0)} in a shirt"
                 : $"{armourFaults.Count} faults: {armourFaults[0]}");
 
+        // ⛳ And mending it, which is the first path in the game that gives durability BACK. Every
+        // tool and every plate has been strictly consumable since the day wear was added.
+        var repairFaults = Repair.Validate(items);
+        Check("an anvil mends what it should and charges for it", repairFaults.Count == 0,
+            repairFaults.Count == 0
+                ? $"a quarter of a thing's life per unit of its own material, at most "
+                  + $"{Repair.MostAtOnce} at a time; the wrong metal does nothing, an undamaged thing "
+                  + "costs nothing, and four ingots do not mend a ruined tool outright"
+                : $"{repairFaults.Count} faults: {repairFaults[0]}");
+
         // And the other half of it: the plates are geometry hung off the body's own joints, wearing
         // sheets painted in code. ⛔ Neither half can be seen from the other — a suit whose numbers
         // are right and whose boots are painted up the whole leg is a player in iron trousers.
@@ -2051,6 +2061,24 @@ public static class WorldAudit
                 if (counts[registry.ByName(source).Id.Value] == 0) continue;
                 if (!Held(items.ByName("bucket").Id)) continue;
                 changed |= Gain(items.ByName(filled).Id);
+            }
+
+            // ⛳ GROW. The SIXTH source, and the walk called wheat unobtainable without it — which was
+            // true of every source it knew: wheat is not dug, not dropped by anything, not crafted
+            // and not smelted. It is planted and waited for.
+            //
+            // ⛔ Three things in hand, and all three are the mechanic: the SEED to plant, a HOE to
+            // make ground that will take it, and a BUCKET to water it — a crop on dry farmland never
+            // moves, so a walk that skipped the bucket would report a harvest a player cannot
+            // actually get. ⚠ Water itself is not asked for: the world always has some, and the
+            // bucket is what turns having some into having it where the field is.
+            foreach (var (seed, crop) in new[] { ("seeds", "wheat") })
+            {
+                if (!Held(items.ByName(seed).Id)) continue;
+                if (!Held(items.ByName("hoe").Id)) continue;
+                if (!Held(items.ByName("bucket").Id)) continue;
+
+                changed |= Gain(items.ByName(crop).Id);
             }
 
             // Craft. ⚠ A recipe worked at a station cannot be made until the station itself has been
@@ -5663,7 +5691,10 @@ public static class WorldAudit
         (StarterBlocks.LayerPaper, "paper"),
         (StarterBlocks.LayerRecipeBook, "recipe_book"),
         (StarterBlocks.LayerFirstMetalBlock, "iron_block"),
-        ((ushort)(StarterBlocks.LayerCount - 1), "copper_block"),
+        (StarterBlocks.LayerAnvilSide, "anvil_side"),
+        (StarterBlocks.LayerFarmland, "farmland"),
+        (StarterBlocks.LayerFirstWheat, StarterBlocks.WheatName(0)),
+        ((ushort)(StarterBlocks.LayerCount - 1), "bonemeal"),
     ];
 
     private static List<string> TextureSelfTest()

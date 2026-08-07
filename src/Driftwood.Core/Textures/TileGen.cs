@@ -335,6 +335,62 @@ public static class TileGen
     }
 
     /// <summary>
+    /// A stand of wheat: blades from the ground up, and ears on it when it is ripe.
+    /// </summary>
+    /// <param name="height">How far up the tile the tallest blade reaches, in pixels.</param>
+    /// <param name="eared">True for the ripe stage, which carries grain on the stalks.</param>
+    /// <remarks>
+    /// ⛳ <b>The silhouette grows rather than the tile filling.</b> A crop tile is drawn on crossed
+    /// planes seen from a distance, so the two things that read across a field are HEIGHT and
+    /// COLOUR — a seedling short and green, a ripe ear tall and gold. A stage that changed only its
+    /// colour would leave a player walking their own field to find out what is ready.
+    /// <para>⚠ Blades at uneven heights and uneven spacing, because a crop drawn as a comb reads as
+    /// a fence. The unevenness is noise off the seed, so the same stage always draws the same field.
+    /// </para>
+    /// </remarks>
+    public static byte[] Wheat(int seed, int height, byte r, byte g, byte b, bool eared)
+    {
+        var t = new byte[BytesPerTile];
+
+        // Five stalks across the tile, none of them on the border — the ink rule every held thing
+        // here follows, and a crop is picked up and carried like anything else.
+        for (var stalk = 0; stalk < 5; stalk++)
+        {
+            var x = 2 + stalk * 3;
+            var tall = height - (int)(Noise(stalk, 0, seed) * 3f);
+
+            for (var up = 0; up < tall; up++)
+            {
+                var y = Size - 1 - up;
+                if (y < 1) break;
+
+                var d = (int)((Noise(x, y, seed) * 2f - 1f) * 14f);
+
+                // Darker at the foot, where a stand of anything is in its own shadow.
+                var shade = up < 2 ? -26 : 0;
+                Put(t, x, y, Clamp(r + d + shade), Clamp(g + d + shade), Clamp(b + d + shade), 255);
+            }
+
+            if (!eared) continue;
+
+            // The grain, on the top third of each stalk and to one side of it, so a ripe field reads
+            // as heavy rather than as a taller green one.
+            for (var ear = 0; ear < 3; ear++)
+            {
+                var y = Size - tall + ear * 2;
+                if (y < 1 || y > Size - 2) continue;
+
+                var side = (stalk + ear) % 2 == 0 ? -1 : 1;
+                var ex = Math.Clamp(x + side, 1, Size - 2);
+
+                Put(t, ex, y, Clamp(r + 22), Clamp(g + 12), Clamp(b - 10), 255);
+            }
+        }
+
+        return t;
+    }
+
+    /// <summary>
     /// A closed book: a leather cover, a spine down one side and page edges down the other.
     /// </summary>
     /// <remarks>

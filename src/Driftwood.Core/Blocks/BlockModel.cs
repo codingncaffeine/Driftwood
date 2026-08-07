@@ -497,6 +497,40 @@ public sealed class BlockModel
     public static BlockModel Layer(ushort top, ushort side, ushort bottom, float height) =>
         new([Box(Vector3.Zero, new Vector3(16f, height, 16f), top, side, bottom)]);
 
+    /// <summary>
+    /// An anvil: a broad foot, a narrow waist, and a wide face to strike on.
+    /// </summary>
+    /// <param name="alongX">True when the face runs east-west rather than north-south.</param>
+    /// <remarks>
+    /// ⛳ <b>Three boxes, and the waist is the whole silhouette.</b> A block-shaped anvil is a block;
+    /// what says anvil at ten paces is that it is pinched in the middle, so the foot and the face are
+    /// wide and the thing between them is not. The face is longer than it is deep, which is what
+    /// gives it an axis worth placing.
+    /// <para>⚠ The stage of wear is carried on the TOP layer alone — the sides of a chipped anvil are
+    /// the sides of a new one, which is what the format's single <c>anvil.png</c> is saying.</para>
+    /// </remarks>
+    public static BlockModel Anvil(ushort top, ushort side, bool alongX)
+    {
+        // Written along x and turned by swapping the two horizontal spans, rather than by rotating —
+        // a rotation would carry the textures and the cull faces round with it and every one of
+        // those is a chance to be a quarter turn out in a way that shows from one side only.
+        static (Vector3 From, Vector3 To) Span(float x0, float x1, float y0, float y1, float z0, float z1, bool alongX) =>
+            alongX
+                ? (new Vector3(x0, y0, z0), new Vector3(x1, y1, z1))
+                : (new Vector3(z0, y0, x0), new Vector3(z1, y1, x1));
+
+        var foot = Span(2f, 14f, 0f, 4f, 3f, 13f, alongX);
+        var waist = Span(5f, 11f, 4f, 10f, 6f, 10f, alongX);
+        var face = Span(0f, 16f, 10f, 16f, 3f, 13f, alongX);
+
+        return new BlockModel(
+        [
+            Box(foot.From, foot.To, top, side, side),
+            Box(waist.From, waist.To, top, side, side),
+            Box(face.From, face.To, top, side, side),
+        ]);
+    }
+
     /// <summary>Half a block, lying in either half of the cell.</summary>
     public static BlockModel Slab(ushort top, ushort side, ushort bottom, bool upper) =>
         new([upper
