@@ -721,16 +721,100 @@ public sealed class ClientHost : IDisposable
     {
         _window.Initialize();
 
+        // ⛳ Asks Windows for a one-millisecond scheduler tick, because the pacing below waits with
+        // Sleep and Sleep is rounded up to the next tick of the system timer — 15.6 ms by default,
+        // against a 5.7 ms frame.
+        // ⚠ HONESTLY: this is the established practice rather than a measured win here. It was added
+        // to explain a limit of 175 reading as 155, and it did not move that number — because the
+        // number was wrong. The rate was being averaged across world loading, and once that was taken
+        // out the limit reads exactly 175 either way. Kept because waiting on a coarse timer is a real
+        // hazard on a slower machine, not because anything here proved it.
+        var timerRaised = TimeBeginPeriod(1) == 0;
+
+        var due = Stopwatch.GetTimestamp();
+
         while (!_window.IsClosing && !_stopRequested)
         {
             _window.DoEvents();
             _window.DoUpdate();
             _window.DoRender();
+            PaceFrame(ref due);
         }
 
         _window.DoEvents();
+        if (timerRaised) TimeEndPeriod(1);
+
         Shutdown();
         return UiCheckFailed ? 1 : _exitCode;
+    }
+
+    /// <summary>
+    /// Asks for a finer scheduler tick, so <see cref="Thread.Sleep(int)"/> means what it says.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ <b>Paired, and only released if it was taken.</b> Windows counts these, and a process that
+    /// raises the timer resolution and never puts it back leaves the whole machine on a one
+    /// millisecond tick — which is somebody else's battery.
+    /// </remarks>
+    [DllImport("winmm.dll", EntryPoint = "timeBeginPeriod")]
+    private static extern uint TimeBeginPeriod(uint ms);
+
+    [DllImport("winmm.dll", EntryPoint = "timeEndPeriod")]
+    private static extern uint TimeEndPeriod(uint ms);
+
+    /// <summary>
+    /// Waits until the next frame is due, when there is a limit to wait for.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛔⛔ <b>Done here because <c>IWindow.FramesPerSecond</c> IS IGNORED BY THIS GAME.</b> That
+    /// property paces Silk's own <c>Run</c> loop, and this loop is driven by hand — see <see cref="Run"/>
+    /// for why. Setting it read as a working frame limit, saved to the settings file, drew a row on
+    /// the video tab, and did precisely nothing: measured through <c>--play</c>, a limit of 175
+    /// produced <b>12,571 fps</b>. A setting that silently does nothing is worse than no setting,
+    /// because it also answers the question.</para>
+    /// <para>⛳ <b>Sleep coarsely, then spin.</b> A frame at 175 is 5.7 ms and <c>Thread.Sleep(1)</c>
+    /// is only good to a millisecond or so on Windows, so sleeping the whole wait overshoots and
+    /// gives an uneven rate under the one asked for. Sleeping while there is time to spare and
+    /// spinning out the last two milliseconds costs a sliver of one core and lands on the number.
+    /// </para>
+    /// <para>⛔ <b>It never tries to CATCH UP.</b> A deadline that keeps advancing while the game is
+    /// loading a world comes due a hundred times at once, and the loop then runs flat out to make
+    /// good a debt it can never repay — which is the frame-pacing bug that looks exactly like a
+    /// stutter. Fall far enough behind and the deadline is simply moved to now.</para>
+    /// </remarks>
+    private void PaceFrame(ref long due)
+    {
+        // ⚠ The benchmark is never paced: its whole job is to say how fast this machine can draw,
+        // and a limited run reports the limit, which is true of every machine.
+        var cap = _settings.VSync || _options.BenchSeconds > 0 ? 0 : _settings.FrameCap;
+
+        if (cap <= 0)
+        {
+            due = Stopwatch.GetTimestamp();
+            return;
+        }
+
+        var period = Stopwatch.Frequency / cap;
+        due += period;
+
+        var now = Stopwatch.GetTimestamp();
+        if (now - due > period * 4)
+        {
+            due = now;
+            return;
+        }
+
+        while (true)
+        {
+            var left = due - Stopwatch.GetTimestamp();
+            if (left <= 0) return;
+
+            // ⚠ Sleep while there is room, spin out the last few milliseconds. Spinning the whole
+            // wait lands on the number just as well and burns a core doing it, which on a limiter
+            // whose entire purpose is to stop wasting the machine would be a joke.
+            if (left * 1000 / Stopwatch.Frequency > 3) Thread.Sleep(1);
+            else Thread.SpinWait(64);
+        }
     }
 
     /// <summary>
@@ -3455,6 +3539,15 @@ public sealed class ClientHost : IDisposable
                     "wait for the display", OnOff(_settings.VSync),
                     Note: "smoother, and the frame counter stops meaning anything"));
 
+                // ⛳ Uncapped, this draws about 5,000 frames a second — twenty-eight thrown away for
+                // every one a 175 Hz display can show, in fans and heat and battery.
+                _hudScreen.Rows.Add(new MenuRow(
+                    "frame limit",
+                    _settings.FrameCap <= 0 ? "as fast as it can" : $"{_settings.FrameCap} a second",
+                    Note: _settings.VSync
+                        ? "ignored while the display is being waited for, which is already a limit"
+                        : "match your display; drawing more than it can show is heat and nothing else"));
+
                 _hudScreen.Rows.Add(new MenuRow("notices", Heading: true));
                 _hudScreen.Rows.Add(new MenuRow(
                     "new recipe notices", OnOff(_settings.RecipeNotices),
@@ -3608,6 +3701,11 @@ public sealed class ClientHost : IDisposable
                     case "field of view": _settings.FieldOfView = Nudge(_settings.FieldOfView, by * 5, 50, 110); break;
                     case "fullscreen": _settings.Fullscreen = !_settings.Fullscreen; break;
                     case "wait for the display": _settings.VSync = !_settings.VSync; break;
+
+                    // ⚠ Steps of five past sixty, and off the bottom rather than at it: a limiter
+                    // nudged one frame at a time from 175 to uncapped is twenty-three presses.
+                    case "frame limit": _settings.FrameCap = NudgeCap(_settings.FrameCap, by); break;
+
                     case "new recipe notices": _settings.RecipeNotices = !_settings.RecipeNotices; break;
                     // Enter only. A direction is how a player browses, not how they throw
                     // something away that cannot be got back.
@@ -4258,6 +4356,23 @@ public sealed class ClientHost : IDisposable
     private static int Nudge(int value, int by, int min, int max) => Math.Clamp(value + by, min, max);
 
     /// <summary>
+    /// Walks the frame limit in fives, with "as fast as it can" off the bottom of the range.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ <b>Uncapped sits BELOW thirty rather than above the top.</b> Putting it past the highest
+    /// number makes "no limit" the thing a player arrives at by asking for more and more frames,
+    /// which is true and reads as a limit of one thousand; putting it under the lowest makes it what
+    /// you get by turning the limiter off, which is what it is.
+    /// </remarks>
+    private static int NudgeCap(int cap, int by)
+    {
+        if (cap <= 0) return by > 0 ? 30 : 0;
+
+        var next = cap + by * 5;
+        return next < 30 ? 0 : Math.Min(next, 1000);
+    }
+
+    /// <summary>
     /// Puts the settings into effect, for the ones that can take effect while the game is running.
     /// </summary>
     /// <remarks>
@@ -4274,6 +4389,11 @@ public sealed class ClientHost : IDisposable
         // check against their own hand.
         _camera.MouseSensitivity = ShippedSensitivity * (_settings.MouseSensitivity / 100f);
         _window.VSync = _settings.VSync;
+
+        // ⛔ The frame limit is NOT set here. IWindow.FramesPerSecond paces Silk's own Run loop and
+        // this game drives its own, so setting it looks exactly like a working limiter and does
+        // nothing whatever — measured at 12,571 fps against a limit of 175. It is enforced in
+        // PaceFrame, which is inside the loop that actually exists.
 
         var wanted = _settings.Fullscreen ? WindowState.Fullscreen : WindowState.Normal;
         if (_window.WindowState != wanted) _window.WindowState = wanted;
@@ -4977,7 +5097,35 @@ public sealed class ClientHost : IDisposable
         _elapsed += dt;
 
         // Closed the way a player closes it, so the exit path under test is the one that ships.
-        if (_options.PlaySeconds > 0 && _elapsed >= _options.PlaySeconds) _stopRequested = true;
+        // ⛳ Frames counted through the ORDINARY loop, which --bench cannot report because it is
+        // deliberately never capped. A limiter that silently does nothing is exactly the sort of
+        // setting this project keeps finding, and the only thing that tells one from a working one
+        // is a rate measured on the path a player actually runs.
+        //
+        // ⛔⛔ COUNTED AFTER THE WARM-UP, and the first version of this was NOT — it averaged over the
+        // whole run and reported 154 against a limit of 175 on a build the user could see holding a
+        // steady 175 on screen. The opening seconds are chunk generation, meshing and uploads, which
+        // is the slowest the game ever runs; a mean taken across them measures the loading and calls
+        // it the frame rate. --bench has always separated its own warm-up for exactly this reason and
+        // this line did not. The user's eyes were right and the instrument was wrong.
+        if (_elapsed >= WarmUpSeconds)
+        {
+            if (_playedFrames == 0) _steadyFrom = _elapsed;
+            _playedFrames++;
+        }
+
+        if (_options.PlaySeconds > 0 && _elapsed >= _options.PlaySeconds)
+        {
+            _stopRequested = true;
+
+            var steady = _elapsed - _steadyFrom;
+            Console.WriteLine(
+                $"played      {_playedFrames:N0} frames over {steady:F1}s once the world had arrived "
+                + $"— {(steady > 0 ? _playedFrames / steady : 0):F0} fps against a limit of "
+                + (_settings.VSync ? "the display"
+                   : _settings.FrameCap <= 0 ? "none" : $"{_settings.FrameCap}"));
+            Console.Out.Flush();
+        }
 
         _clock.Advance((float)dt);
         _skyState = _clock.Now;
@@ -7540,6 +7688,21 @@ public sealed class ClientHost : IDisposable
 
     /// <summary>Campfire dinners drawn, read while the fire was still standing.</summary>
     private int _cookingSeen = -1;
+
+    /// <summary>Frames drawn through the ordinary loop, for the frame limit to be measured against.</summary>
+    private long _playedFrames;
+
+    /// <summary>When counting started, which is not when the session did.</summary>
+    private double _steadyFrom;
+
+    /// <summary>
+    /// Seconds of a session that are loading rather than playing, and are not the frame rate.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ Generous on purpose. Streaming keeps working long after the first frame is drawn, and a
+    /// warm-up that ends too early puts the tail of it back into the number it was meant to keep out.
+    /// </remarks>
+    private const double WarmUpSeconds = 4.0;
 
     /// <summary>
     /// Buries the body in a sealed box of water, so the head is genuinely under.

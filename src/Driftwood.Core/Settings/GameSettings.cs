@@ -28,6 +28,24 @@ public sealed class GameSettings
 
     public bool VSync { get; set; }
 
+    /// <summary>
+    /// The most frames a second the game will draw, or 0 for as many as it can.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳⛳ <b>175 by default, the user's own number — it is what their display can show.</b>
+    /// Uncapped, this game measures about <b>5,000 frames a second</b> on that machine, which is
+    /// twenty-eight frames drawn for every one anybody sees: fans, heat and battery spent on pictures
+    /// thrown away.</para>
+    /// <para>⛔ <b>It is NOT a fix for anything, and must never be treated as one.</b> A rate written
+    /// per frame is wrong at any frame rate — capping to 175 would only have turned a lungful that
+    /// vanished in 59 milliseconds into one that vanished in 1.7 seconds, which is still wrong and is
+    /// far harder to notice. Rates go in seconds and the audit runs them at three frame rates; this
+    /// setting exists because 5,000 fps is wasteful, not because it is dangerous.</para>
+    /// <para>⚠ <b>Ignored while the display is being waited for</b> — vsync is already a cap, and two
+    /// limiters fighting is how a steady 175 becomes an uneven 87.</para>
+    /// </remarks>
+    public int FrameCap { get; set; } = 175;
+
     /// <summary>Everything's loudness, 0 to 100.</summary>
     public int Volume { get; set; } = 100;
 
@@ -132,6 +150,10 @@ public sealed class GameSettings
                 case "video.fov": settings.FieldOfView = Int(value, 50, 110, settings.FieldOfView); break;
                 case "video.fullscreen": settings.Fullscreen = Bool(value, settings.Fullscreen); break;
                 case "video.vsync": settings.VSync = Bool(value, settings.VSync); break;
+
+                // ⚠ Zero means uncapped and is inside the range on purpose, so a player who wants
+                // every frame the machine can make can still say so.
+                case "video.framecap": settings.FrameCap = Int(value, 0, 1000, settings.FrameCap); break;
                 case "audio.volume": settings.Volume = Int(value, 0, 100, settings.Volume); break;
                 case "audio.mute": settings.Mute = Bool(value, settings.Mute); break;
                 case "input.sensitivity": settings.MouseSensitivity = Int(value, 10, 400, settings.MouseSensitivity); break;
@@ -193,6 +215,7 @@ public sealed class GameSettings
         text.AppendLine("# Driftwood settings. Delete a line to go back to its default.");
         text.AppendLine();
         text.AppendLine($"video.viewdistance={ViewDistance}");
+        text.AppendLine($"video.framecap={FrameCap}");
         text.AppendLine($"video.fov={FieldOfView}");
         text.AppendLine($"video.fullscreen={Text(Fullscreen)}");
         text.AppendLine($"video.vsync={Text(VSync)}");
