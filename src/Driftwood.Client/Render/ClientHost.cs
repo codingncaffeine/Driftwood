@@ -5176,7 +5176,7 @@ public sealed class ClientHost : IDisposable
         _vitals.ShieldRaised =
             _walking && _spawned && !_hudScreen.IsOpen && _bench is null
             && _vitals.ShieldShare > 0f
-            && _keys.Held(_input, GameAction.RaiseShield);
+            && (_shotGuard || _keys.Held(_input, GameAction.RaiseShield));
     }
 
     /// <summary>Which material each worn slot has on, as an index, or −1 for bare.</summary>
@@ -5874,7 +5874,7 @@ public sealed class ClientHost : IDisposable
     /// </param>
     private readonly record struct Shot(
         int Frame, string Name, string Item, ViewMode View, bool Strike, ShotScreen Screen = ShotScreen.None,
-        bool Creature = false, string Wears = "");
+        bool Creature = false, string Wears = "", string Offhand = "", bool Guard = false);
 
     /// <summary>Which interface, if any, is up when the picture is taken.</summary>
     private enum ShotScreen
@@ -5932,6 +5932,16 @@ public sealed class ClientHost : IDisposable
         new(320, "19-armour-iron", "iron_sword", ViewMode.ThirdBehind, false, Wears: "iron"),
         new(332, "20-armour-iron-facing", "iron_sword", ViewMode.ThirdFacing, false, Wears: "iron"),
         new(344, "21-armour-leather", "stone_pickaxe", ViewMode.ThirdFacing, false, Wears: "leather"),
+
+        // ⛳ THE OTHER HAND, which had no picture at all and is the reason it went unlooked-at for a
+        // session. A torch first, because a lowered offhand is the ordinary case and a torch is the
+        // thing whose angle in a fist is most obviously wrong when it is wrong. Then the guard, from
+        // the front and from behind: a raised shield is the whole point of the feature and the two
+        // views answer different questions — whether the board faces the way the player does, and
+        // whether the arm has actually come across the chest rather than swung out beside it.
+        new(356, "22-offhand-torch", "iron_sword", ViewMode.ThirdFacing, false, Offhand: "torch"),
+        new(368, "23-guard-facing", "iron_sword", ViewMode.ThirdFacing, false, Wears: "iron", Guard: true),
+        new(380, "24-guard-behind", "iron_sword", ViewMode.ThirdBehind, false, Wears: "iron", Guard: true),
     ];
 
     /// <summary>
@@ -5986,25 +5996,37 @@ public sealed class ClientHost : IDisposable
     /// the shot before would put iron boots in the picture of the leather one, and the two would be
     /// three frames apart in the same folder.
     /// </remarks>
-    private void WearForShot(string material)
+    /// <summary>
+    /// Holds the guard up for a picture, since the real one answers to a key nobody is pressing.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>The shot used to set <c>ShieldRaised</c> directly and it was overwritten on the next
+    /// frame</b> — the flag is recomputed every tick from the key, so a shot that assigns it is
+    /// assigning to something with a live owner. Which is also why the shield the armour shots have
+    /// carried since they were written has only ever been photographed hanging at the side.
+    /// </remarks>
+    private bool _shotGuard;
+
+    private void WearForShot(string material, string offhand, bool guard)
     {
         _equipment.Clear();
-        _vitals.ShieldRaised = false;
-
-        if (material.Length == 0) return;
+        _shotGuard = guard;
 
         foreach (var piece in Armour.Pieces)
         {
+            if (material.Length == 0) break;
+
             var name = $"{material}_{piece.Name}";
             if (_items.TryByName(name, out var type))
                 _equipment.Restore(piece.Slot, new ItemStack(type.Id, 1));
         }
 
-        if (_items.TryByName(Armour.ShieldName, out var shield))
-        {
-            _equipment.Restore(EquipSlot.Offhand, new ItemStack(shield.Id, 1));
-            _vitals.ShieldRaised = true;
-        }
+        // What goes in the other hand: whatever the shot named, or a shield by default so a suit of
+        // armour is photographed with the thing it is worn beside.
+        var other = offhand.Length > 0 ? offhand : material.Length > 0 ? Armour.ShieldName : "";
+
+        if (other.Length > 0 && _items.TryByName(other, out var held))
+            _equipment.Restore(EquipSlot.Offhand, new ItemStack(held.Id, 1));
     }
 
     private void RunShots(Vector2D<int> size)
@@ -6053,7 +6075,7 @@ public sealed class ClientHost : IDisposable
                 _view = shot.View;
                 if (shot.Strike) _animator.Strike();
                 OpenForShot(shot.Screen);
-                WearForShot(shot.Wears);
+                WearForShot(shot.Wears, shot.Offhand, shot.Guard);
             }
 
             // ⛔ A LONG way ahead of the picture, and four frames is nowhere near enough. Walking the
