@@ -319,6 +319,11 @@ public sealed class PlayerRenderer : IDisposable
     public Matrix4x4 HeldWorldTransform(Vector3 feet, in PlayerPose pose, bool flat, Vector3 hold) =>
         HeldGrip.InWorld(feet, pose, flat, hold, Arms);
 
+    /// <summary>And what is in the other hand, in the model's left fist.</summary>
+    public Matrix4x4 OffhandWorldTransform(
+        Vector3 feet, in PlayerPose pose, bool flat, Vector3 hold, bool guard) =>
+        HeldGrip.InOtherHand(feet, pose, flat, hold, Arms, guard);
+
     private void Draw(in BoxDraw draw, Matrix4x4 model)
     {
         _shader.SetMatrix4("uModel", model);

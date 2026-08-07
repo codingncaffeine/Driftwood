@@ -105,6 +105,48 @@ public sealed class PlayerAnimator
     /// <summary>Smoothed 0..1 crouch, for anything that wants to follow the model down.</summary>
     public float SneakAmount => _sneak;
 
+    /// <summary>
+    /// How far the guard has come up, 0 to 1.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>Smoothed, not switched, and for a sharper reason than the crouch's.</b> A shield goes up
+    /// and down constantly through a fight — it is held on a key and released the moment there is
+    /// anything to hit back at — so a limb that teleports between two poses is not a guard going up,
+    /// it is a limb that flickers. Quicker than the crouch, because a guard that takes as long as
+    /// sitting down is a guard that arrives after the blow.
+    /// </remarks>
+    public float BlockAmount => _block;
+
+    private float _block;
+
+    /// <summary>How fast the guard comes up, as a share closed per second.</summary>
+    private const float BlockResponse = 16f;
+
+    /// <summary>
+    /// Where the left arm goes when the guard is up: out in front, turned across the chest.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛔⛔ <b>Pitch is POSITIVE for an arm brought forward — and it took three wrong answers
+    /// to get here, every one of them from a check measuring the wrong axis rather than from this
+    /// number being wrong.</b> The first version of the offhand check asked whether the shield had
+    /// come forward along world −z, and <b>at a body yaw of zero this model faces world +x</b>: z is
+    /// the model's SIDE. It read the same 0.337 for a pitch of +1.25 and of −1.25, which looks
+    /// exactly like an arm that is not moving at all, and sent two rounds of sign-flipping chasing a
+    /// number that was already right. Probing all three limb components settled it in one run —
+    /// pitch moved the fist half a block along x each way, roll moved it along z — and the check
+    /// asks the rig for the body's own forward now.</para>
+    /// <para>⚠ <b>When a claim about direction reads identically for both signs of its input, the
+    /// axis is wrong, not the sign.</b> Flipping the sign twice is the trap; probing every axis once
+    /// is the way out.</para>
+    /// <para>⚠ The roll is positive because a positive roll on the LEFT arm carries it inward across
+    /// the chest. The idle pose already signs the two arms opposite ways (<c>+idleRoll</c> right,
+    /// <c>−idleRoll</c> left), so taking the right arm's sign here swings the shield out into the
+    /// air beside the player rather than across them.</para>
+    /// </remarks>
+    private const float BlockPitch = 1.28f;
+    private const float BlockYaw = 0.22f;
+    private const float BlockRoll = 0.34f;
+
     /// <summary>Begins a swing now. Ignored while one is already running; the repeat handles that.</summary>
     public void Strike()
     {
@@ -149,8 +191,10 @@ public sealed class PlayerAnimator
     /// Advances one frame.
     /// </summary>
     /// <param name="holding">Whether the strike button is still down, which repeats the swing.</param>
+    /// <param name="blocking">Whether the guard is up, which brings the other arm across.</param>
     public void Update(
-        float dt, Vector3 position, float lookYawDegrees, float walkSpeed, bool sneaking, bool holding)
+        float dt, Vector3 position, float lookYawDegrees, float walkSpeed, bool sneaking, bool holding,
+        bool blocking = false)
     {
         if (dt <= 0f) return;
         dt = MathF.Min(dt, 0.1f);
@@ -161,6 +205,9 @@ public sealed class PlayerAnimator
 
         var sneakTarget = sneaking ? 1f : 0f;
         _sneak += (sneakTarget - _sneak) * MathF.Min(1f, SneakResponse * dt);
+
+        var blockTarget = blocking ? 1f : 0f;
+        _block += (blockTarget - _block) * MathF.Min(1f, BlockResponse * dt);
 
         StepSwing(dt, holding);
     }
@@ -275,6 +322,16 @@ public sealed class PlayerAnimator
             // looking like it is bolted to a post.
             bodyYaw += MathF.Sin(MathF.Sqrt(t) * MathF.Tau) * SwingTwist;
         }
+
+        // ⛳ The guard, and it is the whole reason this exists: a raised shield used to be a player
+        // standing perfectly still. Blended over whatever the arm was already doing rather than
+        // replacing it, so walking with the guard up still walks — the arm arrives at the same place
+        // from a stride, from a stand and from a crouch.
+        if (_block > 0f)
+            left = new LimbPose(
+                float.Lerp(left.Pitch, BlockPitch, _block),
+                float.Lerp(left.Yaw, BlockYaw, _block),
+                float.Lerp(left.Roll, BlockRoll, _block));
 
         // Crouching tips the torso over the feet and steps the legs back under it. Arms come
         // forward with the shoulders, since they hang from the body.

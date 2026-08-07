@@ -1094,7 +1094,8 @@ public static class WorldAudit
         var gripFaults = HeldGrip.Validate();
         Check("what is held stays in the fist", gripFaults.Count == 0,
             gripFaults.Count == 0
-                ? "a tool and a block, classic and slim, at four points through a swing"
+                ? "a tool and a block, classic and slim, at four points through a swing; and the "
+                  + "other hand holds its own, two fists apart, with a guard that comes up and down"
                 : $"{gripFaults.Count} faults: {gripFaults[0]}");
 
         var (modelTall, modelWide, jointFaults) = MeasureModel();

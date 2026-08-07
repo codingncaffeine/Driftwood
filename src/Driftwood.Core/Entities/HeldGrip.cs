@@ -276,6 +276,39 @@ public static class HeldGrip
 
     public static readonly Grip ThirdBlock = new(0.78f, 0f, 0f, new Vector3(0.05f, -0.02f, -0.04f));
 
+    /// <summary>The other hand, carrying something at the side.</summary>
+    /// <remarks>
+    /// <para>⛔ <b>Written out rather than mirrored from <see cref="ThirdFlat"/>, and that is a
+    /// decision.</b> A mechanical reflection is not three sign flips: a rotation about an axis
+    /// reflects to a rotation about the <em>reflected axis</em> by the negated angle, and
+    /// <see cref="Twist"/> turns about the picture's diagonal, so mirroring it correctly means
+    /// carrying a second long axis through the whole chain. Every other grip in this file is a
+    /// hand-dialled constant with a note saying why; making this one the exception would buy a
+    /// generality nothing needs.</para>
+    /// <para>⚠ <b>And the twist is zero here, which is the reason nothing needs it.</b> The twist
+    /// exists so an axe leads with its edge. Nothing diagonal goes in the other hand — it holds a
+    /// shield, a torch, a block or something to eat — so the axis a blade turns on has nothing in
+    /// this hand to turn.</para>
+    /// </remarks>
+    public static readonly Grip OffhandFlat =
+        new(-MathF.PI / 2f, 0.22f, 0.55f, new Vector3(-0.05f, -0.04f, -0.04f));
+
+    public static readonly Grip OffhandBlock = new(-0.78f, 0f, 0f, new Vector3(-0.05f, -0.02f, -0.04f));
+
+    /// <summary>
+    /// A shield with the guard up: broad face out, standing in front of the chest.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>Its own grip, because a raised shield is not a carried thing turned a bit.</b> Everything
+    /// else in a hand is held at an angle so its silhouette reads; a shield up is the one item whose
+    /// whole job is to present its face flat to whatever is in front of the player. Held at the side
+    /// like a torch, a guard reads as somebody holding a plank.
+    /// <para>⚠ The arm brings most of it — <c>PlayerAnimator</c> carries the limb across the chest —
+    /// so this only has to stand the board off the fist and square it up. Both halves have to move
+    /// together if either is dialled.</para>
+    /// </remarks>
+    public static readonly Grip ShieldUp = new(0.16f, 0f, 0f, new Vector3(-0.06f, -0.06f, -0.10f));
+
     /// <summary>Where a block is held: near its middle.</summary>
     /// <remarks>
     /// ⛔ <b>Not by its underside, which is the obvious answer and put it off the screen entirely.</b>
@@ -377,6 +410,32 @@ public static class HeldGrip
     }
 
     /// <summary>
+    /// And where the thing in the OTHER hand is: the model's left fist, in the world.
+    /// </summary>
+    /// <param name="guard">
+    /// True when this is a shield being held up, which is its own grip and its own arm pose.
+    /// </param>
+    /// <remarks>
+    /// ⛳ <b>The offhand was a pocket on the interface and nothing on the body.</b> A raised shield
+    /// stopped half of every blow that got past the plate, cost the player every swing and every
+    /// block placed while it was up, and showed on the model as a person standing still doing
+    /// nothing — which is the one part of the armour work the user has not been able to see at all.
+    /// <para>⚠ <b>The LEFT arm's pivot, not the right one's.</b> <see cref="PlayerModel.ArmPivot"/>
+    /// takes the side and answers a different shoulder; handing it <c>true</c> here would place the
+    /// item correctly relative to a shoulder on the wrong side of the chest, which reads as a shield
+    /// floating a body's width away and is exactly the kind of thing that survives review because
+    /// both calls look identical.</para>
+    /// </remarks>
+    public static Matrix4x4 InOtherHand(
+        Vector3 feet, in PlayerPose pose, bool flat, Vector3 hold, ArmStyle arms, bool guard)
+    {
+        var arm = Rig(feet, pose).Part(PlayerPart.LeftArm, PlayerModel.ArmPivot(false), pose);
+        var grip = guard ? ShieldUp : flat ? OffhandFlat : OffhandBlock;
+
+        return InFist(grip, HeldSize(flat), hold, arms, right: false) * arm;
+    }
+
+    /// <summary>
     /// Checks a held thing is in the fist and not in the chest, at rest and through a swing.
     /// </summary>
     /// <remarks>
@@ -434,6 +493,109 @@ public static class HeldGrip
                 faults.Add($"{label} in first person at t={t:F2}: {inView.Z:F2} on z, which is behind the camera");
 
             animator.Update(1f / 60f, feet, 0f, PlayerBody.WalkSpeed, false, false);
+        }
+
+        faults.AddRange(ValidateOffhand(feet));
+        return faults;
+    }
+
+    /// <summary>
+    /// Checks the other hand holds what it is given, and that a raised guard actually goes up.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛔ <b>The side is the whole check, and it is the one a copy of the right-hand path
+    /// passes.</b> Every line of the offhand transform looks exactly like the main hand's, so the
+    /// failure that survives review is a shield placed correctly against the <em>wrong shoulder</em>
+    /// — which reads as a board floating a body's width away and is invisible in the code. The fist
+    /// asked for here is the LEFT one, and there is an arm below asserting the two are not the same
+    /// place: without it, a build that hands both sides to the right arm passes every line.</para>
+    /// <para>⛔ <b>And the guard has to MOVE, measured in seconds rather than in frames.</b> "The
+    /// shield is in the left hand" is equally true of a guard that never comes up, which is the exact
+    /// state this work exists to fix. So the arm is stepped for a fixed time with blocking on and the
+    /// shield has to end up materially further forward than it started — and the down pose is
+    /// measured as its own control, or "it is in front of the chest" passes a shield that was always
+    /// in front of the chest.</para>
+    /// </remarks>
+    private static List<string> ValidateOffhand(Vector3 feet)
+    {
+        var faults = new List<string>();
+        var hold = new Vector3(-0.21f, -0.36f, 0f);
+
+        foreach (var arms in (ReadOnlySpan<ArmStyle>)[ArmStyle.Classic, ArmStyle.Slim])
+        {
+            var animator = new PlayerAnimator();
+            animator.Reset(0f);
+
+            var pose = animator.Pose(0f, 0f);
+            var rig = Rig(feet, pose);
+
+            var leftArm = rig.Part(PlayerPart.LeftArm, PlayerModel.ArmPivot(false), pose);
+            var leftFist = Vector3.Transform(PlayerModel.FistInArm(arms, false) * PlayerModel.Unit, leftArm);
+
+            var rightArm = rig.Part(PlayerPart.RightArm, PlayerModel.ArmPivot(true), pose);
+            var rightFist = Vector3.Transform(PlayerModel.FistInArm(arms, true) * PlayerModel.Unit, rightArm);
+
+            // ⛔ The two hands must be two places. Everything below is satisfied by a build that
+            // quietly uses the right arm for both.
+            var apart = Vector3.Distance(leftFist, rightFist);
+            if (apart < PlayerModel.Unit * 6f)
+                faults.Add($"the two fists of a {arms} model are {apart:F3} blocks apart, which is one hand");
+
+            // ⛔⛔ THE MODEL'S OWN FORWARD, ASKED OF THE RIG — never world −z. This is the whole
+            // reason the first version of this check was useless: at a body yaw of zero the model
+            // faces world **+x**, so measuring "did the shield come forward" along world z was
+            // measuring the model's SIDE. It read the same 0.337 for a pitch of +1.25 and of −1.25
+            // and looked exactly like an arm that was not moving, when the arm was swinging half a
+            // block each way along an axis nothing was looking at.
+            var forward = Vector3.Normalize(Vector3.TransformNormal(-Vector3.UnitZ, rig.Body));
+
+            var down = InOtherHand(feet, pose, flat: true, hold, arms, guard: false);
+            var slip = Vector3.Distance(Vector3.Transform(hold, down), leftFist);
+
+            if (slip > 0.12f)
+                faults.Add($"the other hand of a {arms} model gripped {slip:F3} blocks from its own fist");
+
+            // Guard up, stepped for a fifth of a second — which is real time, not a frame count.
+            for (var elapsed = 0f; elapsed < 0.2f; elapsed += 1f / 60f)
+            {
+                animator.Update(1f / 60f, feet, 0f, PlayerBody.WalkSpeed, false, false, blocking: true);
+                pose = animator.Pose(0f, 0f);
+            }
+
+            if (animator.BlockAmount < 0.9f)
+                faults.Add($"the guard reached {animator.BlockAmount:F2} of the way up in a fifth of a second");
+
+            var guarded = InOtherHand(feet, pose, flat: true, hold, arms, guard: true);
+
+            // ⛳ THE ARM FIRST, and separately from what it is carrying. Asking only where the shield
+            // ends up folds two independent things — whether the limb moved and whether the grip
+            // points the board the right way — into one number, and the first time it went red the
+            // reading was the same for a pitch of +1.25 and of −1.25, which is a fact about the arm
+            // and says nothing whatever about the grip.
+            var upArm = Rig(feet, pose).Part(PlayerPart.LeftArm, PlayerModel.ArmPivot(false), pose);
+            var upFist = Vector3.Transform(PlayerModel.FistInArm(arms, false) * PlayerModel.Unit, upArm);
+
+            var armCame = Vector3.Dot(upFist - leftFist, forward);
+            if (armCame < PlayerModel.Unit * 4f)
+                faults.Add(
+                    $"a raised {arms} guard brings the fist {armCame:F3} blocks forward, which is "
+                    + $"not an arm going up (guard {animator.BlockAmount:F2}, pitch {pose.LeftArm.Pitch:F2})");
+
+            // And then the board itself, which is the grip's half of the same claim.
+            var boardCame = Vector3.Dot(
+                Vector3.Transform(Vector3.Zero, guarded) - Vector3.Transform(Vector3.Zero, down), forward);
+
+            if (boardCame < PlayerModel.Unit * 4f)
+                faults.Add(
+                    $"a raised {arms} guard holds the board {boardCame:F3} blocks further forward "
+                    + $"than a hand at rest, so putting it up moves it nowhere (the fist came {armCame:F3})");
+
+            // And it comes back down, which is the control on the arm pose being a blend at all.
+            for (var elapsed = 0f; elapsed < 0.4f; elapsed += 1f / 60f)
+                animator.Update(1f / 60f, feet, 0f, PlayerBody.WalkSpeed, false, false, blocking: false);
+
+            if (animator.BlockAmount > 0.1f)
+                faults.Add($"the guard was still {animator.BlockAmount:F2} up four tenths after being dropped");
         }
 
         return faults;

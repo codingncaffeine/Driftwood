@@ -4878,7 +4878,8 @@ public sealed class ClientHost : IDisposable
 
         _animator.Update(
             dt, stood, _camera.Yaw, PlayerBody.WalkSpeed, sneaking,
-            !blocking && (_holdingBreak || _holdingPlace));
+            !blocking && (_holdingBreak || _holdingPlace),
+            blocking);
 
         // ⚠ Taken and then discarded rather than not taken. The animator counts swings whether or
         // not anybody asks for them, so a shield held up for a minute would otherwise release a
@@ -7985,6 +7986,23 @@ public sealed class ClientHost : IDisposable
                             _player.Position, pose, !carried.DrawsAsBlock,
                             _itemRenderer.HoldPoint(carried)),
                         carried, _registry, HandLight(light));
+                }
+
+                // ⛳ And the other hand, which had a pocket on the interface and nothing on the body.
+                // A raised shield turned aside half of every blow that got past the plate and cost
+                // its holder every swing and every block placed — and read on the model as somebody
+                // standing perfectly still. It is the one part of the armour work nobody could see.
+                var offhand = _equipment[EquipSlot.Offhand];
+                if (!offhand.IsEmpty)
+                {
+                    var other = _items[offhand.Item];
+                    _blockTextures.Bind();
+                    _itemRenderer.DrawInHand(
+                        viewProj,
+                        _playerRenderer.OffhandWorldTransform(
+                            _player.Position, pose, !other.DrawsAsBlock,
+                            _itemRenderer.HoldPoint(other), _vitals.ShieldRaised),
+                        other, _registry, HandLight(light));
                 }
             }
 
