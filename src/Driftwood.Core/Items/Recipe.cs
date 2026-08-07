@@ -260,6 +260,33 @@ public sealed class SmeltRecipe
     /// building block. A table of "which items are ore" would have to be kept in step with this one.
     /// </remarks>
     public SmeltWork Work { get; init; } = SmeltWork.Other;
+
+    /// <summary>
+    /// This smelt as a one-square recipe, so the book beside a fire is the book beside a bench.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳⛳ <b>The user's own call — <i>"just re-use the recipe book icon that we use for the
+    /// workbench"</i></b> — and it is right twice over. The book already draws a page of recipes,
+    /// pages through them, dims what cannot be paid for, tooltips what a thing costs and hit-tests
+    /// every square; a second list built beside a furnace would be all of that written again in order
+    /// to say something simpler.</para>
+    /// <para>⛔ <b>Built for DISPLAY, and deliberately never added to
+    /// <see cref="RecipeBook.Recipes"/>.</b> A smelt living in the craftable set would be a raw steak
+    /// that turns into a cooked one in the pockets, with no fire and none of the ten seconds — and
+    /// the reachability walk would then quite correctly report that the whole cooked-food tree needs
+    /// no station at all.</para>
+    /// <para>⚠ <b>One square, shapeless.</b> A smelt has exactly one ingredient and nothing to
+    /// arrange, so a 1×1 pattern is not a simplification of it — it is what it is.</para>
+    /// </remarks>
+    public Recipe AsShown() => new()
+    {
+        Name = Name,
+        Result = Result,
+        Width = 1,
+        Height = 1,
+        Cells = [Input],
+        Shapeless = true,
+    };
 }
 
 /// <summary>What kind of job a smelt is.</summary>

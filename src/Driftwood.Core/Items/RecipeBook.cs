@@ -59,6 +59,27 @@ public sealed class RecipeBook
         return null;
     }
 
+    /// <summary>
+    /// Everything a smelter of this kind will work, in the order it was written down.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛔⛔ <b>Reported by the user: <i>"I'm not seeing any recipes for food when i look in the
+    /// furnace."</i> There was no list. At all.</b> A furnace opened three slots and nothing else, so
+    /// the only way to learn that a fire cooks meat was to already know. Every one of the smelts
+    /// worked perfectly and not one was ever named anywhere a player could look — which is exactly
+    /// the fault this project already fixed for the bench, whose own note says it outright: <i>a thing
+    /// that is absent and a thing that does not exist look identical.</i></para>
+    /// <para>⛳ <b>Filtered by the kind, so each fire's book is its own.</b> A smoker lists what a
+    /// smoker cooks and a campfire lists what a campfire cooks, which is also the clearest statement
+    /// the game makes anywhere about what the specialised fires are for.</para>
+    /// </remarks>
+    public IEnumerable<SmeltRecipe> SmeltsAt(FurnaceKind kind)
+    {
+        foreach (var recipe in _smelting)
+            if (FurnaceKinds.Takes(kind, recipe.Work))
+                yield return recipe;
+    }
+
     /// <summary>Seconds of burn this is worth. Zero when it is not fuel.</summary>
     public float BurnSeconds(ItemId fuel) => fuel.IsNone ? 0f : _items[fuel].BurnSeconds;
 

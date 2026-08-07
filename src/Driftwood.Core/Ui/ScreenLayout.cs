@@ -299,11 +299,17 @@ public sealed class ScreenLayout
         _zones.Clear();
         Kind = kind;
 
-        // ⚠ The book only folds out beside a GRID. It was written as "anything but a furnace", which
-        // was true when a furnace was the only other panel — and the day a stonecutter arrived with
-        // a list of its own on the same zone kind, the book drew straight over it out of a recipe
-        // list that was empty, and threw. Name what it belongs to rather than what it does not.
-        BookOut = bookOut && kind is PanelKind.Player or PanelKind.Bench;
+        // ⚠ Named by what it belongs to rather than by what it does not. It was written as "anything
+        // but a furnace", which was true when a furnace was the only other panel — and the day a
+        // stonecutter arrived with a list of its own on the same zone kind, the book drew straight
+        // over it out of an empty recipe list, and threw.
+        //
+        // ⛳⛳ AND THE FURNACE HAS ONE NOW, which is the user's own instruction: "just re-use the
+        // recipe book icon that we use for the workbench". It had none, so a fire was three squares
+        // and no indication anywhere in the game that one of them cooks meat — reported as "I'm not
+        // seeing any recipes for food when i look in the furnace". A stonecutter still has none
+        // because its list IS its panel, built from the rock on its bed.
+        BookOut = bookOut && kind is PanelKind.Player or PanelKind.Bench or PanelKind.Furnace;
 
         Zoom = ZoomFor(screenWidth, screenHeight, BookOut);
 

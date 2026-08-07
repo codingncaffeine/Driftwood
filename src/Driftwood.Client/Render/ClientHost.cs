@@ -2400,6 +2400,16 @@ public sealed class ClientHost : IDisposable
                 RefreshScreen();
                 return;
 
+            // ⛳ A fire's book loads the fire rather than a grid, which is the same gesture one
+            // station over: pick a row, click it again, and what it needs comes out of the pockets
+            // and onto the flame. A book you can read and not act on, in a screen where every other
+            // book acts, reads as a list that has not been wired up.
+            case ZoneKind.Recipe when _hudScreen.Kind == HudScreenKind.Furnace:
+                if (_hudScreen.Selected == at.Value.Index) LoadFire(at.Value.Index, many);
+                else _hudScreen.Selected = at.Value.Index;
+                RefreshScreen();
+                return;
+
             case ZoneKind.Recipe:
                 // The first click picks a recipe out; a click on the one already picked lays it
                 // into the grid. Selecting and acting on one press would make a mis-click move
@@ -2992,6 +3002,15 @@ public sealed class ClientHost : IDisposable
         _holdingBreak = false;
         _holdingPlace = false;
         _mining.Cancel();
+
+        // ⛔ Emptied here, like every other opener. The book is built once per opening and only
+        // rebuilt when this is empty, so a list carried over from the last station is the list that
+        // gets drawn — and the three fires do not share one: a smoker's page and a furnace's page
+        // differ by every recipe that is not food. Left out, walking from a bench to a furnace would
+        // put the bench's whole book beside the flame.
+        _shown.Clear();
+        _hudScreen.Selected = 0;
+        _hudScreen.BookPage = 0;
         _furnaces.Open(x, y, z);
         TakeThePointer();
         RefreshScreen();
@@ -3149,6 +3168,48 @@ public sealed class ClientHost : IDisposable
     /// under them on the frame they pressed enter. The settings rows are rebuilt outright, because
     /// they are cheap and because a value has to be able to change under its own label.
     /// </remarks>
+    /// <summary>What sort of fire the open station is, asked of the block standing there.</summary>
+    /// <remarks>
+    /// ⛔ <b>Off the world, never stored beside the screen</b> — the same rule the cooking tick
+    /// follows and for the same reason. Which fire this is is a property of the block somebody built,
+    /// so a copy kept anywhere else is a copy that can disagree with it; a campfire smothered while
+    /// its screen is open has to stop being a campfire immediately.
+    /// </remarks>
+    private FurnaceKind OpenFireKind() =>
+        _smelterKind[_streamer.World.GetBlock(_station.X, _station.Y, _station.Z).Value];
+
+    /// <summary>
+    /// The page of everything the fire in front of the player will work.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ <b>Lit means "you are carrying what this needs", exactly as it does at a bench.</b>
+    /// The rest are listed dim rather than hidden, because a book that shows only what you can
+    /// already afford answers "what now" and never answers "what for" — and "what for" is the entire
+    /// question a player has when they first stand in front of a furnace.</para>
+    /// <para>⚠ <b>Built once per opening</b>, like the bench's, so the list cannot change length
+    /// under a player between the frame they aim at a row and the frame they click it.</para>
+    /// </remarks>
+    private void RefreshSmeltBook()
+    {
+        var kind = OpenFireKind();
+
+        if (_shown.Count == 0)
+            foreach (var smelt in _book.SmeltsAt(kind))
+                _shown.Add(smelt.AsShown());
+
+        _hudScreen.Recipes.Clear();
+        _hudScreen.Recipes.AddRange(_shown);
+
+        _hudScreen.Payable.Clear();
+        foreach (var recipe in _shown)
+            _hudScreen.Payable.Add(_book.CanPay(_inventory, recipe));
+
+        _hudScreen.Selected = Math.Clamp(_hudScreen.Selected, 0, Math.Max(0, _shown.Count - 1));
+
+        var pages = Math.Max(1, (_shown.Count + ScreenLayout.BookPage - 1) / ScreenLayout.BookPage);
+        _hudScreen.BookPage = Math.Clamp(_hudScreen.BookPage, 0, pages - 1);
+    }
+
     private void RefreshScreen()
     {
         if (_hudScreen.Kind == HudScreenKind.None) return;
@@ -3160,8 +3221,21 @@ public sealed class ClientHost : IDisposable
         // need a list, and what is on it depends on how wide the grid is: a bench lends three.
         if (_hudScreen.IsContainer)
         {
-            // A station with no grid has no book beside it: a furnace and a chest have nothing to
-            // arrange, and a stonecutter's list is its own and is built from what is on its bed.
+            // ⛳⛳ A FIRE'S BOOK IS WHAT IT SMELTS. Reported by the user — "I'm not seeing any recipes
+            // for food when i look in the furnace" — and there was no list at all: a furnace opened
+            // three squares and nothing else, so the only way to learn that a fire cooks meat was to
+            // already know. Every smelt worked; not one was ever named where a player could look.
+            //
+            // ⛔ It is exactly the fault the bench branch below was written to fix, and its own note
+            // says it: a thing that is absent and a thing that does not exist look identical.
+            if (_hudScreen.Kind == HudScreenKind.Furnace)
+            {
+                RefreshSmeltBook();
+                return;
+            }
+
+            // A station with no grid has no book beside it: a chest has nothing to arrange, and a
+            // stonecutter's list is its own and is built from what is on its bed.
             if (_hudScreen.Grid is null)
             {
                 _hudScreen.Recipes.Clear();
@@ -4280,6 +4354,84 @@ public sealed class ClientHost : IDisposable
         _laidOut = recipe;
         if (!quiet) PlaySound(SoundMaterial.Wood, SoundEvent.Place, _viewPosition, 0.4f);
         return true;
+    }
+
+    /// <summary>
+    /// Puts what a smelt needs onto the fire, out of the pockets.
+    /// </summary>
+    /// <param name="all">
+    /// True to fill the input square as far as the pockets and the stack will allow, rather than
+    /// putting on a single one.
+    /// </param>
+    /// <remarks>
+    /// <para>⛳ <b>The fire's answer to laying a recipe into a grid.</b> A furnace has one input
+    /// square and there is nothing to arrange, so "lay it out" is simply "put the right thing in".
+    /// </para>
+    /// <para>⛔ <b>Whatever was already in there comes back to the pockets first.</b> Silently
+    /// stacking a raw potato on top of a raw steak is not possible — they are different items — so
+    /// without this the click would do nothing at all and look broken; and quietly destroying what
+    /// was in there is worse than either.</para>
+    /// <para>⚠ <b>The member actually carried is what goes in</b>, exactly as the grid does it: a
+    /// smelt named against a tag has several things that satisfy it and only one of them is in
+    /// somebody's pocket.</para>
+    /// </remarks>
+    private void LoadFire(int index, bool all)
+    {
+        if (index < 0 || index >= _shown.Count) return;
+        if (_shown[index].At(0, 0) is not { } want) return;
+
+        var fire = _furnaces.Open(_station.X, _station.Y, _station.Z);
+
+        // Whichever member of the tag is in the pockets, fewest of it first — the grid's own rule,
+        // so paying tidies an odd single rather than breaking into a full stack.
+        var pick = ItemId.None;
+        var fewest = int.MaxValue;
+
+        foreach (var member in want.Members)
+        {
+            var have = _inventory.CountOf(member);
+            if (have <= 0 || have >= fewest) continue;
+            pick = member;
+            fewest = have;
+        }
+
+        if (pick.IsNone)
+        {
+            Notice("none of that in your pockets", _items[want.Members[0]]);
+            return;
+        }
+
+        // Anything already on the fire comes off before anything else goes on.
+        if (!fire.Input.IsEmpty && fire.Input.Item.Value != pick.Value)
+        {
+            var left = _inventory.Add(fire.Input);
+            if (!left.IsEmpty && left.Count == fire.Input.Count)
+            {
+                Notice("no room to take that off first", _items[fire.Input.Item]);
+                return;
+            }
+
+            fire.Input = left;
+            if (!fire.Input.IsEmpty) return;
+        }
+
+        var room = _items[pick].MaxStack - fire.Input.Count;
+        if (room <= 0)
+        {
+            Notice("the fire is full", _items[pick]);
+            return;
+        }
+
+        var wanted = all ? Math.Min(room, _inventory.CountOf(pick)) : 1;
+        var took = _inventory.Take(pick, wanted);
+        if (took <= 0) return;
+
+        fire.Input = fire.Input.IsEmpty
+            ? new ItemStack(pick, took)
+            : new ItemStack(pick, fire.Input.Count + took);
+
+        Notice("on the fire", _items[pick]);
+        PlaySound(SoundMaterial.Wood, SoundEvent.Place, _viewPosition, 0.4f);
     }
 
     /// <summary>Makes the selected recipe outright, straight into the pockets.</summary>
@@ -5667,79 +5819,6 @@ public sealed class ClientHost : IDisposable
         return true;
     }
 
-    /// <summary>
-    /// Puts what is in hand on a lit campfire, or takes off whatever is done.
-    /// </summary>
-    /// <remarks>
-    /// <para>⛳⛳ <b>Cooking without a furnace, which is what this is FOR.</b> A furnace wants coal or
-    /// charcoal, and a player on their first evening has neither — so until now the first cooked meal
-    /// came after the first mine, which is backwards. A campfire is logs and a stick, it is already
-    /// burning, and it will cook what is put on it. Its price is time: twice a furnace, four times a
-    /// smoker.</para>
-    /// <para>⛳ <b>No screen, for the anvil's reason.</b> There is one thing on the fire and one thing
-    /// it becomes, so there is nothing to arrange and nothing to choose between.</para>
-    /// <para>⛔ <b>Taking off comes FIRST.</b> Asked the other way round, walking up with more meat in
-    /// hand while a piece is done puts the new one on and leaves the cooked one sitting there — and a
-    /// player holding a stack would never get any of it back without emptying their hand first.</para>
-    /// <para>⚠ Every refusal says why, like the anvil's. A fire that does nothing when clicked is a
-    /// fire a player decides is decoration.</para>
-    /// </remarks>
-    private void UseCampfire(int x, int y, int z)
-    {
-        var fire = _furnaces.Open(x, y, z);
-        var here = new Vector3(x + 0.5f, y + 0.5f, z + 0.5f);
-
-        // Anything cooked comes off first, then anything that was still cooking.
-        foreach (var slot in (int[])[0, 1])
-        {
-            var taking = slot == 0 ? fire.Output : fire.Input;
-            if (taking.IsEmpty) continue;
-
-            var left = _inventory.Add(taking);
-            if (!left.IsEmpty && left.Count == taking.Count)
-            {
-                Notice("no room for that", _items[taking.Item]);
-                return;
-            }
-
-            if (slot == 0) fire.Output = left; else fire.Input = left;
-
-            Notice(slot == 0 ? "taken off the fire" : "taken off half done", _items[taking.Item]);
-            PlaySound(_registry[_streamer.World.GetBlock(x, y, z)], SoundEvent.Place, here, 0.5f);
-            return;
-        }
-
-        var held = _inventory.Held;
-        if (held.IsEmpty)
-        {
-            Notice("nothing to cook", null);
-            return;
-        }
-
-        var food = _items[held.Item];
-
-        // ⛔ Asked of the RECIPE BOOK at this kind, not of whether the item is edible. A campfire
-        // takes what a campfire cooks — raw meat and a potato — and refusing bread by name would be a
-        // second copy of the smelt table living in the renderer.
-        if (_book.SmeltFor(held.Item, FurnaceKind.Campfire) is null)
-        {
-            Notice("a fire will not cook that", food);
-            return;
-        }
-
-        if (!fire.Input.IsEmpty)
-        {
-            Notice("something is already on it", _items[fire.Input.Item]);
-            return;
-        }
-
-        fire.Input = new ItemStack(held.Item, 1);
-        _inventory.SpendHeld();
-
-        Notice("on the fire", food);
-        PlaySound(_registry[_streamer.World.GetBlock(x, y, z)], SoundEvent.Place, here, 0.6f);
-    }
-
     private void UseAnvil(int x, int y, int z)
     {
         var here = new Vector3(x + 0.5f, y + 0.5f, z + 0.5f);
@@ -5873,8 +5952,14 @@ public sealed class ClientHost : IDisposable
                 UseAnvil(hit.X, hit.Y, hit.Z);
                 return;
 
+            // ⛳⛳ THE CAMPFIRE OPENS THE FIRE SCREEN NOW, on the user's instruction — "we'll need the
+            // same thing for the campfire". It deliberately had none, on the anvil's argument that
+            // one thing on the fire and one thing it becomes is nothing to arrange; but that argument
+            // was about ARRANGING, and what was actually missing was the BOOK — nowhere in the game
+            // said a fire cooks meat. The screen is the furnace's own, which is where the book lives.
+            // ⚠ A shovel still puts it out, and SmotherFire is asked before this.
             case BlockUse.Campfire:
-                UseCampfire(hit.X, hit.Y, hit.Z);
+                OpenFurnace(hit.X, hit.Y, hit.Z);
                 return;
 
             case BlockUse.Toggle when _toggle.TryGetValue(struck.Id.Value, out var other):
@@ -6246,6 +6331,7 @@ public sealed class ClientHost : IDisposable
         // unit zero by now.
         _blockTextures.Bind();
         _itemRenderer.Draw(_drops, _registry, _items, viewProj, at => ParticleLight(at));
+        DrawCookingFood(viewProj);
         _particleRenderer.Draw(
             _particles, viewProj, _viewPosition, _viewForward,
             at => ParticleLight(at), _skyState.Horizon, _fogStart, _fogEnd);
@@ -6686,6 +6772,69 @@ public sealed class ClientHost : IDisposable
         }
     }
 
+    /// <summary>Campfires with something on them that were drawn on the last frame.</summary>
+    public int CookingDrawn { get; private set; }
+
+    /// <summary>
+    /// How high above a campfire's cell its dinner sits.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ Measured against <see cref="BlockModel.Campfire"/>, not guessed: the logs stand 8 of 16 tall
+    /// and the flame planes run from 4 to 14, so anything under about a half is inside the timber and
+    /// anything over about 0.8 is floating over the fire rather than cooking on it.
+    /// </remarks>
+    private const float FoodOnFire = 0.58f;
+
+    /// <summary>
+    /// Draws whatever is cooking on a campfire, on the campfire.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳⛳ <b>The missing half of campfire cooking, and the reason it read as not working at
+    /// all.</b> Putting meat on a fire changed nothing whatever on the screen — the campfire has no
+    /// screen by design, so the only feedback was a toast that scrolled away — and a player who walks
+    /// up, right-clicks, sees the world unchanged and walks off has been told, as far as they can
+    /// tell, that the fire is scenery. Everything underneath was already working: it cooks in twenty
+    /// seconds and hands back a cooked steak. Nothing said so.</para>
+    /// <para>⛳ <b>The raw thing turns into the cooked thing in front of you</b>, because
+    /// <see cref="Furnace.Output"/> is drawn the moment it exists. That is the whole loop made
+    /// visible: put it on, watch it, take it off.</para>
+    /// <para>⚠ <b>Only a campfire</b>. A furnace and a smoker are closed boxes with a screen that
+    /// already shows their contents and a gauge for the burn; a thing floating out of a furnace's
+    /// chimney would be a bug, not feedback.</para>
+    /// </remarks>
+    private void DrawCookingFood(Matrix4x4 viewProj)
+    {
+        CookingDrawn = 0;
+
+        foreach (var (at, fire) in _furnaces.All)
+        {
+            // ⛔ Asked of the BLOCK, exactly as the cooking tick is, rather than of anything stored
+            // beside the fire. A campfire that has been smothered is an ordinary campfire block, and
+            // its dinner must stop hanging in the air the instant the flame goes out.
+            var here = _streamer.World.GetBlock(at.X, at.Y, at.Z);
+            if (_smelterKind[here.Value] != FurnaceKind.Campfire) continue;
+
+            // What is done, or failing that what is still cooking. Nothing at all is the common case.
+            var showing = !fire.Output.IsEmpty ? fire.Output : fire.Input;
+            if (showing.IsEmpty) continue;
+
+            var type = _items[showing.Item];
+            var middle = new Vector3(at.X + 0.5f, at.Y + FoodOnFire, at.Z + 0.5f);
+
+            // ⚠ Lying down, not standing up. Every item in this game is drawn upright — in a fist, on
+            // the floor, in a slot — and a steak standing on its edge in a fire reads as a signpost.
+            // A quarter turn about x lays a flat sprite onto the flame like something on a grill.
+            var scale = 0.22f * (type.DrawsAsBlock ? 1f : 1.55f);
+            var model = Matrix4x4.CreateScale(scale)
+                      * Matrix4x4.CreateRotationX(MathF.PI * 0.5f)
+                      * Matrix4x4.CreateRotationY((float)_elapsed * 0.9f)
+                      * Matrix4x4.CreateTranslation(middle);
+
+            _itemRenderer.DrawInHand(viewProj, model, type, _registry, ParticleLight(middle));
+            CookingDrawn++;
+        }
+    }
+
     /// <summary>Reads the frame off the front buffer and writes it, right way up.</summary>
     private unsafe void WriteShot(Vector2D<int> size, string name)
     {
@@ -6727,11 +6876,137 @@ public sealed class ClientHost : IDisposable
 
     private Vector2 _breathAt;
 
+    /// <summary>
+    /// The whole frame at half a lungful, then twice at a full one.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛔⛔ <b>THE WHOLE FRAME, deliberately, and NOT the rectangle the bar says it used.</b>
+    /// <see cref="HudRenderer.LastBubbles"/> is a counter the drawing method increments itself: it
+    /// proves quads were appended and says nothing whatever about a pixel arriving. Reading a patch
+    /// at <see cref="_breathAt"/> would be barely better — it would inherit the very layout
+    /// arithmetic under suspicion, and a bar drawn off the bottom of the screen would come back
+    /// "nothing there" indistinguishably from a bar that was never drawn at all.</para>
+    /// <para>⛳ So the question asked is the widest one there is: <b>did ANY pixel anywhere on the
+    /// screen change when the air was taken away.</b> It needs no constant, cannot be fooled by a
+    /// wrong position, and the bounding box of whatever did change says where the bar actually
+    /// went — which is the thing three sessions of reading the code could not settle.</para>
+    /// <para>⚠ <b>Three reads, because two cannot tell a bubble from a cloud.</b> The overlay is
+    /// drawn over a live world with clouds drifting and a sun moving, so <em>some</em> pixels differ
+    /// between any two frames. The second pair is taken with the air already full and is the noise
+    /// floor the first pair has to beat.</para>
+    /// </remarks>
+    private byte[]? _frameHalfAir;
+    private byte[]? _frameFullAir;
+    private byte[]? _frameFullAgain;
+
+    /// <summary>Pixels that changed when the air went, and how many change anyway.</summary>
+    private int _breathPixels = -1;
+    private int _breathNoise = -1;
+
+    /// <summary>Where on the screen those pixels were, in framebuffer coordinates.</summary>
+    private (int X0, int Y0, int X1, int Y1) _breathBox = (-1, -1, -1, -1);
+
     /// <summary>The water layer as it was ten frames ago, for the check that it moves.</summary>
     private byte[]? _waterBefore;
 
     /// <summary>True once the water on the card has been seen to differ from itself.</summary>
     private bool _waterMoved;
+
+    /// <summary>The whole back buffer as it stands, right now, in the card's own row order.</summary>
+    private unsafe byte[] ReadFrame(Vector2D<int> size)
+    {
+        var raw = new byte[size.X * size.Y * 4];
+        fixed (byte* p = raw)
+            _gl.ReadPixels(0, 0, (uint)size.X, (uint)size.Y, PixelFormat.Rgba, PixelType.UnsignedByte, p);
+        return raw;
+    }
+
+    /// <summary>
+    /// Wipes the world off the frame, draws the overlay alone on flat black, and reads that.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛔ <b>The world had to go, and the first version of this check is why.</b> Comparing two
+    /// ordinary frames put <b>28,505</b> changed pixels on the board before the air was touched at
+    /// all — clouds drift, the sun moves, water animates — and six bubbles are worth about seven
+    /// hundred. The signal was inside the noise, so the honest answer was not a bigger threshold but
+    /// a quieter background.</para>
+    /// <para>⛳ <b>It is still the real <see cref="HudRenderer.Draw"/>, with real GL state, on the real
+    /// back buffer.</b> Nothing is simulated and no arithmetic is re-implemented; the only thing taken
+    /// away is everything that was never being measured. Two of these frames taken with the same
+    /// vitals must come back <em>identical</em>, which is what makes the third read a control rather
+    /// than a hope.</para>
+    /// </remarks>
+    private byte[] HudOnlyFrame(Vector2D<int> size)
+    {
+        _gl.ClearColor(0f, 0f, 0f, 1f);
+        _gl.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
+
+        _furnaces.TryGet(_station.X, _station.Y, _station.Z, out var open);
+        _hudScreen.Burning = _hudScreen.Kind == HudScreenKind.Furnace ? open : null;
+
+        _hud.Draw(
+            _blockTextures, _items, _inventory, _equipment, _vitals,
+            _hudScreen, _layout, _toasts, size.X, size.Y);
+
+        return ReadFrame(size);
+    }
+
+    /// <summary>
+    /// Whether taking the air away changed anything on the screen, and where.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>The noise floor is measured rather than assumed.</b> Two frames of the same live world
+    /// never come back identical, so a bare "some pixels differ" would be satisfied by a drifting
+    /// cloud and would have called this bar working for as long as anybody cared to look. What is
+    /// claimed is that the air is worth <em>more</em> change than a frame is worth on its own.
+    /// </remarks>
+    private void JudgeBreath()
+    {
+        if (_frameHalfAir is null || _frameFullAir is null || _frameFullAgain is null) return;
+        if (_frameHalfAir.Length != _frameFullAir.Length) return;
+        if (_frameFullAir.Length != _frameFullAgain.Length) return;
+
+        _breathNoise = Differ(_frameFullAir, _frameFullAgain, out _);
+        _breathPixels = Differ(_frameHalfAir, _frameFullAir, out _breathBox);
+
+        var box = _breathBox.X0 < 0
+            ? "nowhere"
+            : $"x {_breathBox.X0}..{_breathBox.X1}, y {_breathBox.Y0}..{_breathBox.Y1} from the bottom";
+
+        Console.WriteLine(
+            $"ui-check    breath px  {_breathPixels} pixels changed when the air went, against "
+            + $"{_breathNoise} between two frames that did not; they were at {box}");
+        Console.Out.Flush();
+
+        // Counted exactly, never averaged, and the bounding box comes off the same walk.
+        int Differ(byte[] a, byte[] b, out (int, int, int, int) bounds)
+        {
+            var width = _frameWidth;
+            var count = 0;
+            int x0 = int.MaxValue, y0 = int.MaxValue, x1 = -1, y1 = -1;
+
+            for (var p = 0; p < a.Length; p += 4)
+            {
+                if (a[p] == b[p] && a[p + 1] == b[p + 1] && a[p + 2] == b[p + 2]) continue;
+
+                count++;
+                var pixel = p / 4;
+                var x = pixel % width;
+                var y = pixel / width;
+
+                if (x < x0) x0 = x;
+                if (y < y0) y0 = y;
+                if (x > x1) x1 = x;
+                if (y > y1) y1 = y;
+            }
+
+            bounds = count == 0 ? (-1, -1, -1, -1) : (x0, y0, x1, y1);
+            return count;
+        }
+    }
+
+    /// <summary>The width the captured frames were read at, for turning an offset into a position.</summary>
+    private int _frameWidth = 1;
 
     /// <summary>What share of the water layer changed, and the control that says the read is real.</summary>
     private void JudgeWater()
@@ -6923,10 +7198,25 @@ public sealed class ClientHost : IDisposable
             // deliberately not drawn under one.
             case 50: _vitals.Restore(PlayerVitals.MaxHealth, PlayerVitals.MaxBreath / 2); break;
 
+            // ⛔⛔ AND THE ONLY MEASUREMENT THAT SETTLES IT: the frame itself, before and after the
+            // air comes back. Everything above this line is the renderer being asked about its own
+            // work. This is the screen being asked instead.
             case 52:
                 _breathBubbles = _hud.LastBubbles;
                 _breathAt = _hud.LastBubbleAt;
+                _frameWidth = size.X;
+                _frameHalfAir = HudOnlyFrame(size);
                 _vitals.Restore(PlayerVitals.MaxHealth, PlayerVitals.MaxBreath);
+                break;
+
+            case 54: _frameFullAir = HudOnlyFrame(size); break;
+
+            // ⛔ The control, and it is the strong kind: the same vitals drawn twice on the same flat
+            // background have to come back pixel for pixel identical. Any difference at all here
+            // means the read or the draw is unrepeatable, and the number above it means nothing.
+            case 56:
+                _frameFullAgain = HudOnlyFrame(size);
+                JudgeBreath();
                 break;
 
             case 60: SampleUi(size, "no screen"); break;
@@ -7118,8 +7408,130 @@ public sealed class ClientHost : IDisposable
                 StopTyping(accept: false);
                 break;
 
-            case 331: JudgeUi(); _window.Close(); break;
+            // ⛔⛔ THE FIRE'S BOOK, WHICH IS THE THING A USER HAD TO REPORT: "I'm not seeing any
+            // recipes for food when i look in the furnace." There was no list at all, and no screen
+            // in this script had ever opened a furnace — the eight it walks are the eight that had
+            // one. A page counted here is a page that exists; the sample beside it is a page that
+            // arrived.
+            case 331: CloseScreen(); OpenFireForCheck(); break;
+
+            case 340:
+                SampleUi(size, "furnace");
+                ProbeFireBook(size);
+                break;
+
+            case 341: JudgeUi(); _window.Close(); break;
         }
+    }
+
+    /// <summary>What the fire's book came to: rows laid out, and rows that reached the screen.</summary>
+    private (int Page, int Foods, int Drawn, bool Loaded) _uiFire = (-1, -1, -1, false);
+
+    /// <summary>
+    /// Builds a real furnace beside the player and opens it, with something to cook in hand.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>A real block, not just the screen.</b> Which fire this is is read off the cell every
+    /// time it is asked, so opening the furnace screen over a cell holding stone would silently
+    /// measure the default kind — and would go on passing on a build where no smelter block ever
+    /// resolved to anything.
+    /// </remarks>
+    private void OpenFireForCheck()
+    {
+        var at = ((int)MathF.Floor(_player.Position.X) + 2, (int)MathF.Floor(_player.Position.Y),
+                  (int)MathF.Floor(_player.Position.Z));
+
+        _streamer.EditBlock(at.Item1, at.Item2, at.Item3, _registry.ByName("furnace_north").Id);
+
+        // ⛳ A lit campfire with dinner on it, one cell over, so the thing drawn ON a fire is at
+        // least walked. ⚠ This proves the enumeration, the kind lookup and the transform run — it is
+        // a COUNTER, not a pixel, and it is not the same claim as the breath bar's. Whether a steak
+        // on a campfire reads as a steak on a campfire is the user's eyes, as it always is here.
+        var fire = (at.Item1, at.Item2, at.Item3 + 2);
+        _streamer.EditBlock(fire.Item1, fire.Item2, fire.Item3, _registry.ByName("campfire_x_lit").Id);
+        _furnaces.Open(fire.Item1, fire.Item2, fire.Item3).Input =
+            new ItemStack(_items.ByName("raw_beef").Id, 1);
+
+        _inventory.Clear();
+        _inventory.Add(new ItemStack(_items.ByName("raw_beef").Id, 3));
+
+        OpenFurnace(at.Item1, at.Item2, at.Item3);
+        _hudScreen.BookOut = true;
+        RefreshScreen();
+    }
+
+    /// <summary>
+    /// What the fire's book actually put on the screen, counted and then read off the card.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ <b>Three separate claims, because the first two are the ones that were already true
+    /// while the feature did not exist.</b> That the page has rows is a fact about a list; that the
+    /// rows are laid out is a fact about <c>ScreenLayout</c>; and neither is the same claim as a
+    /// picture of a steak being on the screen. The last one is read out of the framebuffer, which is
+    /// the distinction this project paid for twice in one day.</para>
+    /// <para>⚠ <b>Sampled against the panel beside it rather than against a remembered colour.</b>
+    /// A recipe square that drew nothing reads as the book's own backing, and the book's backing is
+    /// not a number anybody should be writing down here.</para>
+    /// </remarks>
+    private unsafe void ProbeFireBook(Vector2D<int> size)
+    {
+        var page = 0;
+        var drawn = 0;
+        var scale = HudRenderer.ScaleFor(size.Y);
+
+        // ⚠ Outside the loop. A stackalloc inside one is a frame that grows with every row of the
+        // page, which is a real overflow on a long book rather than a style note.
+        Span<byte> middle = stackalloc byte[4];
+        Span<byte> beside = stackalloc byte[4];
+
+        foreach (var zone in _layout.Zones)
+        {
+            if (zone.Kind != ZoneKind.Recipe) continue;
+            if (zone.Index >= _hudScreen.Recipes.Count) continue;
+            page++;
+
+            // The middle of the square, in the framebuffer's own bottom-up rows.
+            var x = (int)((zone.X + zone.W * 0.5f) * scale);
+            var y = (int)((zone.Y + zone.H * 0.5f) * scale);
+            if (x < 0 || y < 0 || x >= size.X || y >= size.Y) continue;
+
+            fixed (byte* p = middle)
+                _gl.ReadPixels(x, size.Y - 1 - y, 1, 1, PixelFormat.Rgba, PixelType.UnsignedByte, p);
+
+            // A few pixels above the square, which is the book's own backing and never an icon.
+            var above = Math.Clamp(y - (int)(zone.H * scale), 0, size.Y - 1);
+            fixed (byte* p = beside)
+                _gl.ReadPixels(x, size.Y - 1 - above, 1, 1, PixelFormat.Rgba, PixelType.UnsignedByte, p);
+
+            if (middle[0] != beside[0] || middle[1] != beside[1] || middle[2] != beside[2]) drawn++;
+        }
+
+        // Something edible on the page, which is the word the user used.
+        var foods = 0;
+        foreach (var recipe in _hudScreen.Recipes)
+            if (_items[recipe.Result.Item].Feeds > 0) foods++;
+
+        // ⛳ AND THAT CLICKING ONE LOADS THE FIRE. A book you can read and not act on is a list that
+        // has not been wired up, and nothing else in this script goes down the LoadFire path.
+        var pick = -1;
+        for (var i = 0; i < _hudScreen.Recipes.Count; i++)
+            if (_hudScreen.Payable[i]) { pick = i; break; }
+
+        var loaded = false;
+        if (pick >= 0)
+        {
+            _hudScreen.Selected = pick;
+            LoadFire(pick, all: false);
+            loaded = _furnaces.TryGet(_station.X, _station.Y, _station.Z, out var fire) && !fire.Input.IsEmpty;
+        }
+
+        _uiFire = (page, foods, drawn, loaded);
+
+        Console.WriteLine(
+            $"ui-check    fire book  {page} rows laid out of {_hudScreen.Recipes.Count}, {foods} of them "
+            + $"edible, {drawn} reached the screen; clicking one "
+            + (loaded ? "put it on the fire" : "PUT NOTHING ON THE FIRE"));
+        Console.Out.Flush();
     }
 
     /// <summary>Which row of the menu carries the seed box, found by its label.</summary>
@@ -8338,6 +8750,43 @@ public sealed class ClientHost : IDisposable
             Console.WriteLine(
                 $"ui-check    breath     {_breathBubbles} bubbles on half a lungful, first at "
                 + $"{_breathAt.X:F0},{_breathAt.Y:F0}");
+
+        // ⛔⛔ AND THE SAME QUESTION ASKED OF THE SCREEN. The line above is the renderer counting its
+        // own quads, which is exactly the claim that was written down as proof and was not — see
+        // JudgeBreath. A check that could not take its measurement is a fault, not a pass.
+        if (_breathPixels < 0)
+            faults.Add("the breath bar was never measured against the framebuffer at all");
+        else if (_breathNoise > 0)
+            faults.Add(
+                $"the overlay drawn twice from the same vitals differed by {_breathNoise} pixels, so "
+                + "the framebuffer read is not repeatable and the breath measurement means nothing");
+        else if (_breathPixels <= 0)
+            faults.Add(
+                "taking the air away changed nothing whatever on the screen, so the bubbles are "
+                + "being built and never drawn");
+
+        // ⛔⛔ THE FIRE'S BOOK, reported by the user as "I'm not seeing any recipes for food when i
+        // look in the furnace" — and there was no list at all. Three claims, because the first two
+        // were already satisfiable while nothing appeared: a page exists, it is laid out, and it
+        // reached the card.
+        if (_uiFire.Page < 0)
+            faults.Add("the furnace's recipe book was never measured at all");
+        else if (_uiFire.Page == 0)
+            faults.Add("a furnace opened with no recipes beside it, so nothing says what a fire is for");
+        else if (_uiFire.Foods == 0)
+            faults.Add("a furnace's book names nothing edible, which is the one thing it is looked at for");
+        else if (_uiFire.Drawn == 0)
+            faults.Add(
+                $"{_uiFire.Page} recipes were laid out beside the furnace and not one of them put a "
+                + "pixel on the screen");
+        else if (!_uiFire.Loaded)
+            faults.Add("clicking a recipe in the fire's book put nothing on the fire");
+
+        // ⚠ A COUNTER, and said as one. It proves the campfire's dinner was enumerated, its kind
+        // resolved and its transform built without throwing — not that a steak is on the screen.
+        // The breath bar next to it is the measurement that earned the stronger word.
+        if (CookingDrawn <= 0)
+            faults.Add("a lit campfire with meat on it drew nothing on the fire");
 
         UiCheckFailed = faults.Count > 0;
 

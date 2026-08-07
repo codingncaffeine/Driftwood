@@ -36,8 +36,36 @@ public sealed class PlayerVitals
     /// <summary>Half-hearts at full health. Ten hearts, the genre's own.</summary>
     public const int MaxHealth = 20;
 
-    /// <summary>Ticks of breath a full lungful is worth, at sixty a second.</summary>
-    public const int MaxBreath = 300;
+    /// <summary>Ticks of breath a full lungful is worth, at <see cref="BreathTicksPerSecond"/>.</summary>
+    /// <remarks>
+    /// ⛳ <b>Fifteen seconds, and it was five until the bar could be seen.</b> Five was chosen when
+    /// nothing had ever drawn a bubble, and it does not survive the swimming that already exists: a
+    /// body sinks 1.2 blocks a second and a stroke lifts 2.7, so ten blocks down and back is about
+    /// twelve seconds of air before a player has looked at anything. Fifteen makes a dive a thing you
+    /// can plan; the ten bubbles then pop about one and a half seconds apart, which is slow enough to
+    /// read as a countdown rather than as a flicker.
+    /// </remarks>
+    public const int MaxBreath = 900;
+
+    /// <summary>
+    /// Ticks of air one second costs.
+    /// </summary>
+    /// <remarks>
+    /// ⛔⛔ <b>THE UNIT THIS WAS MISSING, AND IT COST THE BAR ITS ENTIRE EXISTENCE.</b> Breath used to
+    /// be spent as <c>Ceiling(dt * 60)</c> — which never returns less than one, so it took a tick
+    /// <em>per frame</em> rather than per sixtieth of a second. This build runs at about five thousand
+    /// frames a second, so a full lungful was gone in <b>fifty-nine milliseconds</b>: roughly three
+    /// frames of a sixty-hertz display. The bubbles were drawn, correctly, in the right place, for
+    /// less time than a blink — which is exactly why the user's report was <i>"it was never visible on
+    /// the screen AT ALL"</i> rather than "it does not show underwater".
+    /// ⚠ And every check passed throughout, because each one drives <see cref="Update"/> at a fixed
+    /// step of one sixtieth, where <c>Ceiling(1.0)</c> is 1 and the rate is accidentally right. A rate
+    /// written per frame measures the frame rate — see the same lesson on the tooltip probe.
+    /// </remarks>
+    private const double BreathTicksPerSecond = 60.0;
+
+    /// <summary>How much faster air comes back than it goes.</summary>
+    private const double BreathRecovery = 4.0;
 
     /// <summary>
     /// Half-drumsticks at full. Ten of them, counted in the same unit the bar draws.
@@ -170,6 +198,41 @@ public sealed class PlayerVitals
 
     private float _starvingFor;
 
+    /// <summary>
+    /// Air banked toward the next whole tick, in either direction.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>A double, and for the same reason <see cref="_effort"/> is one.</b> This arrives thousands
+    /// of times a second for as long as a head is under water, and a float accumulator summed that
+    /// finely drifts against the same total paid at once. Hunger failed to exist at all for exactly
+    /// that reason and it was not obvious from the outside.
+    /// ⚠ <b>Kept across the surface, not cleared.</b> The carry is under one tick — a three-hundredth
+    /// of a lungful — so clearing it on every transition would be a rule with nothing to gain and one
+    /// more state to get wrong.
+    /// </remarks>
+    private double _breathCarry;
+
+    /// <summary>
+    /// Whole ticks of air this slice of a second is worth, keeping the remainder for the next one.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>Never rounded up.</b> Rounding a per-frame fraction up is what made this a rate per frame
+    /// instead of a rate per second — see <see cref="BreathTicksPerSecond"/>. Rounding it down alone
+    /// would be the opposite bug and just as silent: at five thousand frames a second every frame's
+    /// share truncates to nothing and the breath would never move at all.
+    /// </remarks>
+    private int Ticks(float dt)
+    {
+        if (dt <= 0f) return 0;
+
+        _breathCarry += dt * BreathTicksPerSecond;
+        if (_breathCarry < 1.0) return 0;
+
+        var whole = (int)_breathCarry;
+        _breathCarry -= whole;
+        return whole;
+    }
+
     /// <summary>Half-hearts remaining, 0 to <see cref="MaxHealth"/>.</summary>
     public int Health { get; private set; } = MaxHealth;
 
@@ -283,6 +346,7 @@ public sealed class PlayerVitals
         _fallInAir = 0f;
         _effort = 0f;
         _starvingFor = 0f;
+        _breathCarry = 0.0;
         _wasOnGround = true;
     }
 
@@ -476,7 +540,7 @@ public sealed class PlayerVitals
 
         if (Submerged)
         {
-            Breath = Math.Max(0, Breath - (int)MathF.Ceiling(dt * 60f));
+            Breath = Math.Max(0, Breath - Ticks(dt));
             if (Breath == 0)
             {
                 _drowningFor += dt;
@@ -496,7 +560,7 @@ public sealed class PlayerVitals
         {
             // Breath comes back several times faster than it goes. Surfacing has to feel like
             // relief rather than like the start of another timer.
-            Breath = Math.Min(MaxBreath, Breath + (int)MathF.Ceiling(dt * 60f * 4f));
+            Breath = Math.Min(MaxBreath, Breath + Ticks(dt * (float)BreathRecovery));
             _drowningFor = 0f;
         }
 

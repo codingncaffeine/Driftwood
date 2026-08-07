@@ -550,6 +550,10 @@ public static class WorldAudit
         Check("a furnace burns only when it has work", furnaceFaults.Count == 0,
             furnaceFaults.Count == 0 ? furnaceDetail : $"{furnaceFaults.Count} faults: {furnaceFaults[0]}");
 
+        var cookFaults = CookingSelfTest(items, book, out var cookDetail);
+        Check("food cooks at all three fires, and each refuses what it is not for", cookFaults.Count == 0,
+            cookFaults.Count == 0 ? cookDetail : $"{cookFaults.Count} faults: {cookFaults[0]}");
+
         var dialectFaults = PackDialectSelfTest(out var dialectDetail);
         Check("a pack of either kind is read as itself", dialectFaults.Count == 0,
             dialectFaults.Count == 0 ? dialectDetail : $"{dialectFaults.Count} faults: {dialectFaults[0]}");
@@ -2827,6 +2831,161 @@ public static class WorldAudit
         }
     }
 
+    /// <summary>
+    /// A piece of raw meat cooked at every one of the three fires that claims it can.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳⛳ <b>Nothing in this project had ever cooked anything.</b> There were checks that a
+    /// furnace lights, that it burns only when there is work, that the smelt table has no duplicate
+    /// signatures and that every station a recipe names has a block — and not one of them put food on
+    /// a fire and looked at what came off. Cooking is a thing a player does on their first evening
+    /// and it was reachable only by playing.</para>
+    /// <para>⛔ <b>Each station gets the control that says what it is FOR, because "it cooked" is
+    /// satisfied by three copies of the same station.</b> A smoker that also smelts ore is a furnace
+    /// that happens to be quick; a campfire that wants coal is a furnace you cannot see into; and
+    /// three fires that all take the same time are one fire registered three times. So each arm
+    /// asserts what its station refuses and how long it takes, not merely that a result appeared.
+    /// </para>
+    /// <para>⚠ <b>The campfire's fuel slot is left EMPTY on purpose</b> — that is the entire point of
+    /// it, and a build where it quietly burns something would pass any check that only looked at the
+    /// output.</para>
+    /// </remarks>
+    private static List<string> CookingSelfTest(ItemRegistry items, RecipeBook book, out string detail)
+    {
+        var faults = new List<string>();
+        const float Step = 1f / 20f;
+        var relit = new List<(int, int, int, bool)>();
+
+        var meat = StarterItems.Meats[0].Name;
+        var raw = items.ByName($"raw_{meat}").Id;
+        var cooked = items.ByName($"cooked_{meat}").Id;
+        var ore = items.ByName("raw_iron").Id;
+        var planks = items.ByName("driftoak_planks").Id;
+
+        if (book.SmeltFor(raw) is not { } recipe)
+        {
+            detail = $"nothing cooks raw {meat}";
+            faults.Add($"raw {meat} has no cooking recipe at all, so no station below could run");
+            return faults;
+        }
+
+        var times = new Dictionary<FurnaceKind, float>();
+
+        // Every fire that is supposed to cook, and what each one costs to run.
+        foreach (var kind in (FurnaceKind[])[FurnaceKind.Furnace, FurnaceKind.Smoker, FurnaceKind.Campfire])
+        {
+            var bank = new FurnaceBank(items, book);
+            var fire = bank.Open(0, 0, 0);
+            fire.Input = new ItemStack(raw, 1);
+
+            // ⛳ THE CAMPFIRE GETS NOTHING TO BURN. It is the only station in the game that cooks for
+            // free and it is the reason a player eats before their first mine rather than after it.
+            if (!FurnaceKinds.CarriesItsOwnFire(kind)) fire.Fuel = new ItemStack(planks, 8);
+
+            var took = -1f;
+            for (var frame = 1; frame <= 8000; frame++)
+            {
+                bank.Update(Step, relit, (_, _, _) => kind);
+                if (fire.Output.IsEmpty) continue;
+                took = frame * Step;
+                break;
+            }
+
+            if (took < 0f)
+            {
+                faults.Add($"a {kind} never cooked raw {meat} at all");
+                continue;
+            }
+
+            times[kind] = took;
+
+            if (fire.Output.Item.Value != cooked.Value)
+                faults.Add($"a {kind} turned raw {meat} into {items[fire.Output.Item].Name}");
+
+            // What the station's own speed says it should have taken, with a frame of slack per
+            // second of work — Progress is a float summed a twentieth at a time.
+            var wanted = recipe.Seconds * FurnaceKinds.SpeedOf(kind);
+            if (MathF.Abs(took - wanted) > Step * 4f)
+                faults.Add($"a {kind} cooked in {took:F2}s where its speed says {wanted:F2}s");
+
+            if (FurnaceKinds.CarriesItsOwnFire(kind) && !fire.Fuel.IsEmpty)
+                faults.Add($"a {kind} was given no fuel and finished holding some");
+        }
+
+        // ⛔ THE CONTROL, AND WITHOUT IT THE THREE ARMS ABOVE PASS ON ONE STATION REGISTERED THRICE.
+        // A specialised fire is defined by what it turns away: a smoker that reduces ore is a plain
+        // furnace that is simply quicker at everything, which is what the old `kind != Blast` test
+        // made it.
+        foreach (var kind in (FurnaceKind[])[FurnaceKind.Smoker, FurnaceKind.Campfire])
+        {
+            var bank = new FurnaceBank(items, book);
+            var fire = bank.Open(0, 0, 0);
+            fire.Input = new ItemStack(ore, 1);
+            fire.Fuel = new ItemStack(planks, 8);
+
+            for (var frame = 0; frame < 4000; frame++) bank.Update(Step, relit, (_, _, _) => kind);
+
+            if (!fire.Output.IsEmpty)
+                faults.Add($"a {kind} smelted raw iron into {items[fire.Output.Item].Name}, so it is "
+                         + "a plain furnace that happens to be a different shape");
+        }
+
+        // ⛔⛔ AND THAT EACH FIRE'S BOOK NAMES WHAT IT COOKS. Reported by the user: "I'm not seeing
+        // any recipes for food when i look in the furnace" — and there was no list anywhere, so every
+        // one of these recipes worked perfectly and none was named where a player could look. That is
+        // not a rendering question: it is whether the fire can SAY what it does.
+        foreach (var kind in (FurnaceKind[])[FurnaceKind.Furnace, FurnaceKind.Smoker, FurnaceKind.Campfire])
+        {
+            var page = book.SmeltsAt(kind).ToList();
+
+            if (page.Count == 0)
+            {
+                faults.Add($"a {kind} lists nothing at all, so nothing in the game says what it is for");
+                continue;
+            }
+
+            if (!page.Any(r => r.Work == SmeltWork.Food))
+                faults.Add($"a {kind}'s book names no food, which is the one thing a player looks for");
+
+            // ⛳ The page is what the fire will actually take, not the whole table. A smoker offering
+            // to reduce iron is a promise the tick then refuses, which is worse than no book at all.
+            foreach (var offered in page)
+                if (!FurnaceKinds.Takes(kind, offered.Work))
+                    faults.Add($"a {kind}'s book offers {offered.Name}, which it will not work");
+
+            // And the book-shaped copy is the same recipe. It is drawn by the bench's own page code,
+            // so a result that did not survive the conversion would be a picture of the wrong thing.
+            foreach (var offered in page)
+            {
+                var shown = offered.AsShown();
+                if (shown.Result.Item.Value != offered.Result.Item.Value)
+                    faults.Add($"{offered.Name} is drawn in the book as {items[shown.Result.Item].Name}");
+                if (shown.At(0, 0) != offered.Input)
+                    faults.Add($"{offered.Name} is drawn in the book asking for the wrong ingredient");
+            }
+        }
+
+        // ⛳ And that they are genuinely three stations rather than three names. The campfire is the
+        // slow one — its price is time, which is what keeps a smoker worth building later.
+        if (times.Count == 3)
+        {
+            if (times[FurnaceKind.Smoker] >= times[FurnaceKind.Furnace])
+                faults.Add("a smoker is no quicker than a plain furnace, so there is no reason to build one");
+
+            if (times[FurnaceKind.Campfire] <= times[FurnaceKind.Furnace])
+                faults.Add("a campfire cooks at least as fast as a furnace while costing no fuel, "
+                         + "which makes every other station pointless");
+        }
+
+        detail = times.Count == 3
+            ? $"raw {meat} cooks in {times[FurnaceKind.Campfire]:F0}s on a campfire with no fuel, "
+              + $"{times[FurnaceKind.Furnace]:F0}s in a furnace and {times[FurnaceKind.Smoker]:F0}s in a "
+              + "smoker; neither the smoker nor the fire will touch ore"
+            : $"{3 - times.Count} of the three fires cooked nothing";
+
+        return faults;
+    }
+
     private static List<string> FurnaceSelfTest(ItemRegistry items, RecipeBook book, out string detail)
     {
         var faults = new List<string>();
@@ -4789,12 +4948,14 @@ public static class WorldAudit
         var lungs = new PlayerVitals(registry);
         swimmer.Teleport(new Vector3(0.5f, 11f, 0.5f));
 
-        // Ten seconds: long enough for the breath to run out and the drowning to start, short
+        // Twenty seconds: long enough for the breath to run out and the drowning to start, short
         // enough to surface alive. A dead body has no vitals to advance, so drowning one outright
         // would leave nothing to measure the recovery with.
+        // ⚠ It was ten while a lungful was five seconds. A window sized to the old number is a check
+        // that goes red on a correct build the day the value it is watching legitimately changes.
         var toEmpty = -1;
         var firstHurt = -1;
-        for (var i = 0; i < 60 * 10; i++)
+        for (var i = 0; i < 60 * 20; i++)
         {
             swimmer.Step(pool, Step, Vector3.Zero, false, false, false);
             lungs.Update(pool, swimmer, Step);
@@ -4804,11 +4965,35 @@ public static class WorldAudit
         }
 
         if (!lungs.Submerged) faults.Add("a body standing in six blocks of water is not submerged");
-        if (toEmpty < 60 * 3 || toEmpty > 60 * 8)
-            faults.Add($"breath ran out after {toEmpty / 60f:F1}s, wanted 3 to 8");
+        if (toEmpty < 60 * 10 || toEmpty > 60 * 18)
+            faults.Add($"breath ran out after {toEmpty / 60f:F1}s, wanted 10 to 18");
         if (firstHurt <= toEmpty) faults.Add("drowning started before the breath was gone");
-        if (lungs.Health >= PlayerVitals.MaxHealth) faults.Add("ten seconds under water cost nothing");
-        if (!lungs.Alive) faults.Add("ten seconds under water was fatal, which is far too fast");
+        if (lungs.Health >= PlayerVitals.MaxHealth) faults.Add("twenty seconds under water cost nothing");
+        if (!lungs.Alive) faults.Add("twenty seconds under water was fatal, which is far too fast");
+
+        // ⛔⛔ AND THE SAME DIVE AT THE FRAME RATE THIS GAME ACTUALLY RUNS AT. This arm is the whole
+        // reason the bar existed for eleven sessions without ever being seen.
+        //
+        // Breath used to be spent as Ceiling(dt * 60), which never returns less than one — so it took
+        // a tick PER FRAME rather than per sixtieth of a second. At the ~5,000 fps --bench measures on
+        // this machine a full lungful went in FIFTY-NINE MILLISECONDS, about three frames of a
+        // sixty-hertz display. The bubbles were built correctly, in the right place, and were gone
+        // before anybody could see them; the user's report was "it was never visible on the screen AT
+        // ALL", and it was exactly right.
+        //
+        // ⛳ Nothing above can catch that and no amount of tightening it would, because every arm here
+        // steps at exactly one sixtieth — where Ceiling(1.0) is 1 and the wrong rate is accidentally
+        // the right one. What is claimed is that AIR IS SPENT IN SECONDS, and the only way to state
+        // that is to run the same dive at two frame rates and get the same answer in seconds.
+        var fast = Drown(1f / 500f);
+        var slow = Drown(1f / 30f);
+
+        if (fast < 0f || slow < 0f)
+            faults.Add("a dive never ran the breath out at all, so the rate could not be measured");
+        else if (MathF.Abs(fast - slow) > 1f)
+            faults.Add(
+                $"breath lasted {fast:F2}s at 500 fps and {slow:F2}s at 30 fps — it is being spent "
+                + "per FRAME rather than per second, so it empties as fast as the machine draws");
 
         // And surfacing gives it back faster than it went.
         var refilled = -1;
@@ -4862,6 +5047,29 @@ public static class WorldAudit
                + $"the same two in water costs {waterHurt} and does not";
 
         return faults;
+
+        // ⛳ Seconds of air, from a real body in a real pool driven at a chosen frame rate — never a
+        // re-implementation of the rate here, which would pass whatever Update actually does. That is
+        // precisely the mistake that let this bug live: the claim being made is about wall-clock time
+        // and every existing arm asked it in frames.
+        float Drown(float step)
+        {
+            var diver = new PlayerBody(registry);
+            var air = new PlayerVitals(registry);
+            diver.Teleport(new Vector3(0.5f, 11f, 0.5f));
+
+            // Thirty seconds of wall clock, however many frames that is at this step.
+            var frames = (int)(30f / step);
+            for (var i = 0; i < frames; i++)
+            {
+                diver.Step(pool, step, Vector3.Zero, false, false, false);
+                air.Update(pool, diver, step);
+
+                if (air.Breath == 0) return i * step;
+            }
+
+            return -1f;
+        }
     }
 
     /// <summary>
