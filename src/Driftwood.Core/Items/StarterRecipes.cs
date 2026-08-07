@@ -376,6 +376,15 @@ public static class StarterRecipes
         Shaped("coal block", "coal_block", 1, ["CCC", "CCC", "CCC"], "coal", station: CraftStation.Bench);
         Loose("coal from a block", "coal", 9, "coal_block");
 
+        // ⛳ The three metals, packed and unpacked. ⚠ BOTH DIRECTIONS, always: a player who tidies
+        // their iron into blocks and then cannot spend it has been punished for being organised,
+        // and the pack-away recipe is the one everybody finds first.
+        foreach (var (name, label, ingot, _, _, _) in StarterBlocks.MetalBlocks)
+        {
+            Shaped(label, name, 1, ["MMM", "MMM", "MMM"], ingot, station: CraftStation.Bench);
+            Loose($"{ingot} from a block", ingot, 9, name);
+        }
+
         // Every tool, off the two tables. The material is a tag for the tiers that have more than
         // one source — any plank, any rough stone — and a plain item for the metals.
         foreach (var tier in StarterItems.Tiers)

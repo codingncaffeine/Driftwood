@@ -402,7 +402,30 @@ public static class StarterBlocks
     /// </remarks>
     public const ushort LayerRecipeBook = LayerBarrelSide + 4;
 
-    public const int LayerCount = LayerRecipeBook + 1;
+    /// <summary>
+    /// The metals packed away: iron, gold and copper, in that order.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>All three at once off one template row, rather than the iron the anvil needs.</b> They
+    /// are the same block three times with a different colour — the packs carry art for every one of
+    /// them — and a set where two of the three metals can be stored is a set somebody has to come
+    /// back to. ⚠ Copper's is the one with a future: the reference weathers it through four stages,
+    /// which is a whole mechanic we do not have and is its own task.
+    /// </remarks>
+    public const ushort LayerFirstMetalBlock = LayerRecipeBook + 1;
+
+    /// <summary>Iron, gold, copper — the order <see cref="MetalBlocks"/> is written in.</summary>
+    public const int MetalBlockCount = 3;
+
+    /// <summary>Our name, the ingot it packs, and the colour it is drawn in.</summary>
+    public static readonly (string Name, string Label, string Ingot, byte R, byte G, byte B)[] MetalBlocks =
+    [
+        ("iron_block", "block of iron", "iron_ingot", 216, 216, 220),
+        ("gold_block", "block of gold", "gold_ingot", 232, 196, 82),
+        ("copper_block", "block of copper", "copper_ingot", 198, 124, 78),
+    ];
+
+    public const int LayerCount = LayerFirstMetalBlock + MetalBlockCount;
 
     public sealed record Ids(
         BlockId Stone,
@@ -533,6 +556,22 @@ public static class StarterBlocks
             HarvestClass = ToolClass.Pickaxe, HarvestTier = 1,
             TopLayer = LayerCoalBlock, SideLayer = LayerCoalBlock, BottomLayer = LayerCoalBlock,
         });
+
+        // ⛳ The three metals packed away. Harder than coal and needing a real pickaxe, because what
+        // is in one is a trip underground rather than an afternoon with an axe — and the anvil is
+        // three of the iron one, which is what makes thirty ingots a number a player feels.
+        for (var m = 0; m < MetalBlockCount; m++)
+        {
+            var layer = (ushort)(LayerFirstMetalBlock + m);
+
+            registry.Register(new BlockType
+            {
+                Name = MetalBlocks[m].Name, Hardness = 5f, Crafted = true,
+                Sounds = SoundMaterial.Stone,
+                HarvestClass = ToolClass.Pickaxe, HarvestTier = 2,
+                TopLayer = layer, SideLayer = layer, BottomLayer = layer,
+            });
+        }
 
         var gravel = registry.Register(new BlockType
         {

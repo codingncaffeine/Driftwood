@@ -370,7 +370,24 @@ public static class BlockTextureSet
         // ⛳ Chrome rather than a block, and a layer anyway so a pack reskins the button with the
         // same machinery it reskins the world. The pack's own is the item they put in a lectern.
         new("recipe_book", "textures/item/book.png",              true),
+
+        // The three metals packed away. Their names are the genre's own, so the mapping is direct.
+        .. MetalBlockRows(),
     ];
+
+    /// <summary>One row per metal storage block, off the block table rather than written out.</summary>
+    private static BlockTextureLayer[] MetalBlockRows()
+    {
+        var rows = new BlockTextureLayer[StarterBlocks.MetalBlockCount];
+
+        for (var m = 0; m < rows.Length; m++)
+            rows[m] = new BlockTextureLayer(
+                StarterBlocks.MetalBlocks[m].Name,
+                $"textures/block/{StarterBlocks.MetalBlocks[m].Name}.png",
+                false);
+
+        return rows;
+    }
 
     /// <summary>
     /// One row per piece of armour, material-major.
@@ -1116,8 +1133,24 @@ public static class BlockTextureSet
             StarterBlocks.LayerBarrelTop => TileGen.Scored(1109, TileGen.Planks(1110, 128, 94, 54)),
             StarterBlocks.LayerBarrelSide => TileGen.Panel(TileGen.Planks(1110, 128, 94, 54), 2, 34),
 
-            _ => Wool(layer) ?? Meat(layer) ?? Dye(layer) ?? Armour(layer) ?? Shield(layer) ?? Tool(layer),
+            _ => MetalBlock(layer) ?? Wool(layer) ?? Meat(layer) ?? Dye(layer)
+                 ?? Armour(layer) ?? Shield(layer) ?? Tool(layer),
         };
+    }
+
+    /// <summary>One metal packed into a block, or null when this layer is not one.</summary>
+    /// <remarks>
+    /// ⚠ Brighter and far smoother than the ore it came out of. An ore is blobs of metal in rock and
+    /// a block is solid metal, so the two must not share a grain — a storage block that reads as a
+    /// rich seam is a block somebody mines expecting to get their ingots back nine at a time.
+    /// </remarks>
+    private static byte[]? MetalBlock(int layer)
+    {
+        var index = layer - StarterBlocks.LayerFirstMetalBlock;
+        if (index < 0 || index >= StarterBlocks.MetalBlockCount) return null;
+
+        var (_, _, _, r, g, b) = StarterBlocks.MetalBlocks[index];
+        return TileGen.Panel(TileGen.Speckle(1120 + index, r, g, b, 7, 0.25f), 2, 26);
     }
 
     /// <summary>One shield, or null when this layer is not one.</summary>

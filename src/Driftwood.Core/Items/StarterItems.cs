@@ -120,6 +120,11 @@ public static class StarterItems
         Block(items, blocks, "bricks", "bricks", StarterBlocks.LayerBricks);
         Block(items, blocks, "coal_block", "block of coal", StarterBlocks.LayerCoalBlock);
 
+        for (var m = 0; m < StarterBlocks.MetalBlockCount; m++)
+            Block(items, blocks,
+                StarterBlocks.MetalBlocks[m].Name, StarterBlocks.MetalBlocks[m].Label,
+                (ushort)(StarterBlocks.LayerFirstMetalBlock + m));
+
         // ⛳ The flowers, which are worth carrying now that they are worth crushing. All four:
         // until the dye tree there was nothing to do with one, so picking a flower left nothing at
         // all — which is the right answer for grass and the wrong one for the thing a whole colour

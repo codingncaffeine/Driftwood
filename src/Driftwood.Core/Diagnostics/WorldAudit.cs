@@ -5661,7 +5661,9 @@ public static class WorldAudit
         // and the moving claim covers the newest run only.
         (StarterBlocks.LayerDiamond, "diamond"),
         (StarterBlocks.LayerPaper, "paper"),
-        ((ushort)(StarterBlocks.LayerCount - 1), "recipe_book"),
+        (StarterBlocks.LayerRecipeBook, "recipe_book"),
+        (StarterBlocks.LayerFirstMetalBlock, "iron_block"),
+        ((ushort)(StarterBlocks.LayerCount - 1), "copper_block"),
     ];
 
     private static List<string> TextureSelfTest()
