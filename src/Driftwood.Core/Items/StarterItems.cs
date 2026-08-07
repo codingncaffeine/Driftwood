@@ -391,7 +391,57 @@ public static class StarterItems
             IconLayer = StarterBlocks.LayerLavaBucket, MaxStack = 1, BurnSeconds = 1000f,
         });
 
+        RegisterArmour(items);
+
         return items.Seal(blocks);
+    }
+
+    /// <summary>
+    /// Twenty pieces of armour, off the one table.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ <b>This is what leather has been for since the animals landed.</b> It dropped, it was
+    /// carried, and nothing anywhere consumed it — the one honest hole in "a drop that feeds the
+    /// recipe tree". A cow is now the first armour in the game and the only kind obtainable without
+    /// going underground at all.</para>
+    /// <para>⚠ <b>One in a slot, always.</b> Armour carries wear, and wear is part of a stack's
+    /// identity — two half-worn helmets folding into one another would silently repair or silently
+    /// ruin one of them depending on which was merged into which.</para>
+    /// </remarks>
+    private static void RegisterArmour(ItemRegistry items)
+    {
+        for (var m = 0; m < Armour.Materials.Length; m++)
+        for (var p = 0; p < Armour.Pieces.Length; p++)
+        {
+            var material = Armour.Materials[m];
+            var piece = Armour.Pieces[p];
+
+            items.Register(new ItemType
+            {
+                Name = Armour.ItemName(material, piece),
+                Label = $"{material.Name} {piece.Name}",
+                IconLayer = (ushort)(StarterBlocks.LayerFirstArmour + m * StarterBlocks.ArmourPieceCount + p),
+                MaxStack = 1,
+                Wears = piece.Slot,
+                ArmourPoints = material.Points[(int)piece.Slot],
+                Durability = material.Durability,
+            });
+        }
+
+        // ⛳ THE SHIELD, and it is what finally makes the other hand worth having. The offhand has
+        // been real storage since the player screen landed and took anything at all, which is a
+        // place to lose a stack rather than a slot — a shield is the one thing that is only useful
+        // there, so putting it in is a decision rather than a shrug.
+        //
+        // ⚠ `Wears` is Offhand rather than null. Nothing filters on it — the other hand accepts
+        // anything by design — but it is what the tooltip reads to say where a thing goes, and it is
+        // how Armour.ShieldInHand tells a shield from the torch somebody left in there.
+        items.Register(new ItemType
+        {
+            Name = Armour.ShieldName, Label = "shield",
+            IconLayer = StarterBlocks.LayerShield,
+            MaxStack = 1, Wears = EquipSlot.Offhand, Durability = 340,
+        });
     }
 
     /// <summary>Every meat, raw and cooked, off the one table.</summary>

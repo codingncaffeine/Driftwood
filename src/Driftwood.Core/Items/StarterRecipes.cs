@@ -357,6 +357,27 @@ public static class StarterRecipes
         foreach (var (head, rows) in ToolPatterns)
             Shaped($"{tier.Name} {head}", $"{tier.Name}_{head}", 1, rows, tier.Material);
 
+        // ⛳ And every piece of armour, off its own table, at a bench. Three of the four are three
+        // wide and would need one anyway; the boots are not, and putting them at a bench with the
+        // rest is the station gate doing what it was added for — a set of boots run up in the hands
+        // on the walk home would be the one exception with nothing to justify it.
+        //
+        // ⛳ THE LEATHER SET IS THE POINT. It is the only armour reachable without a pickaxe, it
+        // comes off an animal, and it is what finally consumes the leather that has been dropping
+        // since the herd arrived.
+        foreach (var material in Armour.Materials)
+        foreach (var piece in Armour.Pieces)
+        {
+            Shaped(
+                $"{material.Name} {piece.Name}", Armour.ItemName(material, piece), 1,
+                piece.Rows, material.Made, mirrored: false, station: CraftStation.Bench);
+        }
+
+        // ⛳ A board round an iron boss, drawn as the shape of a shield. It is the only thing in the
+        // game that is worth having in the other hand, which is what the other hand was waiting for.
+        Shaped("shield", Armour.ShieldName, 1, ["PIP", "PPP", " P "],
+               mirrored: false, station: CraftStation.Bench);
+
         // The furnace's whole job. Rubble back into stone is the loop that makes one worth building
         // before there is any metal to melt, and charcoal is what keeps it burning where there is
         // no coal — a forest is fuel, which is the answer to spawning somewhere with no cave.

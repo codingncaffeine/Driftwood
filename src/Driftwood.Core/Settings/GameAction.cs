@@ -21,6 +21,18 @@ public enum GameAction
     Sneak,
     Sprint,
 
+    /// <summary>
+    /// Held: puts the shield in the other hand up, if there is one there.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>Its own key rather than the right mouse button, and that is forced rather than chosen.</b>
+    /// Right-click already means "use what is in front of you" — open a chest, light a campfire, put
+    /// a block down — and every one of those is something a player does constantly while a shield is
+    /// in their other hand. Overloading it would make raising a shield and opening a door the same
+    /// gesture, decided by whatever happened to be under the crosshair.
+    /// </remarks>
+    RaiseShield,
+
     /// <summary>Opens what this character is carrying and can make. Closes it again.</summary>
     OpenInventory,
 
@@ -62,6 +74,7 @@ public static class GameActions
     public static string GroupOf(GameAction action) => action switch
     {
         <= GameAction.Sprint => "moving",
+        GameAction.RaiseShield => "fighting",
         <= GameAction.OpenOptions => "screens",
         <= GameAction.WindClock => "looking at things",
         _ => "the bar",
@@ -77,6 +90,7 @@ public static class GameActions
         GameAction.Jump => "jump",
         GameAction.Sneak => "sneak",
         GameAction.Sprint => "sprint",
+        GameAction.RaiseShield => "raise shield",
         GameAction.OpenInventory => "inventory",
         GameAction.OpenOptions => "options",
         GameAction.ToggleView => "change view",

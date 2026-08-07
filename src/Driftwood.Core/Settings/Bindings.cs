@@ -42,6 +42,11 @@ public sealed class Bindings
         bindings.Set(GameAction.Sneak, "ControlLeft");
         bindings.Set(GameAction.Sprint, "ShiftLeft");
 
+        // ⚠ Two, and the pair is the point again: V falls under a left hand on WASD, right control
+        // under a right hand on the arrows. This project's own player uses the arrows, and a shield
+        // key only that player's other hand can reach is a shield they never raise.
+        bindings.Set(GameAction.RaiseShield, "V", "ControlRight");
+
         // I is what this project's player reaches for; E is what the genre trained everybody else
         // to press. Two keys per action exists precisely so that is not a choice anybody has to
         // make. Escape opens the options and gives the mouse back, which is one gesture everywhere.

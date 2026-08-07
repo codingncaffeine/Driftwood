@@ -282,7 +282,44 @@ public static class BlockTextureSet
         // off; fire is not made of anything, and smoke is not made of the thing it came out of.
         new("flame",       "textures/particle/flame.png",         true),
         new("smoke",       "textures/particle/generic_0.png",     true, "textures/particle/smoke.png"),
+
+        // ⛳ The twenty pieces of armour, last for the same reason the fluids are: THIS ARRAY'S ORDER
+        // IS THE LAYER NUMBERING. Built off the armour table rather than written out, so a sixth
+        // material is one row there and none here.
+        .. ArmourRows(),
+
+        new("shield",      "textures/item/shield.png",            true),
     ];
+
+    /// <summary>
+    /// One row per piece of armour, material-major.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ <b>The pack's material name, not ours.</b> A pack ships six materials under the genre's own
+    /// names and ours deliberately are not those, so <see cref="Items.Armour.Material.Pack"/> states
+    /// the mapping — copper wears chainmail's icons and stormglass wears diamond's, which are the
+    /// nearest things anybody has actually painted. ⛔ Their <em>helmet</em> is spelled
+    /// <c>_helmet</c> on modern layouts and <c>_helmet</c> on the old one too, but the old one puts
+    /// the whole set under a <c>helmetCloth</c>-style stem for leather alone; that one is left to our
+    /// own art rather than guessed at, which the empty alternate path says out loud.
+    /// </remarks>
+    private static BlockTextureLayer[] ArmourRows()
+    {
+        var rows = new List<BlockTextureLayer>(
+            Items.Armour.Materials.Length * Items.Armour.Pieces.Length);
+
+        foreach (var material in Items.Armour.Materials)
+        foreach (var piece in Items.Armour.Pieces)
+        {
+            rows.Add(new BlockTextureLayer(
+                Items.Armour.ItemName(material, piece),
+                $"textures/item/{material.Pack}_{piece.Name}.png",
+                true,
+                $"textures/items/{material.Pack}_{piece.Name}.png"));
+        }
+
+        return [.. rows];
+    }
 
     /// <summary>One row per colour of wool, off the colour table rather than written out.</summary>
     /// <remarks>
@@ -833,8 +870,25 @@ public static class BlockTextureSet
             StarterBlocks.LayerFlame => TileGen.Flame(1102),
             StarterBlocks.LayerSmoke => TileGen.Smoke(1103),
 
-            _ => Wool(layer) ?? Meat(layer) ?? Dye(layer) ?? Tool(layer),
+            // Timber with an iron boss and an iron rim: the two materials it is made of, both
+            // visible, which is what makes the recipe legible from the picture.
+            StarterBlocks.LayerShield => TileGen.IconShield(1104, 152, 118, 70, 190, 190, 198),
+
+            _ => Wool(layer) ?? Meat(layer) ?? Dye(layer) ?? Armour(layer) ?? Tool(layer),
         };
+    }
+
+    /// <summary>One piece of armour, or null when this layer is not one.</summary>
+    private static byte[]? Armour(int layer)
+    {
+        var index = layer - StarterBlocks.LayerFirstArmour;
+        if (index < 0 || index >= StarterBlocks.ArmourMaterialCount * StarterBlocks.ArmourPieceCount)
+            return null;
+
+        var material = Items.Armour.Materials[index / StarterBlocks.ArmourPieceCount];
+
+        return TileGen.IconArmour(
+            1200 + index, index % StarterBlocks.ArmourPieceCount, material.R, material.G, material.B);
     }
 
     /// <summary>One wool tile, or null when this layer is not one.</summary>

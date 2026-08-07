@@ -1,4 +1,5 @@
 using Driftwood.Core.Blocks;
+using Driftwood.Core.Items;
 using Driftwood.Core.Physics;
 using Driftwood.Core.World;
 
@@ -8,7 +9,13 @@ namespace Driftwood.Core.Entities;
 /// <param name="Hurt">Health lost, in half-hearts.</param>
 /// <param name="Died">True on the one frame health reached nothing.</param>
 /// <param name="Drowned">True on the frames breath is being spent rather than recovered.</param>
-public readonly record struct VitalsEvent(int Hurt, bool Died, bool Drowned);
+/// <param name="Armoured">
+/// Half-hearts of armour-protected damage thrown at the player this frame, <em>before</em> the
+/// armour took its share. ⚠ Deliberately the blow rather than what landed: a full set turns most of
+/// it aside, and wear paid out of what got through would make the best armour also the
+/// longest-lasting by a wide margin — which is backwards. What wears a plate is being hit.
+/// </param>
+public readonly record struct VitalsEvent(int Hurt, bool Died, bool Drowned, int Armoured = 0);
 
 /// <summary>
 /// Health, the fall that takes it, the water that takes it, and the rest that gives it back.
@@ -181,13 +188,74 @@ public sealed class PlayerVitals
         Breath = Math.Clamp(breath, 0, MaxBreath);
     }
 
-    /// <summary>Takes damage directly, for anything that is not a fall or a lungful of water.</summary>
-    public void Hurt(int halfHearts)
+    /// <summary>
+    /// Points of armour currently worn, 0 to <see cref="Armour.MaxPoints"/>.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ <b>Handed in rather than worked out.</b> Vitals knows about a body and the blocks round it
+    /// and nothing about pockets, and giving it an <see cref="Equipment"/> to read would make every
+    /// check that hurts a player have to build an inventory first. The host sets it when what is
+    /// worn changes, which is a few times a session.
+    /// </remarks>
+    public int ArmourPoints { get; set; }
+
+    /// <summary>
+    /// True while a shield is up: something is in the other hand and the player is holding it there.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>The cost of holding it is paid elsewhere and is deliberately not a number here.</b> A
+    /// raised shield stops the player mining and stops them swinging, which is a cost a player feels
+    /// immediately and a check can state outright — where a movement penalty would be a multiplier
+    /// nobody notices and every check would have to be calibrated against.
+    /// </remarks>
+    public bool ShieldRaised { get; set; }
+
+    /// <summary>Armour-protected damage thrown this frame, before the armour's share came off.</summary>
+    private int _armoured;
+
+    /// <summary>And how much of that arrived while the shield was up, which is what wears one.</summary>
+    private int _shielded;
+
+    /// <summary>
+    /// Takes damage directly, for anything that is not a fall or a lungful of water.
+    /// </summary>
+    /// <param name="armoured">
+    /// False for the handful of things a plate cannot help with. ⛔ Drowning is the one that
+    /// matters: armour that made a lungful of water survivable would turn the single hazard with no
+    /// counterplay into one solved by wearing more of something, and diving in a full set would be
+    /// safer than diving in a shirt.
+    /// </param>
+    public void Hurt(int halfHearts, bool armoured = true)
     {
         if (halfHearts <= 0 || !Alive) return;
+
+        if (armoured)
+        {
+            _armoured += halfHearts;
+            if (ShieldRaised) _shielded += halfHearts;
+            halfHearts = Armour.Survive(halfHearts, ArmourPoints, ShieldRaised);
+        }
+
         Health = Math.Max(0, Health - halfHearts);
         _sinceHurt = 0f;
         _regenerating = 0f;
+    }
+
+    /// <summary>
+    /// Reads and clears what the armour and the shield have been asked to stand up to.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ Cleared by reading it, because the blow that starts a frame and the blow that arrives
+    /// mid-frame — a creature's swing goes through <see cref="Hurt"/> directly — must both be paid
+    /// for exactly once. A field the host reads and forgets to reset is a set of armour that wears
+    /// through in a second.
+    /// </remarks>
+    public (int Armour, int Shield) TakeWear()
+    {
+        var was = (_armoured, _shielded);
+        _armoured = 0;
+        _shielded = 0;
+        return was;
     }
 
     /// <summary>
@@ -287,7 +355,12 @@ public sealed class PlayerVitals
                 while (_drowningFor >= 1f / DrownRate)
                 {
                     _drowningFor -= 1f / DrownRate;
-                    Hurt(1);
+
+                    // ⛔ The one thing armour must not help with. See Hurt: making a lungful of
+                    // water survivable by wearing more of something turns the single hazard with no
+                    // counterplay into one solved by shopping, and would make diving in a full set
+                    // safer than diving in a shirt.
+                    Hurt(1, armoured: false);
                 }
             }
         }

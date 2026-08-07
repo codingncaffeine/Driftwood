@@ -284,7 +284,35 @@ public static class StarterBlocks
     public const ushort LayerFlame = LayerFirstFluid + 7;
     public const ushort LayerSmoke = LayerFirstFluid + 8;
 
-    public const int LayerCount = LayerFirstFluid + 9;
+    /// <summary>
+    /// The twenty armour icons: one material per row of four pieces, material-major.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ Appended, like the fluids and for the same reason — <see cref="Textures.BlockTextureSet.Layers"/>'
+    /// order <em>is</em> this numbering, and a row slipped in among the item icons moves every
+    /// constant after it while every texture check goes on passing. Material-major so the index
+    /// arithmetic is the same shape the tools use: <c>material * 4 + piece</c>.
+    /// </remarks>
+    public const ushort LayerFirstArmour = LayerFirstFluid + 9;
+
+    /// <summary>Helmet, chestplate, leggings, boots — <see cref="Items.EquipSlot"/> order.</summary>
+    public const int ArmourPieceCount = 4;
+
+    /// <summary>Leather, copper, gold, iron, stormglass.</summary>
+    public const int ArmourMaterialCount = 5;
+
+    /// <summary>
+    /// The shield, which is the only thing in the game carried in the other hand rather than worn.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ One, not five. A shield is a board with a boss on it and its material barely changes what
+    /// it does — where a set of armour in five metals is the whole progression. A row of five nearly
+    /// identical boards would be four items nobody chooses between.
+    /// </remarks>
+    public const ushort LayerShield =
+        LayerFirstArmour + ArmourPieceCount * ArmourMaterialCount;
+
+    public const int LayerCount = LayerShield + 1;
 
     public sealed record Ids(
         BlockId Stone,

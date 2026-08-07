@@ -1,5 +1,6 @@
 using System.Numerics;
 using Driftwood.Core.Entities;
+using Driftwood.Core.Items;
 using Driftwood.Core.Textures;
 using Silk.NET.OpenGL;
 
@@ -32,6 +33,9 @@ public sealed class PlayerRenderer : IDisposable
 {
     private readonly record struct BoxDraw(int First, int Count, ModelBox Box);
 
+    /// <summary>One plate of armour: its slice of the same buffer, and what makes it appear.</summary>
+    private readonly record struct PlateDraw(int First, int Count, ArmourBox Box);
+
     private const int FloatsPerVertex = 8;   // position 3, normal 3, uv 2
 
     private readonly GL _gl;
@@ -41,6 +45,15 @@ public sealed class PlayerRenderer : IDisposable
     private readonly uint _ebo;
     private readonly uint _skin;
     private readonly BoxDraw[] _draws;
+    private readonly PlateDraw[] _plates;
+
+    /// <summary>One sheet per material per layer, indexed material-major. 64×32 each.</summary>
+    /// <remarks>
+    /// ⚠ <b>Ten textures of eight kilobytes, uploaded once.</b> Building them per frame off what is
+    /// worn would be nothing to draw and everything to allocate; keeping them all resident costs
+    /// less than one block tile at the resolutions this game runs packs at.
+    /// </remarks>
+    private readonly uint[] _armourSheets;
 
     public ArmStyle Arms { get; }
 
@@ -62,6 +75,20 @@ public sealed class PlayerRenderer : IDisposable
         }
 
         _draws = [.. draws];
+
+        // ⛳ The armour goes in the SAME buffer, past the body. It is nine more boxes hung off the
+        // same six joints, and giving it a buffer of its own would mean a second bind between the
+        // body and the plate over it — for geometry that is never drawn without the body under it.
+        var plates = new List<PlateDraw>();
+
+        foreach (var box in ArmourModel.Build())
+        {
+            var first = indices.Count;
+            ArmourModel.Emit(box, vertices, indices);
+            plates.Add(new PlateDraw(first, indices.Count - first, box));
+        }
+
+        _plates = [.. plates];
 
         var buffer = new float[vertices.Count * FloatsPerVertex];
         for (var i = 0; i < vertices.Count; i++)
@@ -103,6 +130,15 @@ public sealed class PlayerRenderer : IDisposable
         _gl.BindVertexArray(0);
 
         _skin = UploadSkin(gl, skin);
+
+        _armourSheets = new uint[Armour.Materials.Length * 2];
+        for (var m = 0; m < Armour.Materials.Length; m++)
+        {
+            var sheets = ArmourArt.Build(Armour.Materials[m]);
+            for (var layer = 0; layer < 2; layer++)
+                _armourSheets[m * 2 + layer] =
+                    UploadSheet(gl, sheets[layer], ArmourArt.Width, ArmourArt.Height);
+        }
     }
 
     /// <summary>
@@ -115,16 +151,20 @@ public sealed class PlayerRenderer : IDisposable
     /// is exactly one model on screen and it is usually a few blocks away, so the aliasing this
     /// leaves is a much smaller price than the bleeding it avoids.
     /// </remarks>
-    private static unsafe uint UploadSkin(GL gl, PlayerSkinData skin)
+    private static uint UploadSkin(GL gl, PlayerSkinData skin) =>
+        UploadSheet(gl, skin.Pixels, skin.Size, skin.Size);
+
+    /// <summary>One RGBA sheet, nearest and clamped — the rule every net in this game is read by.</summary>
+    private static unsafe uint UploadSheet(GL gl, byte[] pixels, int width, int height)
     {
         var handle = gl.GenTexture();
         gl.BindTexture(TextureTarget.Texture2D, handle);
 
-        fixed (byte* p = skin.Pixels)
+        fixed (byte* p = pixels)
         {
             gl.TexImage2D(
                 TextureTarget.Texture2D, 0, InternalFormat.Rgba8,
-                (uint)skin.Size, (uint)skin.Size, 0,
+                (uint)width, (uint)height, 0,
                 PixelFormat.Rgba, PixelType.UnsignedByte, p);
         }
 
@@ -155,10 +195,14 @@ public sealed class PlayerRenderer : IDisposable
         _gl.BindVertexArray(_vao);
     }
 
-    /// <summary>Draws the whole model, stood at <paramref name="feet"/>.</summary>
+    /// <summary>Draws the whole model, stood at <paramref name="feet"/>, wearing what it is wearing.</summary>
+    /// <param name="worn">
+    /// Which material each slot has on, as an index into <see cref="Armour.Materials"/>, or −1 for a
+    /// slot with nothing in it.
+    /// </param>
     public void DrawWorld(
         Matrix4x4 viewProj, Vector3 cameraPos, in SkyParams sky, EntityLight light,
-        Vector3 feet, in PlayerPose pose)
+        Vector3 feet, in PlayerPose pose, ReadOnlySpan<int> worn = default)
     {
         BeginPass(viewProj, cameraPos, sky.SunDirection, sky);
         _shader.SetFloat("uFogStart", sky.FogStart);
@@ -171,7 +215,61 @@ public sealed class PlayerRenderer : IDisposable
         foreach (var draw in _draws)
             Draw(draw, rig.Part(draw.Box.Part, draw.Box.Pivot, pose));
 
+        DrawArmour(rig, pose, worn);
+
         _gl.BindVertexArray(0);
+    }
+
+    /// <summary>
+    /// The plates over the top, one bind per sheet actually being worn.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ <b>Grouped by sheet rather than drawn in slot order.</b> Four slots can be four different
+    /// materials, and each material is two sheets — so drawn naively a player in a mixed set costs
+    /// nine texture binds for nine boxes. Walking the boxes once per sheet that is in use costs at
+    /// most as many binds as there are distinct sheets, which for anybody in a matching set is two.
+    /// </remarks>
+    /// <summary>
+    /// How many plates the last <see cref="DrawWorld"/> actually submitted.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>Because everything else about armour is checkable and none of it is the wiring.</b> The
+    /// table, the sheets and the boxes all have checks of their own and every one of them passes on
+    /// a build where the renderer is handed an empty span — which is a player in a full set with
+    /// nothing on. This is the number that says a plate reached the card, and <c>--shot</c> prints
+    /// it beside the picture.
+    /// </remarks>
+    public int PlatesDrawn { get; private set; }
+
+    private void DrawArmour(in PlayerRig rig, in PlayerPose pose, ReadOnlySpan<int> worn)
+    {
+        PlatesDrawn = 0;
+        if (worn.Length < 4) return;
+
+        for (var m = 0; m < Armour.Materials.Length; m++)
+        for (var layer = 0; layer < 2; layer++)
+        {
+            var bound = false;
+
+            foreach (var plate in _plates)
+            {
+                if (plate.Box.Sheet != layer) continue;
+                if (worn[(int)plate.Box.Slot] != m) continue;
+
+                if (!bound)
+                {
+                    _gl.BindTexture(TextureTarget.Texture2D, _armourSheets[m * 2 + layer]);
+                    bound = true;
+                }
+
+                _shader.SetMatrix4("uModel", rig.Part(plate.Box.Part, plate.Box.Pivot, pose));
+                DrawRange(plate.First, plate.Count);
+                PlatesDrawn++;
+            }
+        }
+
+        // Put the skin back, or the next model drawn through this renderer wears somebody's boots.
+        _gl.BindTexture(TextureTarget.Texture2D, _skin);
     }
 
     /// <summary>
@@ -221,13 +319,16 @@ public sealed class PlayerRenderer : IDisposable
     public Matrix4x4 HeldWorldTransform(Vector3 feet, in PlayerPose pose, bool flat, Vector3 hold) =>
         HeldGrip.InWorld(feet, pose, flat, hold, Arms);
 
-    private unsafe void Draw(in BoxDraw draw, Matrix4x4 model)
+    private void Draw(in BoxDraw draw, Matrix4x4 model)
     {
         _shader.SetMatrix4("uModel", model);
-        _gl.DrawElements(
-            PrimitiveType.Triangles, (uint)draw.Count, DrawElementsType.UnsignedInt,
-            (void*)(draw.First * sizeof(uint)));
+        DrawRange(draw.First, draw.Count);
     }
+
+    private unsafe void DrawRange(int first, int count) =>
+        _gl.DrawElements(
+            PrimitiveType.Triangles, (uint)count, DrawElementsType.UnsignedInt,
+            (void*)(first * sizeof(uint)));
 
     public void Dispose()
     {
@@ -235,6 +336,7 @@ public sealed class PlayerRenderer : IDisposable
         _gl.DeleteBuffer(_ebo);
         _gl.DeleteVertexArray(_vao);
         _gl.DeleteTexture(_skin);
+        foreach (var sheet in _armourSheets) _gl.DeleteTexture(sheet);
         _shader.Dispose();
     }
 }

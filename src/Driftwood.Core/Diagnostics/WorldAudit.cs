@@ -1032,6 +1032,36 @@ public static class WorldAudit
                 ? string.Join("; ", creatureDrops.Describe())
                 : $"{creatureDropFaults.Count} faults: {creatureDropFaults[0]}");
 
+        // ⛳ Armour, which is where the leather those animals drop finally goes. The table and the
+        // registered items are two statements of the same twenty numbers and nothing else in the
+        // game would notice them disagreeing — a helmet worth the chestplate's points looks exactly
+        // like working armour from every screen there is.
+        var armourFaults = Armour.Validate(items);
+        Check("armour turns aside what the table says", armourFaults.Count == 0,
+            armourFaults.Count == 0
+                ? $"{Armour.Materials.Length} materials x {Armour.Pieces.Length} pieces, best set "
+                  + $"{Armour.MaxPoints} points turning a blow of 10 into "
+                  + $"{Armour.Survive(10, Armour.MaxPoints)}, {Armour.Survive(10, Armour.MaxPoints, true)} "
+                  + $"behind a raised shield, and {Armour.Survive(10, 0)} in a shirt"
+                : $"{armourFaults.Count} faults: {armourFaults[0]}");
+
+        // And the other half of it: the plates are geometry hung off the body's own joints, wearing
+        // sheets painted in code. ⛔ Neither half can be seen from the other — a suit whose numbers
+        // are right and whose boots are painted up the whole leg is a player in iron trousers.
+        var plateFaults = ArmourModel.Validate();
+        Check("worn armour stands off the body", plateFaults.Count == 0,
+            plateFaults.Count == 0
+                ? $"{ArmourModel.Build().Length} plates over 4 slots, outer at {ArmourModel.Outer} "
+                  + $"and leggings under it at {ArmourModel.Inner}, every net on the sheet, wound outward"
+                : $"{plateFaults.Count} faults: {plateFaults[0]}");
+
+        var armourArtFaults = ArmourArt.Validate();
+        Check("armour is painted where it is worn", armourArtFaults.Count == 0,
+            armourArtFaults.Count == 0
+                ? $"{Armour.Materials.Length} materials x 2 sheets at {ArmourArt.Width}x{ArmourArt.Height}, "
+                  + "boots at the foot and not the knee, leggings at the knee and not the foot"
+                : $"{armourArtFaults.Count} faults: {armourArtFaults[0]}");
+
         var artFaults = CreatureArt.Validate();
         Check("our own creatures are painted", artFaults.Count == 0,
             artFaults.Count == 0
@@ -5397,7 +5427,15 @@ public static class WorldAudit
         (StarterBlocks.LayerLavaBucket, "lava_bucket"),
         (StarterBlocks.LayerCoalBlock, "coal_block"),
         (StarterBlocks.LayerFlame, "flame"),
-        ((ushort)(StarterBlocks.LayerCount - 1), "smoke"),
+        (StarterBlocks.LayerSmoke, "smoke"),
+
+        // ⛳ THIS PIN DID ITS JOB THE DAY THE ARMOUR LANDED. It used to read "the last layer is
+        // smoke", which is a true statement about a table until something is appended to it — and
+        // twenty-one rows went on the end. Both ends of every run are pinned by their own constant
+        // now, so "the last one" is a fact about the shield rather than about whatever is newest.
+        (StarterBlocks.LayerFirstArmour, "leather_helmet"),
+        ((ushort)(StarterBlocks.LayerShield - 1), "stormglass_boots"),
+        ((ushort)(StarterBlocks.LayerCount - 1), "shield"),
     ];
 
     private static List<string> TextureSelfTest()

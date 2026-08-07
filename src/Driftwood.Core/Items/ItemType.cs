@@ -126,11 +126,21 @@ public sealed class ItemType
     /// Where on the body this is worn, or null for anything that is not armour.
     /// </summary>
     /// <remarks>
-    /// Nothing sets this yet — there is no armour — and the four worn slots on the player screen
-    /// refuse everything as a result. That is deliberate: the slots are the prerequisite the worn
-    /// armour work is blocked on, and a field on the item is where the answer belongs.
+    /// The worn slots filter on this, so it is also what decides whether a slot will take a thing at
+    /// all — a helmet in the boot square is refused here rather than by a rule written beside the
+    /// screen.
     /// </remarks>
     public EquipSlot? Wears { get; init; }
+
+    /// <summary>
+    /// Points of armour this is worth while it is worn. Zero for everything else.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ <b>Points, not a fraction.</b> See <see cref="Armour"/>: fractions do not add, so four
+    /// pieces each stopping a share of a blow would compose into a set of the worst material beating
+    /// one piece of the best. The curve from points to a share is written once and lives there.
+    /// </remarks>
+    public int ArmourPoints { get; init; }
 
     /// <summary>Assigned by <see cref="ItemRegistry.Register"/>.</summary>
     public ItemId Id { get; internal set; }

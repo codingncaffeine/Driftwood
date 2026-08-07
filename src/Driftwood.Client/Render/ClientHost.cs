@@ -4632,6 +4632,8 @@ public sealed class ClientHost : IDisposable
         // a frame and the only place the picked path crosses back onto the game's thread.
         TakePickedPack();
 
+        StepArmour();
+
         // What a screen can afford changes as the world hands things over, so it is recomputed
         // rather than only rebuilt on a keypress: a stack flying into the bar while the book is
         // open should light up what it just made possible.
@@ -4713,10 +4715,22 @@ public sealed class ClientHost : IDisposable
         var stood = _walking ? _player.Position : _camera.Position;
         var sneaking = _walking && _player.Sneaking;
 
-        _animator.Update(
-            dt, stood, _camera.Yaw, PlayerBody.WalkSpeed, sneaking, _holdingBreak || _holdingPlace);
+        // ⛳ THE COST OF THE SHIELD, and it is deliberately not a number. A raised shield is a hand
+        // holding a board in front of you: while it is up nothing is mined, nothing is struck and
+        // nothing is placed. That is a price a player feels the instant they pay it, where a
+        // movement penalty is a multiplier nobody notices and every check would have to be
+        // calibrated against.
+        var blocking = _vitals.ShieldRaised;
 
+        _animator.Update(
+            dt, stood, _camera.Yaw, PlayerBody.WalkSpeed, sneaking,
+            !blocking && (_holdingBreak || _holdingPlace));
+
+        // ⚠ Taken and then discarded rather than not taken. The animator counts swings whether or
+        // not anybody asks for them, so a shield held up for a minute would otherwise release a
+        // minute's worth of blows the moment it came down.
         var strikes = _animator.TakeStrikes();
+        if (blocking) strikes = 0;
 
         // A click fast enough to be released inside one frame still registered its intent when it
         // went down, so fall back to that rather than dropping the swing on the floor.
@@ -4748,7 +4762,7 @@ public sealed class ClientHost : IDisposable
             PlaySound(target, SoundEvent.Hit, new Vector3(struck.X + 0.5f, struck.Y + 0.5f, struck.Z + 0.5f), 0.55f);
         }
 
-        if (!_mining.Update(dt, target, cell, _holdingBreak, _inventory.HeldType)) return;
+        if (!_mining.Update(dt, target, cell, !blocking && _holdingBreak, _inventory.HeldType)) return;
 
         // The burst goes before the block does. Reading the type after BreakTarget gets air.
         if (target is not null && cell is { } broken)
@@ -4926,6 +4940,17 @@ public sealed class ClientHost : IDisposable
 
         var what = _vitals.Update(_streamer.World, _player, dt);
 
+        // ⛳ What the armour was asked to stand up to, and what that cost it. Read here rather than
+        // where each blow lands because there are three places a blow comes from — a fall, the
+        // world, a creature — and the wear rule belongs in one of them, not three.
+        var (armourHit, shieldHit) = _vitals.TakeWear();
+
+        if (Armour.Wear(_equipment, _items, armourHit) > 0)
+            PlaySound(SoundMaterial.Stone, SoundEvent.Break, _viewPosition, 0.7f);
+
+        if (Armour.WearShield(_equipment, _items, shieldHit))
+            PlaySound(SoundMaterial.Wood, SoundEvent.Break, _viewPosition, 0.7f);
+
         // A hurt has to be felt. There is no player voice in the sound pack, so the ground the
         // blow was taken on stands in for one — which is at least the right material.
         if (what.Hurt > 0)
@@ -4948,6 +4973,72 @@ public sealed class ClientHost : IDisposable
         // the least likely to have thought about it. The copy taken alongside is the step before the
         // death, which is the only thing that makes it recoverable.
         SaveWorld("after dying");
+    }
+
+    /// <summary>What <see cref="Equipment.Version"/> read when the armour was last counted.</summary>
+    private int _wornVersion = -1;
+
+    /// <summary>
+    /// Keeps the vitals' idea of what is being worn current, and holds the shield up.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ <b>Counted only when what is worn CHANGES.</b> Five lookups a frame would be nothing, but
+    /// the version is already there and using it means the answer cannot silently be stale — which
+    /// is the failure a running total would have, since armour changes on a screen, on a load, on a
+    /// death and when a piece finally gives out.
+    /// </remarks>
+    private void StepArmour()
+    {
+        if (_wornVersion != _equipment.Version)
+        {
+            _wornVersion = _equipment.Version;
+            _vitals.ArmourPoints = Armour.PointsOf(_equipment, _items);
+        }
+
+        // ⛔ Only while actually playing. A key held down under an open screen is a key somebody is
+        // typing, and a shield raised by the fly camera would be armour on a thing with no body.
+        _vitals.ShieldRaised =
+            _walking && _spawned && !_hudScreen.IsOpen && _bench is null
+            && Armour.ShieldInHand(_equipment, _items)
+            && _keys.Held(_input, GameAction.RaiseShield);
+    }
+
+    /// <summary>Which material each worn slot has on, as an index, or −1 for bare.</summary>
+    private readonly int[] _wornMaterials = [-1, -1, -1, -1];
+
+    /// <summary>
+    /// Reads what is worn into that array, once per change, and hands it to the renderer.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ <b>An index rather than the item.</b> The renderer holds one sheet per material and knows
+    /// nothing about pockets or item ids; the whole of what it needs is "which of the five, or none",
+    /// and passing anything richer would put the item registry inside a draw call.
+    /// </remarks>
+    private ReadOnlySpan<int> WornMaterials()
+    {
+        for (var slot = 0; slot < _wornMaterials.Length; slot++)
+        {
+            _wornMaterials[slot] = -1;
+
+            var stack = _equipment.At(slot);
+            if (stack.IsEmpty) continue;
+
+            // ⛔ The whole name, not a prefix of it. "Does it start with the material" happens to
+            // work for these five and would put a stormglass helmet on somebody wearing a
+            // stormglass lamp the day anything else is named after a material — and the tell would
+            // be a piece of armour appearing on a player carrying no armour at all.
+            var name = _items[stack.Item].Name;
+            var piece = Armour.Pieces[slot];
+
+            for (var m = 0; m < Armour.Materials.Length; m++)
+            {
+                if (name != Armour.ItemName(Armour.Materials[m], piece)) continue;
+                _wornMaterials[slot] = m;
+                break;
+            }
+        }
+
+        return _wornMaterials;
     }
 
     /// <summary>Plays one of a material's sounds for one situation, at a point in the world.</summary>
@@ -5592,9 +5683,15 @@ public sealed class ClientHost : IDisposable
     /// wherever the shot placement happened to leave the camera, and an animal twenty blocks behind
     /// it is a picture of an empty field that looks exactly like a renderer drawing nothing.
     /// </param>
+    /// <param name="Wears">
+    /// A material to put a whole set of on, and a shield in the other hand. ⛔ The plates are
+    /// geometry hung off the body's joints wearing sheets painted in code, and every part of that is
+    /// checkable headlessly while none of it says whether there is a suit of armour on the screen —
+    /// which is the same argument the creatures needed a picture for.
+    /// </param>
     private readonly record struct Shot(
         int Frame, string Name, string Item, ViewMode View, bool Strike, ShotScreen Screen = ShotScreen.None,
-        bool Creature = false);
+        bool Creature = false, string Wears = "");
 
     /// <summary>Which interface, if any, is up when the picture is taken.</summary>
     private enum ShotScreen
@@ -5644,6 +5741,14 @@ public sealed class ClientHost : IDisposable
         // there is a cow on the screen.
         new(260, "17-creature", "stone", ViewMode.First, false, ShotScreen.None, Creature: true),
         new(300, "18-creature-third", "stone", ViewMode.ThirdBehind, false, ShotScreen.None, Creature: true),
+
+        // ⛳ A suit of armour, from behind and from the front, in two materials. Two because the
+        // sheets are painted per material and one picture proves one material — and leather over an
+        // iron set is also the pair that shows whether the leggings really do sit under the
+        // chestplate rather than through it.
+        new(320, "19-armour-iron", "iron_sword", ViewMode.ThirdBehind, false, Wears: "iron"),
+        new(332, "20-armour-iron-facing", "iron_sword", ViewMode.ThirdFacing, false, Wears: "iron"),
+        new(344, "21-armour-leather", "stone_pickaxe", ViewMode.ThirdFacing, false, Wears: "leather"),
     ];
 
     /// <summary>
@@ -5689,6 +5794,35 @@ public sealed class ClientHost : IDisposable
     /// new spot has to be generated, meshed and uploaded before there is anything under the animal.
     /// </remarks>
     private const int CreatureLead = 30;
+
+    /// <summary>
+    /// Puts a whole set of one material on, and a shield up, or takes everything off.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ Cleared first, every time, rather than only when a material is named. A set left on from
+    /// the shot before would put iron boots in the picture of the leather one, and the two would be
+    /// three frames apart in the same folder.
+    /// </remarks>
+    private void WearForShot(string material)
+    {
+        _equipment.Clear();
+        _vitals.ShieldRaised = false;
+
+        if (material.Length == 0) return;
+
+        foreach (var piece in Armour.Pieces)
+        {
+            var name = $"{material}_{piece.Name}";
+            if (_items.TryByName(name, out var type))
+                _equipment.Restore(piece.Slot, new ItemStack(type.Id, 1));
+        }
+
+        if (_items.TryByName(Armour.ShieldName, out var shield))
+        {
+            _equipment.Restore(EquipSlot.Offhand, new ItemStack(shield.Id, 1));
+            _vitals.ShieldRaised = true;
+        }
+    }
 
     private void RunShots(Vector2D<int> size)
     {
@@ -5736,6 +5870,7 @@ public sealed class ClientHost : IDisposable
                 _view = shot.View;
                 if (shot.Strike) _animator.Strike();
                 OpenForShot(shot.Screen);
+                WearForShot(shot.Wears);
             }
 
             // ⛔ A LONG way ahead of the picture, and four frames is nowhere near enough. Walking the
@@ -5924,7 +6059,8 @@ public sealed class ClientHost : IDisposable
         // by looking. A number settles it; a picture cannot.
         var lit = HandLight(SampleLight(_camera.Position));
         Console.WriteLine(
-            $"shot        {name,-24} {width}x{height}   light {lit.X:F2} {lit.Y:F2} {lit.Z:F2}");
+            $"shot        {name,-24} {width}x{height}   light {lit.X:F2} {lit.Y:F2} {lit.Z:F2}"
+            + $"   {_playerRenderer?.PlatesDrawn ?? 0} plates");
     }
 
     /// <summary>How many frames the check has drawn, for its own timing.</summary>
@@ -7652,7 +7788,8 @@ public sealed class ClientHost : IDisposable
             if (_spawned)
             {
                 var pose = _animator.Pose(_camera.Yaw, _camera.Pitch);
-                _playerRenderer.DrawWorld(viewProj, _viewPosition, sky, light, _player.Position, pose);
+                _playerRenderer.DrawWorld(
+                    viewProj, _viewPosition, sky, light, _player.Position, pose, WornMaterials());
 
                 // ⛳ And what they are carrying, in the world, against the same arm. Third person
                 // showed empty hands until now — no tool, no torch, nothing — which the user called

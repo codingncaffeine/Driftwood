@@ -398,6 +398,17 @@ public sealed class HudRenderer : IDisposable
     /// <summary>A soft round bloom, drawn behind anything that gives off light.</summary>
     private const int IconBloom = IconEquip + 5;
 
+    /// <summary>
+    /// The plate the armour bar is counted in.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ Appended past the bloom rather than filed beside the heart, for exactly the reason the
+    /// dyes cost this project a session: <b>the order these are added to the list IS the numbering
+    /// these constants name</b>, so a tile slipped in among them moves every layer after it while
+    /// nothing anywhere fails — the cursor would simply become a bubble.
+    /// </remarks>
+    private const int IconPlate = IconBloom + 1;
+
     public unsafe HudRenderer(GL gl)
     {
         _gl = gl;
@@ -408,6 +419,7 @@ public sealed class HudRenderer : IDisposable
         icons.Add(TileGen.Cursor());
         icons.AddRange(TileGen.EquipGhosts());
         icons.Add(TileGen.Bloom());
+        icons.Add(TileGen.Plate());
         _icons = new BlockTextureArray(gl, [.. icons], TileGen.Size);
 
         _font = new BlockTextureArray(gl, TileGen.Font(), TileGen.Size);
@@ -536,11 +548,15 @@ public sealed class HudRenderer : IDisposable
         // ⚠ And nobody is carrying anything before they have started: an empty bar under the menu
         // reads as a game somebody is already losing at.
         if (!screen.IsContainer && screen.Kind != HudScreenKind.Start)
+        {
             Hotbar(catalogue, inventory, w, h);
+            Offhand(catalogue, equipment, vitals, w, h);
+        }
 
         if (!screen.IsOpen)
         {
             Hearts(vitals, w, h);
+            ArmourBar(vitals, w, h);
             Bubbles(vitals, w, h);
         }
 
@@ -2008,6 +2024,85 @@ public sealed class HudRenderer : IDisposable
             var portion = filled == 2 ? 1f : 0.5f;
             Rect(_iconQuads, x, top, (Icon - 1f) * portion, Icon - 1f, full, IconHeart, uWidth: portion);
         }
+    }
+
+    /// <summary>
+    /// The armour bar, above the hearts, shown only when there is any.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ <b>Hidden at zero rather than drawn empty.</b> Ten empty plates over the hearts for the
+    /// entire first hour of a world is a row that says "you have none of this" every frame to
+    /// somebody who has not been shown that it exists yet — and it costs the hearts a row of screen
+    /// they are much more likely to want to read.
+    /// </remarks>
+    private void ArmourBar(PlayerVitals vitals, float w, float h)
+    {
+        if (vitals.ArmourPoints <= 0) return;
+
+        const float Icon = 9f;
+        const int Count = Armour.MaxPoints / 2;
+
+        var left = MathF.Round(w / 2f) - Count * Icon;
+        var top = h - 53f;
+
+        // ⛳ Lit while it is up, so raising the shield is visible from the bar rather than only from
+        // the damage numbers. The one thing a player has to be able to tell at a glance is whether
+        // the key they are holding is doing anything.
+        var colour = vitals.ShieldRaised
+            ? new Vector4(0.92f, 0.94f, 0.70f, 1f)
+            : new Vector4(0.72f, 0.76f, 0.82f, 1f);
+
+        for (var i = 0; i < Count; i++)
+        {
+            var filled = Math.Clamp(vitals.ArmourPoints - i * 2, 0, 2);
+            if (filled == 0) continue;
+
+            var portion = filled == 2 ? 1f : 0.5f;
+            Rect(_iconQuads, left + i * Icon, top, (Icon - 1f) * portion, Icon - 1f,
+                colour, IconPlate, uWidth: portion);
+        }
+    }
+
+    /// <summary>
+    /// What is in the other hand, in its own pocket beside the bar.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>The whole reason the offhand was worth doing.</b> It has been real storage since the
+    /// player screen landed, it accepts anything, and nothing about it appeared anywhere outside
+    /// that screen — which makes it a place to put a stack and then forget you own it. Drawn beside
+    /// the bar it is a slot; not drawn, it is a hole.
+    /// </remarks>
+    private void Offhand(
+        ItemRegistry catalogue, Equipment equipment, PlayerVitals vitals, float w, float h)
+    {
+        var stack = equipment[EquipSlot.Offhand];
+        if (stack.IsEmpty) return;
+
+        const float Slot = 22f;
+        const float Pad = 2f;
+
+        var barWidth = Inventory.HotbarSlots * Slot;
+        var left = MathF.Round((w - barWidth) / 2f) - Slot - 8f;
+
+        // Lifted a little while it is up, which is the smallest gesture that reads as raised.
+        var top = MathF.Round(h - Slot - 8f) - (vitals.ShieldRaised ? 4f : 0f);
+
+        Bevel(left - 3f, top - 3f, Slot + 6f, Slot + 6f, raised: true, PanelFill);
+        Bevel(left + 1f, top + 1f, Slot - 2f, Slot - 2f, raised: false, SlotFill);
+        if (vitals.ShieldRaised) Select(left + 1f, top + 1f, Slot - 2f, Slot - 2f);
+
+        SlotIcon(catalogue, stack, left + Pad, top + Pad, Slot - Pad * 2f, Vector4.One);
+
+        var type = catalogue[stack.Item];
+        if (type.Durability > 0 && stack.Damage > 0)
+        {
+            var life = 1f - stack.Damage / (float)type.Durability;
+            Rect(_plain, left + Pad, top + Slot - 4f, Slot - Pad * 2f, 2f, new Vector4(0f, 0f, 0f, 0.8f));
+            Rect(_plain, left + Pad, top + Slot - 4f, (Slot - Pad * 2f) * life, 2f,
+                new Vector4(1f - life, 0.25f + life * 0.65f, 0.2f, 1f));
+        }
+
+        if (stack.Count > 1) Number(stack.Count, left + Slot - 1.5f, top + Slot - 8.5f);
     }
 
     /// <summary>Breath, shown only while it is worth knowing about.</summary>

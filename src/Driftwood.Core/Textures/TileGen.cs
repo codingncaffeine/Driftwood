@@ -766,6 +766,37 @@ public static class TileGen
         return tiles;
     }
 
+    /// <summary>
+    /// The plate the armour bar is counted in, white to be tinted like the heart is.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ <b>A shield outline rather than a chestplate.</b> At nine pixels on the bar, beside a row
+    /// of hearts, a chestplate silhouette is a blob with two notches in it and reads as a heart in
+    /// the wrong colour — which is the one thing the row must not do. A pointed heater is the only
+    /// small shape in the vocabulary that is nothing like a heart.
+    /// </remarks>
+    public static byte[] Plate()
+    {
+        var t = new byte[BytesPerTile];
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var u = (x + 0.5f) / Size * 2f - 1f;
+            var v = (y + 0.5f) / Size;
+
+            // Straight sides for the top two thirds, then tapering to a point.
+            var half = v < 0.62f ? 0.74f : 0.74f * (1f - (v - 0.62f) / 0.33f);
+            if (v > 0.95f || MathF.Abs(u) > half) continue;
+
+            var edge = MathF.Abs(u) > half - 0.22f || v < 0.10f || v > 0.86f;
+            var shade = edge ? (byte)168 : (byte)255;
+            Put(t, x, y, shade, shade, shade, 255);
+        }
+
+        return t;
+    }
+
     /// <summary>The bubble the breath meter is counted in, likewise white.</summary>
     public static byte[] Bubble()
     {
@@ -2556,6 +2587,212 @@ public static class TileGen
         return edged;
     }
 
+    /// <summary>
+    /// The four pieces of armour, in <see cref="Items.EquipSlot"/> order.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ <b>Silhouettes first, and they are what a player reads at sixteen pixels.</b> A helmet
+    /// is a dome with a face cut out of it, a chestplate is shoulders wider than its waist, leggings
+    /// are a band with two legs under it, and boots are a pair. Those four outlines are distinct at
+    /// a glance in a way four differently-shaded rectangles are not — which is the fault the tools
+    /// were caught with, where the axe and the shovel were the same shape shifted one column.</para>
+    /// <para>⚠ <b>Two of them are deliberately two pieces of ink.</b> Boots are a pair and leggings
+    /// have a leg either side of a gap; the drawing check allows up to six islands and reads three
+    /// for the shears, so a pair is well inside it. Joining them would be drawing a mistake to
+    /// satisfy a check.</para>
+    /// </remarks>
+    public static readonly string[][] ArmourShapes =
+    [
+        // Helmet: a domed cap, cheek pieces either side of the face.
+        [
+            "................",
+            "................",
+            "....llllllll....",
+            "...lmmmmmmmml...",
+            "..lmmmmmmmmmml..",
+            "..mmmmmmmmmmmm..",
+            "..mmmmmmmmmmmm..",
+            "..mmmmmmmmmmmm..",
+            "..mmm......mmm..",
+            "..mmM......Mmm..",
+            "..mMM......MMm..",
+            "...MM......MM...",
+            "................",
+            "................",
+            "................",
+            "................",
+        ],
+
+        // Chestplate: shoulders, a neck cut out between them, a waist narrower than the chest.
+        [
+            "................",
+            ".mmm..llll..mmm.",
+            ".mmmmllllllmmmm.",
+            ".mmmmmllllmmmmm.",
+            ".mmmmmmmmmmmmmm.",
+            ".mmmmmmmmmmmmmm.",
+            "..mmmmmmmmmmmm..",
+            "..mmmmmmmmmmmm..",
+            "..mmmmmmmmmmmm..",
+            "..Mmmmmmmmmmmm..",
+            "..Mmmmmmmmmmmm..",
+            "..MMmmmmmmmmMM..",
+            "...MMMMMMMMMM...",
+            "................",
+            "................",
+            "................",
+        ],
+
+        // Leggings: a waistband with two legs hanging off it.
+        [
+            "................",
+            "................",
+            "..llllllllllll..",
+            "..mmmmmmmmmmmm..",
+            "..mmmmmmmmmmmm..",
+            "..mmmmmmmmmmmm..",
+            "..mmmm....mmmm..",
+            "..mmmm....mmmm..",
+            "..mmmm....mmmm..",
+            "..mmmm....mmmm..",
+            "..MmmM....MmmM..",
+            "..MMMM....MMMM..",
+            "................",
+            "................",
+            "................",
+            "................",
+        ],
+
+        // Boots: a pair, seen from the side, toes outward.
+        [
+            "................",
+            "................",
+            "................",
+            "................",
+            "................",
+            "................",
+            "..llll....llll..",
+            "..mmmm....mmmm..",
+            "..mmmm....mmmm..",
+            "..mmmm....mmmm..",
+            ".mmmmm...mmmmm..",
+            ".mmmmmm..mmmmmm.",
+            ".MMMMMM..MMMMMM.",
+            "................",
+            "................",
+            "................",
+        ],
+    ];
+
+    /// <summary>One piece of armour: a silhouette in a material's colours, riveted and edged.</summary>
+    /// <remarks>
+    /// ⛳ Shares the tool icons' shading letters and the same grown outline. A row of armour and a
+    /// row of tools in the same metal have to read as the same metal, and two separate shading rules
+    /// is exactly how they stop doing so.
+    /// </remarks>
+    public static byte[] IconArmour(int seed, int piece, byte r, byte g, byte b)
+    {
+        var t = new byte[BytesPerTile];
+        var rows = ArmourShapes[piece];
+
+        for (var y = 0; y < Size && y < rows.Length; y++)
+        for (var x = 0; x < Size && x < rows[y].Length; x++)
+        {
+            var c = rows[y][x];
+            if (c == '.') continue;
+
+            var d = c switch
+            {
+                'l' => 44,
+                'm' => 0,
+                _ => -36,
+            } + (int)((Noise(x, y, seed) * 2f - 1f) * 9f);
+
+            // ⚠ Rivets rather than a gradient. A plate at this size reads as beaten metal because of
+            // the studs along its edges, and the one place a gradient was tried on an icon in this
+            // project it was measured to make the tone range slightly WORSE — see IconTool.
+            if ((x + 1) % 5 == 0 && (y + 2) % 4 == 0) d += 30;
+
+            Put(t, x, y, Clamp(r + d), Clamp(g + d), Clamp(b + d), 255);
+        }
+
+        return Edged(t);
+    }
+
+    /// <summary>
+    /// A shield: a heater board with a rim and a boss, drawn in two materials.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ <b>Both materials are on the tile on purpose.</b> The recipe is timber round an iron boss,
+    /// and an icon that showed only the board would be a picture a player could not read the recipe
+    /// off. It is also what tells it apart from a plain plank in a slot at sixteen pixels.
+    /// </remarks>
+    public static byte[] IconShield(int seed, byte r, byte g, byte b, byte mr, byte mg, byte mb)
+    {
+        var t = new byte[BytesPerTile];
+        const float Centre = (Size - 1) / 2f;
+
+        for (var y = 1; y < Size - 1; y++)
+        for (var x = 2; x < Size - 2; x++)
+        {
+            // A heater: straight sides down to two thirds, then tapering to a point at the bottom.
+            var shoulder = y < Size * 2 / 3;
+            var half = shoulder ? 6f : 6f - (y - Size * 2f / 3f) * 1.7f;
+            if (MathF.Abs(x - Centre) > half) continue;
+
+            var rim = MathF.Abs(x - Centre) > half - 1.2f || y <= 2 || half < 1.6f;
+
+            // The boss, dead centre, in the same metal as the rim.
+            var dx = x - Centre;
+            var dy = y - Centre + 0.5f;
+            var boss = dx * dx + dy * dy < 5.2f;
+
+            var metal = rim || boss;
+            var (br, bg, bb) = metal ? (mr, mg, mb) : (r, g, b);
+
+            var d = (boss ? 22 : 0)
+                  + (int)((Centre - y) * 1.6f)
+                  + (int)((Noise(x, y, seed) * 2f - 1f) * 9f);
+
+            // The grain of the boards runs down it, which is what stops the timber reading as felt.
+            if (!metal) d += x % 4 == 0 ? -14 : 0;
+
+            Put(t, x, y, Clamp(br + d), Clamp(bg + d), Clamp(bb + d), 255);
+        }
+
+        return Edged(t);
+    }
+
+    /// <summary>Grows a one-pixel dark line round whatever has been drawn.</summary>
+    /// <remarks>
+    /// ⛳ Shared by the tools and the armour. Written as a pass over what is there rather than as
+    /// pixels in the drawings: a hand-drawn outline is a hand-drawn mistake on a shape that is
+    /// otherwise sampled, and this way a shape gets its edge for free including every gap inside it.
+    /// </remarks>
+    private static byte[] Edged(byte[] tile)
+    {
+        var edged = (byte[])tile.Clone();
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            if (tile[(y * Size + x) * 4 + 3] >= 128) continue;
+
+            var touches = false;
+            for (var side = 0; side < 4 && !touches; side++)
+            {
+                var nx = x + (side == 0 ? -1 : side == 1 ? 1 : 0);
+                var ny = y + (side == 2 ? -1 : side == 3 ? 1 : 0);
+                if (nx < 0 || ny < 0 || nx >= Size || ny >= Size) continue;
+                touches = tile[(ny * Size + nx) * 4 + 3] >= 128;
+            }
+
+            if (touches) Put(edged, x, y, 30, 24, 18, 255);
+        }
+
+        return edged;
+    }
+
     /// <summary>Printable ASCII, from space to tilde. The range every string in the game uses.</summary>
     public const int FirstGlyph = 32;
 
@@ -2779,10 +3016,11 @@ public static class TileGen
         tile[i] = r; tile[i + 1] = g; tile[i + 2] = b; tile[i + 3] = a;
     }
 
-    private static byte Clamp(int v) => (byte)Math.Clamp(v, 0, 255);
+    /// <summary>Keeps a channel in range. Shared so a painter outside this file shades the same way.</summary>
+    internal static byte Clamp(int v) => (byte)Math.Clamp(v, 0, 255);
 
     /// <summary>Deterministic 0..1 hash noise. Stateless, so tiles can be built in any order.</summary>
-    private static float Noise(int x, int y, int seed)
+    internal static float Noise(int x, int y, int seed)
     {
         unchecked
         {
