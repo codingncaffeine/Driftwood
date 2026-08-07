@@ -485,7 +485,16 @@ public static class BlockTextureSet
                 continue;
             }
 
-            var replacement = pack.TryLoadTile(Layers[i].PackPath, size, out var from);
+            // ⛳ A 2012 pack is asked by CELL rather than by path, and it has to be tried first: it
+            // ships no per-texture files at all, so every path candidate misses and the layer would
+            // silently keep our art on a pack that plainly has a picture of that block in it.
+            byte[]? replacement = null;
+            var from = Layers[i].PackPath;
+
+            if (pack.Dialect == PackDialect.Atlas && PackAtlas.Of(i) is { } cell)
+                replacement = pack.TryLoadAtlasTile(cell.Index, size, cell.Items, out from);
+
+            replacement ??= pack.TryLoadTile(Layers[i].PackPath, size, out from);
 
             if (replacement is null && Layers[i].PackPathAlt.Length > 0)
                 replacement = pack.TryLoadTile(Layers[i].PackPathAlt, size, out from);

@@ -1032,6 +1032,16 @@ public static class WorldAudit
                 ? string.Join("; ", creatureDrops.Describe())
                 : $"{creatureDropFaults.Count} faults: {creatureDropFaults[0]}");
 
+        // ⛳ The 2012 grid, which is a table of cell numbers and therefore a table that can be wrong
+        // in the one way nothing notices: two layers reading one cell imports cleanly, paints every
+        // tile and puts the wrong picture on one block.
+        var atlasFaults = PackAtlas.Validate();
+        Check("the 2012 atlas table reads one cell each", atlasFaults.Count == 0,
+            atlasFaults.Count == 0
+                ? $"{PackAtlas.Mapped} of {StarterBlocks.LayerCount} layers can come off a "
+                  + $"{TexturePack.AtlasCells}x{TexturePack.AtlasCells} grid, no cell twice"
+                : $"{atlasFaults.Count} faults: {atlasFaults[0]}");
+
         // ⛳ Armour, which is where the leather those animals drop finally goes. The table and the
         // registered items are two statements of the same twenty numbers and nothing else in the
         // game would notice them disagreeing — a helmet worth the chestplate's points looks exactly

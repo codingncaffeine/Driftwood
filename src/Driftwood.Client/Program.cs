@@ -86,6 +86,21 @@ public static class Program
                 return 0;
             }
 
+            // ⛔ THE INSTRUMENT THAT SAYS WHAT IS ON A 2012 GRID, and it exists because the
+            // alternative is transcribing a well-known table from memory. A cell holds whatever it
+            // holds; that is a fact about the image and it is measurable. One candidate table
+            // checked this way already read grey where diamond was expected.
+            if (args.Contains("--atlas"))
+            {
+                if (string.IsNullOrWhiteSpace(options.PackPath))
+                {
+                    Console.Error.WriteLine("driftwood: --atlas needs --pack <folder or .zip>");
+                    return 1;
+                }
+
+                return Atlas(options.PackPath);
+            }
+
             // ⛔ THE ANSWER TO "CAN A PACK'S ANIMALS EVER WORK". A creature is two halves from two
             // different places: the skeleton ships with the GAME (a resource pack only overrides
             // shapes it changes, so a pack that repaints every mob carries no geometry at all) and
@@ -220,6 +235,65 @@ public static class Program
     /// connected region). Nothing in the picture says where a head sits or where a leg pivots. The
     /// numbers exist, in the game's own geometry files, and this is what reads them.
     /// </remarks>
+    /// <summary>
+    /// Prints what is on a pre-1.6 pack's grid, cell by cell.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>Mean colour and how much of the cell is opaque</b>, which between them identify most of
+    /// the sheet: gold block is the most distinctive cell on it, bedrock is near-black, sand is pale,
+    /// and a cutout — a sapling, a flower, a torch — is a cell that is mostly clear. The eye that
+    /// reads this output is mine, once, to write the index table; the table is then in the code and
+    /// this stays as the thing that checks it against the next pack somebody hands us.
+    /// </remarks>
+    private static int Atlas(string packPath)
+    {
+        using var pack = TexturePack.Open(packPath);
+        if (pack is null)
+        {
+            Console.Error.WriteLine($"driftwood: nothing readable at {packPath}");
+            return 1;
+        }
+
+        Console.WriteLine($"atlas       {pack.Name}: {pack.Dialect}, cells of {pack.AtlasTileSize}px");
+
+        if (pack.Dialect != PackDialect.Atlas)
+        {
+            Console.Error.WriteLine("driftwood: that pack has no terrain.png at its root");
+            return 1;
+        }
+
+        foreach (var items in (ReadOnlySpan<bool>)[false, true])
+        {
+            var census = pack.AtlasCensus(items);
+            var any = false;
+            foreach (var cell in census) any |= cell.Opaque > 0;
+
+            Console.WriteLine();
+            Console.WriteLine(items ? "gui/items.png" : "terrain.png");
+
+            if (!any)
+            {
+                Console.WriteLine("  (not in this pack)");
+                continue;
+            }
+
+            for (var row = 0; row < TexturePack.AtlasCells; row++)
+            {
+                var line = new System.Text.StringBuilder($"  row {row,2} ");
+                for (var column = 0; column < TexturePack.AtlasCells; column++)
+                {
+                    var index = row * TexturePack.AtlasCells + column;
+                    var (r, g, b, opaque) = census[index];
+                    line.Append($"{index,3}:{r,3},{g,3},{b,3}@{opaque,3}%  ");
+                }
+
+                Console.WriteLine(line.ToString());
+            }
+        }
+
+        return 0;
+    }
+
     private static int Creatures(string? geometryPath, ClientOptions options)
     {
         var root = geometryPath ?? CreatureLibrary.FindInstalledGeometry();
@@ -489,6 +563,7 @@ public static class Program
                 case "--pack-coverage":
                 case "--pack-report":
                 case "--packs":
+                case "--atlas":
                     break;   // handled in Main; listed here so they are not unknown arguments
                 default:
                     throw new ArgumentException($"unknown argument '{args[i]}' (try --help)");
@@ -584,6 +659,10 @@ public static class Program
                                 data\resource_packs. Add --pack to check the skins as well.
               --pack-report     with --pack, report which of OUR layers the pack supplied and
                                 which kept our art — the answer to "is the pack even being used"
+              --atlas           with --pack, print what is on a pre-1.6 terrain.png grid: every
+                                cell's mean colour and how much of it is opaque. A 2012 pack
+                                addresses blocks by CELL NUMBER rather than by name, so this is
+                                what says which cell holds what — measured rather than remembered
               --play <secs>     play normally for this long and then close the window the way a
                                 player would, so the world is saved on the way out. The only way to
                                 ask whether closing the window keeps the world: a killed process

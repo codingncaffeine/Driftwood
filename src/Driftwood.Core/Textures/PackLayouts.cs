@@ -24,6 +24,18 @@ public enum PackDialect
     /// </summary>
     Bedrock,
 
+    /// <summary>
+    /// Pre-1.6: one <c>terrain.png</c> at the root holding every block on a 16×16 grid.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>A different ADDRESSING SCHEME, not a different format.</b> There is no <c>assets/</c>,
+    /// no <c>pack.mcmeta</c> and no per-texture file at all — a block is a cell number rather than a
+    /// name, which is why every candidate-path mechanism in this project simply misses. The community
+    /// back catalogue in this layout is large and entirely readable, and a player holding one has not
+    /// done anything wrong.
+    /// </remarks>
+    Atlas,
+
     /// <summary>Nothing recognisable. Read as best it can be and reported as such.</summary>
     Unknown,
 }

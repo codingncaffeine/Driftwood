@@ -201,7 +201,13 @@ public static class PackLibrary
             // and yields nothing — so the shelf called it fine, and a player would have worn it,
             // relaunched, and seen exactly no change with nothing anywhere saying why. Opening
             // without exploding is not the same as being usable.
-            if (pack.Dialect is not (PackDialect.Java or PackDialect.JavaLegacy or PackDialect.Bedrock))
+            // ⛳ Picture-perfect-pack-128X128 is why this line exists AND why it now has a fourth
+            // dialect in it. It opened perfectly, reported no dialect and yielded nothing, so the
+            // shelf called it fine — a player would have worn it, relaunched, and seen no change
+            // with nothing anywhere saying why. It was refused by name, and refusing it was the
+            // right answer only until the layout could be read.
+            if (pack.Dialect is not (PackDialect.Java or PackDialect.JavaLegacy
+                                     or PackDialect.Bedrock or PackDialect.Atlas))
                 return new Entry(name, path, Unrecognised(pack), false);
 
             var size = pack.DetectResolution();
@@ -209,6 +215,7 @@ public static class PackLibrary
             {
                 PackDialect.Java => "Java",
                 PackDialect.JavaLegacy => "Java, pre-flattening",
+                PackDialect.Atlas => "pre-2013 terrain.png",
                 _ => "Bedrock",
             };
 
@@ -235,7 +242,7 @@ public static class PackLibrary
     /// </remarks>
     private static string Unrecognised(TexturePack pack) =>
         pack.Has("terrain.png")
-            ? "a pre-2013 terrain.png pack — that layout is not read yet"
+            ? "a pre-2013 terrain.png pack whose grid is not where it should be"
             : "the layout is not one we know: no assets/, no textures/, no terrain.png";
 
     private static void CopyFolder(string from, string to)

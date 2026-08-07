@@ -147,7 +147,7 @@ public sealed class TexturePack : IDisposable
 
     private PackDialect FindDialect()
     {
-        bool java = false, plural = false, textures = false, assets = false;
+        bool java = false, plural = false, textures = false, assets = false, atlas = false;
 
         foreach (var path in RawEntries())
         {
@@ -159,7 +159,16 @@ public sealed class TexturePack : IDisposable
 
             if (path.StartsWith($"{_prefix}textures/", StringComparison.OrdinalIgnoreCase)) textures = true;
             if (path.StartsWith($"{_prefix}assets/", StringComparison.OrdinalIgnoreCase)) assets = true;
+
+            if (string.Equals(path, $"{_prefix}terrain.png", StringComparison.OrdinalIgnoreCase)) atlas = true;
         }
+
+        // ⛳ ASKED FIRST, and it has to be. A 2012 pack is the only layout with no per-texture files
+        // at all, so every other test below reads false on it and the answer would be "unknown" —
+        // which is what it was, and it is why the shelf refused a perfectly readable pack by name.
+        // ⚠ Before the folder tests rather than after, because a few of these packs also ship a
+        // stray textures/ folder for the things that were never on the grid.
+        if (atlas) return PackDialect.Atlas;
 
         // No assets/ above the textures at all is the thing only one layout does.
         if (!assets && textures) return PackDialect.Bedrock;
@@ -167,6 +176,143 @@ public sealed class TexturePack : IDisposable
         if (plural) return PackDialect.JavaLegacy;
 
         return PackDialect.Unknown;
+    }
+
+    /// <summary>The grid is always sixteen cells across and sixteen down, whatever it is stored at.</summary>
+    public const int AtlasCells = 16;
+
+    private Image? _terrain;
+    private Image? _guiItems;
+    private bool _triedTerrain;
+    private bool _triedGuiItems;
+
+    /// <summary>
+    /// One sheet of a 2012 pack, decoded once and kept.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ <b>Held rather than re-read per cell.</b> Every block in the game comes off one image, and
+    /// this pack's is 2048×2048 — decoding it a hundred and eighty times would be the whole import.
+    /// </remarks>
+    private Image? Sheet(bool items)
+    {
+        if (items)
+        {
+            if (_triedGuiItems) return _guiItems;
+            _triedGuiItems = true;
+            _guiItems = Decode($"{_prefix}gui/items.png");
+            return _guiItems;
+        }
+
+        if (_triedTerrain) return _terrain;
+        _triedTerrain = true;
+        _terrain = Decode($"{_prefix}terrain.png");
+        return _terrain;
+    }
+
+    private Image? Decode(string path)
+    {
+        var raw = ReadAllBytes(path);
+        if (raw is null) return null;
+
+        if (Png.TryDecode(raw, out var image, out var error)) return image;
+
+        Faults.Add($"{path}: {error}");
+        return null;
+    }
+
+    /// <summary>How big one cell of the grid is, in pixels. Zero when there is no grid.</summary>
+    public int AtlasTileSize => Sheet(items: false) is { } sheet ? sheet.Width / AtlasCells : 0;
+
+    /// <summary>
+    /// One cell of the grid, resampled to a tile.
+    /// </summary>
+    /// <param name="index">Row-major: <c>row * 16 + column</c>, which is the scheme itself.</param>
+    /// <param name="items">True to read <c>gui/items.png</c> rather than <c>terrain.png</c>.</param>
+    public byte[]? TryLoadAtlasTile(int index, int size, bool items, out string from)
+    {
+        from = items ? $"gui/items.png#{index}" : $"terrain.png#{index}";
+
+        if (index < 0 || index >= AtlasCells * AtlasCells || Sheet(items) is not { } sheet)
+        {
+            Missing++;
+            return null;
+        }
+
+        var cell = sheet.Width / AtlasCells;
+        if (cell <= 0 || sheet.Height < cell * AtlasCells)
+        {
+            Missing++;
+            return null;
+        }
+
+        var left = index % AtlasCells * cell;
+        var top = index / AtlasCells * cell;
+        var tile = new byte[size * size * 4];
+
+        for (var y = 0; y < size; y++)
+        for (var x = 0; x < size; x++)
+        {
+            var sx = left + Math.Min(x * cell / size, cell - 1);
+            var sy = top + Math.Min(y * cell / size, cell - 1);
+
+            var src = (sy * sheet.Width + sx) * 4;
+            var dst = (y * size + x) * 4;
+
+            tile[dst] = sheet.Pixels[src];
+            tile[dst + 1] = sheet.Pixels[src + 1];
+            tile[dst + 2] = sheet.Pixels[src + 2];
+            tile[dst + 3] = sheet.Pixels[src + 3];
+        }
+
+        Loaded++;
+        return tile;
+    }
+
+    /// <summary>
+    /// Every cell's mean colour and how much of it is opaque, for identifying the grid.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>THE TABLE OF WHAT IS WHERE IS NOT TRANSCRIBED FROM MEMORY, AND THIS IS WHY.</b> The
+    /// classic grid is well known and half-remembering it puts diamond where lapis is — a sampled
+    /// check of one candidate table read grey at the cell diamond was expected in. What a cell holds
+    /// is a fact about the image, so it is measured off the image: gold block is 228,169,18 and
+    /// nothing else on the sheet is, bedrock is near-black, sand is pale. This is the instrument
+    /// that says so.
+    /// </remarks>
+    public (byte R, byte G, byte B, int Opaque)[] AtlasCensus(bool items)
+    {
+        var census = new (byte, byte, byte, int)[AtlasCells * AtlasCells];
+        if (Sheet(items) is not { } sheet) return census;
+
+        var cell = sheet.Width / AtlasCells;
+        if (cell <= 0 || sheet.Height < cell * AtlasCells) return census;
+
+        for (var index = 0; index < census.Length; index++)
+        {
+            var left = index % AtlasCells * cell;
+            var top = index / AtlasCells * cell;
+
+            long r = 0, g = 0, b = 0;
+            var opaque = 0;
+
+            for (var y = 0; y < cell; y++)
+            for (var x = 0; x < cell; x++)
+            {
+                var at = ((top + y) * sheet.Width + left + x) * 4;
+                if (sheet.Pixels[at + 3] < 128) continue;
+
+                r += sheet.Pixels[at];
+                g += sheet.Pixels[at + 1];
+                b += sheet.Pixels[at + 2];
+                opaque++;
+            }
+
+            census[index] = opaque == 0
+                ? ((byte)0, (byte)0, (byte)0, 0)
+                : ((byte)(r / opaque), (byte)(g / opaque), (byte)(b / opaque), opaque * 100 / (cell * cell));
+        }
+
+        return census;
     }
 
     /// <summary>
@@ -565,6 +711,12 @@ public sealed class TexturePack : IDisposable
             widest = Math.Max(widest, image.Width);
         }
 
+        // ⛳ A 2012 pack carries none of the five and is still perfectly measurable: its resolution
+        // is the whole sheet divided by sixteen, which is the one number that layout states about
+        // itself. Asked after the probes rather than instead of them, because a pack of that era can
+        // also ship a stray modern file and the widest real texture is still the honest answer.
+        widest = Math.Max(widest, AtlasTileSize);
+
         // A pack that carries none of the five is a pack we cannot measure, so keep our own size
         // rather than guessing large and spending a gigabyte on it.
         return widest > 0 ? widest : TileGen.Size;
@@ -584,6 +736,12 @@ public sealed class TexturePack : IDisposable
     /// </remarks>
     private IEnumerable<string> Candidates(string assetPath)
     {
+        // ⛳ The 2012 era's own paths for the handful of files that were never on the grid. The
+        // colormaps are the ones worth having: they are the same two 256×256 images the modern
+        // layout keeps under textures/colormap/, at a different name in a different folder, and
+        // they are what decides the colour of every field and every canopy in the world.
+        foreach (var old in AtlasPaths(assetPath)) yield return $"{_prefix}{old}";
+
         if (Dialect == PackDialect.Bedrock)
         {
             // No assets/, no namespace, and the old names.
@@ -606,6 +764,23 @@ public sealed class TexturePack : IDisposable
         // And the rootward one, for a pack with no assets/ that carries no manifest either.
         foreach (var legacy in PackLayouts.Legacy(assetPath)) yield return $"{_prefix}{legacy}";
     }
+
+    /// <summary>
+    /// Where a 2012 pack keeps the few things that were never on the grid.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ <b>A short list on purpose.</b> Everything else in that era is a cell, and a path candidate
+    /// for a file that layout never had is a lookup that always misses. These are the ones that
+    /// genuinely are files: the two colormaps, and the player's own skin, which is 64×32 and which
+    /// <c>PlayerSkin</c> already reads as the legacy sheet.
+    /// </remarks>
+    private static IEnumerable<string> AtlasPaths(string assetPath) => assetPath switch
+    {
+        "textures/colormap/grass.png" => ["misc/grasscolor.png"],
+        "textures/colormap/foliage.png" => ["misc/foliagecolor.png"],
+        "textures/entity/steve.png" => ["mob/char.png"],
+        _ => [],
+    };
 
     /// <summary>Reads one asset, and says which of the candidates it actually came off.</summary>
     private byte[]? ReadAsset(string assetPath, out string from)
