@@ -2914,6 +2914,62 @@ public static class WorldAudit
         if (!starved.Output.IsEmpty) faults.Add("a furnace with no fuel smelted something");
         if (starved.Progress > 0f) faults.Add($"a furnace with no fuel got {starved.Progress:F2}s through a smelt");
 
+        // ── A CAMPFIRE COOKS WITH NOTHING UNDER IT, and only food ───────────────────────────────
+        //
+        // ⛔ The arm above is exactly why this one needs its own: "no fuel means no progress" is
+        // true of every other kind in the game and is precisely what a campfire has to break. A
+        // campfire wired up wrong would sit there doing nothing and look identical to a correct
+        // furnace with an empty fuel slot.
+        var campfireTook = -1f;
+        var beef = items.ByName("raw_beef").Id;
+        var roast = items.ByName("cooked_beef").Id;
+        var cook = book.SmeltFor(beef, FurnaceKind.Campfire);
+
+        if (cook is null)
+        {
+            faults.Add("a campfire will not cook raw beef, so it cooks nothing at all");
+        }
+        else
+        {
+            var fire = new FurnaceBank(items, book);
+            var onIt = fire.Open(1, 2, 3);
+            onIt.Input = new ItemStack(beef, 1);
+
+            var cookedAfter = -1f;
+            for (var frame = 1; frame <= 6000; frame++)
+            {
+                fire.Update(Step, relit, (_, _, _) => FurnaceKind.Campfire);
+                if (onIt.Output.IsEmpty) continue;
+                cookedAfter = frame * Step;
+                break;
+            }
+
+            campfireTook = cookedAfter;
+
+            if (cookedAfter < 0f)
+                faults.Add("a lit campfire with meat on it and no fuel cooked nothing");
+            else if (onIt.Output.Item.Value != roast.Value)
+                faults.Add($"a campfire turned raw beef into {items[onIt.Output.Item].Name}");
+
+            // ⚠ Slower than a furnace, or the free one is also the quick one and a smoker is a
+            // building nobody would put up. Both sides walked rather than compared as constants.
+            var plainSeconds = cook.Seconds * FurnaceKinds.SpeedOf(FurnaceKind.Furnace);
+            if (cookedAfter > 0f && cookedAfter <= plainSeconds)
+                faults.Add($"a campfire cooked in {cookedAfter:F1}s against a furnace's "
+                         + $"{plainSeconds:F1}s, so the fuel-free one is also the fast one");
+
+            // ⛔ AND IT MUST REFUSE ORE. A campfire that smelts iron is a furnace you never build.
+            var smelter = new FurnaceBank(items, book);
+            var wrong = smelter.Open(1, 2, 3);
+            wrong.Input = new ItemStack(iron, 2);
+            for (var frame = 0; frame < 2000; frame++)
+                smelter.Update(Step, relit, (_, _, _) => FurnaceKind.Campfire);
+
+            if (!wrong.Output.IsEmpty) faults.Add("a campfire smelted iron ore");
+            if (wrong.Progress > 0f)
+                faults.Add($"a campfire got {wrong.Progress:F2}s into smelting ore");
+        }
+
         // A full output stops the work rather than swallowing it.
         var full = new FurnaceBank(items, book);
         var blocked = full.Open(0, 0, 0);
@@ -3025,7 +3081,8 @@ public static class WorldAudit
                + "idle burns nothing, unfuelled makes no progress, a full one stops, and the flame is "
                + $"reported both ways. A blast furnace does the same four in {blast:F0}s against "
                + $"{plain:F0}s and will not touch sand; a smoker does four steaks in {cooked:F0}s "
-               + $"against {overFire:F0}s and will not touch ore";
+               + $"against {overFire:F0}s and will not touch ore; and a campfire cooks one with "
+               + $"NOTHING under it in {campfireTook:F0}s, refusing ore";
 
         return faults;
     }

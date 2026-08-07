@@ -1479,7 +1479,14 @@ public static class StarterBlocks
             {
                 Name = $"campfire_{AxisNames[axis == Faces.PosX ? 0 : 1]}{(lit ? "_lit" : "")}",
                 Hardness = 2f, Opaque = false, Crafted = true,
-                Sounds = SoundMaterial.Wood, Use = BlockUse.Toggle,
+                Sounds = SoundMaterial.Wood,
+
+                // ⛳ A LIT ONE COOKS AND AN UNLIT ONE LIGHTS. The two states want different answers
+                // to the same click, which is exactly what BlockUse is for — and it is why the pair
+                // is two block ids rather than one with a flag.
+                // ⚠ Putting a lit one OUT moved to the shovel, because right-click is now taken. The
+                // reference's own answer, and the first thing a shovel does that is not digging.
+                Use = lit ? BlockUse.Campfire : BlockUse.Toggle,
                 HarvestClass = ToolClass.Axe,
                 SupportFace = Faces.NegY,
                 LightEmission = lit ? LightValue.PackBlock(15, 11, 6) : (ushort)0,
@@ -1804,6 +1811,11 @@ public static class StarterBlocks
             foreach (var id in BlastFurnaces(registry, lit)) kinds[id.Value] = FurnaceKind.Blast;
             foreach (var id in Smokers(registry, lit)) kinds[id.Value] = FurnaceKind.Smoker;
         }
+
+        // ⛔ THE LIT CAMPFIRE ONLY, and that is what makes putting the fire out stop the cooking.
+        // The kind is read off the cell every tick, so an extinguished campfire falls back to the
+        // default — a plain furnace with no fuel in it, which does nothing. Nothing else has to know.
+        foreach (var id in Campfires(registry, lit: true)) kinds[id.Value] = FurnaceKind.Campfire;
 
         return kinds;
     }

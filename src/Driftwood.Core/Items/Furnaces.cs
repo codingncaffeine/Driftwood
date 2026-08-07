@@ -132,22 +132,34 @@ public sealed class FurnaceBank
         // bar filled at the plain rate and then finished early would read as a rendering fault.
         furnace.Takes = (recipe?.Seconds ?? 0f) * FurnaceKinds.SpeedOf(kind);
 
-        // Light a new piece of fuel only if there is work for it. This is the whole reason the
-        // recipe is looked up before the fuel is touched rather than after.
-        if (furnace.BurnLeft <= 0f && recipe is not null && !furnace.Fuel.IsEmpty)
+        if (FurnaceKinds.CarriesItsOwnFire(kind))
         {
-            var worth = _items[furnace.Fuel.Item].BurnSeconds;
-            if (worth > 0f)
-            {
-                furnace.Fuel = furnace.Fuel.MinusOne();
-                furnace.BurnLeft = worth;
-                furnace.BurnTotal = worth;
-            }
+            // ⛳ A CAMPFIRE IS ALREADY BURNING, so there is nothing to light and nothing to spend.
+            // ⛔ And it is only asked to be a campfire while its block is the LIT one — the kind comes
+            // off the cell every tick — so putting the fire out genuinely stops the cooking, which is
+            // the behaviour a player expects and one that costs nothing to get right here.
+            furnace.BurnLeft = 1f;
+            furnace.BurnTotal = 1f;
         }
+        else
+        {
+            // Light a new piece of fuel only if there is work for it. This is the whole reason the
+            // recipe is looked up before the fuel is touched rather than after.
+            if (furnace.BurnLeft <= 0f && recipe is not null && !furnace.Fuel.IsEmpty)
+            {
+                var worth = _items[furnace.Fuel.Item].BurnSeconds;
+                if (worth > 0f)
+                {
+                    furnace.Fuel = furnace.Fuel.MinusOne();
+                    furnace.BurnLeft = worth;
+                    furnace.BurnTotal = worth;
+                }
+            }
 
-        // Anything already alight burns down whether or not there is still something in the top,
-        // which is what makes taking the ore out mid-smelt cost you the coal.
-        if (furnace.BurnLeft > 0f) furnace.BurnLeft = MathF.Max(0f, furnace.BurnLeft - dt);
+            // Anything already alight burns down whether or not there is still something in the top,
+            // which is what makes taking the ore out mid-smelt cost you the coal.
+            if (furnace.BurnLeft > 0f) furnace.BurnLeft = MathF.Max(0f, furnace.BurnLeft - dt);
+        }
 
         if (recipe is null || !furnace.Lit)
         {

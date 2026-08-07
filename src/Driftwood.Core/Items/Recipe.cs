@@ -298,6 +298,20 @@ public enum FurnaceKind
     /// the only thing that varies between them.
     /// </remarks>
     Smoker,
+
+    /// <summary>
+    /// A campfire. Food only, slowly, and it carries its own fire.
+    /// </summary>
+    /// <remarks>
+    /// ⛳⛳ <b>The first cooking in the game that costs no fuel, and that is the whole point of it.</b>
+    /// A furnace wants coal or charcoal and a player on their first evening has neither, so meat went
+    /// uncooked until they had been down a mine — which is backwards, because cooked food is exactly
+    /// what you want before the first night rather than after it. A campfire is logs and a stick, it
+    /// is already burning, and it will cook what is put on it.
+    /// ⚠ <b>Its cost is TIME, not fuel</b> — twice as slow as a furnace and four times a smoker.
+    /// That is the whole trade, and it is what keeps building a smoker worth doing later.
+    /// </remarks>
+    Campfire,
 }
 
 /// <summary>What each kind of smelter will take, and how fast.</summary>
@@ -310,7 +324,18 @@ public static class FurnaceKinds
     /// furnace and takes nothing but food. What each gives back has to be worth walking to, and the
     /// genre's answer — which is the right one — is that it is simply twice as quick.
     /// </remarks>
-    public static float SpeedOf(FurnaceKind kind) => kind == FurnaceKind.Furnace ? 1f : 0.5f;
+    /// <remarks>
+    /// ⛔ <b>A switch rather than "furnace or not".</b> It was <c>kind == Furnace ? 1 : 0.5</c>, which
+    /// is right while every specialised smelter is a FASTER one — and a campfire is the first that is
+    /// deliberately slower. That test would have made the free one the quick one too, which is a
+    /// campfire that obsoletes the smoker it is supposed to be worse than.
+    /// </remarks>
+    public static float SpeedOf(FurnaceKind kind) => kind switch
+    {
+        FurnaceKind.Furnace => 1f,
+        FurnaceKind.Campfire => 2f,
+        _ => 0.5f,
+    };
 
     /// <summary>What one kind will take, or null for the furnace, which takes everything.</summary>
     /// <remarks>
@@ -323,8 +348,20 @@ public static class FurnaceKinds
     {
         FurnaceKind.Blast => SmeltWork.Ore,
         FurnaceKind.Smoker => SmeltWork.Food,
+        FurnaceKind.Campfire => SmeltWork.Food,
         _ => null,
     };
+
+    /// <summary>
+    /// True when this kind burns on its own and wants nothing put under it.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>Stated here rather than tested for at the point of use.</b> "Does this need fuel" is a
+    /// fact about a kind of fire, and the moment a second self-fuelling one exists — a fire pit, a
+    /// lava-fed forge — an <c>== Campfire</c> written into the step loop is a rule about the whole
+    /// game living in one branch of one method.
+    /// </remarks>
+    public static bool CarriesItsOwnFire(FurnaceKind kind) => kind == FurnaceKind.Campfire;
 
     /// <summary>True when a smelter of this kind will do this job at all.</summary>
     public static bool Takes(FurnaceKind kind, SmeltWork work) => Only(kind) is not { } only || work == only;

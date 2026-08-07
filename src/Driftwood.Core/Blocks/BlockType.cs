@@ -36,6 +36,20 @@ public enum BlockUse
     /// material could not pay off — a bespoke result no pattern can express.
     /// </remarks>
     Anvil,
+
+    /// <summary>
+    /// Puts food on a lit campfire, or takes it off again.
+    /// </summary>
+    /// <remarks>
+    /// ⛳⛳ <b>No screen, for the anvil's reason.</b> Every station with a screen has something to
+    /// ARRANGE or to choose between — a grid, a fuel, a list of cuts. A campfire has one thing on it
+    /// and one thing it becomes; a window with two squares in it would be two drag gestures to say
+    /// what walking up and clicking already says.
+    /// ⛔ <b>Only the LIT form answers this</b>, and the unlit one keeps <see cref="Toggle"/> so it
+    /// can be started. Putting one out is a shovel's job — which is the reference's own answer and
+    /// gives the shovel something to do that is not digging.
+    /// </remarks>
+    Campfire,
 }
 
 /// <summary>Which fluid a block is, when it is one.</summary>

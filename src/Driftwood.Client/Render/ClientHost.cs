@@ -5636,6 +5636,110 @@ public sealed class ClientHost : IDisposable
     /// combining two worn tools, enchantments. It would then have something to choose between, which
     /// is the test.</para>
     /// </remarks>
+    /// <summary>
+    /// Puts a lit campfire out with a shovel.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>The shovel's first job that is not digging</b>, and it exists because right-click on a
+    /// lit campfire now means "cook" — so the toggle that used to put one out had nowhere left to
+    /// live. The reference's own answer, and better than a modifier key: a fire is smothered with a
+    /// spadeful of earth, which is a thing a player can guess.
+    /// ⚠ Asked before <see cref="PlantSeed"/> and the rest for the same reason the hoe is: these are
+    /// all things done TO a block with a tool, and the block's own Use would otherwise take the click
+    /// first and start cooking with a shovel.
+    /// </remarks>
+    private bool SmotherFire(RayHit hit)
+    {
+        if (_inventory.HeldType is not { Tool: ToolClass.Shovel }) return false;
+
+        var struck = _streamer.World.GetBlock(hit.X, hit.Y, hit.Z);
+        if (_registry[struck].Use != BlockUse.Campfire) return false;
+        if (!_toggle.TryGetValue(struck.Value, out var out_)) return false;
+
+        // ⚠ Whatever was on it comes off rather than burning up with the fire, exactly as a furnace
+        // spills when it is mined. A player who smothers a fire mid-cook has lost the time, not the
+        // meat.
+        var here = new Vector3(hit.X + 0.5f, hit.Y + 0.5f, hit.Z + 0.5f);
+        foreach (var spilled in _furnaces.Remove(hit.X, hit.Y, hit.Z)) _drops.Drop(spilled, here);
+
+        _streamer.EditBlock(hit.X, hit.Y, hit.Z, out_);
+        PlaySound(_registry[out_], SoundEvent.Place, here, 0.7f);
+        return true;
+    }
+
+    /// <summary>
+    /// Puts what is in hand on a lit campfire, or takes off whatever is done.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳⛳ <b>Cooking without a furnace, which is what this is FOR.</b> A furnace wants coal or
+    /// charcoal, and a player on their first evening has neither — so until now the first cooked meal
+    /// came after the first mine, which is backwards. A campfire is logs and a stick, it is already
+    /// burning, and it will cook what is put on it. Its price is time: twice a furnace, four times a
+    /// smoker.</para>
+    /// <para>⛳ <b>No screen, for the anvil's reason.</b> There is one thing on the fire and one thing
+    /// it becomes, so there is nothing to arrange and nothing to choose between.</para>
+    /// <para>⛔ <b>Taking off comes FIRST.</b> Asked the other way round, walking up with more meat in
+    /// hand while a piece is done puts the new one on and leaves the cooked one sitting there — and a
+    /// player holding a stack would never get any of it back without emptying their hand first.</para>
+    /// <para>⚠ Every refusal says why, like the anvil's. A fire that does nothing when clicked is a
+    /// fire a player decides is decoration.</para>
+    /// </remarks>
+    private void UseCampfire(int x, int y, int z)
+    {
+        var fire = _furnaces.Open(x, y, z);
+        var here = new Vector3(x + 0.5f, y + 0.5f, z + 0.5f);
+
+        // Anything cooked comes off first, then anything that was still cooking.
+        foreach (var slot in (int[])[0, 1])
+        {
+            var taking = slot == 0 ? fire.Output : fire.Input;
+            if (taking.IsEmpty) continue;
+
+            var left = _inventory.Add(taking);
+            if (!left.IsEmpty && left.Count == taking.Count)
+            {
+                Notice("no room for that", _items[taking.Item]);
+                return;
+            }
+
+            if (slot == 0) fire.Output = left; else fire.Input = left;
+
+            Notice(slot == 0 ? "taken off the fire" : "taken off half done", _items[taking.Item]);
+            PlaySound(_registry[_streamer.World.GetBlock(x, y, z)], SoundEvent.Place, here, 0.5f);
+            return;
+        }
+
+        var held = _inventory.Held;
+        if (held.IsEmpty)
+        {
+            Notice("nothing to cook", null);
+            return;
+        }
+
+        var food = _items[held.Item];
+
+        // ⛔ Asked of the RECIPE BOOK at this kind, not of whether the item is edible. A campfire
+        // takes what a campfire cooks — raw meat and a potato — and refusing bread by name would be a
+        // second copy of the smelt table living in the renderer.
+        if (_book.SmeltFor(held.Item, FurnaceKind.Campfire) is null)
+        {
+            Notice("a fire will not cook that", food);
+            return;
+        }
+
+        if (!fire.Input.IsEmpty)
+        {
+            Notice("something is already on it", _items[fire.Input.Item]);
+            return;
+        }
+
+        fire.Input = new ItemStack(held.Item, 1);
+        _inventory.SpendHeld();
+
+        Notice("on the fire", food);
+        PlaySound(_registry[_streamer.World.GetBlock(x, y, z)], SoundEvent.Place, here, 0.6f);
+    }
+
     private void UseAnvil(int x, int y, int z)
     {
         var here = new Vector3(x + 0.5f, y + 0.5f, z + 0.5f);
@@ -5741,7 +5845,7 @@ public sealed class ClientHost : IDisposable
         // hoe turns ground over, a seed goes into the ground it turned, and bone meal hurries what
         // is growing there. All three are asked before the block's own Use, because the ground has
         // no Use of its own and would otherwise fall through to being built on.
-        if (UseHoe(hit) || PlantSeed(hit) || UseBonemeal(hit)) return;
+        if (UseHoe(hit) || SmotherFire(hit) || PlantSeed(hit) || UseBonemeal(hit)) return;
 
         // Using comes before building. A block that does something answers the right button itself,
         // so a bench cannot be buried under the plank a player meant to open it with — and what it
@@ -5767,6 +5871,10 @@ public sealed class ClientHost : IDisposable
 
             case BlockUse.Anvil:
                 UseAnvil(hit.X, hit.Y, hit.Z);
+                return;
+
+            case BlockUse.Campfire:
+                UseCampfire(hit.X, hit.Y, hit.Z);
                 return;
 
             case BlockUse.Toggle when _toggle.TryGetValue(struck.Id.Value, out var other):
