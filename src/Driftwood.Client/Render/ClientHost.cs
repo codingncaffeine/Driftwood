@@ -330,6 +330,27 @@ public sealed class ClientHost : IDisposable
     private void ReadSavesFolder() => _saved = WorldSave.List(out _unreadable);
 
     /// <summary>
+    /// Which world's row has been asked to delete once and is waiting to be asked again.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛔ <b>A row that throws something away must not answer to a direction</b>, and one press
+    /// of enter is not enough either. Left and right are how a player walks along every row on this
+    /// screen to see what it says, and "forget what has been said" already wiped the persisted
+    /// unlock record on either of them once. This answers to enter alone, twice, and the second
+    /// press has to land on the same row as the first.</para>
+    /// <para>⚠ <b>Cleared by moving off the row</b>, so arming is never a state a player is left in
+    /// without seeing it — the row itself is the only place the armed state exists, and looking
+    /// somewhere else puts it back.</para>
+    /// </remarks>
+    private string? _deleteArmed;
+
+    /// <summary>Puts an armed delete back, for anything that moves off the row.</summary>
+    private void DisarmDelete() => _deleteArmed = null;
+
+    /// <summary>What was thrown away last, for the row to say so once.</summary>
+    private string? _deleted;
+
+    /// <summary>
     /// The seed the menu will start a new world on, or empty for one drawn at random.
     /// </summary>
     /// <remarks>
@@ -2824,6 +2845,8 @@ public sealed class ClientHost : IDisposable
             if (at == 0 || at == _hudScreen.Rows.Count - 1) return;
         }
 
+        if (at != _hudScreen.Selected) DisarmDelete();
+
         _hudScreen.Selected = at;
         ShowSelectedRow();
     }
@@ -3340,7 +3363,8 @@ public sealed class ClientHost : IDisposable
 
                 _hudScreen.Rows.Add(new MenuRow(
                     (_saved.Count == 1 ? "1 world on this machine" : $"{_saved.Count} worlds on this machine")
-                    + (_unreadable.Count > 0 ? $", {_unreadable.Count} unreadable" : ""),
+                    + (_unreadable.Count > 0 ? $", {_unreadable.Count} unreadable" : "")
+                    + (_deleted is not null ? $" — {_deleted}" : ""),
                     Heading: true));
 
                 if (_saved.Count == 0 && _unreadable.Count == 0)
@@ -3360,14 +3384,24 @@ public sealed class ClientHost : IDisposable
                     // Local time, because a save is a thing that happened to the person reading it.
                     // The header keeps UTC so the ordering survives moving a save between machines.
                     var when = world.Saved.ToLocalTime();
+                    var open = world.Name == _worldName;
+
+                    // ⚠ The armed row says so where its date was, because that is the line a player
+                    // is already reading — a warning in the note strip under the list is a warning
+                    // beside the thing rather than on it.
+                    var armed = _deleteArmed == world.Name;
 
                     _hudScreen.Rows.Add(new MenuRow(
-                        world.Name == _worldName ? $"{world.Name}  (open)" : world.Name,
-                        $"{world.PlayedFor} · {when:d MMM HH:mm}",
-                        Note: world.Name == _worldName
-                            ? SavesFolderNote
-                            : $"{world.Edits} changes, seed {world.Seed}. "
-                              + "Opening another world from here arrives with the start screen"));
+                        open ? $"{world.Name}  (open)" : world.Name,
+                        armed ? "delete it? enter again" : $"{world.PlayedFor} · {when:d MMM HH:mm}",
+                        Note: armed
+                            ? $"this throws away {world.Name} and the {WorldSave.Backups} states kept "
+                              + "beside it, for good. Anything else puts it back"
+                            : open
+                                ? $"the world you are in, so it cannot be thrown away from here. "
+                                  + SavesFolderNote
+                                : $"{world.Edits} changes, seed {world.Seed}. "
+                                  + "Enter asks to throw it away; open it from the start screen"));
                 }
                 break;
 
@@ -3889,7 +3923,78 @@ public sealed class ClientHost : IDisposable
             }
         }
 
+        // ⛳ Taken out BEFORE the fall-through, the same way the pack rows are, because everything
+        // left on this tab below its second heading is the name of a world and none of them is a
+        // setting AdjustRow could do anything sensible with.
+        if (OnTab(GameTab.Saves)
+            && _hudScreen.Selected >= 0
+            && _hudScreen.Selected < _hudScreen.Rows.Count
+            && !_hudScreen.Rows[_hudScreen.Selected].Heading
+            && WorldAtRow() is { } world)
+        {
+            AskToDelete(world);
+            return;
+        }
+
         AdjustRow(1, activated: true);
+    }
+
+    /// <summary>
+    /// The world the selected saves row names, or null when the row is not one.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>Asked of the LIST, never of the row's words.</b> The rows above the worlds are readings
+    /// ("save now", "played"), and the rows for files that would not open carry a <em>file</em> name
+    /// rather than a world name — this exact confusion once let enter on an unreadable row relaunch
+    /// the game pointed at a world named after the file, quietly making a new one. A row is a world
+    /// when there is a header behind it.
+    /// </remarks>
+    private string? WorldAtRow()
+    {
+        var label = _hudScreen.Rows[_hudScreen.Selected].Label.Replace("  (open)", "");
+        return _saved.Any(w => w.Name == label) ? label : null;
+    }
+
+    /// <summary>
+    /// Enter on a world: asks the first time, throws it away the second.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ <b>The open world is refused here rather than in <see cref="WorldSave.Delete"/></b>, which
+    /// knows about files and has no business knowing what is being played. Deleting it would not
+    /// even work — the autosave writes it straight back two minutes later, so the row would come
+    /// back on its own and look like a bug in the list.
+    /// </remarks>
+    private void AskToDelete(string world)
+    {
+        if (world == _worldName)
+        {
+            DisarmDelete();
+            ShowSelectedRow();
+            return;
+        }
+
+        if (_deleteArmed != world)
+        {
+            _deleteArmed = world;
+            RefreshScreen();
+            ShowSelectedRow();
+            return;
+        }
+
+        var removed = WorldSave.Delete(world);
+        _deleted = removed < 0
+            ? $"{world} was already gone"
+            : $"threw away {world} and {removed - 1} of its backups";
+
+        Console.WriteLine($"saves       {_deleted}");
+
+        DisarmDelete();
+        ReadSavesFolder();
+
+        // The list is one row shorter, so whatever was under the cursor is now something else.
+        _hudScreen.Selected = Math.Max(0, _hudScreen.Selected - 1);
+        RefreshScreen();
+        ShowSelectedRow();
     }
 
     /// <summary>

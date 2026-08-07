@@ -147,6 +147,46 @@ public static class WorldSave
         Path.Combine(Folder, $"{Sanitised(name)}.{slot}.dwsbak");
 
     /// <summary>
+    /// Throws a world away: its save and every backup beside it.
+    /// </summary>
+    /// <returns>How many files were removed, or -1 when the world does not exist.</returns>
+    /// <remarks>
+    /// <para>⛔ <b>BY NAME, one file at a time, and never a wildcard.</b> This project has already
+    /// deleted somebody's game with a glob aimed at a saves folder. A world is exactly
+    /// <c>&lt;name&gt;.dws</c> plus at most <see cref="Backups"/> numbered <c>.dwsbak</c> files, which
+    /// is four known paths — the set is enumerable, so there is no reason whatever to ask the
+    /// filesystem to match a pattern and delete what comes back.</para>
+    /// <para>⚠ <b>The backups go with it and that is the decision.</b> Leaving them would mean a
+    /// world deleted from the list is still three files on the disk, which is the opposite of what
+    /// somebody clearing space asked for — and the row they used to reach them is gone, so they
+    /// could never be recovered from inside the game anyway.</para>
+    /// <para>⚠ Refusing to delete the world currently open is <em>not</em> enforced here. The
+    /// caller knows what is open; this knows about files. A rule written in both places is a rule
+    /// that can disagree with itself.</para>
+    /// </remarks>
+    public static int Delete(string name)
+    {
+        var save = PathFor(name);
+        if (!File.Exists(save)) return -1;
+
+        var removed = 0;
+
+        File.Delete(save);
+        removed++;
+
+        for (var slot = 1; slot <= Backups; slot++)
+        {
+            var backup = BackupPath(name, slot);
+            if (!File.Exists(backup)) continue;
+
+            File.Delete(backup);
+            removed++;
+        }
+
+        return removed;
+    }
+
+    /// <summary>
     /// Moves the world's previous states down a slot and takes a copy of the current one.
     /// </summary>
     /// <remarks>

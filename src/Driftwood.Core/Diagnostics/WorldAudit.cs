@@ -3328,14 +3328,55 @@ public static class WorldAudit
             if (listed != 1)
                 faults.Add($"one world with {WorldSave.Backups} copies behind it lists as {listed} worlds");
 
+            // ⛔ AND THROWING IT AWAY TAKES EXACTLY IT. This project has already deleted somebody's
+            // game with a glob aimed at a saves folder, so the claim worth checking is not "delete
+            // removed some files" — a wildcard passes that — but that a world standing BESIDE it,
+            // under a name a careless pattern would sweep up, is still there afterwards.
+            var neighbour = $"{name}-beside";
+
+            var beside = new WorldState(
+                neighbour, items, new VoxelWorld(registry),
+                new FurnaceBank(items, book), new ChestBank(items),
+                new Inventory(items), new Equipment(items),
+                new PlayerVitals(registry), new RecipeUnlocks());
+
+            if (WorldSave.Write(neighbour, beside) is { } asideFault)
+                faults.Add($"the world beside it would not save: {asideFault}");
+
+            var removed = WorldSave.Delete(name);
+
+            if (removed != 1 + WorldSave.Backups)
+                faults.Add(
+                    $"deleting a world with {WorldSave.Backups} states behind it removed {removed} "
+                    + $"files rather than {1 + WorldSave.Backups}");
+
+            if (File.Exists(WorldSave.PathFor(name)))
+                faults.Add("the world itself survived being deleted");
+
+            for (var slot = 1; slot <= WorldSave.Backups; slot++)
+                if (File.Exists(WorldSave.BackupPath(name, slot)))
+                    faults.Add($"state {slot} was left behind, so a deleted world is still on the disk");
+
+            // ⛔ THE CONTROL, and the entire reason the neighbour is written at all.
+            if (!File.Exists(WorldSave.PathFor(neighbour)))
+                faults.Add("deleting one world took the world beside it as well");
+
+            // ⚠ And a name nothing is under answers -1 rather than claiming it removed something,
+            // or the screen tells somebody it threw away a world that was never there.
+            if (WorldSave.Delete(name) != -1)
+                faults.Add("deleting a world that is not there reported that it removed files");
+
             detail = $"five saves of 1..5 edits leave the world holding 5 and the {WorldSave.Backups} "
-                   + "slots holding 4, 3 and 2; the oldest is dropped and none of them list as a world";
+                   + "slots holding 4, 3 and 2; the oldest is dropped and none of them list as a "
+                   + $"world; deleting it takes {1 + WorldSave.Backups} files by name and leaves the "
+                   + "one beside it standing";
         }
         finally
         {
             try
             {
                 File.Delete(WorldSave.PathFor(name));
+                File.Delete(WorldSave.PathFor($"{name}-beside"));
                 for (var slot = 1; slot <= WorldSave.Backups + 1; slot++)
                     File.Delete(WorldSave.BackupPath(name, slot));
             }
