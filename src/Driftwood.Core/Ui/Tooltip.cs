@@ -33,10 +33,10 @@ public static class Tooltip
     /// <summary>What the pointer is over, in words. Empty when there is nothing worth saying.</summary>
     public static TooltipText For(
         Zone zone, ItemStack stack, ItemRegistry items,
-        Recipe? recipe = null, bool payable = true) => zone.Kind switch
+        Recipe? recipe = null, bool payable = true, Inventory? carrying = null) => zone.Kind switch
     {
         ZoneKind.Slot => stack.IsEmpty ? Empty(zone.Role, zone.Index) : Of(stack, items),
-        ZoneKind.Recipe when recipe is not null => OfRecipe(recipe, items, payable),
+        ZoneKind.Recipe when recipe is not null => OfRecipe(recipe, items, payable, carrying),
         ZoneKind.Button => OfButton((ScreenButton)zone.Index),
         _ => TooltipText.None,
     };
@@ -80,18 +80,57 @@ public static class Tooltip
     /// and useless for the twelfth grey rock. It is also what #46 wanted, and it belongs here rather
     /// than in a second panel.
     /// </remarks>
-    public static TooltipText OfRecipe(Recipe recipe, ItemRegistry items, bool payable)
+    public static TooltipText OfRecipe(
+        Recipe recipe, ItemRegistry items, bool payable, Inventory? carrying = null)
     {
-        var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+        // What each ingredient costs, and — when the pockets are offered — how many are actually in
+        // them. Held is taken from the FIRST slot of a name, because every slot sharing a name is
+        // the same ingredient and asking twice would double the count for a tag.
+        var need = new Dictionary<string, (int Needed, int Held)>(StringComparer.Ordinal);
 
         foreach (var slot in recipe.Ingredients)
-            counts[Named(slot, items)] = counts.GetValueOrDefault(Named(slot, items)) + 1;
+        {
+            var name = Named(slot, items);
 
-        var parts = counts.Select(c => c.Value > 1 ? $"{c.Value} {c.Key}" : c.Key);
+            if (need.TryGetValue(name, out var seen))
+            {
+                need[name] = (seen.Needed + 1, seen.Held);
+                continue;
+            }
+
+            var held = 0;
+            if (carrying is not null)
+                foreach (var member in slot.Members) held += carrying.CountOf(member);
+
+            need[name] = (1, held);
+        }
+
+        var parts = need.Select(c => c.Value.Needed > 1 ? $"{c.Value.Needed} {c.Key}" : c.Key);
         var cost = string.Join(", ", parts);
 
-        var made = items[recipe.Result.Item];
-        var title = recipe.Result.Count > 1 ? $"{made.Label} x{recipe.Result.Count}" : made.Label;
+        // ⛳ #46's "say WHICH slot is unpayable rather than only greying the row". The whole cost was
+        // already listed and a reader had to check every line of it against their own pockets —
+        // which is the work the game had already done and thrown away.
+        // ⚠ Named as what is MISSING, not as what is needed: "needs 3 planks" beside three planks in
+        // the bar is the message that made this worth changing.
+        if (!payable && carrying is not null)
+        {
+            var shortOf = need
+                .Where(c => c.Value.Held < c.Value.Needed)
+                .Select(c => $"{c.Value.Needed - c.Value.Held} more {c.Key}")
+                .ToList();
+
+            // ⚠ Falls back to the full cost when nothing is individually short. That is a real case
+            // and not a bug: two slots taking the same tag can each be satisfied alone and not
+            // together, and RecipeBook.Plan is the only thing that knows. Claiming a specific
+            // shortfall there would be a confident wrong answer.
+            if (shortOf.Count > 0)
+                return new TooltipText(
+                    RecipeTitle(recipe, items),
+                    $"{recipe.MadeAt} · short {string.Join(", ", shortOf)}");
+        }
+
+        var title = RecipeTitle(recipe, items);
 
         // ⛔ WHERE IT IS MADE COMES FIRST, AND IT IS THE HALF THAT WAS MISSING. A user read
         // "5 iron ingot, 3 smooth stone, furnace" off a blast furnace and concluded it could not be
@@ -103,6 +142,13 @@ public static class Tooltip
         // a picture somebody squints at — the words are what actually answer "why is this grey".
         return new TooltipText(
             title, $"{recipe.MadeAt} · {(payable ? cost : $"needs {cost}")}");
+    }
+
+    /// <summary>What a recipe makes, with its count when it makes more than one.</summary>
+    private static string RecipeTitle(Recipe recipe, ItemRegistry items)
+    {
+        var made = items[recipe.Result.Item];
+        return recipe.Result.Count > 1 ? $"{made.Label} x{recipe.Result.Count}" : made.Label;
     }
 
     /// <summary>What a button on a screen does.</summary>
@@ -245,6 +291,35 @@ public static class Tooltip
 
             if (!told.Note.Contains("in your hands", StringComparison.Ordinal))
                 faults.Add($"a hand recipe does not say it is made in the hands: '{told.Note}'");
+        }
+
+        // ⛳ #46: an unaffordable recipe names WHAT IS MISSING rather than restating its full cost.
+        //
+        // ⛔ Both sides, and the pair is the check. Empty pockets must say "short", and pockets
+        // holding the whole cost must NOT — a build that said "short" unconditionally passes an
+        // empty-handed probe on its own, and a build that never says it passes a full-handed one.
+        foreach (var recipe in book.Recipes)
+        {
+            if (recipe.SlotsUsed == 0) continue;
+
+            var empty = new Inventory(items);
+            var withNothing = OfRecipe(recipe, items, payable: false, empty);
+
+            if (!withNothing.Note.Contains("short", StringComparison.Ordinal))
+                faults.Add($"'{recipe.Name}' with empty pockets does not say what is short: "
+                         + $"'{withNothing.Note}'");
+
+            // Now hand over everything it asks for, and it must stop saying so.
+            var full = new Inventory(items);
+            foreach (var slot in recipe.Ingredients) full.Add(new ItemStack(slot.Members[0], 1));
+
+            var withAll = OfRecipe(recipe, items, payable: true, full);
+
+            if (withAll.Note.Contains("short", StringComparison.Ordinal))
+                faults.Add($"'{recipe.Name}' says something is short while the cost is in hand: "
+                         + $"'{withAll.Note}'");
+
+            break;
         }
 
         // ⛔ THE NEGATIVE CONTROL. A zone that is not a thing must answer with nothing — without

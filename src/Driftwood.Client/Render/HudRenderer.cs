@@ -1877,8 +1877,11 @@ public sealed class HudRenderer : IDisposable
                       || (zone.Index < screen.Payable.Count && screen.Payable[zone.Index]);
         }
 
+        // ⛳ The pockets go in so an unaffordable recipe can say WHAT IS MISSING rather than
+        // restating its whole cost — #46's own line, and the game already knew the answer.
         var told = Tooltip.For(
-            zone, Contents(inventory, equipment, screen, zone), catalogue, recipe, payable);
+            zone, Contents(inventory, equipment, screen, zone), catalogue, recipe, payable,
+            inventory);
 
         if (told.IsEmpty) return;
 
