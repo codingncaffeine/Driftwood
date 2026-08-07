@@ -1056,6 +1056,16 @@ public static class WorldAudit
                   + $"shield, and {Armour.Survive(10, 0)} in a shirt"
                 : $"{armourFaults.Count} faults: {armourFaults[0]}");
 
+        // ⛳ A field, planted and grown in a real world, with every gate on the way asserted from
+        // both sides. ⛔ "The wheat grew" is true of a build with no gates at all.
+        var growthFaults = Growth.Validate(registry);
+        Check("a field grows where it should and nowhere else", growthFaults.Count == 0,
+            growthFaults.Count == 0
+                ? $"{StarterBlocks.WheatStages} stages on wet ground in the light, stopping when ripe; "
+                  + $"dry ground, darkness and a ripe ear all refuse, and water reaches "
+                  + $"{Growth.WaterReach} cells and no further"
+                : $"{growthFaults.Count} faults: {growthFaults[0]}");
+
         // ⛳ And mending it, which is the first path in the game that gives durability BACK. Every
         // tool and every plate has been strictly consumable since the day wear was added.
         var repairFaults = Repair.Validate(items);

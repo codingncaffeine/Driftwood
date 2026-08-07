@@ -62,8 +62,12 @@ public sealed class Growth
     /// <summary>And how many of those actually became something else.</summary>
     public long Grew { get; private set; }
 
+    private readonly BlockId _water;
+
     public Growth(BlockRegistry registry)
     {
+        _water = registry.ByName("water").Id;
+
         _next = new int[registry.Count];
         _isCrop = new bool[registry.Count];
         _isFarmland = new bool[registry.Count];
@@ -113,6 +117,22 @@ public sealed class Growth
     public bool Step(VoxelWorld world, int x, int y, int z, double roll)
     {
         var here = world.GetBlock(x, y, z);
+
+        // ⛳ Tilled ground wets and dries on the same tick the crops grow on, rather than on a
+        // watcher of its own. It is the same question — what does this cell want to become — and a
+        // second mechanism ticking the same cells at a different rate is how a field ends up
+        // half-watered from two directions.
+        if (_isFarmland[here.Value])
+        {
+            var wet = Watered(world, x, y, z, _water);
+            var want = wet ? _farmlandWet : _farmland;
+
+            if (here == want) return false;
+
+            world.SetBlock(x, y, z, want);
+            return true;
+        }
+
         if (!_isCrop[here.Value] || _next[here.Value] < 0) return false;
 
         // ⛔ On tilled ground, and WATERED tilled ground. Without this a crop grows on the dry
@@ -124,6 +144,108 @@ public sealed class Growth
 
         world.SetBlock(x, y, z, Next(here));
         return true;
+    }
+
+    /// <summary>
+    /// Plants a field in a real world and grows it, and checks every gate on the way.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛔ <b>Every arm has its refusal beside it, because "the wheat grew" is true of a build
+    /// with no gates at all.</b> A crop on DRY ground must not move; one in the dark must not move;
+    /// one already ripe must not move. Each of those is a rule a player will lean on, and a build
+    /// that grew everything everywhere would pass a check that only watched a good field.</para>
+    /// <para>⚠ Stepped with a roll of zero rather than a random one — the chance is not what is
+    /// being tested here and a seeded stream that happened to roll high would make this flap.</para>
+    /// </remarks>
+    public static List<string> Validate(BlockRegistry registry)
+    {
+        var faults = new List<string>();
+
+        var world = new VoxelWorld(registry);
+        var growth = new Growth(registry);
+
+        var dirt = registry.ByName("dirt").Id;
+        var water = registry.ByName("water").Id;
+        var farmland = registry.ByName("farmland").Id;
+        var seedling = registry.ByName(StarterBlocks.WheatName(0)).Id;
+
+        // A field at y 64 with a channel of water beside it, lit as if under an open sky.
+        for (var x = 0; x < 12; x++)
+        for (var z = 0; z < 12; z++)
+            world.SetBlock(x, 64, z, dirt);
+
+        world.SetBlock(0, 64, 0, water);
+        world.SetBlock(4, 64, 4, farmland);
+        world.SetBlock(4, 65, 4, seedling);
+
+        // ⛔ DRY FIRST, and this is the arm that matters. The ground is farmland but nothing has
+        // watered it, so a build without the wet check grows the crop here and passes everything
+        // below regardless.
+        if (growth.Step(world, 4, 65, 4, 0.0))
+            faults.Add("a crop on dry farmland grew");
+
+        // Water it the way the tick does, then it should move.
+        if (!growth.Step(world, 4, 64, 4, 0.0))
+            faults.Add("farmland four cells from water did not turn wet");
+
+        if (world.GetBlock(4, 64, 4) != registry.ByName("farmland_wet").Id)
+            faults.Add("watered farmland is not the wet block");
+
+        // ⛳ Lit by the REAL light engine rather than by writing a value in. A fresh VoxelWorld is
+        // dark and a dark crop is correctly refused, so the field has to actually see the sky — and
+        // running the engine is also the only way this check knows the two agree about what "lit"
+        // means. ⚠ There is deliberately no light setter on VoxelWorld to reach for: an instrument
+        // that writes state the game computes is an instrument that can pass on a broken build.
+        new Lighting.LightEngine(registry).LightAll(world);
+
+        if (!growth.Step(world, 4, 65, 4, 0.0))
+            faults.Add("a lit crop on wet farmland did not grow");
+
+        if (world.GetBlock(4, 65, 4) != registry.ByName(StarterBlocks.WheatName(1)).Id)
+            faults.Add("a crop that grew did not become the next stage");
+
+        // ⛔ THE DARK ARM, and it is roofed rather than dimmed: a slab of stone over the crop and
+        // the light engine run again, which is what a player actually does to a cellar. Writing a
+        // zero in would test the comparison and not the mechanic.
+        // ⛔ AND IT HAS TO BE A BIG ROOF. A three-by-three lid left the crop two steps from open
+        // sky, which at one level of falloff a step is light 13 — brighter than the gate — so the
+        // first version of this arm went red on correct code and read as the light rule not working.
+        // Sky light spreads SIDEWAYS as well as down; a cellar is only dark in the middle.
+        const int Roof = 16;
+
+        for (var x = 4 - Roof; x <= 4 + Roof; x++)
+        for (var z = 4 - Roof; z <= 4 + Roof; z++)
+            world.SetBlock(x, 66, z, registry.ByName("stone").Id);
+
+        new Lighting.LightEngine(registry).LightAll(world);
+
+        if (growth.Step(world, 4, 65, 4, 0.0))
+            faults.Add("a crop grew under a roof with no light on it");
+
+        // Take the roof off and let it run all the way to ripe, which then stops.
+        for (var x = 4 - Roof; x <= 4 + Roof; x++)
+        for (var z = 4 - Roof; z <= 4 + Roof; z++)
+            world.SetBlock(x, 66, z, BlockId.Air);
+
+        new Lighting.LightEngine(registry).LightAll(world);
+        for (var i = 0; i < StarterBlocks.WheatStages + 2; i++) growth.Step(world, 4, 65, 4, 0.0);
+
+        var last = world.GetBlock(4, 65, 4);
+        if (!growth.IsRipe(last))
+            faults.Add($"a field grown out is {registry[last].Name} rather than ripe");
+
+        if (growth.Step(world, 4, 65, 4, 0.0))
+            faults.Add("a ripe crop grew again");
+
+        // ⛔ And the far side of the field is out of reach of the one water cell, or the reach is
+        // not a reach at all. Eleven cells from the water, well past WaterReach.
+        world.SetBlock(11, 64, 11, farmland);
+        growth.Step(world, 11, 64, 11, 0.0);
+
+        if (world.GetBlock(11, 64, 11) != farmland)
+            faults.Add("farmland eleven cells from water turned wet, so the reach is unbounded");
+
+        return faults;
     }
 
     /// <summary>The brighter of what the sky and a torch give this cell.</summary>

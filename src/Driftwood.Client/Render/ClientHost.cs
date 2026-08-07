@@ -1342,6 +1342,7 @@ public sealed class ClientHost : IDisposable
         _player = new PlayerBody(registry);
         _vitals = new PlayerVitals(registry);
         _particles = new ParticleSystem(registry);
+        _growth = new Growth(registry);
         _leafBlock = ids.Leaves;
         _inventory = new Inventory(_items);
         _equipment = new Equipment(_items);
@@ -1665,6 +1666,19 @@ public sealed class ClientHost : IDisposable
 
         _fires ??= new Fires(_registry);
         _fires.Update(_streamer.World, _viewPosition, dt);
+
+        // ⛳ Crops grow and fields wet and dry over the chunks that are actually MESHED, which is the
+        // set the player can see. Growing a field nobody is near is work nobody watches, and the
+        // mesh dictionary is already exactly that set — no second list to keep in step.
+        //
+        // ⚠ Rebuilt each frame rather than cached. It is a few hundred entries into a list that
+        // keeps its capacity, and a cached copy is one more thing that can disagree with what is
+        // loaded — which for a growth tick means growing crops in a chunk that has been unloaded.
+        _growthChunks.Clear();
+        foreach (var pos in _meshes.Keys)
+            _growthChunks.Add((pos.X * Chunk.Size, pos.Y * Chunk.Size, pos.Z * Chunk.Size));
+
+        _growth.Update(_streamer.World, _growthChunks, dt, _growthRandom);
         _fires.Emit(_particles, StarterBlocks.LayerFlame, StarterBlocks.LayerSmoke, dt);
     }
 
@@ -4988,6 +5002,18 @@ public sealed class ClientHost : IDisposable
             // apart and leaves nothing, which is the whole reason to go and make a pickaxe.
             _drops.Drop(_dropTable.Harvest(target, _inventory.HeldType), centre);
 
+            // ⛳ A RIPE CROP LEAVES ITS SEED AS WELL AS ITS HARVEST, and that is what makes a field
+            // repay itself rather than being spent. BlockDrops is one item per block by design, so
+            // the second one is here — the first honest reason this game has had for a block to
+            // leave two things.
+            //
+            // ⚠ One to three, so a field grows slowly rather than doubling every harvest. At exactly
+            // one it can only ever break even and a bad roll ends the farm; at a guaranteed two it
+            // fills a chest by the third season.
+            if (_growth.IsRipe(target.Id))
+                _drops.Drop(
+                    new ItemStack(_items.ByName("seeds").Id, 1 + _growthRandom.Next(3)), centre);
+
             // A tool that did the work wears from it. Only the tool: a bare hand is free, and so is
             // a plank held like a club, which is why this asks the item rather than the swing.
             if (_inventory.HeldType is { IsTool: true } && _inventory.WearHeld())
@@ -5483,6 +5509,207 @@ public sealed class ClientHost : IDisposable
         return true;
     }
 
+    /// <summary>The farming rules, built once against the registry the world is using.</summary>
+    private Growth _growth = null!;
+
+    private readonly List<(int X, int Y, int Z)> _growthChunks = new(1024);
+
+    /// <summary>
+    /// The growth tick's own stream, seeded off the world.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ Its own rather than shared with the spawner or the herd. Two systems drawing from one
+    /// stream means the pattern of one depends on how often the other asked, which is a thing that
+    /// cannot be reproduced from a seed — and every other random source in this project is derived
+    /// for exactly that reason.
+    /// </remarks>
+    private readonly Random _growthRandom = new(0x6C726F70);
+
+    /// <summary>
+    /// Turns ground over with a hoe: dirt or grass becomes a field.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>Only with the sky above it.</b> A field under a block is a field a crop can never be
+    /// planted in — the crop needs the cell overhead — so tilling one is a wasted swing that looks
+    /// like the hoe not working. Refusing it is the difference between a rule and a mystery.
+    /// </remarks>
+    private bool UseHoe(RayHit hit)
+    {
+        if (_inventory.HeldType is not { Tool: ToolClass.Hoe }) return false;
+
+        var here = _streamer.World.GetBlock(hit.X, hit.Y, hit.Z);
+        if (here != _ids.Dirt && here != _ids.Grass) return false;
+
+        var above = _streamer.World.GetBlock(hit.X, hit.Y + 1, hit.Z);
+        if (!_registry[above].Replaceable) return false;
+
+        _streamer.EditBlock(hit.X, hit.Y, hit.Z, _registry.ByName("farmland").Id);
+
+        // ⚠ A hoe wears out tilling, exactly as a pickaxe wears out digging. Same call the mining
+        // path makes, same snap when it goes — without it the one tool in the game with a single
+        // purpose would be the one tool that lasts forever.
+        if (_inventory.WearHeld())
+            PlaySound(SoundMaterial.Wood, SoundEvent.Break, _viewPosition, 0.7f);
+
+        PlaySound(
+            _registry[here], SoundEvent.Break,
+            new Vector3(hit.X + 0.5f, hit.Y + 1f, hit.Z + 0.5f), 0.7f);
+
+        return true;
+    }
+
+    /// <summary>Puts a seed into tilled ground.</summary>
+    /// <remarks>
+    /// ⚠ Into the cell ABOVE the field, which is where a crop stands. Planting into the farmland
+    /// itself would replace the ground the crop needs to grow out of — and the growth rule looks
+    /// down for its farmland, so it would never advance.
+    /// </remarks>
+    private bool PlantSeed(RayHit hit)
+    {
+        if (_inventory.HeldType is not { } held || held.Name != "seeds") return false;
+
+        var ground = _streamer.World.GetBlock(hit.X, hit.Y, hit.Z);
+        if (!_growth.IsFarmland(ground)) return false;
+
+        var above = _streamer.World.GetBlock(hit.X, hit.Y + 1, hit.Z);
+        if (!_registry[above].Replaceable) return false;
+
+        _streamer.EditBlock(
+            hit.X, hit.Y + 1, hit.Z, _registry.ByName(StarterBlocks.WheatName(0)).Id);
+
+        _inventory.SpendHeld();
+        return true;
+    }
+
+    /// <summary>Hurries a growing crop along.</summary>
+    /// <remarks>
+    /// ⛳ <b>One stage per pinch and no roll.</b> The reference rolls a chance, which means a player
+    /// watching their bone meal do nothing three times in a row has learned that bone meal does
+    /// nothing. Here it always moves it on, and the cost is that a full crop takes three.
+    /// </remarks>
+    private bool UseBonemeal(RayHit hit)
+    {
+        if (_inventory.HeldType is not { } held || held.Name != "bonemeal") return false;
+
+        var crop = _streamer.World.GetBlock(hit.X, hit.Y, hit.Z);
+        if (!_growth.IsCrop(crop) || _growth.IsRipe(crop)) return false;
+
+        _streamer.EditBlock(hit.X, hit.Y, hit.Z, _growth.Next(crop));
+        _inventory.SpendHeld();
+
+        _particles.Puff(_registry[crop], new Vector3(hit.X + 0.5f, hit.Y + 0.5f, hit.Z + 0.5f), 8);
+        return true;
+    }
+
+    /// <summary>
+    /// Mends what is in hand on the anvil, out of the pockets, and wears the anvil doing it.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳⛳ <b>No screen, and that is a design decision rather than a shortcut.</b> Every other
+    /// station in this game has one because it has something to ARRANGE or to choose between — a
+    /// grid, a fuel, a list of cuts. An anvil has neither: there is exactly one damaged thing you
+    /// care about, it is the one in your hand, and there is exactly one metal that will mend it.
+    /// A two-slot window would be two drag gestures to express a fact the game already knows.</para>
+    /// <para>⛳ <b>And the material comes out of the pockets rather than a slot</b>, which is what
+    /// makes it one gesture: walk up, right-click, done. <c>Repair.Mend</c> spends only what it
+    /// needs, so there is nothing to over-pay by accident either.</para>
+    /// <para>⚠ A screen is still worth building the day an anvil does more than one thing — renaming,
+    /// combining two worn tools, enchantments. It would then have something to choose between, which
+    /// is the test.</para>
+    /// </remarks>
+    private void UseAnvil(int x, int y, int z)
+    {
+        var here = new Vector3(x + 0.5f, y + 0.5f, z + 0.5f);
+        var held = _inventory.Held;
+
+        // ⛔ EVERY REFUSAL SAYS WHY. An anvil that does nothing when clicked is an anvil a player
+        // decides is broken — and there are four separate reasons it might, none of which is
+        // guessable from the outside.
+        if (held.IsEmpty || _items[held.Item].Durability <= 0)
+        {
+            Notice("nothing in hand to mend", held.IsEmpty ? null : _items[held.Item]);
+            return;
+        }
+
+        var type = _items[held.Item];
+
+        if (held.Damage <= 0)
+        {
+            Notice("not damaged", type);
+            return;
+        }
+
+        var material = Repair.MaterialFor(_items, type);
+        if (material.IsNone)
+        {
+            Notice("cannot be mended", type);
+            return;
+        }
+
+        var carried = _inventory.CountOf(material);
+        if (carried <= 0)
+        {
+            Notice("none of its metal carried", _items[material]);
+            return;
+        }
+
+        var mended = Repair.Mend(_items, held, new ItemStack(material, carried), out var spent);
+        if (spent <= 0) return;
+
+        _inventory.Take(material, spent);
+        _inventory.SetHeld(mended);
+
+        // ⛔ THE ANVIL WEARS, and this is the only place it can: an anvil is a block, and a block has
+        // no durability field to spend. Its wear IS its id, so mending steps it along its own three
+        // stages and the last one takes it away entirely.
+        WearAnvil(x, y, z);
+
+        PlaySound(SoundMaterial.Stone, SoundEvent.Break, here, 0.9f);
+        Notice($"mended for {spent} {_items[material].Label}", type);
+    }
+
+    /// <summary>Puts a short line on screen with a picture beside it.</summary>
+    /// <remarks>
+    /// ⚠ Through the toast strip rather than a new mechanism, so it wears the same style, obeys the
+    /// same "notices off" setting, and cannot pile up — the cap is the strip's own.
+    /// </remarks>
+    private void Notice(string what, ItemType? about)
+    {
+        _toasts.Add(new Toast(
+            what, about?.Label ?? "", about?.IconLayer ?? StarterBlocks.LayerAnvilTop, ToastSeconds));
+
+        while (_toasts.Count > MaxToasts) _toasts.RemoveAt(0);
+    }
+
+    /// <summary>Steps an anvil one stage nearer gone, and removes it at the end.</summary>
+    /// <remarks>
+    /// ⚠ <b>By NAME through the stage table, not by adding one to an id.</b> The six anvil blocks are
+    /// registered stage-major and two facings apart, so "the next id" is the same anvil turned
+    /// sideways — which would read as an anvil that spins when you use it and never wears at all.
+    /// </remarks>
+    private void WearAnvil(int x, int y, int z)
+    {
+        var here = _registry[_streamer.World.GetBlock(x, y, z)];
+
+        for (var stage = 0; stage < StarterBlocks.AnvilStages; stage++)
+        for (var axis = 0; axis < 2; axis++)
+        {
+            if (here.Name != StarterBlocks.AnvilName(stage, axis == 0)) continue;
+
+            if (stage + 1 >= StarterBlocks.AnvilStages)
+            {
+                _streamer.EditBlock(x, y, z, BlockId.Air);
+                _particles.Burst(here, x, y, z);
+                Notice("the anvil broke", null);
+                return;
+            }
+
+            _streamer.EditBlock(
+                x, y, z, _registry.ByName(StarterBlocks.AnvilName(stage + 1, axis == 0)).Id);
+            return;
+        }
+    }
+
     private void PlaceOnTarget()
     {
         // A bucket is used on the world rather than placed into it, and it reaches things the
@@ -5490,6 +5717,12 @@ public sealed class ClientHost : IDisposable
         if (UseBucket()) return;
 
         if (_target is not { } hit) return;
+
+        // ⛳ The three things done TO the world with something in hand rather than built onto it: a
+        // hoe turns ground over, a seed goes into the ground it turned, and bone meal hurries what
+        // is growing there. All three are asked before the block's own Use, because the ground has
+        // no Use of its own and would otherwise fall through to being built on.
+        if (UseHoe(hit) || PlantSeed(hit) || UseBonemeal(hit)) return;
 
         // Using comes before building. A block that does something answers the right button itself,
         // so a bench cannot be buried under the plank a player meant to open it with — and what it
@@ -5511,6 +5744,10 @@ public sealed class ClientHost : IDisposable
 
             case BlockUse.Stonecutter:
                 OpenStonecutter(hit.X, hit.Y, hit.Z);
+                return;
+
+            case BlockUse.Anvil:
+                UseAnvil(hit.X, hit.Y, hit.Z);
                 return;
 
             case BlockUse.Toggle when _toggle.TryGetValue(struck.Id.Value, out var other):

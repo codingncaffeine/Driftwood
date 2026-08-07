@@ -92,6 +92,20 @@ public sealed class Inventory
         return stack;
     }
 
+    /// <summary>
+    /// Puts a changed version of the held stack back where it was.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ <b>For a stack that came OUT of this slot and has been altered</b> — mended, worn, renamed
+    /// — rather than for putting something new down. Nothing merges and nothing is checked, because
+    /// what is going in is what was already there.
+    /// </remarks>
+    public void SetHeld(ItemStack stack)
+    {
+        _slots[Selected] = stack;
+        Version++;
+    }
+
     /// <summary>Takes one off the held stack, for a block that has just been put down.</summary>
     public void SpendHeld()
     {
