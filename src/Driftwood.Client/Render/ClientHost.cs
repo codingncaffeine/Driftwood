@@ -5566,7 +5566,11 @@ public sealed class ClientHost : IDisposable
     /// </remarks>
     private bool PlantSeed(RayHit hit)
     {
-        if (_inventory.HeldType is not { } held || held.Name != "seeds") return false;
+        // ⛔ WHAT THE GAME GROWS IS ASKED OF THE TABLE, not written in here. This compared against
+        // "seeds" and planted WheatName(0) — a rule about the crop set living in the renderer — so
+        // the root crops would have grown, dropped and been edible while being unplantable.
+        if (_inventory.HeldType is not { } held) return false;
+        if (StarterBlocks.SownBy(held.Name) is not { } seedling) return false;
 
         var ground = _streamer.World.GetBlock(hit.X, hit.Y, hit.Z);
         if (!_growth.IsFarmland(ground)) return false;
@@ -5574,8 +5578,7 @@ public sealed class ClientHost : IDisposable
         var above = _streamer.World.GetBlock(hit.X, hit.Y + 1, hit.Z);
         if (!_registry[above].Replaceable) return false;
 
-        _streamer.EditBlock(
-            hit.X, hit.Y + 1, hit.Z, _registry.ByName(StarterBlocks.WheatName(0)).Id);
+        _streamer.EditBlock(hit.X, hit.Y + 1, hit.Z, _registry.ByName(seedling).Id);
 
         _inventory.SpendHeld();
         return true;

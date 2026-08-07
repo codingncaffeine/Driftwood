@@ -478,7 +478,40 @@ public static class StarterBlocks
     public const ushort LayerBread = LayerHoe + 3;
     public const ushort LayerBonemeal = LayerHoe + 4;
 
-    public const int LayerCount = LayerHoe + 5;
+    /// <summary>
+    /// The three root crops: four stages of tops each, then one icon each.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>Four stages is not a compromise here, the way it is for wheat.</b> Measured off the
+    /// shelf 2026-08-07: every pack that paints these paints <c>carrots_stage0..3</c> and
+    /// <c>potatoes_stage0..3</c> — exactly four, where wheat's own eight have to be spread across
+    /// ours. So these land on a pack's art one for one and their rows need no spreading rule.
+    /// ⚠ Appended, like everything since the fluids, because <see cref="Textures.BlockTextureSet"/>'s
+    /// array order IS this numbering.
+    /// </remarks>
+    public const ushort LayerFirstCrop = LayerHoe + 5;
+
+    /// <summary>How many stages a root crop grows through, and how many tiles of tops it has.</summary>
+    public const int CropStages = 4;
+
+    /// <summary><see cref="Crops"/>'s length, as something a <c>const</c> can be built from.</summary>
+    public const int CropCount = 3;
+
+    /// <summary>The icons the three are carried as, after every stage of tops.</summary>
+    public const ushort LayerFirstCropItem = LayerFirstCrop + CropCount * CropStages;
+
+    /// <summary>
+    /// And the one of them worth putting on a fire.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>One cooked crop rather than three.</b> Cooking is what makes a potato worth growing —
+    /// it is the meanest of the three raw and the best of them baked — and that is a reason to grow
+    /// a particular crop. Three cooked vegetables would be three items that all say the same thing.
+    /// ⚠ It is also the second thing the smoker can cook, which until now was meat and nothing else.
+    /// </remarks>
+    public const ushort LayerBakedPotato = LayerFirstCropItem + CropCount;
+
+    public const int LayerCount = LayerBakedPotato + 1;
 
     /// <summary>One anvil's name, by how worn it is and which way it lies.</summary>
     /// <remarks>
@@ -490,6 +523,87 @@ public static class StarterBlocks
 
     /// <summary>And one stage of wheat.</summary>
     public static string WheatName(int stage) => $"wheat_{stage}";
+
+    /// <summary>
+    /// A crop that is pulled up rather than reaped: green tops, and the thing itself underground.
+    /// </summary>
+    /// <param name="Name">Ours, and the stem of every block name it registers.</param>
+    /// <param name="Pack">Theirs, which is plural — <c>carrots_stage0.png</c>, not <c>carrot_</c>.</param>
+    /// <param name="Leaf">The tops, which is what the world sees at every stage.</param>
+    /// <param name="Root">What comes out of the ground, and what the icon is drawn in.</param>
+    /// <param name="Feeds">Half-hearts eating one restores.</param>
+    public readonly record struct Crop(
+        string Name, string Pack, (byte R, byte G, byte B) Leaf, (byte R, byte G, byte B) Root,
+        int Feeds);
+
+    /// <summary>
+    /// The three, in the order every layer, block and item derived from them runs.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>Each one sows itself.</b> The reference gives beetroot a separate seed item and lets the
+    /// other two plant themselves, which is a rule with one exception in it — and the exception buys
+    /// nothing here, because we have no trading and no villager gardens for the seed to come out of.
+    /// One rule: you plant what you harvested, and a field's first crop costs one of it.
+    /// ⚠ <b>Feeds is the only number here that is a balance decision.</b> A potato is the least of the
+    /// three raw and the most of them baked, which is the whole reason the smelt exists.
+    /// </remarks>
+    public static readonly Crop[] Crops =
+    [
+        new("carrot", "carrots", (86, 140, 44), (232, 137, 42), 3),
+        new("potato", "potatoes", (78, 132, 50), (198, 166, 98), 2),
+        new("beetroot", "beetroots", (94, 128, 52), (160, 40, 52), 2),
+    ];
+
+    /// <summary>One stage of one root crop, as a block name.</summary>
+    public static string CropName(int crop, int stage) => $"{Crops[crop].Name}_{stage}";
+
+    /// <summary>The tile a stage of tops is drawn from.</summary>
+    public static ushort CropStageLayer(int crop, int stage) =>
+        (ushort)(LayerFirstCrop + crop * CropStages + stage);
+
+    /// <summary>
+    /// Every crop in the game as a ladder of block names, ripe last.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>Wheat is in here too, which is the point.</b> <see cref="Growth"/>'s note has always said
+    /// a second crop should be "a row in StarterBlocks and nothing there" — it was not true while the
+    /// ladder was built from <see cref="WheatName"/> by hand. It is true now: the growth rule, the
+    /// drops, the sowing rule and the reachability walk all read this one list.
+    /// </remarks>
+    public static string[][] CropLadders()
+    {
+        var ladders = new string[1 + CropCount][];
+
+        var wheat = new string[WheatStages];
+        for (var s = 0; s < WheatStages; s++) wheat[s] = WheatName(s);
+        ladders[0] = wheat;
+
+        for (var c = 0; c < CropCount; c++)
+        {
+            var rungs = new string[CropStages];
+            for (var s = 0; s < CropStages; s++) rungs[s] = CropName(c, s);
+            ladders[c + 1] = rungs;
+        }
+
+        return ladders;
+    }
+
+    /// <summary>What an item sows when it is used on tilled ground, or null when it sows nothing.</summary>
+    /// <remarks>
+    /// ⛔ <b>Asked of the table, not written into the interaction.</b> Sowing used to be
+    /// <c>held.Name != "seeds"</c> against <c>WheatName(0)</c> in the client, which is a rule about
+    /// the crop set living in the renderer — so a fourth crop would have grown, dropped and been
+    /// eaten while being unplantable.
+    /// </remarks>
+    public static string? SownBy(string item)
+    {
+        if (item == "seeds") return WheatName(0);
+
+        for (var c = 0; c < CropCount; c++)
+            if (Crops[c].Name == item) return CropName(c, 0);
+
+        return null;
+    }
 
     public sealed record Ids(
         BlockId Stone,
@@ -530,7 +644,17 @@ public static class StarterBlocks
         BlockId Bench,
         BlockId Furnace,
         BlockId FurnaceLit,
-        BlockId Lava)
+        BlockId Lava,
+
+        /// <summary>
+        /// The three root crops at their ripe stage, which is how they are found growing wild.
+        /// </summary>
+        /// <remarks>
+        /// ⛳ <b>One array rather than three fields</b>, because nothing ever wants a particular one:
+        /// the generator picks between them and the census weighs them together. A fourth crop is a
+        /// row in <see cref="Crops"/> and changes nothing that reads this.
+        /// </remarks>
+        BlockId[] WildCrops)
     {
         /// <summary>Every rock an ore can form in. Ore replaces rock, whichever rock it is.</summary>
         public BlockId[] Rock => [Stone, Deepstone, Coralstone, Driftstone, Saltstone];
@@ -696,6 +820,29 @@ public static class StarterBlocks
                 SupportFace = Faces.NegY,
                 Model = BlockModel.Cross((ushort)(LayerFirstWheat + stage), tinted: false),
             });
+        }
+
+        // ⛳ And the three that are pulled up rather than reaped. Identical to wheat in every field
+        // that matters — the stage is the block id, so a field halfway up is already in the save —
+        // which is exactly why they are a loop over a table rather than three more hand-written
+        // ladders that could quietly disagree with wheat about hardness or what holds them up.
+        var wildCrops = new BlockId[CropCount];
+
+        for (var crop = 0; crop < CropCount; crop++)
+        for (var stage = 0; stage < CropStages; stage++)
+        {
+            var id = registry.Register(new BlockType
+            {
+                Name = CropName(crop, stage), Hardness = 0.05f, Crafted = true, Derived = stage > 0,
+                Solid = false, Opaque = false, Sounds = SoundMaterial.Plant,
+                SupportFace = Faces.NegY,
+                Model = BlockModel.Cross(CropStageLayer(crop, stage), tinted: false),
+            });
+
+            // ⛳ The RIPE stage is the one found growing wild, which is what makes a wild patch worth
+            // walking to: it is a crop and a seed at once, so finding one is the whole entry to
+            // growing that crop. An unripe one would be a plant a player has to leave and come back to.
+            if (stage == CropStages - 1) wildCrops[crop] = id;
         }
 
         var gravel = registry.Register(new BlockType
@@ -1169,7 +1316,7 @@ public static class StarterBlocks
             emberstone, vine, deepstone, coralstone, driftstone, saltstone, copper, gold, stormglass,
             diamond, azurite, clay, sandstone, snow, snowLayer, meadowgrass, seaflax, marshlily,
             emberbloom, sunwort,
-            rubble, glass, bricks, bench, furnace, furnaceLit, lava);
+            rubble, glass, bricks, bench, furnace, furnaceLit, lava, wildCrops);
     }
 
     /// <summary>

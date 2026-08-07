@@ -464,6 +464,10 @@ public static class StarterRecipes
         foreach (var meat in StarterItems.Meats)
             Smelt($"raw_{meat.Name}", $"cooked_{meat.Name}", work: SmeltWork.Food);
 
+        // ⛳ And the one crop worth cooking, which finally gives the smoker something to do that does
+        // not involve an animal — it has been a station for meat alone since the day it landed.
+        Smelt("potato", "baked_potato", work: SmeltWork.Food);
+
         return book;
     }
 

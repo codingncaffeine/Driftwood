@@ -137,7 +137,13 @@ public static class PackLibrary
         if (!isFolder && !Extensions.Contains(
                 System.IO.Path.GetExtension(from), StringComparer.OrdinalIgnoreCase))
         {
-            TexturePack.Open(from, out why);
+            // ⚠ Open answers a reason that may be null and this method promises one that is not.
+            // Coalesced rather than trusted: the entire point of this branch is that a player is
+            // TOLD a .rar is a .rar, so a null arriving here has to still leave a sentence. It
+            // cannot happen today — Open's every path to null past our own File.Exists guard sets
+            // one — but that is a fact about the other file, and this is the one making the promise.
+            TexturePack.Open(from, out var refused);
+            why = refused ?? $"a pack is a folder or {string.Join(", ", Extensions)}";
             return null;
         }
 

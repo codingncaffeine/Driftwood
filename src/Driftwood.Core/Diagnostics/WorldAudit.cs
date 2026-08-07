@@ -497,6 +497,10 @@ public static class WorldAudit
                   + "tool gives its tier and its wear, and a recipe says what it costs"
                 : $"{tipFaults.Count} faults: {tipFaults[0]}");
 
+        var gateFaults = StationGateSelfTest(items, book, out var gateDetail);
+        Check("every station a recipe names can be stood in front of", gateFaults.Count == 0,
+            gateFaults.Count == 0 ? gateDetail : $"{gateFaults.Count} faults: {gateFaults[0]}");
+
         var reach = ReachabilitySelfTest(registry, items, drops, creatureDrops, book, counts, out var reachDetail);
         Check("everything is reachable from bare hands", reach.Count == 0,
             reach.Count == 0 ? reachDetail : $"{reach.Count} faults: {reach[0]}");
@@ -1974,26 +1978,83 @@ public static class WorldAudit
     /// first pickaxe is crafted from dug wood and unlocks the rock the second is made of — so it
     /// runs to exhaustion rather than in passes.</para>
     /// </remarks>
-    /// <summary>What has to be standing before a station's recipes can be worked, or none.</summary>
+    /// <summary>What a station's block is called, or null for one worked in bare hands.</summary>
     /// <remarks>
     /// Named here rather than on <see cref="CraftStation"/> because it is a fact about this game's
     /// item set, not about the idea of a station — and it is the one place the walk and the world
-    /// have to agree. A station whose block does not exist yet returns null and its recipes are
-    /// treated as reachable, which is honest: nothing is gated behind something unbuildable.
+    /// have to agree.
+    /// </remarks>
+    private static string? StationItemName(CraftStation station) => station switch
+    {
+        CraftStation.Hand => null,
+        CraftStation.Bench => "bench",
+        CraftStation.Stonecutter => "stonecutter",
+        CraftStation.Smithing => "smithing_table",
+        CraftStation.Loom => "loom",
+        _ => null,
+    };
+
+    /// <summary>What has to be standing before a station's recipes can be worked, or none.</summary>
+    /// <remarks>
+    /// A station whose block does not exist yet returns null and its recipes are treated as
+    /// reachable. That is honest <em>only while nothing is worked there</em> — which is exactly
+    /// what <see cref="StationGateSelfTest"/> is for.
     /// </remarks>
     private static ItemId? StationItem(ItemRegistry items, CraftStation station)
     {
-        var name = station switch
-        {
-            CraftStation.Bench => "bench",
-            CraftStation.Stonecutter => "stonecutter",
-            CraftStation.Smithing => "smithing_table",
-            CraftStation.Loom => "loom",
-            _ => null,
-        };
-
-        if (name is null) return null;
+        if (StationItemName(station) is not { } name) return null;
         return items.TryByName(name, out var type) ? type.Id : null;
+    }
+
+    /// <summary>
+    /// Every station a recipe actually names has to have its block in the item set.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛔ <b>The stonecutter's fault, caught before it is paid for a second time.</b>
+    /// <see cref="StationItem"/> answers null for three different situations and the walk cannot
+    /// tell them apart: a recipe worked in bare hands, a station whose block is not built yet, and
+    /// a station whose name is <em>wrong</em>. The last two mean the gate is not there — every
+    /// recipe at that station is free, the reachability walk stays green, and nothing says so.</para>
+    /// <para>⛳ <b>The question is asked of the recipes, not of the enum</b>, which is what keeps it
+    /// honest in both directions. A station in the enum with no block yet is not a fault while
+    /// nothing is worked there — that is the deliberate "nothing is gated behind something
+    /// unbuildable" rule. The fault is a recipe naming a station that cannot be stood in front of,
+    /// and it fires the moment the first such recipe is written.</para>
+    /// </remarks>
+    private static List<string> StationGateSelfTest(
+        ItemRegistry items, RecipeBook book, out string detail)
+    {
+        var faults = new List<string>();
+        var gated = new SortedDictionary<CraftStation, int>();
+
+        foreach (var recipe in book.Recipes)
+        {
+            if (recipe.Station == CraftStation.Hand) continue;
+
+            gated.TryGetValue(recipe.Station, out var seen);
+            gated[recipe.Station] = seen + 1;
+
+            if (seen > 0) continue;
+
+            if (StationItemName(recipe.Station) is not { } name)
+            {
+                faults.Add($"'{recipe.Name}' is worked at the {recipe.Station}, which names no "
+                         + "block at all, so every recipe there is silently free");
+                continue;
+            }
+
+            if (!items.TryByName(name, out _))
+                faults.Add($"'{recipe.Name}' is worked at the {recipe.Station}, whose block "
+                         + $"'{name}' is not in the item set, so every recipe there is "
+                         + "silently free");
+        }
+
+        detail = gated.Count == 0
+            ? "nothing is worked at a station"
+            : string.Join(", ", gated.Select(g => $"{g.Key} {g.Value}"))
+              + " — each one has a block you have to be standing at";
+
+        return faults;
     }
 
     private static List<string> ReachabilitySelfTest(
@@ -2082,7 +2143,14 @@ public static class WorldAudit
             // moves, so a walk that skipped the bucket would report a harvest a player cannot
             // actually get. ⚠ Water itself is not asked for: the world always has some, and the
             // bucket is what turns having some into having it where the field is.
-            foreach (var (seed, crop) in new[] { ("seeds", "wheat") })
+            // ⛳ The root crops are their OWN seed, so each appears on both sides of its own row.
+            // That is not a tautology here: the seed has to be in hand already, and the only way to
+            // hold a first carrot is to have dug a wild one out of a meadow — which is a dig, and
+            // arrives through the block-drop source above. Farming turns one into a supply.
+            var farmed = new List<(string Seed, string Crop)> { ("seeds", "wheat") };
+            foreach (var crop in StarterBlocks.Crops) farmed.Add((crop.Name, crop.Name));
+
+            foreach (var (seed, crop) in farmed)
             {
                 if (!Held(items.ByName(seed).Id)) continue;
                 if (!Held(items.ByName("hoe").Id)) continue;
@@ -5677,6 +5745,14 @@ public static class WorldAudit
         (StarterBlocks.LayerFlame, "flame"),
         (StarterBlocks.LayerSmoke, "smoke"),
 
+        // ⛳ The crops, pinned at both ends of their own run: the first stage of the first one and
+        // the last icon. Appending to the Layers array and appending to these constants are two
+        // different acts, and the dyes are the reason this list exists — sixteen of them went in at
+        // the end of the array while their constant said 112, every texture check passed, and a pack
+        // would have painted a wooden pickaxe onto white dye.
+        (StarterBlocks.LayerFirstCrop, "carrot_0"),
+        ((ushort)(StarterBlocks.LayerFirstCropItem + StarterBlocks.CropCount - 1), "beetroot"),
+
         // ⛳ THIS PIN DID ITS JOB THE DAY THE ARMOUR LANDED. It used to read "the last layer is
         // smoke", which is a true statement about a table until something is appended to it — and
         // twenty-one rows went on the end. Both ends of every run are pinned by their own constant
@@ -5704,7 +5780,14 @@ public static class WorldAudit
         (StarterBlocks.LayerAnvilSide, "anvil_side"),
         (StarterBlocks.LayerFarmland, "farmland"),
         (StarterBlocks.LayerFirstWheat, StarterBlocks.WheatName(0)),
-        ((ushort)(StarterBlocks.LayerCount - 1), "bonemeal"),
+
+        // ⛳ Bonemeal by its OWN constant now that the root crops went on after it — which is this
+        // pin doing precisely its job. It read "the last layer is bonemeal", that stayed true until
+        // fifteen rows were appended, and it went red naming the newcomer. Same shape as the smoke
+        // pin above, and the second time the moving claim has caught an append.
+        (StarterBlocks.LayerBonemeal, "bonemeal"),
+        (StarterBlocks.LayerFirstCropItem, StarterBlocks.Crops[0].Name),
+        ((ushort)(StarterBlocks.LayerCount - 1), "baked_potato"),
     ];
 
     /// <summary>
@@ -7314,9 +7397,16 @@ public static class WorldAudit
         if (!falling) faults.Add("spawn pressure does not fall as the night fills");
 
         // One attempt may not fill the night. This is the whole of "scale it back" as a number.
-        if (SpawnRules.HostileBatch >= SpawnRules.HostileCap)
-            faults.Add($"one attempt may place {SpawnRules.HostileBatch} of a cap of "
-                     + $"{SpawnRules.HostileCap}, which is the deficit-refill it replaced");
+        //
+        // ⚠ Through locals ON PURPOSE. Compared constant against constant the compiler folds the
+        // test, reports the body as unreachable, and what is left is a check that never runs — see
+        // the same trap in the radius test below. Reading them first keeps it a runtime assertion.
+        var batch = SpawnRules.HostileBatch;
+        var cap = SpawnRules.HostileCap;
+
+        if (batch >= cap)
+            faults.Add($"one attempt may place {batch} of a cap of "
+                     + $"{cap}, which is the deficit-refill it replaced");
 
         // And they arrive at an irregular remove, not on a beat and not on your doorstep.
         var soonest = SpawnRules.NextAttempt(0.0);
@@ -7326,8 +7416,9 @@ public static class WorldAudit
         if (latest <= soonest + 2f)
             faults.Add($"attempts land between {soonest:F1}s and {latest:F1}s, which is a metronome");
 
-        if (SpawnRules.HostileMinRadius < 20f)
-            faults.Add($"things appear {SpawnRules.HostileMinRadius:F0} blocks away, close enough to be an ambush");
+        var minRadius = SpawnRules.HostileMinRadius;
+        if (minRadius < 20f)
+            faults.Add($"things appear {minRadius:F0} blocks away, close enough to be an ambush");
 
         // And the fault this was written for: a cave animal filed as a meadow animal.
         foreach (var kind in CreatureSet.All)

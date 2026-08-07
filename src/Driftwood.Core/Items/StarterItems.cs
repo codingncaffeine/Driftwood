@@ -412,6 +412,30 @@ public static class StarterItems
             Name = "bread", Label = "bread", IconLayer = StarterBlocks.LayerBread, Feeds = 6,
         });
 
+        // ⛳ The three that are eaten as they come up, and each of which is also its own seed. They
+        // feed less than bread on purpose: bread is three wheat and a bench, and something you can
+        // pull up and eat where you stand should not be the better meal.
+        for (var c = 0; c < StarterBlocks.CropCount; c++)
+        {
+            var crop = StarterBlocks.Crops[c];
+
+            items.Register(new ItemType
+            {
+                Name = crop.Name, Label = crop.Name,
+                IconLayer = (ushort)(StarterBlocks.LayerFirstCropItem + c),
+                Feeds = crop.Feeds,
+            });
+        }
+
+        // ⚠ Six, which is bread and a cooked steak — so a fire turns the meanest of the three into
+        // the best meal a field can produce. That is the whole reason to grow potatoes rather than
+        // carrots, and it is the only thing separating the three crops mechanically.
+        items.Register(new ItemType
+        {
+            Name = "baked_potato", Label = "baked potato",
+            IconLayer = StarterBlocks.LayerBakedPotato, Feeds = 6,
+        });
+
         Loose(items, "clay_lump", "clay lump", StarterBlocks.LayerClayLump);
         Loose(items, "brick", "brick", StarterBlocks.LayerBrick);
 
@@ -659,6 +683,31 @@ public static class StarterItems
         new CreatureDrops.Rule("skeleton", DropTrigger.Killed, "bone", 1, 3),
         new CreatureDrops.Rule("zombie", DropTrigger.Killed, "rotten_flesh", 1, 2));
 
+    /// <summary>What every stage of every root crop leaves when it is pulled up.</summary>
+    /// <remarks>
+    /// ⚠ <b>The ripe one gives more, which is the entire reason to wait.</b> One back for an unripe
+    /// pull is break-even; two to three for a ripe one is what makes a field grow rather than just
+    /// persist. Built off the table so a fourth crop is a row in <see cref="StarterBlocks.Crops"/>
+    /// and nothing here.
+    /// </remarks>
+    private static BlockDrops.Rule[] CropDropRules()
+    {
+        var rules = new BlockDrops.Rule[StarterBlocks.CropCount * StarterBlocks.CropStages];
+
+        for (var c = 0; c < StarterBlocks.CropCount; c++)
+        for (var s = 0; s < StarterBlocks.CropStages; s++)
+        {
+            var ripe = s == StarterBlocks.CropStages - 1;
+
+            rules[c * StarterBlocks.CropStages + s] = new BlockDrops.Rule(
+                StarterBlocks.CropName(c, s),
+                StarterBlocks.Crops[c].Name,
+                ripe ? 3 : 1);
+        }
+
+        return rules;
+    }
+
     private static BlockDrops.Rule[] Written(BlockRegistry blocks, ItemRegistry items) =>
     [
         new BlockDrops.Rule("stone", "rubble"),
@@ -698,6 +747,13 @@ public static class StarterItems
         new BlockDrops.Rule(StarterBlocks.WheatName(1), "seeds"),
         new BlockDrops.Rule(StarterBlocks.WheatName(2), "seeds"),
         new BlockDrops.Rule(StarterBlocks.WheatName(3), "wheat"),
+
+        // ⛳ The root crops, on the same rule and for the same reason — but with one difference that
+        // matters: a crop that IS its own seed gives the same item at every stage, so pulling one up
+        // early costs you the wait and never the crop. That is deliberate. Wheat can punish an early
+        // harvest because its seed is a separate item; making a carrot vanish would be a trap rather
+        // than a lesson, since the thing you planted and the thing you want are one item.
+        .. CropDropRules(),
         new BlockDrops.Rule("snow_layer", null),
         new BlockDrops.Rule("water", null),
         new BlockDrops.Rule("bedrock", null),

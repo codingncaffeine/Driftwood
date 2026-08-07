@@ -83,13 +83,18 @@ public sealed class Growth
         // ⛳ The ladder is read off the block table by NAME, so a fifth stage of wheat or a second
         // crop entirely is a row in StarterBlocks and nothing here. ⚠ The last stage has no next,
         // which is what makes "ripe" a state rather than a number this file has to know.
-        for (var stage = 0; stage < StarterBlocks.WheatStages; stage++)
+        //
+        // ⛔ That claim used to be FALSE while this loop said WheatName. Adding the root crops is
+        // what proved it: the ladders come out of StarterBlocks now, one per crop, and this file
+        // has never heard of wheat. A crop with one stage or with nine costs nothing here.
+        foreach (var ladder in StarterBlocks.CropLadders())
+        for (var stage = 0; stage < ladder.Length; stage++)
         {
-            var here = registry.ByName(StarterBlocks.WheatName(stage)).Id;
+            var here = registry.ByName(ladder[stage]).Id;
             _isCrop[here.Value] = true;
 
-            if (stage + 1 < StarterBlocks.WheatStages)
-                _next[here.Value] = registry.ByName(StarterBlocks.WheatName(stage + 1)).Id.Value;
+            if (stage + 1 < ladder.Length)
+                _next[here.Value] = registry.ByName(ladder[stage + 1]).Id.Value;
         }
     }
 

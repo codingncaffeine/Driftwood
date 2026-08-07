@@ -810,6 +810,27 @@ public sealed class TerrainGenerator
             var roll = Noise.Value2(wx, wz, _seedMeadow + 11);
             if (roll > 0.44f) continue;
 
+            // ⛳ WILD CROPS, and they are the whole entry to growing anything but wheat. Nothing
+            // drops a carrot and nothing crafts one, so without this the three root crops are
+            // registered, drawn, edible and unreachable — which the reachability walk says out loud.
+            //
+            // ⚠ Rarer than the flowers by a factor of five, off the SAME roll for the same reason
+            // the flowers are: a patch belongs to the meadow it is in rather than being a second
+            // scattering that sometimes agrees with the first. Which crop is its own slow field, so
+            // a patch is carrots or potatoes and never a salad.
+            if (roll < 0.006f)
+            {
+                var wild = _ids.WildCrops;
+                var pick = Noise.Fbm2(wx / 128f, wz / 128f, _seedMeadow + 37, 2);
+
+                // Three bands of a field that runs about −0.4 to 0.4, same quantisation as the
+                // flowers below and for the same reason: comparing against zero only ever gives two.
+                var crop = pick < -0.09f ? wild[0] : pick < 0.09f ? wild[1] : wild[2];
+
+                PlaceIntoAir(chunk, ox, oy, oz, wx, surface + 1, wz, crop);
+                continue;
+            }
+
             // Flowers come out of the same roll as the grass rather than a second one, so a meadow
             // is a meadow with flowers in it instead of two unrelated scatterings that sometimes
             // agree. Which flower is a slow field of its own, so a patch is one kind or the other.

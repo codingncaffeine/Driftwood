@@ -402,6 +402,63 @@ public static class TileGen
     /// lump. It is right: seed corn is counted and meal is poured. Looking at the real tile settled
     /// in one glance what two attempts at reasoning had got wrong.
     /// </remarks>
+    /// <summary>
+    /// One root vegetable in a pocket: the crop itself, with a tuft of its own tops on the shoulder.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>Tapered or round is the whole of what separates the three.</b> A carrot and a beetroot
+    /// are cones and a potato is a lump, so the shape is a parameter and the colour does the rest —
+    /// which keeps three icons legible at sixteen pixels without three bespoke drawings.
+    /// <para>⚠ <b>The tops are not decoration.</b> Without them a beetroot is a red blob and a lump
+    /// of raw meat is a red blob; the green flash at the top is what says "this came out of a field".
+    /// </para>
+    /// <para>⚠ Ink stays off the border, like every other icon here — a held item is extruded from
+    /// its own silhouette, and ink on the edge extrudes into a wall wearing its own outline.</para>
+    /// </remarks>
+    public static byte[] IconRoot(
+        int seed, byte r, byte g, byte b, byte leafR, byte leafG, byte leafB, bool tapered)
+    {
+        var t = new byte[BytesPerTile];
+
+        // The body runs corner to corner, thickest at the top and drawn to a point at the bottom
+        // when it is tapered. Rows 4..13, so two clear squares top and bottom.
+        for (var y = 4; y < Size - 2; y++)
+        {
+            var down = (y - 4) / 9f;
+
+            var half = tapered
+                ? float.Lerp(3.1f, 0.6f, down)
+                : 3.0f - MathF.Abs(down - 0.5f) * 2.2f;
+
+            var cx = 7.5f + (down - 0.5f) * 1.6f;
+
+            for (var x = 1; x < Size - 1; x++)
+            {
+                if (MathF.Abs(x - cx) > half) continue;
+
+                // Lit from the top left, the way every icon here is, plus a little grain along it.
+                var lift = (Noise(x, y, seed) * 2f - 1f) * 13f - (y - 8) * 2.2f + (8 - x) * 1.4f;
+                var v = (int)lift;
+
+                Put(t, x, y, Clamp(r + v), Clamp(g + v), Clamp(b + v), 255);
+            }
+        }
+
+        // And the tuft, three short leaves off the shoulder.
+        for (var leaf = 0; leaf < 3; leaf++)
+        {
+            var x = 6 + leaf * 2;
+
+            for (var y = 1; y <= 3 + (leaf == 1 ? 0 : -1); y++)
+            {
+                var d = (int)((Noise(x, y, seed + 5) * 2f - 1f) * 14f);
+                Put(t, x, y, Clamp(leafR + d), Clamp(leafG + d), Clamp(leafB + d), 255);
+            }
+        }
+
+        return t;
+    }
+
     public static byte[] IconPile(int seed, byte r, byte g, byte b)
     {
         var t = new byte[BytesPerTile];
@@ -492,6 +549,91 @@ public static class TileGen
     /// a fence. The unevenness is noise off the seed, so the same stage always draws the same field.
     /// </para>
     /// </remarks>
+    /// <summary>
+    /// A stand of leafy tops, with the root itself breaking the soil once it is ready.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>Why this is not <see cref="Wheat"/> with different numbers.</b> Wheat says "ripe" by
+    /// going gold from the ground up, because the whole plant is the crop. A carrot's tops stay green
+    /// to the end and what changes is that the carrot is showing — so the ripe signal has to be a
+    /// different COLOUR IN A DIFFERENT PLACE, at the foot, not a recolouring of the leaves.
+    /// <para>⛔ <b>It is also the only thing telling three fields apart.</b> Real carrot, potato and
+    /// beetroot tops are all much the same green; if the ripe signal were leaf colour, a player would
+    /// have to walk into a field to learn which one it was. The root is what carries the difference,
+    /// which is why <see cref="StarterBlocks.Crop"/> keeps leaf and root as two colours.</para>
+    /// <para>⚠ Blades lean off the seed rather than standing straight, for the same reason wheat's do:
+    /// a crop drawn as a comb reads as a fence.</para>
+    /// </remarks>
+    public static byte[] RootCrop(
+        int seed, int height,
+        byte leafR, byte leafG, byte leafB,
+        byte rootR, byte rootG, byte rootB,
+        bool showRoot)
+    {
+        var t = new byte[BytesPerTile];
+
+        for (var stalk = 0; stalk < 5; stalk++)
+        {
+            var x = 2 + stalk * 3;
+            var tall = height - (int)(Noise(stalk, 7, seed) * 3f);
+            var prev = Math.Clamp(x, 1, Size - 2);
+
+            for (var up = 0; up < tall; up++)
+            {
+                var y = Size - 1 - up;
+                if (y < 1) break;
+
+                // A lean of at most one square, so a top flops rather than standing to attention.
+                var lean = up > tall / 2 && Noise(stalk, up, seed) > 0.55f ? 1 : 0;
+                var lx = Math.Clamp(x + (stalk % 2 == 0 ? lean : -lean), 1, Size - 2);
+
+                // ⛔ THE LEAN FILLS ACROSS, and this is the feather's bug in miniature. Stepping one
+                // square sideways and one square up in the same move leaves two runs of ink that
+                // touch at a CORNER only — four-connected, that is two islands, and a blade that
+                // leans twice is three. The audit counts islands for exactly this and caught it at
+                // ten pieces per tile. Filling from the previous column to this one costs one square
+                // and makes the blade one connected thing however often it bends.
+                var from = Math.Min(prev, lx);
+                var to = Math.Max(prev, lx);
+                var shade = up < 2 ? -24 : 0;
+
+                for (var bx = from; bx <= to; bx++)
+                {
+                    var d = (int)((Noise(bx, y, seed) * 2f - 1f) * 12f);
+
+                    Put(t, bx, y,
+                        Clamp(leafR + d + shade), Clamp(leafG + d + shade), Clamp(leafB + d + shade),
+                        255);
+                }
+
+                prev = lx;
+            }
+        }
+
+        if (!showRoot) return t;
+
+        // The crop itself, shouldering out of the soil along the bottom two rows. Off-centre and
+        // uneven, because a row of identical lumps reads as masonry rather than as vegetables.
+        for (var lump = 0; lump < 3; lump++)
+        {
+            var cx = 3 + lump * 5 + (Noise(lump, 3, seed) > 0.5f ? 1 : 0);
+
+            for (var y = Size - 2; y < Size; y++)
+            for (var x = cx - 1; x <= cx + 1; x++)
+            {
+                if (x < 1 || x > Size - 2) continue;
+
+                // The shoulder is narrower than the belly, so it sits IN the ground rather than on it.
+                if (y == Size - 2 && x != cx) continue;
+
+                var d = (int)((Noise(x, y, seed + lump) * 2f - 1f) * 10f);
+                Put(t, x, y, Clamp(rootR + d), Clamp(rootG + d), Clamp(rootB + d), 255);
+            }
+        }
+
+        return t;
+    }
+
     public static byte[] Wheat(int seed, int height, byte r, byte g, byte b, bool eared)
     {
         var t = new byte[BytesPerTile];

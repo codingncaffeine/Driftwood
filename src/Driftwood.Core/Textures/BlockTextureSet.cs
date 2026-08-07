@@ -395,7 +395,55 @@ public static class BlockTextureSet
         new("wheat",       "textures/item/wheat.png",             true),
         new("bread",       "textures/item/bread.png",             true),
         new("bonemeal",    "textures/item/bone_meal.png",         true, "textures/item/dye_powder_white.png"),
+
+        // ⛳ The three that are pulled up. Four stages each and then their three icons, appended for
+        // the same reason everything since the fluids has been: this array's order IS the numbering.
+        .. CropRows(),
+
+        new("baked_potato", "textures/item/baked_potato.png", true),
     ];
+
+    /// <summary>
+    /// Four stages of tops and one icon for each root crop, straight onto the pack's own names.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>No spreading rule, unlike <see cref="WheatRows"/>.</b> Measured across the shelf
+    /// 2026-08-07: Silent Hill, Vintage and Dokucraft all paint <c>carrots_stage0..3</c> and
+    /// <c>potatoes_stage0..3</c> — four stages, the same four we grow — so stage n is stage n and
+    /// there is nothing to map.
+    /// ⚠ <b>Beetroot is the one to watch.</b> Silent Hill ships only <c>item/beetroot.png</c> and no
+    /// field art at all, where Vintage ships all four stages. So on that pack a beetroot field keeps
+    /// our own tops while its icon comes off theirs — which is the per-layer fallback doing exactly
+    /// what it is for, and the reason coverage is asked per layer rather than per feature.
+    /// ⚠ The pack's block names are PLURAL and ours are not, which is the whole reason
+    /// <see cref="StarterBlocks.Crop.Pack"/> exists beside <c>Name</c>.
+    /// </remarks>
+    private static BlockTextureLayer[] CropRows()
+    {
+        var stages = StarterBlocks.CropCount * StarterBlocks.CropStages;
+        var rows = new BlockTextureLayer[stages + StarterBlocks.CropCount];
+
+        for (var c = 0; c < StarterBlocks.CropCount; c++)
+        {
+            var crop = StarterBlocks.Crops[c];
+
+            for (var s = 0; s < StarterBlocks.CropStages; s++)
+                rows[c * StarterBlocks.CropStages + s] = new BlockTextureLayer(
+                    StarterBlocks.CropName(c, s),
+                    $"textures/block/{crop.Pack}_stage{s}.png",
+                    true,
+                    $"textures/block/{crop.Pack}_stage_{s}.png");
+        }
+
+        // Then the pockets, after every stage of every crop — the order LayerFirstCropItem states.
+        for (var c = 0; c < StarterBlocks.CropCount; c++)
+            rows[stages + c] = new BlockTextureLayer(
+                StarterBlocks.Crops[c].Name,
+                $"textures/item/{StarterBlocks.Crops[c].Name}.png",
+                true);
+
+        return rows;
+    }
 
     /// <summary>One row per stage of wheat, spread across the pack's own eight.</summary>
     /// <remarks>
@@ -1201,8 +1249,13 @@ public static class BlockTextureSet
             StarterBlocks.LayerBread => TileGen.IconMeat(1153, 186, 138, 82, TileGen.MeatShape.Cut, cooked: true),
             StarterBlocks.LayerBonemeal => TileGen.IconPile(1154, 214, 214, 222),
 
-            _ => Wheat(layer) ?? MetalBlock(layer) ?? Wool(layer) ?? Meat(layer) ?? Dye(layer)
-                 ?? Armour(layer) ?? Shield(layer) ?? Tool(layer),
+            // ⚠ A baked potato is the raw one gone browner and softer at the edges, drawn round
+            // rather than tapered — so the pair reads as the same vegetable before and after a fire.
+            StarterBlocks.LayerBakedPotato =>
+                TileGen.IconRoot(1190, 166, 122, 62, 132, 96, 48, tapered: false),
+
+            _ => Wheat(layer) ?? Crop(layer) ?? CropIcon(layer) ?? MetalBlock(layer) ?? Wool(layer)
+                 ?? Meat(layer) ?? Dye(layer) ?? Armour(layer) ?? Shield(layer) ?? Tool(layer),
         };
     }
 
@@ -1213,6 +1266,48 @@ public static class BlockTextureSet
     /// standing at the edge of a field has to be able to see which rows are ready without walking
     /// them. Drawn as blades from the ground up so the silhouette grows rather than the tile filling.
     /// </remarks>
+    /// <summary>One stage of a root crop's tops, or null when this layer is not one.</summary>
+    /// <remarks>
+    /// ⛳ <b>The tops go green and the ROOT shows at the end.</b> Every stage is the same leaf colour
+    /// getting taller and a little richer — because that is what the tops of all three actually do —
+    /// so the only thing telling a ripe carrot from a ripe beetroot at a glance is the root breaking
+    /// the surface on the last stage. Three fields side by side have to be distinguishable, and they
+    /// cannot be by leaf colour: real ones are all the same green.
+    /// </remarks>
+    private static byte[]? Crop(int layer)
+    {
+        var index = layer - StarterBlocks.LayerFirstCrop;
+        if (index < 0 || index >= StarterBlocks.CropCount * StarterBlocks.CropStages) return null;
+
+        var crop = StarterBlocks.Crops[index / StarterBlocks.CropStages];
+        var stage = index % StarterBlocks.CropStages;
+        var t = stage / (float)(StarterBlocks.CropStages - 1);
+
+        return TileGen.RootCrop(
+            1160 + index,
+            height: (int)MathF.Round(float.Lerp(4f, 12f, t)),
+            leafR: (byte)float.Lerp(crop.Leaf.R * 0.72f, crop.Leaf.R, t),
+            leafG: (byte)float.Lerp(crop.Leaf.G * 0.78f, crop.Leaf.G, t),
+            leafB: (byte)float.Lerp(crop.Leaf.B * 0.72f, crop.Leaf.B, t),
+            rootR: crop.Root.R, rootG: crop.Root.G, rootB: crop.Root.B,
+            showRoot: stage == StarterBlocks.CropStages - 1);
+    }
+
+    /// <summary>And what one is carried as, or null when this layer is not one.</summary>
+    private static byte[]? CropIcon(int layer)
+    {
+        var index = layer - StarterBlocks.LayerFirstCropItem;
+        if (index < 0 || index >= StarterBlocks.CropCount) return null;
+
+        var crop = StarterBlocks.Crops[index];
+
+        return TileGen.IconRoot(
+            1180 + index,
+            crop.Root.R, crop.Root.G, crop.Root.B,
+            crop.Leaf.R, crop.Leaf.G, crop.Leaf.B,
+            tapered: crop.Name != "potato");
+    }
+
     private static byte[]? Wheat(int layer)
     {
         var stage = layer - StarterBlocks.LayerFirstWheat;
