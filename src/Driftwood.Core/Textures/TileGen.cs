@@ -335,6 +335,150 @@ public static class TileGen
     }
 
     /// <summary>
+    /// Ground turned over: furrows cut across it, with the earth heaped between them.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>This was <see cref="Scored"/> over dirt and it read as PLANKS.</b> Scored draws even
+    /// bands the full width of the tile, which is exactly what a floorboard is — a field of it
+    /// looked like somebody had decked their garden. Caught by <c>--icon-sheet</c>, which is the
+    /// third time that instrument has found a drawing nobody would have questioned in the game.
+    /// <para>⛳ What separates a furrow from a plank is that a furrow is <b>uneven and broken</b>: the
+    /// groove wanders, the ridge either side of it is lit, and clods of earth sit across it. A
+    /// straight dark line with a straight light line under it is joinery.</para>
+    /// </remarks>
+    public static byte[] Tilled(int seed, byte r, byte g, byte b)
+    {
+        var t = Speckle(seed, r, g, b, 16, 0.5f);
+
+        // ⛔ TWICE WRONG BEFORE THIS, AND BOTH TIMES IT WAS TIMBER. Horizontal grooves with a lit lip
+        // under each is a floorboard; vertical grooves at full height and full contrast is the same
+        // board stood on end. Going and LOOKING at the reference settled it in one glance and both
+        // guesses had missed the same thing: its tile is mostly MOTTLE. The seams are faint, they do
+        // not run the whole way, and what actually says "sown" is four dark holes.
+        for (var furrow = 0; furrow < 4; furrow++)
+        {
+            var at = 1 + furrow * 4;
+
+            for (var y = 0; y < Size; y++)
+            {
+                // Broken, not continuous: about a third of each seam is missing, which is the whole
+                // difference between a furrow in earth and a join between two planks.
+                if (Noise(y, furrow, seed + 5) > 0.68f) continue;
+
+                var x = at + (int)MathF.Round((Noise(y, furrow, seed) * 2f - 1f) * 0.6f);
+                if (x < 0 || x >= Size) continue;
+
+                // ⚠ A sixth of the contrast the first two versions used. At −40 it is a line drawn
+                // on the tile; at −7 it is a shadow in it.
+                Put(t, x, y, Clamp(r - 7), Clamp(g - 6), Clamp(b - 5), 255);
+            }
+        }
+
+        // ⛳ The holes seed goes into, and they carry the whole read. Two by two, dark and square,
+        // the one thing in the reference's tile that could not be mistaken for a material.
+        for (var i = 0; i < 4; i++)
+        {
+            var x = 3 + (i % 2) * 8;
+            var y = 4 + (i / 2) * 7;
+
+            if (x >= Size - 1 || y >= Size - 1) continue;
+
+            Put(t, x, y, Clamp(r - 58), Clamp(g - 52), Clamp(b - 44), 255);
+            Put(t, x + 1, y, Clamp(r - 50), Clamp(g - 45), Clamp(b - 38), 255);
+            Put(t, x, y + 1, Clamp(r - 50), Clamp(g - 45), Clamp(b - 38), 255);
+            Put(t, x + 1, y + 1, Clamp(r - 44), Clamp(g - 40), Clamp(b - 34), 255);
+        }
+
+        return t;
+    }
+
+    /// <summary>
+    /// A heap of powder: one lumpy connected pile, lit from above.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>CONNECTED, and that is the reference's own answer rather than a guess.</b> Bone meal
+    /// went in as a scatter beside the seeds, on the reasoning that both are loose stuff in a
+    /// pocket — and the reference draws seeds as nine separate grains and bone meal as a single
+    /// lump. It is right: seed corn is counted and meal is poured. Looking at the real tile settled
+    /// in one glance what two attempts at reasoning had got wrong.
+    /// </remarks>
+    public static byte[] IconPile(int seed, byte r, byte g, byte b)
+    {
+        var t = new byte[BytesPerTile];
+
+        for (var y = 2; y < Size - 2; y++)
+        for (var x = 2; x < Size - 2; x++)
+        {
+            var dx = (x - 7.5f) / 5.6f;
+            var dy = (y - 8.0f) / 5.2f;
+
+            // A lumpy round mass: a disc with its edge chewed by noise, so it is a heap of grains
+            // rather than a ball.
+            if (dx * dx + dy * dy > 0.72f + (Noise(x, y, seed) - 0.5f) * 0.55f) continue;
+
+            // Lit from the top left, the way every icon here is.
+            var lift = (Noise(x, y, seed + 13) * 2f - 1f) * 16f - (y - 8) * 3.4f + (8 - x) * 1.6f;
+            var v = (int)lift;
+
+            Put(t, x, y, Clamp(r + v), Clamp(g + v), Clamp(b + v), 255);
+        }
+
+        return t;
+    }
+
+    /// <summary>
+    /// A scatter of grains: seed corn, or a pinch of meal.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>Both of these were drawn with <see cref="IconSkein"/> and came out as LOOPS.</b> A
+    /// skein is a coil of string — a closed ring with a hole in it — which is right for string and
+    /// says nothing whatever about a handful of seed. Caught on the icon sheet, where a green ring
+    /// and a white ring sat side by side and neither was what it claimed.
+    /// <para>⛳ Grains are small, separate and heaped low: a scatter with more of them toward the
+    /// bottom of the tile, because a pinch of anything dropped on a surface settles.</para>
+    /// </remarks>
+    public static byte[] IconGrains(int seed, byte r, byte g, byte b)
+    {
+        var t = new byte[BytesPerTile];
+
+        // ⛔ LAID ON A GRID AND JITTERED, not scattered from noise. Taking both coordinates straight
+        // from the stream makes the result a matter of the seed's luck: the same function drew a
+        // decent handful of seed corn and, one seed along, six specks of bone meal in two clumps.
+        // A drawing that is only right for the seed it was tried with is not a drawing.
+        const int Across = 5;
+        const int Down = 4;
+
+        for (var i = 0; i < Across * Down; i++)
+        {
+            var col = i % Across;
+            var row = i / Across;
+
+            var x = 2 + col * 3 + (int)MathF.Round((Noise(i, 0, seed) * 2f - 1f) * 1.2f);
+
+            // Squared, so the heap settles toward the bottom rather than filling the square evenly.
+            var fall = (row + Noise(0, i, seed + 19)) / Down;
+            var y = 3 + (int)(fall * fall * 11f);
+
+            // ⚠ Two thirds of the grid, so it reads as a scatter rather than as a pattern — but
+            // dropped from a full grid, so no seed can leave a corner of the tile empty.
+            if (Noise(i, i, seed + 53) > 0.66f) continue;
+            if (x < 1 || x > Size - 3 || y < 1 || y > Size - 3) continue;
+
+            // ⛳ Each grain is a 2x2 with a darker corner, which is how the reference draws one and
+            // is the difference between a seed and a speck of dust. A single pixel at this size is
+            // noise; four with a shaded corner is an object.
+            var d = (int)((Noise(x, y, seed + 41) * 2f - 1f) * 18f);
+
+            Put(t, x, y, Clamp(r + d + 14), Clamp(g + d + 14), Clamp(b + d + 8), 255);
+            Put(t, x + 1, y, Clamp(r + d), Clamp(g + d), Clamp(b + d), 255);
+            Put(t, x, y + 1, Clamp(r + d), Clamp(g + d), Clamp(b + d), 255);
+            Put(t, x + 1, y + 1, Clamp(r + d - 30), Clamp(g + d - 30), Clamp(b + d - 20), 255);
+        }
+
+        return t;
+    }
+
+    /// <summary>
     /// A stand of wheat: blades from the ground up, and ears on it when it is ripe.
     /// </summary>
     /// <param name="height">How far up the tile the tallest blade reaches, in pixels.</param>

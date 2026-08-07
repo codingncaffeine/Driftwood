@@ -1188,18 +1188,18 @@ public static class BlockTextureSet
             // ⛳ Tilled ground is dirt turned over: same colour, combed into rows. Wet is the same
             // tile darkened, because that is what wet earth is and a player has to tell them apart
             // from standing height across a field.
-            StarterBlocks.LayerFarmland => TileGen.Scored(1134, TileGen.Speckle(1002, 118, 85, 57, 18, 0.5f)),
-            StarterBlocks.LayerFarmlandWet => TileGen.Scored(1135, TileGen.Speckle(1002, 78, 54, 34, 14, 0.5f)),
+            StarterBlocks.LayerFarmland => TileGen.Tilled(1134, 118, 85, 57),
+            StarterBlocks.LayerFarmlandWet => TileGen.Tilled(1135, 78, 54, 34),
 
             // ⚠ The hoe borrows IconTool's shovel shape — a blade on a haft is the same silhouette
             // at sixteen pixels, and drawing a fifth tool shape to be told apart from a shovel it is
             // never held beside would be a drawing nobody can read either way.
             StarterBlocks.LayerHoe => TileGen.IconTool(1150, 2, 196, 196, 202),
 
-            StarterBlocks.LayerSeeds => TileGen.IconSkein(1151, 150, 176, 96),
+            StarterBlocks.LayerSeeds => TileGen.IconGrains(1151, 150, 176, 96),
             StarterBlocks.LayerWheatItem => TileGen.Wheat(1152, 14, 214, 186, 74, eared: true),
             StarterBlocks.LayerBread => TileGen.IconMeat(1153, 186, 138, 82, TileGen.MeatShape.Cut, cooked: true),
-            StarterBlocks.LayerBonemeal => TileGen.IconSkein(1154, 236, 236, 224),
+            StarterBlocks.LayerBonemeal => TileGen.IconPile(1154, 214, 214, 222),
 
             _ => Wheat(layer) ?? MetalBlock(layer) ?? Wool(layer) ?? Meat(layer) ?? Dye(layer)
                  ?? Armour(layer) ?? Shield(layer) ?? Tool(layer),

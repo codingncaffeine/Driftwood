@@ -5707,6 +5707,16 @@ public static class WorldAudit
         ((ushort)(StarterBlocks.LayerCount - 1), "bonemeal"),
     ];
 
+    /// <summary>
+    /// The layers that are a scatter by design, and are therefore many islands of ink on purpose.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ Every entry here needs a reason that was MEASURED against a real pack, not argued. This one
+    /// has one: the reference's <c>wheat_seeds.png</c> is nine separate grains.
+    /// </remarks>
+    private static readonly HashSet<string> Scatters =
+        new(StringComparer.Ordinal) { "seeds" };
+
     private static List<string> TextureSelfTest()
     {
         var faults = new List<string>();
@@ -5769,6 +5779,19 @@ public static class WorldAudit
             // shears, whose blades meet the handles only at the pivot), and the fault that motivated
             // this read 23. Anything between 7 and 22 passes — a drawing that fragments only mildly
             // is exactly what this is blind to, and the icon sheet is what catches those.
+            // ⛔ AND A HANDFUL OF SEED IS GENUINELY MANY PIECES. This check has caught three real
+            // faults and its claim was still too broad: it says a picture is one island and a few
+            // specks, which is true of every drawing in the set until something is drawn that IS a
+            // scatter. MEASURED against the reference's own wheat_seeds.png — nine separate grains,
+            // each a 2x2 with a shaded corner — so the drawing was right and the rule was not.
+            //
+            // ⚠ Named rather than a threshold raised for everything, because raising it to fifteen
+            // would have let the feather's checkerboard through, which is the fault this exists for.
+            // ⚠ And bone meal is NOT on this list: the reference draws that as one connected lump,
+            // which is the distinction the list is really recording — seed is counted, meal is
+            // poured.
+            if (Scatters.Contains(name)) continue;
+
             var islands = InkIslands(tile, built.Size);
             if (islands > 6) faults.Add($"{name} is {islands} disconnected pieces of ink, which is a spray not a drawing");
         }
