@@ -216,6 +216,21 @@ public sealed class HudScreen
     /// </remarks>
     public Vector4 TipBox;
 
+    /// <summary>
+    /// The middle of the first cell of the title the word FILLS, and of the first it leaves empty,
+    /// in layout units. Negative when no title was drawn this frame.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>Published because the title MOVES, and a check that works out where it should be lands
+    /// on the backdrop.</b> Every letter of the word bobs and leans on its own phase — up to a
+    /// little over half a cell — so the grid position of a filled cell says nothing whatever about
+    /// which pixel it was drawn at. The check that reads the timber recomputed the grid from the
+    /// same constants the renderer uses, ignored the bob, and read a cell's worth away: it passed
+    /// for months on whatever happened to be there, and went red the day the backdrop behind that
+    /// point was black rather than brown. Same fault and same fix as <see cref="TipBox"/>.
+    /// </remarks>
+    public Vector2 TitleInk = new(-1f, -1f), TitleGap = new(-1f, -1f);
+
     public bool IsOpen => Kind != HudScreenKind.None;
 
     /// <summary>
@@ -753,7 +768,7 @@ public sealed class HudRenderer : IDisposable
         // paused game is the other place a title reads as a title rather than as decoration.
         var cell = TitleCell(w);
         var titleTop = MathF.Max(6f, top - TitleArt.LetterHeight * cell - 26f);
-        Title(w * 0.5f, titleTop, cell, screen.Drift);
+        Title(screen, w * 0.5f, titleTop, cell, screen.Drift);
 
         Tabs(screen, layout, left, top, Panel);
         Rows(screen, layout, left, top + 22f, Panel, h);
@@ -2321,12 +2336,15 @@ public sealed class HudRenderer : IDisposable
     public static float TitleCell(float width) =>
         MathF.Max(2f, MathF.Round(width * 0.58f / TitleArt.Cells));
 
-    private void Title(float centreX, float top, float cell, float drift)
+    private void Title(HudScreen screen, float centreX, float top, float cell, float drift)
     {
         var depth = MathF.Max(1f, MathF.Round(cell * 0.9f));
         var width = TitleArt.Cells * cell;
         var left = centreX - width * 0.5f;
         var middle = TitleArt.Cells * 0.5f;
+
+        // Cleared each frame, so "no title drawn" is a state rather than last frame's answer.
+        screen.TitleInk = screen.TitleGap = new Vector2(-1f, -1f);
 
         // How far across one plank tile a single cell reaches. Eight cells to a board, so the grain
         // is coarse enough to read at this size and repeats slowly enough not to look tiled.
@@ -2344,11 +2362,21 @@ public sealed class HudRenderer : IDisposable
             for (var y = 0; y < TitleArt.LetterHeight; y++)
             for (var x = 0; x < TitleArt.LetterWidth; x++)
             {
-                if (!TitleArt.Filled(letter, x, y)) continue;
-
                 var cx = column + x;
                 var px = left + cx * cell + lean;
                 var py = top + y * cell + bob;
+                var filled = TitleArt.Filled(letter, x, y);
+
+                // ⛳ Where the first of each landed, with this letter's own bob and lean in it —
+                // which is the whole point, since those are what a check working from the grid
+                // cannot know. Recorded before the skip, because an empty cell is never drawn and
+                // is half of what makes the pair a check.
+                if (filled && screen.TitleInk.X < 0f)
+                    screen.TitleInk = new Vector2(px + cell * 0.5f, py + cell * 0.5f);
+                else if (!filled && screen.TitleGap.X < 0f)
+                    screen.TitleGap = new Vector2(px + cell * 0.5f, py + cell * 0.5f);
+
+                if (!filled) continue;
 
                 // Toward the middle of the word, and a little down: one viewpoint in front of it.
                 var toward = cx < middle ? 1f : -1f;

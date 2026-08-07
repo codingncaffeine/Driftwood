@@ -23,7 +23,21 @@ namespace Driftwood.Core.Textures;
 public static class PackLibrary
 {
     /// <summary>The shapes a pack arrives in. Everything else is refused by name rather than tried.</summary>
-    private static readonly string[] Extensions = [".zip", ".mcpack", ".mcaddon"];
+    public static IReadOnlyList<string> Extensions { get; } = [".zip", ".mcpack", ".mcaddon"];
+
+    /// <summary>What a file chooser should call these in its "files of type" line.</summary>
+    public static string FilterLabel => $"texture packs ({string.Join(", ", Extensions)})";
+
+    /// <summary>
+    /// The masks a file chooser wants, e.g. <c>*.zip;*.mcpack;*.mcaddon</c>.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>Built from the list above rather than written out beside it.</b> Two lists of the same
+    /// extensions is a shape the shelf accepts and the browser hides — a player with a perfectly
+    /// good <c>.mcaddon</c> staring at a folder the game says is empty, with nothing anywhere
+    /// saying why. One list, and adding to it is one edit.
+    /// </remarks>
+    public static string FilterSpec => string.Join(";", Extensions.Select(static e => $"*{e}"));
 
     /// <summary>One pack on the shelf.</summary>
     /// <param name="Name">What it is called, and what the setting stores.</param>

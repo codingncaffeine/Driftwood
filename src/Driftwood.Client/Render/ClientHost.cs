@@ -4,6 +4,7 @@ using System.Runtime.InteropServices;
 using Silk.NET.Core;
 using Driftwood.Client.Diagnostics;
 using Driftwood.Client.Audio;
+using Driftwood.Client.Platform;
 using Driftwood.Core.Audio;
 using Driftwood.Core.Blocks;
 using Driftwood.Core.Entities;
@@ -3527,6 +3528,13 @@ public sealed class ClientHost : IDisposable
     /// <summary>The box a path is pasted into to put a pack on the shelf.</summary>
     private readonly TextField _packBox = new(240);
 
+    /// <summary>The Explorer window that finds a pack, so nobody has to know where one lives.</summary>
+    private readonly NativeFilePicker _packPicker = new();
+
+    /// <summary>The two rows that open it, named once so the row and the switch cannot drift apart.</summary>
+    private const string BrowseFileRow = "browse for a pack";
+    private const string BrowseFolderRow = "browse for a folder";
+
     /// <summary>What the shelf held when it was last read, and what the last import said.</summary>
     private IReadOnlyList<PackLibrary.Entry> _packs = [];
     private string _packNote = "";
@@ -3618,16 +3626,83 @@ public sealed class ClientHost : IDisposable
 
         _hudScreen.Rows.Add(new MenuRow("add one", Heading: true));
 
+        // ⛳ WHATEVER THE LAST IMPORT SAID, ON WHICHEVER ROW YOU ARE STANDING ON. A note is drawn
+        // for the selected row only, and the row somebody is on after an import is the one they
+        // pressed — so pinning the answer to the typed-path row alone means browsing for a pack
+        // succeeds or fails in silence.
+        string Said(string otherwise) => _packNote.Length > 0 ? _packNote : otherwise;
+
+        if (NativeFilePicker.Available)
+        {
+            _hudScreen.Rows.Add(new MenuRow(
+                BrowseFileRow, _packPicker.Busy ? "choosing" : "",
+                Note: Said($"Opens a file browser. {PackLibrary.FilterLabel} — whichever one you "
+                         + "downloaded, wherever it landed")));
+
+            _hudScreen.Rows.Add(new MenuRow(
+                BrowseFolderRow, _packPicker.Busy ? "choosing" : "",
+                Note: Said("Opens a folder browser, for a pack that has already been unzipped — "
+                         + "pick the folder with pack.mcmeta or manifest.json in it")));
+        }
+
         _hudScreen.Rows.Add(new MenuRow(
             "from a path", Edits: _packBox,
-            Note: _packNote.Length > 0
-                ? _packNote
-                : "A folder, a .zip, a .mcpack or a .mcaddon. Enter opens the box, enter again "
-                  + "copies it onto the shelf — Java, pre-flattening Java and Bedrock all read"));
+            Note: Said("A folder, a .zip, a .mcpack or a .mcaddon. Enter opens the box, enter again "
+                     + "copies it onto the shelf — Java, pre-flattening Java and Bedrock all read")));
 
         _hudScreen.Rows.Add(new MenuRow(
             "the shelf", "", Note: $"Packs live in {PackLibrary.Folder} — dropping one in there by "
                                + "hand works just as well"));
+    }
+
+    /// <summary>
+    /// Opens the Explorer window, and says so on the row while it is up.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ <b>The game keeps running behind it.</b> The chooser is on a thread of its own, so nothing
+    /// here waits for it — the answer is collected by <see cref="TakePickedPack"/> whenever it turns
+    /// up, which may be a second later or a minute later.
+    /// </remarks>
+    private void BrowseForPack(NativeFilePicker.Want want)
+    {
+        if (_packPicker.Busy) return;
+
+        var opened = _packPicker.Ask(
+            want,
+            _window.Native?.Win32?.Hwnd ?? nint.Zero,
+            want == NativeFilePicker.Want.Folder ? "Choose a texture pack folder" : "Choose a texture pack",
+            PackLibrary.FilterLabel,
+            PackLibrary.FilterSpec);
+
+        _packNote = opened
+            ? "choosing — the window is in front of the game"
+            : "the file browser would not open; paste the path in below instead";
+
+        RefreshScreen();
+    }
+
+    /// <summary>Collects what the chooser came back with, if it has come back.</summary>
+    /// <remarks>
+    /// ⛔ <b>The path does NOT go through the box.</b> <see cref="TextField"/> keeps only what the
+    /// font can draw — 95 glyphs, ASCII 32 to 126 — and its setter drops the rest silently. A pack
+    /// under a folder with an accent in its name would arrive correct from Windows, come out of the
+    /// box as a path that does not exist, and be refused with "there is nothing at that path",
+    /// naming the one thing that was not wrong.
+    /// </remarks>
+    private void TakePickedPack()
+    {
+        if (!_packPicker.TryTake(out var picked, out var why)) return;
+
+        if (picked is null)
+        {
+            // Cancelling is the commonest answer and means nothing went wrong. Only a real failure
+            // gets to say anything.
+            _packNote = why.Length > 0 ? $"could not choose a file: {why}" : "";
+            RefreshScreen();
+            return;
+        }
+
+        ImportPack(picked);
     }
 
     /// <summary>Puts the pack named on this row on, or takes an unreadable one off the shelf.</summary>
@@ -3719,10 +3794,14 @@ public sealed class ClientHost : IDisposable
         }
     }
 
-    /// <summary>Takes what is in the box and tries to put it on the shelf.</summary>
-    private void ImportPack()
+    /// <summary>Takes a path — typed or chosen — and tries to put what is there on the shelf.</summary>
+    /// <remarks>
+    /// ⚠ <b>The path is a parameter rather than read off the box</b>, because the chooser's answer
+    /// must never be laundered through a field that keeps only what the font can draw.
+    /// </remarks>
+    private void ImportPack(string from)
     {
-        var entry = PackLibrary.Install(_packBox.Text, out var why);
+        var entry = PackLibrary.Install(from, out var why);
 
         if (entry is { } added)
         {
@@ -3750,7 +3829,7 @@ public sealed class ClientHost : IDisposable
         {
             // ⛳ The pack box is the one that DOES something when it is accepted rather than merely
             // remembering what was typed — a path is not a setting, it is an instruction.
-            StartTyping(box, box == _packBox ? kept => { if (kept) ImportPack(); } : null);
+            StartTyping(box, box == _packBox ? kept => { if (kept) ImportPack(_packBox.Text); } : null);
             return;
         }
 
@@ -3782,8 +3861,18 @@ public sealed class ClientHost : IDisposable
             && _hudScreen.Selected < _hudScreen.Rows.Count)
         {
             var row = _hudScreen.Rows[_hudScreen.Selected];
-            if (!row.Heading && row.Label != "the shelf") ChoosePack(row.Label);
-            return;
+            if (row.Heading) return;
+
+            // ⛔ The two browse rows are taken out BEFORE the fall-through, and by the same names
+            // the rows were built from. Everything left on this tab is the name of a pack, and a
+            // row reaching ChoosePack that is not one quietly does nothing whatever.
+            switch (row.Label)
+            {
+                case BrowseFileRow: BrowseForPack(NativeFilePicker.Want.File); return;
+                case BrowseFolderRow: BrowseForPack(NativeFilePicker.Want.Folder); return;
+                case "the shelf": return;
+                default: ChoosePack(row.Label); return;
+            }
         }
 
         AdjustRow(1, activated: true);
@@ -4537,6 +4626,11 @@ public sealed class ClientHost : IDisposable
         StepAutosave(dt);
         _particles.Update(_streamer.World, (float)dt);
         StepFires((float)dt);
+
+        // ⛳ The file chooser's answer, whenever it arrives. It runs on a thread of its own so the
+        // world keeps drawing behind it, which means nothing here waits — this is one volatile read
+        // a frame and the only place the picked path crosses back onto the game's thread.
+        TakePickedPack();
 
         // What a screen can afford changes as the world hands things over, so it is recomputed
         // rather than only rebuilt on a keypress: a stack flying into the bar while the book is
@@ -6949,28 +7043,28 @@ public sealed class ClientHost : IDisposable
     /// Reads the title's own timber, and the gap inside a letter beside it.
     /// </summary>
     /// <remarks>
-    /// ⚠ The pair is the check, for the same reason the chest's is. A title drawn in the wrong place
-    /// or not at all leaves the backdrop showing, and a backdrop is a colour — so what has to be
-    /// true is that a cell the word FILLS reads differently from a cell the word LEAVES EMPTY, both
-    /// worked out from the same letter grid the renderer draws from.
+    /// <para>⚠ The pair is the check, for the same reason the chest's is. A title drawn in the wrong
+    /// place or not at all leaves the backdrop showing, and a backdrop is a colour — so what has to
+    /// be true is that a cell the word FILLS reads differently from a cell the word LEAVES EMPTY.
+    /// </para>
+    /// <para>⛔ <b>Both points come from the RENDERER now, and that is a fix rather than a tidy-up.</b>
+    /// This used to rebuild the letter grid from the same constants the renderer lays it out from,
+    /// which sounds equivalent and is not: <b>every letter bobs and leans on its own phase</b>, up to
+    /// a little over half a cell, and the sample knew nothing about either. It read past the timber
+    /// it named, onto the backdrop, and passed for as long as whatever was behind the word happened
+    /// to be brownish — then went red on a build where nothing about the title had changed at all
+    /// and the world behind it was darker. Third time this project has been caught sampling where a
+    /// thing usually is; see <see cref="HudScreen.TipBox"/> for the second.</para>
     /// </remarks>
     private unsafe void SampleTitle(Vector2D<int> size)
     {
         var scale = HudRenderer.ScaleFor(size.Y);
-        var h = size.Y / scale;
-        var w = size.X / scale;
+        var cell = HudRenderer.TitleCell(size.X / scale);
 
-        // The same arithmetic the renderer uses, so the sample follows the title if it ever moves.
-        var tall = 22f + Math.Min(_hudScreen.Rows.Count, ScreenLayout.MenuLines(h)) * ScreenLayout.MenuLine + 12f;
-        var top = MathF.Round((h - tall) * 0.42f);
-        var cell = HudRenderer.TitleCell(w);
-        var titleTop = MathF.Max(6f, top - TitleArt.LetterHeight * cell - 26f);
-        var left = w * 0.5f - TitleArt.Cells * cell * 0.5f;
-
-        (byte R, byte G, byte B) At(int cx, int cy)
+        (byte R, byte G, byte B) At(Vector2 at)
         {
-            var px = (int)((left + (cx + 0.5f) * cell) * scale);
-            var py = (int)((titleTop + (cy + 0.5f) * cell) * scale);
+            var px = (int)(at.X * scale);
+            var py = (int)(at.Y * scale);
 
             Span<byte> pixel = stackalloc byte[4];
             fixed (byte* p = pixel)
@@ -6979,29 +7073,20 @@ public sealed class ClientHost : IDisposable
             return (pixel[0], pixel[1], pixel[2]);
         }
 
-        // The first filled cell of the word, and the first empty one — found from the letter grid
-        // rather than written down, so neither can drift away from what is drawn.
-        (int X, int Y) ink = (-1, -1);
-        (int X, int Y) air = (-1, -1);
+        // Where the word was actually drawn last frame — with the bob and the lean already in it.
+        var ink = _hudScreen.TitleInk;
+        var air = _hudScreen.TitleGap;
 
-        for (var i = 0; i < TitleArt.Word.Length; i++)
-        for (var y = 0; y < TitleArt.LetterHeight; y++)
-        for (var x = 0; x < TitleArt.LetterWidth; x++)
-        {
-            var at = (i * (TitleArt.LetterWidth + TitleArt.Gap) + x, y);
-            if (TitleArt.Filled(TitleArt.Word[i], x, y)) { if (ink.X < 0) ink = at; }
-            else if (air.X < 0) air = at;
-        }
-
-        _uiSamples["title wood"] = ink.X >= 0 ? At(ink.X, ink.Y) : default;
-        _uiSamples["title gap"] = air.X >= 0 ? At(air.X, air.Y) : default;
+        _uiSamples["title wood"] = ink.X >= 0f ? At(ink) : default;
+        _uiSamples["title gap"] = air.X >= 0f ? At(air) : default;
 
         var wood = _uiSamples["title wood"];
         var gap = _uiSamples["title gap"];
 
         Console.WriteLine(
             $"ui-check    title      {TitleArt.Cells} cells at {cell:F0}, timber rgb {wood.R,3} {wood.G,3} "
-            + $"{wood.B,3} against a gap of {gap.R,3} {gap.G,3} {gap.B,3}");
+            + $"{wood.B,3} at {ink.X:F0},{ink.Y:F0} against a gap of {gap.R,3} {gap.G,3} {gap.B,3} "
+            + $"at {air.X:F0},{air.Y:F0}");
         Console.Out.Flush();
     }
 
@@ -7017,6 +7102,14 @@ public sealed class ClientHost : IDisposable
     private void JudgeUi()
     {
         var faults = new List<string>();
+
+        // ⛳ THE PACK CHOOSER'S INTERFACE, and it is judged here because this is the client's gate
+        // and --audit cannot see a Win32 anything from Core. It builds a real chooser and works it
+        // without showing one, so it costs a few milliseconds and needs nobody to click. The thing
+        // it catches — a wrong interface id, or a method missing from a COM vtable — compiles,
+        // starts, and looks exactly like a button somebody forgot to wire up.
+        faults.AddRange(NativeFilePicker.SelfTest(out var chooser));
+        Console.WriteLine($"ui-check    file chooser  {chooser}");
 
         (byte R, byte G, byte B) Read(string key) =>
             _uiSamples.TryGetValue(key, out var v) ? v : default;
