@@ -3135,10 +3135,29 @@ public sealed class ClientHost : IDisposable
                 return;
             }
 
+            // ⛔⛔ THE BOOK USED TO LIST ONLY WHAT THIS GRID COULD WORK, and that is how a player
+            // concludes something is impossible. Reported directly: they had the iron, the smooth
+            // stone and a furnace, and the blast furnace "never actually became available to make".
+            // Every one of the 195 recipes crafts correctly when handed its ingredients — measured,
+            // with --recipes — so nothing was wrong with the recipe. It was simply not in the list,
+            // because a two-by-two cannot work a three-by-three, and a thing that is absent and a
+            // thing that does not exist look identical.
+            //
+            // ⛳ So the book shows what this grid works, AND anything else the pockets could already
+            // pay for — dim, with its own line saying where to go. That is the whole missing sentence:
+            // "you can afford this; walk to a bench." A recipe you cannot yet afford and cannot make
+            // here stays out, because listing all 195 in a two-by-two is a different way of saying
+            // nothing.
             if (_shown.Count == 0)
             {
                 foreach (var recipe in _book.Recipes)
                     if (recipe.WorkedAt(_hudScreen.Grid.Station, _hudScreen.Grid.Width)) _shown.Add(recipe);
+
+                foreach (var recipe in _book.Recipes)
+                {
+                    if (recipe.WorkedAt(_hudScreen.Grid.Station, _hudScreen.Grid.Width)) continue;
+                    if (_book.CanPay(_inventory, recipe)) _shown.Add(recipe);
+                }
             }
 
             // Built once per opening and only its affordability recomputed. A list that changed
@@ -3147,8 +3166,14 @@ public sealed class ClientHost : IDisposable
             _hudScreen.Recipes.Clear();
             _hudScreen.Recipes.AddRange(_shown);
 
+            // ⚠ Lit means "you can make this, here, now" — so a recipe you can afford and cannot
+            // work at this grid is dim, exactly like one you cannot afford. Its tooltip is what
+            // tells the two apart, and that is the line that says where to go.
             _hudScreen.Payable.Clear();
-            foreach (var recipe in _shown) _hudScreen.Payable.Add(_book.CanPay(_inventory, recipe));
+            foreach (var recipe in _shown)
+                _hudScreen.Payable.Add(
+                    recipe.WorkedAt(_hudScreen.Grid.Station, _hudScreen.Grid.Width)
+                    && _book.CanPay(_inventory, recipe));
 
             _hudScreen.Selected = Math.Clamp(_hudScreen.Selected, 0, Math.Max(0, _shown.Count - 1));
 

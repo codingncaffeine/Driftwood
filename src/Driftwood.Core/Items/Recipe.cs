@@ -146,6 +146,32 @@ public sealed class Recipe
         return grid >= Width && grid >= Height;
     }
 
+    /// <summary>
+    /// Where a player actually has to stand to make this, in words.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛔ <b>Not the same question as <see cref="Station"/>, and a user report is what proved
+    /// it matters.</b> They read a blast furnace's cost — five iron, three smooth stone <em>and a
+    /// furnace</em> — and concluded it could not be made at a bench, because a furnace has two slots
+    /// and neither of them is for building things in. It is a bench recipe with a furnace as an
+    /// <em>ingredient</em>. Nothing on screen distinguished <b>made at</b> from <b>made of</b>, so
+    /// one flat list had to carry both meanings and carried the wrong one.</para>
+    /// <para>⚠ <b><see cref="Station"/> is the wrong thing to show a player.</b> It defaults to
+    /// <see cref="CraftStation.Hand"/> and most recipes never set it, so 76 of ours say "hand" and
+    /// do not fit in two hands — what holds those is their SHAPE. This is the only property that
+    /// knows both halves, and it is the one anything player-facing must ask.</para>
+    /// </remarks>
+    public string MadeAt => Station != CraftStation.Hand
+        ? Station switch
+        {
+            CraftStation.Bench => "at a bench",
+            CraftStation.Stonecutter => "at a stonecutter",
+            CraftStation.Smithing => "at a smithing table",
+            CraftStation.Loom => "at a loom",
+            _ => $"at a {Station.ToString().ToLowerInvariant()}",
+        }
+        : TooBigForHands ? "at a bench" : "in your hands";
+
     /// <summary>What it costs, as a flat list with repeats.</summary>
     public IEnumerable<Ingredient> Ingredients
     {

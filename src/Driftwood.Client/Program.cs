@@ -5,6 +5,7 @@ using Driftwood.Core.Blocks;
 using Driftwood.Core.Diagnostics;
 using Driftwood.Core.Entities;
 using Driftwood.Core.Gen;
+using Driftwood.Core.Items;
 using Driftwood.Core.Textures;
 
 namespace Driftwood.Client;
@@ -77,6 +78,41 @@ public static class Program
                     Console.WriteLine($"  {(pack.Readable ? " " : "!")} {pack.Name,-44} {pack.Kind}");
 
                 return shelf.Any(p => !p.Readable) ? 1 : 0;
+            }
+
+            // ⛳ EVERY RECIPE, WHERE IT IS REALLY MADE, AND WHAT IT REALLY COSTS. Asked for after a
+            // user report that reads as a bug and is not one: a blast furnace wants a furnace in the
+            // grid, which means breaking the one already built, and nothing anywhere said so. The
+            // list is the small half; the findings under it are the point.
+            if (args.Contains("--recipes"))
+            {
+                var blocks = new BlockRegistry();
+                StarterBlocks.Register(blocks);
+
+                var items = StarterItems.Register(blocks);
+                var book = StarterRecipes.Build(items);
+                var blockDrops = StarterItems.Drops(blocks, items);
+                var creatureDrops = StarterItems.Creatures(items);
+
+                Console.WriteLine(
+                    $"recipes     {book.Recipes.Count} recipes and {book.Smelting.Count} smelts "
+                    + $"over {items.Count} items");
+
+                Console.Write(RecipeReport.Build(blocks, items, book, blockDrops, creatureDrops, out var found));
+
+                Console.WriteLine();
+                Console.WriteLine(found.Count == 0
+                    ? "findings    none"
+                    : $"findings    {found.Count}");
+
+                foreach (var group in found.GroupBy(f => f.Kind))
+                {
+                    Console.WriteLine($"  {group.Key}  ({group.Count()})");
+                    foreach (var finding in group)
+                        Console.WriteLine($"    {finding.Recipe,-28} {finding.What}");
+                }
+
+                return 0;
             }
 
             if (args.Contains("--pack-report"))
@@ -564,6 +600,7 @@ public static class Program
                 case "--pack-report":
                 case "--packs":
                 case "--atlas":
+                case "--recipes":
                     break;   // handled in Main; listed here so they are not unknown arguments
                 default:
                     throw new ArgumentException($"unknown argument '{args[i]}' (try --help)");

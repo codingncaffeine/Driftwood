@@ -93,9 +93,16 @@ public static class Tooltip
         var made = items[recipe.Result.Item];
         var title = recipe.Result.Count > 1 ? $"{made.Label} x{recipe.Result.Count}" : made.Label;
 
+        // ⛔ WHERE IT IS MADE COMES FIRST, AND IT IS THE HALF THAT WAS MISSING. A user read
+        // "5 iron ingot, 3 smooth stone, furnace" off a blast furnace and concluded it could not be
+        // made at a bench — because a furnace has two slots and neither is for building in. It is a
+        // bench recipe with a furnace as an ingredient. One flat list was carrying both "made at"
+        // and "made of", and a reader has no way to tell which any entry is.
+        //
         // ⚠ Says so when it cannot be paid for. The book already dims those, and a dimmed picture is
         // a picture somebody squints at — the words are what actually answer "why is this grey".
-        return new TooltipText(title, payable ? cost : $"needs {cost}");
+        return new TooltipText(
+            title, $"{recipe.MadeAt} · {(payable ? cost : $"needs {cost}")}");
     }
 
     /// <summary>What a button on a screen does.</summary>
@@ -215,10 +222,29 @@ public static class Tooltip
                 faults.Add($"the torch recipe's cost does not mention a stick: '{told.Note}'");
 
             if (OfRecipe(torch, items, payable: false).Note is var cannot
-                && !cannot.StartsWith("needs", StringComparison.Ordinal))
+                && !cannot.Contains("needs", StringComparison.Ordinal))
             {
                 faults.Add($"a recipe that cannot be paid for reads '{cannot}'");
             }
+
+            // ⛔⛔ AND WHERE IT IS MADE, which is the half that was missing and the half a user
+            // report turned on. A cost line alone cannot distinguish "made at" from "made of": they
+            // read a blast furnace as wanting five iron, three smooth stone AND A FURNACE, and every
+            // reading of that sentence except the right one says it cannot be made at a bench.
+            //
+            // ⚠ Both arms, and the second is the one that matters. A build that printed "at a bench"
+            // on everything would satisfy the first — so a torch, which two hands really do make,
+            // has to say so instead.
+            var bench = book.Recipes.FirstOrDefault(r => r.Name == "blast furnace");
+
+            if (bench is null) faults.Add("the blast furnace recipe is gone");
+            else if (!OfRecipe(bench, items, payable: true).Note.Contains("at a bench", StringComparison.Ordinal))
+                faults.Add(
+                    "a bench recipe does not say where it is made: "
+                    + $"'{OfRecipe(bench, items, payable: true).Note}'");
+
+            if (!told.Note.Contains("in your hands", StringComparison.Ordinal))
+                faults.Add($"a hand recipe does not say it is made in the hands: '{told.Note}'");
         }
 
         // ⛔ THE NEGATIVE CONTROL. A zone that is not a thing must answer with nothing — without
