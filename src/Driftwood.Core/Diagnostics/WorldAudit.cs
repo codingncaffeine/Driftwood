@@ -5732,7 +5732,94 @@ public static class WorldAudit
 
         faults.AddRange(TextureCeilingSelfTest());
         faults.AddRange(PaintedArtSelfTest());
+        faults.AddRange(BorrowedArtSelfTest());
         return faults;
+    }
+
+    /// <summary>
+    /// Checks every tier of a ladder can wear a pack's art, borrowing where the pack has no such
+    /// material — and that what comes back is the borrowing tier's colour rather than the lender's.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ <b>Our ladders are deeper than the genre's.</b> Seven rungs of tools against six,
+    /// and copper is ours alone until a pack is new enough to carry the reference's own copper gear.
+    /// A pack written before that dressed six tiers and left one in our art, which reads worse than
+    /// none of them matching — reported by the user holding a copper set in a fully skinned bar.
+    /// </para>
+    /// <para>⛔ <b>Both arms, and the second is what makes it a check.</b> "Every tier has a pack
+    /// path" is satisfied by pointing copper at iron and calling it done — which would put an iron
+    /// pickaxe on the copper rung and make two tiers indistinguishable. So the borrowed picture has
+    /// to come back nearer the borrower's colour than the lender's, and a material that needs no
+    /// borrowing must not do any.</para>
+    /// </remarks>
+    private static List<string> BorrowedArtSelfTest()
+    {
+        var faults = new List<string>();
+
+        // ⚠ GEAR ONLY, and the names come off the same tables the layers were built from rather than
+        // from a prefix. The first version matched anything called copper_* and caught the ORE and
+        // the INGOT — which every pack has painted since long before copper gear existed and which
+        // need no borrowing at all. A check that flags correct rows is a check that gets muted.
+        var gear = new List<string>();
+
+        foreach (var head in StarterItems.Heads) gear.Add($"copper_{head.Name}");
+        foreach (var piece in Items.Armour.Pieces) gear.Add($"copper_{piece.Name}");
+
+        foreach (var name in gear)
+        {
+            var layer = BlockTextureSet.Layers.FirstOrDefault(l => l.Name == name);
+
+            if (layer.Name is null)
+            {
+                faults.Add($"'{name}' is a tier of gear with no texture layer at all");
+                continue;
+            }
+
+            if (layer.PackPath.Length == 0)
+                faults.Add($"'{name}' has no pack path at all, so no pack can ever dress it");
+            else if (layer.Borrow.Length == 0)
+                faults.Add($"'{name}' has nothing to borrow, so a pack without copper leaves it ours");
+        }
+
+        // ⛔ And the recolour actually recolours. A flat grey plate stands in for a lender's neutral
+        // metal; what comes back has to be copper. Measured against BOTH metals, because "it is
+        // near copper" is also true of a build that did nothing to a texture that was already warm.
+        var copper = Items.Armour.Materials.First(m => m.Name == "copper");
+        var grey = TileGen.Speckle(4242, 190, 190, 196, 10);
+
+        var before = MeanRgb(grey);
+        var after = MeanRgb(BlockTextureSet.RecolourFor(grey, copper.Tint));
+
+        var toCopper = Distance(after, (copper.R, copper.G, copper.B));
+        var toIron = Distance(after, before);
+
+        if (toCopper >= toIron)
+            faults.Add(
+                $"a borrowed grey recoloured to copper came back {toCopper:F0} from copper and "
+                + $"{toIron:F0} from where it started, so it kept the lender's metal");
+
+        // The control: leaving it alone must NOT pass the arm above.
+        var untouched = MeanRgb(grey);
+        if (Distance(untouched, (copper.R, copper.G, copper.B)) < Distance(untouched, before))
+            faults.Add("the check cannot tell a recoloured tile from one that was left alone");
+
+        return faults;
+
+        static (float R, float G, float B) MeanRgb(byte[] tile)
+        {
+            float r = 0f, g = 0f, b = 0f, n = 0f;
+
+            for (var i = 0; i < tile.Length; i += 4)
+            {
+                if (tile[i + 3] < 8) continue;
+                r += tile[i]; g += tile[i + 1]; b += tile[i + 2]; n++;
+            }
+
+            return n <= 0f ? (0f, 0f, 0f) : (r / n, g / n, b / n);
+        }
+
+        static float Distance((float R, float G, float B) a, (float R, float G, float B) b) =>
+            MathF.Sqrt((a.R - b.R) * (a.R - b.R) + (a.G - b.G) * (a.G - b.G) + (a.B - b.B) * (a.B - b.B));
     }
 
     /// <summary>

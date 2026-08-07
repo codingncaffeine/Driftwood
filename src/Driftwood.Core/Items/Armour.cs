@@ -50,17 +50,24 @@ public static class Armour
     /// <param name="Name">Ours, and the stem every item of it is named from.</param>
     /// <param name="Made">What it is beaten out of — an item's name.</param>
     /// <param name="Pack">
-    /// The material a texture pack calls this. ⚠ Not our name: a pack ships six materials by the
+    /// The material a texture pack calls this. ⚠ Not our name: a pack ships its materials by the
     /// genre's own names and ours deliberately are not those, so the mapping is stated rather than
-    /// derived. Copper wears chainmail's sheet and stormglass wears diamond's, which are the nearest
-    /// things a pack actually paints.
+    /// derived — stormglass wears netherite's sheet, which is the nearest thing anybody paints.
+    /// </param>
+    /// <param name="Borrow">
+    /// A material to take the SHAPE from and recolour, when a pack has none of this one's own.
+    /// Empty for anything every pack already paints.
     /// </param>
     /// <param name="Points">Head, chest, legs and feet, in <see cref="EquipSlot"/> order.</param>
     public readonly record struct Material(
-        string Name, string Made, string Pack, byte R, byte G, byte B, int[] Points, int Durability)
+        string Name, string Made, string Pack, byte R, byte G, byte B, int[] Points, int Durability,
+        string Borrow = "")
     {
         /// <summary>What a whole set of it is worth.</summary>
         public int Total => Points[0] + Points[1] + Points[2] + Points[3];
+
+        /// <summary>This material's colour, packed, for recolouring a borrowed picture into it.</summary>
+        public uint Tint => ((uint)R << 16) | ((uint)G << 8) | B;
     }
 
     /// <summary>
@@ -74,7 +81,12 @@ public static class Armour
     public static readonly Material[] Materials =
     [
         new("leather", "leather", "leather", 152, 100, 62, [1, 3, 2, 1], 90),
-        new("copper", "copper_ingot", "chainmail", 198, 124, 78, [2, 4, 3, 2], 200),
+        // ⛔ THIS WORE CHAINMAIL'S SHEET, and that was the nearest thing anybody had painted right up
+        // until copper gear shipped in the reference. Measured against the packs on this machine:
+        // three of seven now carry a full copper set — helmet, chestplate, leggings, boots.
+        // Chainmail is GREY and this metal is 198,124,78, so borrowing it was a mismatch accepted
+        // for want of anything better. There is something better now.
+        new("copper", "copper_ingot", "copper", 198, 124, 78, [2, 4, 3, 2], 200, Borrow: "iron"),
         new("gold", "gold_ingot", "gold", 232, 196, 82, [2, 6, 5, 3], 100),
         new("iron", "iron_ingot", "iron", 214, 214, 220, [2, 6, 5, 2], 280),
 

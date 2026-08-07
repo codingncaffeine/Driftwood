@@ -26,8 +26,27 @@ namespace Driftwood.Core.Textures;
 /// <param name="Tinted">
 /// True when this layer is multiplied by a climate colour before it reaches the screen.
 /// </param>
+/// <param name="Borrow">
+/// A texture of a <em>different</em> material to take the shape from when the pack has none of its
+/// own, recoloured to <paramref name="BorrowTint"/>.
+/// </param>
+/// <param name="BorrowTint">
+/// Packed 0xRRGGBB the borrowed texture is recoloured to. Zero means no borrowing.
+/// </param>
+/// <remarks>
+/// ⛳ <b>Borrowing is for a rung of a ladder the reference does not have.</b> Our tool and armour
+/// ladders run seven and six deep against the genre's six and five, so there are tiers nobody has
+/// ever painted — copper had none at all until the reference gave it a set, and a pack written
+/// before that has six materials of tools and one of ours left in our own art. One odd tier out of
+/// seven reads worse than none of them matching.
+/// <para>⛔ <b>Borrow from a NEUTRAL material, never a coloured one.</b> The recolour multiplies a
+/// texture's own light against a target, so what it needs is shading rather than hue: iron carries
+/// the shape and nothing else, and gold would fight the new colour with the old one all the way
+/// through. It is the same reason copper armour wore chainmail before copper existed.</para>
+/// </remarks>
 public readonly record struct BlockTextureLayer(
-    string Name, string PackPath, bool Cutout, string PackPathAlt = "", bool Tinted = false);
+    string Name, string PackPath, bool Cutout, string PackPathAlt = "", bool Tinted = false,
+    string Borrow = "", uint BorrowTint = 0);
 
 /// <summary>
 /// Builds the full set of block tiles, starting from Driftwood's own and letting a pack override
@@ -41,6 +60,16 @@ public readonly record struct BlockTextureLayer(
 /// </remarks>
 public static class BlockTextureSet
 {
+    /// <summary>
+    /// Copper's own colour, for recolouring a borrowed iron picture into it.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ Taken from <see cref="Items.Armour"/>'s table rather than typed again, so the tools, the
+    /// armour and the borrowed art are all one metal. Two copies of a colour is two coppers.
+    /// </remarks>
+    private static readonly uint CopperTint =
+        Items.Armour.Materials.First(m => m.Name == "copper").Tint;
+
     /// <summary>Indexed by layer id — the same numbers <see cref="StarterBlocks"/> hands out.</summary>
     public static readonly BlockTextureLayer[] Layers =
     [
@@ -245,10 +274,24 @@ public static class BlockTextureSet
         new("stone_axe",   "textures/item/stone_axe.png",         true),
         new("stone_shovel", "textures/item/stone_shovel.png",     true),
         new("stone_sword", "textures/item/stone_sword.png",       true),
-        new("copper_pickaxe", "",                                 true),
-        new("copper_axe",  "",                                    true),
-        new("copper_shovel", "",                                  true),
-        new("copper_sword", "",                                   true),
+        // ⛔ THESE FOUR WERE AN EMPTY PATH — hard-wired to keep our art no matter what was loaded —
+        // and the reason was true when it was written and is not any more. Copper had no tools in
+        // the reference, so nobody had painted one; the copper era gave it a full set, and MEASURED
+        // against the packs on this machine, three of seven now ship all four. Reported by the user
+        // as copper tools staying default while everything else in the bar wore the pack.
+        //
+        // ⚠ No alternate to a warmer metal on purpose. Falling back to the gold ones would put the
+        // same picture on two rungs of the ladder, and telling a copper pickaxe from a gold one at
+        // a glance is worth more than matching the pack's style on one tier. A pack without copper
+        // keeps ours, which is at least the right colour.
+        new("copper_pickaxe", "textures/item/copper_pickaxe.png", true,
+            Borrow: "textures/item/iron_pickaxe.png", BorrowTint: CopperTint),
+        new("copper_axe",  "textures/item/copper_axe.png",        true,
+            Borrow: "textures/item/iron_axe.png", BorrowTint: CopperTint),
+        new("copper_shovel", "textures/item/copper_shovel.png",   true,
+            Borrow: "textures/item/iron_shovel.png", BorrowTint: CopperTint),
+        new("copper_sword", "textures/item/copper_sword.png",     true,
+            Borrow: "textures/item/iron_sword.png", BorrowTint: CopperTint),
         new("gold_pickaxe", "textures/item/golden_pickaxe.png",   true),
         new("gold_axe",    "textures/item/golden_axe.png",        true),
         new("gold_shovel", "textures/item/golden_shovel.png",     true),
@@ -353,7 +396,11 @@ public static class BlockTextureSet
                 Items.Armour.ItemName(material, piece),
                 $"textures/item/{material.Pack}_{piece.Name}.png",
                 true,
-                $"textures/items/{material.Pack}_{piece.Name}.png"));
+                $"textures/items/{material.Pack}_{piece.Name}.png",
+                Borrow: material.Borrow.Length == 0
+                    ? ""
+                    : $"textures/item/{material.Borrow}_{piece.Name}.png",
+                BorrowTint: material.Borrow.Length == 0 ? 0 : material.Tint));
         }
 
         return [.. rows];
@@ -530,6 +577,7 @@ public static class BlockTextureSet
 
         size = chosen;
         var neutralised = 0;
+        var borrowed = 0;
         var outcomes = new List<LayerOutcome>(Layers.Length);
         var moving = OwnAnimations(tiles, size);
 
@@ -554,6 +602,22 @@ public static class BlockTextureSet
 
             if (replacement is null && Layers[i].PackPathAlt.Length > 0)
                 replacement = pack.TryLoadTile(Layers[i].PackPathAlt, size, out from);
+
+            // ⛳ LAST, AND ONLY WHEN THE MATERIAL'S OWN PICTURE IS NOT THERE. A pack that has copper
+            // tools gives us copper tools; one written before the reference had any lends us the
+            // shape of its iron ones and we recolour them. Either way the tier wears the pack's
+            // style instead of being the one rung in seven still in ours.
+            if (replacement is null && Layers[i].Borrow.Length > 0 && Layers[i].BorrowTint != 0)
+            {
+                replacement = pack.TryLoadTile(Layers[i].Borrow, size, out from);
+
+                if (replacement is not null)
+                {
+                    Recolour(replacement, Layers[i].BorrowTint);
+                    from = $"{from} recoloured";
+                    borrowed++;
+                }
+            }
 
             if (replacement is null)
             {
@@ -612,6 +676,7 @@ public static class BlockTextureSet
                     + (colormaps > 0 ? $", {colormaps} colormaps" : ", built-in colormaps")
                     + (pack.Namespaces.Count > 1 ? $", {pack.Namespaces.Count} namespaces" : "")
                     + (neutralised > 0 ? $", {neutralised} tinted layers flattened" : "")
+                    + (borrowed > 0 ? $", {borrowed} borrowed from another material and recoloured" : "")
                     + (pack.Faults.Count > 0 ? $", {pack.Faults.Count} unreadable: {pack.Faults[0]}" : "");
 
         return new Result(tiles, size, summary, grass, foliage, outcomes, moving);
@@ -790,6 +855,65 @@ public static class BlockTextureSet
         // size rather than being parameterised over every resolution a pack might arrive at.
         var tile = Draw(layer);
         return TileGen.Upscale(tile, size);
+    }
+
+    /// <summary>
+    /// Recolours a borrowed texture to another metal, in place, keeping its own shading.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ <b>The texture's own light times the target colour.</b> What makes an iron pickaxe
+    /// look like a pickaxe is where it is bright and where it is dark, and that survives being
+    /// multiplied; what makes it look like iron is that the three channels are equal, and that is
+    /// exactly what is being replaced. Luminance rather than a plain average, because a flat mean
+    /// reads a saturated highlight as darker than the eye does and the edge of a blade goes dull.
+    /// </para>
+    /// <para>⚠ <b>Scaled so mid-grey lands on the target rather than so white does.</b> Multiplying
+    /// straight would only ever darken — a metal is mostly middling values, so the result came out
+    /// as a brown smear with two bright pixels. Normalising against the source's own middle keeps
+    /// the range it was painted with.</para>
+    /// <para>⚠ Alpha is untouched. The silhouette is the pack author's and recolouring is not
+    /// permission to reshape it.</para>
+    /// </remarks>
+    /// <summary>Recolours a copy, for a check that wants both the before and the after.</summary>
+    public static byte[] RecolourFor(byte[] tile, uint rgb)
+    {
+        var copy = (byte[])tile.Clone();
+        Recolour(copy, rgb);
+        return copy;
+    }
+
+    private static void Recolour(byte[] tile, uint rgb)
+    {
+        var tr = (rgb >> 16) & 0xFF;
+        var tg = (rgb >> 8) & 0xFF;
+        var tb = rgb & 0xFF;
+
+        // The source's own mid-point, over the pixels that are actually drawn. A texture painted
+        // dark and one painted bright must both come out the target's colour rather than the
+        // target's colour times how bright somebody happened to paint their iron.
+        float sum = 0f, count = 0f;
+
+        for (var i = 0; i < tile.Length; i += 4)
+        {
+            if (tile[i + 3] < 8) continue;
+            sum += 0.299f * tile[i] + 0.587f * tile[i + 1] + 0.114f * tile[i + 2];
+            count++;
+        }
+
+        if (count <= 0f) return;
+
+        var middle = MathF.Max(1f, sum / count);
+
+        for (var i = 0; i < tile.Length; i += 4)
+        {
+            if (tile[i + 3] < 8) continue;
+
+            var light = (0.299f * tile[i] + 0.587f * tile[i + 1] + 0.114f * tile[i + 2]) / middle;
+
+            tile[i] = (byte)Math.Clamp((int)MathF.Round(tr * light), 0, 255);
+            tile[i + 1] = (byte)Math.Clamp((int)MathF.Round(tg * light), 0, 255);
+            tile[i + 2] = (byte)Math.Clamp((int)MathF.Round(tb * light), 0, 255);
+        }
     }
 
     /// <summary>Which painted resource a layer takes, or null when it is generated like the rest.</summary>
