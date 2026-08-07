@@ -728,7 +728,9 @@ public sealed class HudRenderer : IDisposable
     /// <summary>The bar, one slot per pocket, with each block's own tile and its count.</summary>
     private void Hotbar(ItemRegistry catalogue, Inventory inventory, float w, float h)
     {
-        const float Slot = 22f;
+        // ⛳ The same number the bars over it hang off — see BarSpan. One source, so the rack and the
+        // rows above it cannot drift apart.
+        const float Slot = HotbarSlot;
         const float Pad = 2f;
 
         var width = Inventory.HotbarSlots * Slot;
@@ -2197,6 +2199,35 @@ public sealed class HudRenderer : IDisposable
     /// </remarks>
     private const int TearBands = 8;
 
+    /// <summary>One notch of any of the bars over the hotbar.</summary>
+    private const float BarIcon = 9f;
+
+    /// <summary>One pocket of the hotbar, which is what the bars are measured against.</summary>
+    private const float HotbarSlot = 22f;
+
+    /// <summary>
+    /// How far from the middle the OUTER end of a bar sits: half the hotbar's own width.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳⛳ <b>The bars hang off the ends of the rack under them rather than off the crosshair.</b>
+    /// Reported by the user — <i>"they're kinda close to each other"</i> — and they were in fact
+    /// touching, because both were measured from the centre outward and both are exactly ninety wide.
+    /// The hotbar is ninety-nine to a side, so hanging the outer ends there leaves eighteen pixels of
+    /// clear air in the middle, two icons' worth, and the assembly reads as one block of interface
+    /// rather than two rows that happen to be adjacent.</para>
+    /// <para>⛔ <b>Derived from the hotbar's own numbers, not a constant that happens to match them
+    /// today.</b> The rack is what the eye lines these up against; a hand-written ninety-nine is a
+    /// gap that silently stops matching the day the hotbar gains a tenth pocket, and nothing anywhere
+    /// would fail.</para>
+    /// </remarks>
+    private static float BarSpan => Inventory.HotbarSlots * HotbarSlot / 2f;
+
+    /// <summary>The far left of the pair of bars, which the health side hangs off.</summary>
+    private static float BarsLeft(float w) => MathF.Round(w / 2f) - BarSpan;
+
+    /// <summary>And the far right, which the food side hangs off.</summary>
+    private static float BarsRight(float w) => MathF.Round(w / 2f) + BarSpan;
+
     /// <summary>
     /// How far one icon of a nearly-empty bar is shifted this instant, in whole screen pixels.
     /// </summary>
@@ -2229,10 +2260,10 @@ public sealed class HudRenderer : IDisposable
     /// </remarks>
     private void Hearts(PlayerVitals vitals, float drift, float w, float h)
     {
-        const float Icon = 9f;
+        const float Icon = BarIcon;
         const int Count = PlayerVitals.MaxHealth / 2;
 
-        var start = MathF.Round(w / 2f) - Count * Icon;
+        var start = BarsLeft(w);
         var top = h - 44f;
 
         var empty = new Vector4(0.10f, 0.05f, 0.06f, 0.85f);
@@ -2281,10 +2312,10 @@ public sealed class HudRenderer : IDisposable
     /// </remarks>
     private void Food(PlayerVitals vitals, float drift, float w, float h)
     {
-        const float Icon = 9f;
+        const float Icon = BarIcon;
         const int Count = PlayerVitals.MaxFood / 2;
 
-        var right = MathF.Round(w / 2f) + Count * Icon;
+        var right = BarsRight(w);
         var top = h - 44f;
         var filled = (vitals.Food + 1) / 2;
 
@@ -2349,11 +2380,16 @@ public sealed class HudRenderer : IDisposable
     {
         if (vitals.ArmourPoints <= 0) return;
 
-        const float Icon = 9f;
-        const int Count = Armour.MaxPoints / 2;
+        const float Icon = BarIcon;
+        var Count = VitalBars.Icons(VitalBar.Armour);
 
-        var left = MathF.Round(w / 2f) - Count * Icon;
-        var top = h - 53f;
+        // ⛔ TEN PLATES FOR TWENTY-FOUR POINTS, and it used to be one plate per two — which made this
+        // bar twelve icons where every other one is ten. Anchored to the hearts' left edge that ran
+        // it eleven pixels PAST the middle of the screen and straight into the air bubbles, and the
+        // layout check is what said so. A bar is a proportion of its maximum, not a tally of it; the
+        // torn fill already draws any fraction, so nothing was needed to make ten work.
+        var left = BarsLeft(w);
+        var top = h - VitalBars.FromBottom(VitalBar.Armour);
 
         // ⛳ Lit while it is up, so raising the shield is visible from the bar rather than only from
         // the damage numbers. The one thing a player has to be able to tell at a glance is whether
@@ -2362,14 +2398,20 @@ public sealed class HudRenderer : IDisposable
             ? new Vector4(0.92f, 0.94f, 0.70f, 1f)
             : new Vector4(0.72f, 0.76f, 0.82f, 1f);
 
+        var worn = vitals.ArmourPoints / (float)Armour.MaxPoints * Count;
+
         for (var i = 0; i < Count; i++)
         {
-            var filled = Math.Clamp(vitals.ArmourPoints - i * 2, 0, 2);
-            if (filled == 0) continue;
+            var level = Math.Clamp(worn - i, 0f, 1f);
+            if (level <= 0f) continue;
 
-            var portion = filled == 2 ? 1f : 0.5f;
-            Rect(_iconQuads, left + i * Icon, top, (Icon - 1f) * portion, Icon - 1f,
-                colour, IconPlate, uWidth: portion);
+            if (level >= 1f)
+            {
+                Rect(_iconQuads, left + i * Icon, top, Icon - 1f, Icon - 1f, colour, IconPlate);
+                continue;
+            }
+
+            TornFill(left + i * Icon, top, Icon - 1f, level, colour, IconPlate, i);
         }
     }
 
@@ -2416,22 +2458,31 @@ public sealed class HudRenderer : IDisposable
     }
 
     /// <summary>Breath, shown only while it is worth knowing about.</summary>
+    /// <remarks>
+    /// ⛔ <b>MOVED UP AND RIGHT, because hunger took the space it was in.</b> Breath started at the
+    /// middle and ran right, which was empty screen until the food bar landed there — and two rows of
+    /// icons drawn over each other is not something either of them reports. It sits over the food
+    /// now, sharing its right edge, which is also the genre's own arrangement: air above food, armour
+    /// above hearts, and the two columns kept apart.
+    /// ⚠ <b>Right-aligned, and it empties toward the middle</b> like the food under it, so the pair
+    /// drain the same way rather than in opposite directions.
+    /// </remarks>
     private void Bubbles(PlayerVitals vitals, float w, float h)
     {
         if (!vitals.Submerged && vitals.Breath >= PlayerVitals.MaxBreath) return;
 
-        const float Icon = 9f;
+        const float Icon = BarIcon;
         const int Count = 10;
 
-        var left = MathF.Round(w / 2f);
-        var top = h - 44f;
+        var right = BarsRight(w);
+        var top = h - 53f;
         var colour = new Vector4(0.72f, 0.88f, 1f, 0.95f);
 
         var remaining = vitals.Breath * Count / (float)PlayerVitals.MaxBreath;
         for (var i = 0; i < Count; i++)
         {
             if (remaining <= i) continue;
-            Rect(_iconQuads, left + i * Icon, top, Icon - 1f, Icon - 1f, colour, IconBubble);
+            Rect(_iconQuads, right - (i + 1) * Icon, top, Icon - 1f, Icon - 1f, colour, IconBubble);
         }
     }
 

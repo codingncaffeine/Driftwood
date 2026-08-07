@@ -1054,6 +1054,10 @@ public static class WorldAudit
         Check("hunger drains, gates mending, and stops short of killing", hungerFaults.Count == 0,
             hungerFaults.Count == 0 ? hungerDetail : $"{hungerFaults.Count} faults: {hungerFaults[0]}");
 
+        var barFaults = VitalBars.Validate(out var barDetail);
+        Check("the four vitals rows keep out of each other's way", barFaults.Count == 0,
+            barFaults.Count == 0 ? barDetail : $"{barFaults.Count} faults: {barFaults[0]}");
+
         var shakeFaults = BarShake.Validate(out var shakeDetail);
         Check("a bar shivers only when it is nearly out", shakeFaults.Count == 0,
             shakeFaults.Count == 0 ? shakeDetail : $"{shakeFaults.Count} faults: {shakeFaults[0]}");
