@@ -2467,8 +2467,26 @@ public sealed class HudRenderer : IDisposable
     /// ⚠ <b>Right-aligned, and it empties toward the middle</b> like the food under it, so the pair
     /// drain the same way rather than in opposite directions.
     /// </remarks>
+    /// <summary>
+    /// Bubbles actually drawn on the last frame, and where the first one was put.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>Reported by the user: the bubbles were not showing up at all.</b> Every part of them
+    /// checked out on its own — the sheet loads, the tile has a hundred and thirteen texels of ink,
+    /// the layer number is right, the call is in the draw — and not one of those is the same claim as
+    /// <em>quads reached the screen</em>. So the renderer publishes what it drew, which is the rule
+    /// <c>ScreenLayout</c> and <c>HudScreen.TipBox</c> already follow, and the gate can ask instead of
+    /// somebody having to dive into a lake and look.
+    /// </remarks>
+    public int LastBubbles { get; private set; }
+
+    /// <summary>Where the first bubble was put, in layout units.</summary>
+    public Vector2 LastBubbleAt { get; private set; }
+
     private void Bubbles(PlayerVitals vitals, float drift, float w, float h)
     {
+        LastBubbles = 0;
+
         if (!vitals.Submerged && vitals.Breath >= PlayerVitals.MaxBreath) return;
 
         const float Icon = BarIcon;
@@ -2493,7 +2511,12 @@ public sealed class HudRenderer : IDisposable
             // The last few shiver, exactly as the other three do. Running out of air is the most
             // urgent thing that happens to a player, so if any row earns the shake it is this one.
             var y = top + Tremble(drift, i, left);
-            Rect(_iconQuads, right - (i + 1) * Icon, y, Icon - 1f, Icon - 1f, colour, IconBubble);
+            var x = right - (i + 1) * Icon;
+
+            Rect(_iconQuads, x, y, Icon - 1f, Icon - 1f, colour, IconBubble);
+
+            if (LastBubbles == 0) LastBubbleAt = new Vector2(x, y);
+            LastBubbles++;
         }
     }
 

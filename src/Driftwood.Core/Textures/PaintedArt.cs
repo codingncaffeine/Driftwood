@@ -238,6 +238,7 @@ public static class PaintedArt
         // difference visible except saying it out loud here.
         var bubbleInk = 0;
         var bubbleHollow = 0;
+        var bubbleWhole = 0;
 
         if (!Has(Breath))
         {
@@ -260,7 +261,27 @@ public static class PaintedArt
                 else if (seenInk) bubbleHollow++;
             }
 
+            for (var i = 0; i < size * size; i++)
+                if (bubble[i * 4 + 3] >= 128) bubbleWhole++;
+
             if (bubbleInk == 0) faults.Add("the bubble has no ink across its middle");
+
+            // ⛔ REPORTED BY THE USER: "we've got bubbles but they aren't displaying at all when i'm
+            // under water." They were drawing — the wiring was right — and there was simply almost
+            // nothing there to see. A ring one texel wide in pale blue over a water-tinted screen is
+            // invisible, and every check here passed it because each was asking about the SHAPE of
+            // the ring rather than about whether there is enough of it to read.
+            // ⚠ Against the generated bubble it replaced, not against a number: "enough ink" has no
+            // absolute value, and the old one is the thing a player was able to see.
+            var generatedInk = 0;
+            var generated = TileGen.Bubble();
+            for (var i = 0; i < size * size && i * 4 + 3 < generated.Length; i++)
+                if (generated[i * 4 + 3] >= 128) generatedInk++;
+
+            if (bubbleWhole * 2 < generatedInk)
+                faults.Add($"the painted bubble is {bubbleWhole} texels of ink against the generated "
+                         + $"one's {generatedInk} — less than half as much on screen, which is a "
+                         + "bubble a player cannot see");
 
             // ⛳ The fault carries the TILE, not just the claim. "It came out solid" is a sentence
             // somebody then has to go and reproduce; the sixteen rows say whether the ring closed up,
@@ -283,7 +304,7 @@ public static class PaintedArt
         detail = $"the user's own heart at {size}px: {line} texels of outline round {middle} of "
                + $"fill, {clear} clear, line met first down the middle; their drumstick in "
                + $"{colours} colours over {fullInk} texels against a hollow socket of {socketInk}; "
-               + $"and their bubble still hollow, {bubbleInk} of rim with {bubbleHollow} clear "
+               + $"and their bubble {bubbleWhole} texels of ink, still hollow, {bubbleInk} of rim with {bubbleHollow} clear "
                + "across the middle";
 
         return faults;

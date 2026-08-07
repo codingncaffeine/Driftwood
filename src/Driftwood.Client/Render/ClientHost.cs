@@ -6722,6 +6722,11 @@ public sealed class ClientHost : IDisposable
     /// <summary>How many frames the check has drawn, for its own timing.</summary>
     private int _uiCheckFrame;
 
+    /// <summary>Bubbles the breath bar put on screen when the ui-check took its air away.</summary>
+    private int _breathBubbles = -1;
+
+    private Vector2 _breathAt;
+
     /// <summary>The water layer as it was ten frames ago, for the check that it moves.</summary>
     private byte[]? _waterBefore;
 
@@ -6905,6 +6910,24 @@ public sealed class ClientHost : IDisposable
             // layer, the wrong mip level or a texture nobody binds does all of the above and leaves
             // a still lake. Read the layer, wait, read it again, and compare it to itself.
             case 20: _waterBefore = _blockTextures.ReadLayer(StarterBlocks.LayerWater); break;
+
+            // ⛔⛔ THE BREATH BAR, WHICH A USER REPORTED AS NOT SHOWING AT ALL. Every part of it
+            // passed on its own — the sheet loads, the tile has a hundred and thirteen texels of ink,
+            // the layer number is right, the call is in the draw — and not one of those is the same
+            // claim as QUADS REACHING THE SCREEN. It is also the only bar nothing had ever looked at,
+            // because seeing it means being underwater and this whole script runs on dry land.
+            // ⛳ Breath is dropped through Restore rather than by drowning a body: the bar's guard is
+            // "submerged OR short of air", and short of air is enough to make it draw — so this needs
+            // no lake, no swimming and no waiting for a body to sink.
+            // ⚠ Before frame 61, because every frame after that has a screen open and the bars are
+            // deliberately not drawn under one.
+            case 50: _vitals.Restore(PlayerVitals.MaxHealth, PlayerVitals.MaxBreath / 2); break;
+
+            case 52:
+                _breathBubbles = _hud.LastBubbles;
+                _breathAt = _hud.LastBubbleAt;
+                _vitals.Restore(PlayerVitals.MaxHealth, PlayerVitals.MaxBreath);
+                break;
 
             case 60: SampleUi(size, "no screen"); break;
 
@@ -8306,6 +8329,15 @@ public sealed class ClientHost : IDisposable
 
         if (!_waterMoved)
             faults.Add("the water layer on the card did not change, or the read cannot tell layers apart");
+
+        // ⛔ The bar a user had to tell us about. Half a lungful has to put bubbles on the screen,
+        // and "the tile is fine" is not that claim — see the note on frame 50.
+        if (_breathBubbles <= 0)
+            faults.Add("half a lungful of air drew no bubbles at all, so the breath bar is invisible");
+        else
+            Console.WriteLine(
+                $"ui-check    breath     {_breathBubbles} bubbles on half a lungful, first at "
+                + $"{_breathAt.X:F0},{_breathAt.Y:F0}");
 
         UiCheckFailed = faults.Count > 0;
 
