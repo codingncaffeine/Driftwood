@@ -150,6 +150,28 @@ public static class HeldGrip
     }
 
     /// <summary>
+    /// Where the first-person OTHER arm is. The main one's pose, mirrored, and never swinging.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ <b>Mirrored rather than given numbers of its own.</b> Three constants flip — the roll,
+    /// the yaw and the sideways offset — and the other three do not, because a left arm hangs at the
+    /// same height, reaches the same distance and is held at the same pitch as a right one. Two
+    /// independent sets of six would drift apart the first time <see cref="RestOffset"/> was dialled,
+    /// and the offhand is exactly the thing nobody re-checks after a tweak.</para>
+    /// <para>⛔ <b>And it does not swing.</b> The offhand is not what a click strikes with — the swing
+    /// curve belongs to the main hand — so passing the main hand's <c>t</c> in here would put a torch
+    /// through the same arc as the sword beside it every time the player attacked.</para>
+    /// <para>⚠ The guard is a separate movement and lives on <c>PlayerAnimator.BlockAmount</c>, which
+    /// is third-person. In first person a raised shield shows on the HUD; bringing the view-model arm
+    /// across the screen is the thing left to judge by eye, and the numbers to change are here.</para>
+    /// </remarks>
+    public static Matrix4x4 OffhandArmTransform() =>
+        Matrix4x4.CreateRotationZ(-RestRoll)
+      * Matrix4x4.CreateRotationX(RestPitch)
+      * Matrix4x4.CreateRotationY(-RestYaw)
+      * Matrix4x4.CreateTranslation(RestOffset with { X = -RestOffset.X });
+
+    /// <summary>
     /// The swing, as one number: −1 fully cocked, 0 at rest, +1 fully followed through.
     /// </summary>
     /// <remarks>
@@ -394,6 +416,19 @@ public static class HeldGrip
         InFist(flat ? FirstFlat : FirstBlock, HeldSize(flat), hold, arms, right: true) * ArmTransform(t);
 
     /// <summary>
+    /// And where the OTHER hand's thing is in first person: in the left fist, never swinging.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>The same call with two arguments changed</b>, which is the whole point of
+    /// <see cref="InFist"/> taking a hand: <c>PlayerModel.FistInArm</c> has answered for the left arm
+    /// since the model was built, and the third-person offhand already goes through it. The view
+    /// model was the one place still assuming a right hand.
+    /// </remarks>
+    public static Matrix4x4 InViewOffhand(bool flat, Vector3 hold, ArmStyle arms) =>
+        InFist(flat ? FirstFlat : FirstBlock, HeldSize(flat), hold, arms, right: false)
+      * OffhandArmTransform();
+
+    /// <summary>
     /// Where the held thing is in third person: in the model's own right fist, in the world.
     /// </summary>
     /// <remarks>
@@ -496,6 +531,61 @@ public static class HeldGrip
         }
 
         faults.AddRange(ValidateOffhand(feet));
+        faults.AddRange(ValidateOffhandInView());
+        return faults;
+    }
+
+    /// <summary>
+    /// The other hand in FIRST person: on the far side of the eye, in front of it, and still.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛔ <b>All three axes are probed, not the one the claim is about.</b> The third-person
+    /// offhand cost most of a session to exactly this: a check asked whether the shield came forward
+    /// along world −z, and at a body yaw of zero the model faces world +x, so z was its <em>side</em>.
+    /// It read the same number for both signs of its input, which looks precisely like an arm that
+    /// is not moving. Camera space here is unambiguous — +x right, +y up, −z forward — so the
+    /// mirroring claim is about x, and y and z are asserted to have NOT moved, which is what makes
+    /// "mirrored" different from "displaced".</para>
+    /// <para>⚠ And it must not swing: a torch in the offhand travelling through the sword's arc is
+    /// the bug that comes free with passing the main hand's <c>t</c> into the wrong transform.</para>
+    /// </remarks>
+    private static List<string> ValidateOffhandInView()
+    {
+        var faults = new List<string>();
+
+        foreach (var (label, flat, hold) in (ReadOnlySpan<(string, bool, Vector3)>)
+                 [("a torch", true, new Vector3(-0.21f, -0.36f, 0f)), ("a block", false, BlockHold)])
+        foreach (var arms in (ReadOnlySpan<ArmStyle>)[ArmStyle.Classic, ArmStyle.Slim])
+        {
+            var main = Vector3.Transform(hold, InView(0f, flat, hold, arms));
+            var other = Vector3.Transform(hold, InViewOffhand(flat, hold, arms));
+
+            if (other.Z >= 0f)
+                faults.Add($"{label} in the other hand is {other.Z:F2} on z, which is behind the camera");
+
+            if (main.X <= 0f)
+                faults.Add($"the main hand is at x {main.X:F2}, so this test has no side to mirror");
+
+            if (other.X >= 0f)
+                faults.Add($"{label} in the other hand is at x {other.X:F2}: it is on the same side "
+                         + $"of the screen as the main hand at {main.X:F2}");
+
+            // Mirrored means the same height and the same distance out, not merely somewhere else.
+            if (MathF.Abs(other.Y - main.Y) > 0.08f)
+                faults.Add($"{label} hangs at y {other.Y:F2} against the main hand's {main.Y:F2}, "
+                         + "so the arms are at different heights rather than mirrored");
+
+            if (MathF.Abs(other.Z - main.Z) > 0.12f)
+                faults.Add($"{label} sits at z {other.Z:F2} against the main hand's {main.Z:F2}, "
+                         + "so one arm reaches further than the other");
+
+            // ⛔ The swing belongs to the hand that strikes. If the offhand ever picks it up, a
+            // mid-swing probe moves and this is the only thing that would ever say so.
+            var mid = Vector3.Transform(hold, InViewOffhand(flat, hold, arms));
+            if (Vector3.Distance(mid, other) > 0.001f)
+                faults.Add($"{label} in the other hand is not the same twice, so something is animating it");
+        }
+
         return faults;
     }
 

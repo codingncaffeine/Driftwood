@@ -2035,6 +2035,13 @@ public sealed class ClientHost : IDisposable
                 CycleView();
                 break;
 
+            // ⛳ Trading the hands, which is what makes the offhand a place a player keeps something
+            // rather than a slot they filled once. A torch and a pickaxe swap constantly.
+            case GameAction.SwapHands:
+                if (_bench is not null) break;
+                SwapHands();
+                break;
+
             // Holding the clock still. A sky is judged by eye at a particular hour, and waiting
             // twenty minutes for the one you wanted to look at again is how a colour ramp ends up
             // checked at noon and nowhere else.
@@ -5794,7 +5801,22 @@ public sealed class ClientHost : IDisposable
         var (x, y, z) = hit.Adjacent;
         if (!_streamer.World.GetBlock(x, y, z).IsAir) return;
 
-        if (_inventory.HeldType is not { Places: { } held }) return;
+        // ⛳ THE MAIN HAND FIRST, THEN THE OTHER ONE — which is what makes a torch in the offhand and
+        // a pickaxe in the main hand the loop everybody wants. Asked in that order and never both:
+        // a player holding two placeable things means the one they are pointing with.
+        // ⚠ Which hand pays is decided HERE and carried to the spend below. Spending the main hand
+        // for a block that came out of the other one is the obvious way to get this wrong, and it
+        // would read as the offhand being infinite.
+        var fromOffhand = false;
+
+        if (_inventory.HeldType is not { Places: { } held })
+        {
+            var spare = _equipment[EquipSlot.Offhand];
+            if (spare.IsEmpty || _items[spare.Item].Places is not { } offhandPlaces) return;
+
+            held = offhandPlaces;
+            fromOffhand = true;
+        }
 
         // Where in the target cell the ray landed, which is what decides a slab's half. Taken from
         // the ray rather than from which face was struck: clicking a block's top lands at the floor
@@ -5847,9 +5869,31 @@ public sealed class ClientHost : IDisposable
         _streamer.EditBlock(x, y, z, block);
         if (tall) _streamer.EditBlock(x, y + 1, z, _tallUpper[block.Value]);
 
-        _inventory.SpendHeld();
+        if (fromOffhand) SpendOffhand();
+        else _inventory.SpendHeld();
+
         PlaySound(_registry[block], SoundEvent.Place, new Vector3(x + 0.5f, y + 0.5f, z + 0.5f), 0.85f);
     }
+
+    /// <summary>Takes one off what is in the other hand, emptying the slot when it runs out.</summary>
+    private void SpendOffhand()
+    {
+        var stack = _equipment[EquipSlot.Offhand];
+        if (stack.IsEmpty) return;
+
+        var left = stack.Count - 1;
+
+        // ⚠ Taken out and put back rather than mutated in place: ItemStack is a value and Equipment
+        // bumps its Version on write, which is what the HUD and the recipe toasts watch. A count
+        // changed behind its back is a pocket that empties on screen one action late.
+        _equipment.TakeAll(EquipSlot.Offhand);
+        if (left > 0) _equipment.Put(EquipSlot.Offhand, stack with { Count = left });
+    }
+
+    /// <summary>
+    /// Trades what is in the two hands. The rule itself is Core's, so the audit can run it.
+    /// </summary>
+    private void SwapHands() => _equipment.SwapWithHeld(_inventory);
 
     /// <summary>
     /// Turns key state into a movement wish, advances the body, and puts the camera in its head.
@@ -8331,6 +8375,7 @@ public sealed class ClientHost : IDisposable
         if (_inventory.HeldType is { } held)
         {
             DrawHeldItem(projection, light, held);
+            DrawOffhandItem(projection, light);
             return;
         }
 
@@ -8339,6 +8384,38 @@ public sealed class ClientHost : IDisposable
         _playerRenderer.DrawViewModel(
             projection, Vector3.TransformNormal(_skyState.SunDirection, view), sky, light,
             _animator.Swinging, _animator.SwingProgress);
+
+        DrawOffhandItem(projection, light);
+    }
+
+    /// <summary>
+    /// Puts whatever is in the OTHER hand on screen, on the far side of the view.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ <b>Drawn in both branches above, which is the bug this closes.</b> A raised shield
+    /// turned aside half of every blow that got past the plate and cost its holder every swing — and
+    /// in first person, the view a player is actually in, it appeared nowhere at all. The pocket on
+    /// the HUD lit up and the world showed nothing.</para>
+    /// <para>⛳ <b>The thing and not the limb</b>, exactly as the main hand does it: an item in that
+    /// hand is what you look at, and an empty offhand draws nothing rather than parking a bare left
+    /// arm in the corner of the screen for the whole game.</para>
+    /// <para>⚠ It does not swing. The swing belongs to the hand that strikes, and passing the main
+    /// hand's progress in here would send a torch through the same arc as the sword beside it.</para>
+    /// </remarks>
+    private void DrawOffhandItem(Matrix4x4 projection, EntityLight light)
+    {
+        var stack = _equipment[EquipSlot.Offhand];
+        if (stack.IsEmpty) return;
+
+        var other = _items[stack.Item];
+
+        _blockTextures.Bind();
+        _itemRenderer.DrawInHand(
+            projection,
+            _playerRenderer.OffhandTransform(!other.DrawsAsBlock, _itemRenderer.HoldPoint(other)),
+            other,
+            _registry,
+            HandLight(light));
     }
 
     /// <summary>

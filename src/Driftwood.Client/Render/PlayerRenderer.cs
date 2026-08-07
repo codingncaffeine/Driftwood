@@ -326,6 +326,10 @@ public sealed class PlayerRenderer : IDisposable
     public Matrix4x4 HeldTransform(float t, bool flat, Vector3 hold) =>
         HeldGrip.InView(t, flat, hold, Arms);
 
+    /// <summary>And what is in the other hand, in the camera's own space.</summary>
+    public Matrix4x4 OffhandTransform(bool flat, Vector3 hold) =>
+        HeldGrip.InViewOffhand(flat, hold, Arms);
+
     /// <summary>And where it sits in the model's own fist, in the world.</summary>
     public Matrix4x4 HeldWorldTransform(Vector3 feet, in PlayerPose pose, bool flat, Vector3 hold) =>
         HeldGrip.InWorld(feet, pose, flat, hold, Arms);

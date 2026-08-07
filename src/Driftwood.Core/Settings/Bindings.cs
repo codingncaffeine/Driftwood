@@ -47,6 +47,10 @@ public sealed class Bindings
         // key only that player's other hand can reach is a shield they never raise.
         bindings.Set(GameAction.RaiseShield, "V", "ControlRight");
 
+        // ⚠ F is the genre's own, and it has to be a key the moving hand can reach without leaving
+        // the movement keys: hands are swapped mid-fight and mid-dig, never at rest.
+        bindings.Set(GameAction.SwapHands, "F");
+
         // I is what this project's player reaches for; E is what the genre trained everybody else
         // to press. Two keys per action exists precisely so that is not a choice anybody has to
         // make. Escape opens the options and gives the mouse back, which is one gesture everywhere.

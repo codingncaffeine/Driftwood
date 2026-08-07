@@ -1050,6 +1050,13 @@ public static class WorldAudit
         // registered items are two statements of the same twenty numbers and nothing else in the
         // game would notice them disagreeing — a helmet worth the chestplate's points looks exactly
         // like working armour from every screen there is.
+        var swapFaults = Equipment.Validate(items);
+        Check("the two hands trade what is in them", swapFaults.Count == 0,
+            swapFaults.Count == 0
+                ? "both hands full, either one empty, neither, and the same item on both sides — "
+                  + "which is the one that merges instead of swapping"
+                : $"{swapFaults.Count} faults: {swapFaults[0]}");
+
         var armourFaults = Armour.Validate(items);
         Check("armour turns aside what the table says", armourFaults.Count == 0,
             armourFaults.Count == 0

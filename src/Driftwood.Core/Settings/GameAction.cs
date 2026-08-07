@@ -33,6 +33,19 @@ public enum GameAction
     /// </remarks>
     RaiseShield,
 
+    /// <summary>
+    /// Trades what is in the two hands.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>One key rather than a drag across two screens.</b> The pair a player actually swaps —
+    /// a torch and a pickaxe, a sword and a shield — is swapped constantly and in the middle of
+    /// doing something else. Opening the inventory to move two stacks is the whole reason the
+    /// offhand goes unused in games that make you do it.
+    /// ⚠ It swaps whatever is there, including nothing: putting a torch INTO the empty offhand and
+    /// taking it back out are the same gesture, which is what makes the key learnable.
+    /// </remarks>
+    SwapHands,
+
     /// <summary>Opens what this character is carrying and can make. Closes it again.</summary>
     OpenInventory,
 
@@ -74,7 +87,10 @@ public static class GameActions
     public static string GroupOf(GameAction action) => action switch
     {
         <= GameAction.Sprint => "moving",
-        GameAction.RaiseShield => "fighting",
+        // ⚠ Named, not a range. The rows either side of these two are ordered by what they do and
+        // these are not adjacent to the rest of "fighting" — a `<=` here would file swapping hands
+        // under screens, which is where it silently landed the first time.
+        GameAction.RaiseShield or GameAction.SwapHands => "fighting",
         <= GameAction.OpenOptions => "screens",
         <= GameAction.WindClock => "looking at things",
         _ => "the bar",
@@ -91,6 +107,7 @@ public static class GameActions
         GameAction.Sneak => "sneak",
         GameAction.Sprint => "sprint",
         GameAction.RaiseShield => "raise shield",
+        GameAction.SwapHands => "swap hands",
         GameAction.OpenInventory => "inventory",
         GameAction.OpenOptions => "options",
         GameAction.ToggleView => "change view",
