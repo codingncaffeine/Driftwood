@@ -101,6 +101,26 @@ public sealed class BlockType
     public int LightAttenuation { get; init; }
 
     /// <summary>
+    /// Drawn in the see-through pass rather than the opaque one, so what is behind it shows through.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛔ <b>Not the same question as <see cref="Opaque"/>, and this is the third time this set
+    /// of flags has had to be split rather than derived.</b> <c>Opaque</c> is about light and face
+    /// culling: a pane of plain glass is <c>Opaque = false</c> and is still drawn in the FIRST pass,
+    /// alpha-tested, because its tile is either ink or a hole. Blending with what is behind it is a
+    /// different property and needs its own field.</para>
+    /// <para>⛔ <b>The mesher used to ask <c>Fluid == FluidKind.Water</c>.</b> That was exactly right
+    /// while water was the only thing that blended — and it is the same shape of mistake as deriving
+    /// drowning from three unrelated flags: a rule that happens to pick out the right block until a
+    /// second one wants the same treatment. Stained glass is that second one.</para>
+    /// <para>⚠ <b>The alpha belongs to the PASS, not to this block.</b> The shader takes one uniform
+    /// for the whole see-through draw, so anything flagged here blends exactly as strongly as water
+    /// does. That suits glass and would not suit something meant to be faintly tinted; the day one is
+    /// wanted, the alpha has to move into the vertex.</para>
+    /// </remarks>
+    public bool Translucent { get; init; }
+
+    /// <summary>
     /// Light this block gives off, packed by <see cref="Lighting.LightValue"/>. Zero for almost
     /// everything.
     /// </summary>

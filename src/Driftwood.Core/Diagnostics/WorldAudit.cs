@@ -365,7 +365,7 @@ public static class WorldAudit
             fireFaults.Count == 0 ? fireDetail : string.Join("; ", fireFaults));
 
         var passFaults = TranslucentPassFaults(registry, ids, out var passDetail);
-        Check("water is meshed into a pass of its own", passFaults.Count == 0,
+        Check("what you see through is meshed into a pass of its own", passFaults.Count == 0,
             passFaults.Count == 0 ? passDetail : string.Join("; ", passFaults));
 
         var shoreFaults = ShoreFaults(seed, registry, ids, oceanCoverage, out var shoreDetail);
@@ -5787,7 +5787,9 @@ public static class WorldAudit
         // pin above, and the second time the moving claim has caught an append.
         (StarterBlocks.LayerBonemeal, "bonemeal"),
         (StarterBlocks.LayerFirstCropItem, StarterBlocks.Crops[0].Name),
-        ((ushort)(StarterBlocks.LayerCount - 1), "baked_potato"),
+        (StarterBlocks.LayerBakedPotato, "baked_potato"),
+        (StarterBlocks.LayerFirstStainedGlass, "stained_glass_white"),
+        ((ushort)(StarterBlocks.LayerCount - 1), "stained_glass_black"),
     ];
 
     /// <summary>
@@ -7313,8 +7315,32 @@ public static class WorldAudit
         if (hot.OpaqueIndexCount != hot.IndexCount)
             faults.Add("the lava chunk's two halves do not add up");
 
+        // ⛔ AND THE SECOND THING THAT BLENDS, which is the whole reason the membership rule stopped
+        // being `Fluid == Water`. Without this the flag is a claim: stained glass would register,
+        // draw, craft and be reachable while being meshed into the opaque pass, and every check above
+        // would stay green because none of them has ever asked about anything but water.
+        // ⚠ Asked of a block that is NOT a fluid, on purpose — a test that used a fluid could not
+        // tell the new rule from the old one.
+        var pane = MeshOne(registry.ByName("stained_glass_red").Id);
+
+        if (pane is null)
+        {
+            faults.Add("the stained glass test chunk meshed to nothing");
+        }
+        else
+        {
+            if (!pane.HasTranslucent)
+                faults.Add("stained glass is not a fluid and was meshed into the opaque pass, so "
+                         + "nothing shows through it");
+
+            if (pane.OpaqueIndexCount == 0)
+                faults.Add("the stained glass chunk put ALL of its geometry in the see-through pass");
+        }
+
         detail = $"stone {dry.OpaqueIndexCount}/0 indices, a pool {wet.OpaqueIndexCount}/"
-               + $"{wet.IndexCount - wet.OpaqueIndexCount}, lava {hot.OpaqueIndexCount}/0";
+               + $"{wet.IndexCount - wet.OpaqueIndexCount}, lava {hot.OpaqueIndexCount}/0, "
+               + $"stained glass {pane?.OpaqueIndexCount ?? 0}/"
+               + $"{(pane?.IndexCount ?? 0) - (pane?.OpaqueIndexCount ?? 0)}";
 
         return faults;
 

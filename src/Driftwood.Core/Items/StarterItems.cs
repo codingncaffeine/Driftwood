@@ -157,6 +157,13 @@ public static class StarterItems
             Block(items, blocks, $"carpet_{dye.Name}", $"{shown} carpet", (ushort)(StarterBlocks.LayerFirstWool + i));
 
             Loose(items, $"dye_{dye.Name}", $"{shown} dye", (ushort)(StarterBlocks.LayerFirstDye + i));
+
+            // ⛳ And the same colour in glass. The PANE needs no line here — a family that joins up
+            // with its neighbours gets its item from the ConnectedNames loop below, which is why
+            // sixteen pane families cost nothing at all in this file.
+            Block(
+                items, blocks, $"stained_glass_{dye.Name}", $"{shown} glass",
+                (ushort)(StarterBlocks.LayerFirstStainedGlass + i));
         }
         Block(items, blocks, "bench", "bench", StarterBlocks.LayerBenchTop, Timber);
         Block(items, blocks, "stonecutter", "stonecutter", StarterBlocks.LayerStonecutterTop);

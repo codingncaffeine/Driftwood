@@ -133,13 +133,19 @@ public sealed class ChunkMesher
         for (var id = 0; id < registry.Count; id++)
             _tintSource[id] = registry[(ushort)id].Tint;
 
-        // Every layer any water block draws, off the registry. Lava is deliberately not here: it is
-        // opaque and emissive and belongs in the first pass, which is what let it ship before this.
+        // Every layer anything see-through draws, off the registry. Lava is deliberately not here: it
+        // is opaque and emissive and belongs in the first pass, which is what let it ship before this.
+        //
+        // ⛔ THIS ASKED `Fluid == FluidKind.Water`, AND THAT WAS A DERIVED RULE. It picked out exactly
+        // the right blocks for as long as water was the only thing in the game that blended — the
+        // same shape as the drowning test that read water off three flags lava also satisfied.
+        // Stained glass is the second thing that wants this pass and is not a fluid at all, so the
+        // question is asked outright now. See BlockType.Translucent.
         _lateLayer = new bool[ushort.MaxValue];
         for (var id = 1; id < registry.Count; id++)
         {
             var type = registry[(ushort)id];
-            if (type.Fluid != FluidKind.Water) continue;
+            if (type.Fluid != FluidKind.Water && !type.Translucent) continue;
 
             foreach (var quad in type.Model.Quads) _lateLayer[quad.Layer] = true;
         }

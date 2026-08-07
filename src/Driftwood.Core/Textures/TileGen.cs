@@ -1748,6 +1748,43 @@ public static class TileGen
     /// Almost entirely transparent, which is the point — a glass tile that is a translucent wash
     /// reads as dirty ice, and cannot be drawn in the cut-out pass the rest of our alpha uses.
     /// </remarks>
+    /// <summary>
+    /// A pane of coloured glass: the colour fills it, with a darker frame and a highlight.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>Filled, where <see cref="Glass"/> is empty, and that is the whole difference between
+    /// them.</b> A clear window IS its hole — the frame and the sky-streak are all there is to draw.
+    /// A coloured one has to have glass in the middle or it is not coloured at all, so the middle is
+    /// the point and the frame is trim round it.
+    /// <para>⚠ <b>Every square is opaque in the tile.</b> The shader alpha-tests at 0.5 and discards
+    /// below it, so a pane drawn half-transparent would come out as a pane with holes in it. What
+    /// makes this see-through is the PASS it is drawn in — see <c>BlockType.Translucent</c>.</para>
+    /// <para>⚠ Lifted well off the dye's own colour: sixteen wools at their true value are legible
+    /// because you see them lit from in front, and a window is seen with daylight coming THROUGH it.
+    /// The dark ones especially — a black pane at its wool value is a hole in the wall.</para>
+    /// </remarks>
+    public static byte[] StainedGlass(int seed, byte r, byte g, byte b)
+    {
+        var t = new byte[BytesPerTile];
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var edge = x == 0 || y == 0 || x == Size - 1 || y == Size - 1;
+            var streak = y >= 2 && y <= 6 && x - y >= 1 && x - y <= 3;
+
+            var d = (int)((Noise(x, y, seed) * 2f - 1f) * 9f);
+
+            // Three tones off one colour: a frame that reads as leading, the glass itself, and the
+            // streak where a pane catches the sky.
+            var lift = edge ? -34 : streak ? 54 : 30;
+
+            Put(t, x, y, Clamp(r + d + lift), Clamp(g + d + lift), Clamp(b + d + lift), 255);
+        }
+
+        return t;
+    }
+
     public static byte[] Glass(int seed)
     {
         var t = new byte[BytesPerTile];

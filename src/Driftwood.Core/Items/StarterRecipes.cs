@@ -375,6 +375,19 @@ public static class StarterRecipes
             Shaped(
                 $"{dye.Name.Replace('_', ' ')} carpet", $"carpet_{dye.Name}", 3, ["MM"],
                 $"wool_{dye.Name}", mirrored: false, station: CraftStation.Bench);
+
+            // ⛳ And the same colour in glass, which is the second axis the dye tree pays for and the
+            // cheapest thirty-two blocks in the game — sand is everywhere and the dyes already exist.
+            // ⚠ ONE pane per pane, not the reference's eight-for-eight. Ours follows the WOOL rule
+            // above rather than the reference's: a colour costs a dye, every time, so choosing wrong
+            // costs one dye instead of eight. That is the same argument as re-dyeing off #wool.
+            LooseAt(
+                $"{dye.Name.Replace('_', ' ')} glass", $"stained_glass_{dye.Name}", 1,
+                CraftStation.Bench, "glass", $"dye_{dye.Name}");
+
+            Shaped(
+                $"{dye.Name.Replace('_', ' ')} glass pane", $"stained_glass_pane_{dye.Name}", 16,
+                ["MMM", "MMM"], $"stained_glass_{dye.Name}", station: CraftStation.Bench);
         }
 
         // ⛳ Four threads woven back into a fleece — the other way a player gets wool, and the reason

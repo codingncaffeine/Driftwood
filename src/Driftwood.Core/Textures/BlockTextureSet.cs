@@ -401,7 +401,45 @@ public static class BlockTextureSet
         .. CropRows(),
 
         new("baked_potato", "textures/item/baked_potato.png", true),
+
+        // ⛳ Sixteen panes of coloured glass, serving both the block and the pane family.
+        .. StainedGlassRows(),
     ];
+
+    /// <summary>
+    /// One row per colour of stained glass, on the pack's own name for it.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ Measured across the shelf 2026-08-07: Dokucraft ships all 48 files (block, pane and pane
+    /// top for each of sixteen), Vintage 16 and Silent Hill 21 — and every one of them uses
+    /// <c>{colour}_stained_glass.png</c>, so the modern path is the one that matches everywhere.
+    /// ⚠ The alternate is the pre-flattening <c>glass_{colour}.png</c> and is best effort, exactly
+    /// like the dye rows: a name that is not in a pack simply keeps our own tile.
+    /// ⛔ <b>NOT cutout, where plain glass is — and the audit is what said so.</b> Cutout means "this
+    /// tile has holes in it, alpha-test them away", which is true of a clear pane (it IS a hole) and
+    /// false of a coloured one (it is filled, or it would not be coloured). Marked cutout it fails
+    /// "is marked cutout but has no holes" sixteen times over, and it would also have taken the
+    /// weighted-halving mip path meant for foliage. What makes these see-through is the PASS they are
+    /// drawn in — see <c>BlockType.Translucent</c> — and that is a different question from this flag.
+    /// </remarks>
+    private static BlockTextureLayer[] StainedGlassRows()
+    {
+        var rows = new BlockTextureLayer[StarterBlocks.Colours.Length];
+
+        for (var i = 0; i < rows.Length; i++)
+        {
+            var dye = StarterBlocks.Colours[i];
+            var old = dye.Pack == "light_gray" ? "silver" : dye.Pack;
+
+            rows[i] = new BlockTextureLayer(
+                $"stained_glass_{dye.Name}",
+                $"textures/block/{dye.Pack}_stained_glass.png",
+                false,
+                $"textures/block/glass_{old}.png");
+        }
+
+        return rows;
+    }
 
     /// <summary>
     /// Four stages of tops and one icon for each root crop, straight onto the pack's own names.
@@ -1254,8 +1292,9 @@ public static class BlockTextureSet
             StarterBlocks.LayerBakedPotato =>
                 TileGen.IconRoot(1190, 166, 122, 62, 132, 96, 48, tapered: false),
 
-            _ => Wheat(layer) ?? Crop(layer) ?? CropIcon(layer) ?? MetalBlock(layer) ?? Wool(layer)
-                 ?? Meat(layer) ?? Dye(layer) ?? Armour(layer) ?? Shield(layer) ?? Tool(layer),
+            _ => Wheat(layer) ?? Crop(layer) ?? CropIcon(layer) ?? StainedGlass(layer)
+                 ?? MetalBlock(layer) ?? Wool(layer) ?? Meat(layer) ?? Dye(layer)
+                 ?? Armour(layer) ?? Shield(layer) ?? Tool(layer),
         };
     }
 
@@ -1266,6 +1305,22 @@ public static class BlockTextureSet
     /// standing at the edge of a field has to be able to see which rows are ready without walking
     /// them. Drawn as blades from the ground up so the silhouette grows rather than the tile filling.
     /// </remarks>
+    /// <summary>One colour of stained glass, or null when this layer is not one.</summary>
+    /// <remarks>
+    /// ⛔ <b>The pane is FILLED, unlike plain glass, and that is the whole difference.</b>
+    /// <c>TileGen.Glass</c> paints a frame and a streak and leaves the middle empty, because a clear
+    /// window IS its hole. A coloured one has to have something in the middle to be coloured at all —
+    /// the glass is the point rather than the frame round it.
+    /// </remarks>
+    private static byte[]? StainedGlass(int layer)
+    {
+        var index = layer - StarterBlocks.LayerFirstStainedGlass;
+        if (index < 0 || index >= StarterBlocks.Colours.Length) return null;
+
+        var dye = StarterBlocks.Colours[index];
+        return TileGen.StainedGlass(1200 + index, dye.R, dye.G, dye.B);
+    }
+
     /// <summary>One stage of a root crop's tops, or null when this layer is not one.</summary>
     /// <remarks>
     /// ⛳ <b>The tops go green and the ROOT shows at the end.</b> Every stage is the same leaf colour

@@ -511,7 +511,20 @@ public static class StarterBlocks
     /// </remarks>
     public const ushort LayerBakedPotato = LayerFirstCropItem + CropCount;
 
-    public const int LayerCount = LayerBakedPotato + 1;
+    /// <summary>
+    /// Sixteen panes of coloured glass, in <see cref="Colours"/> order.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>One layer per colour serves both the block and the pane</b>, exactly as plain glass
+    /// already does — <c>glass_pane</c> in <see cref="ConnectedMaterials"/> draws <c>LayerGlass</c>.
+    /// The packs do ship a separate <c>_pane_top</c> for the pane's rim (measured: Dokucraft has all
+    /// 48 files, Silent Hill 21, Vintage 16), and taking it would be a second run of sixteen layers
+    /// to draw one edge nobody looks at straight on.
+    /// ⚠ Appended, because this array's order IS the numbering.
+    /// </remarks>
+    public const ushort LayerFirstStainedGlass = LayerBakedPotato + 1;
+
+    public const int LayerCount = LayerFirstStainedGlass + 16;
 
     /// <summary>One anvil's name, by how worn it is and which way it lies.</summary>
     /// <remarks>
@@ -1142,6 +1155,25 @@ public static class StarterBlocks
                 Solid = false, Opaque = false, Sounds = SoundMaterial.Cloth,
                 SupportFace = Faces.NegY,
                 Model = BlockModel.Layer(layer, layer, layer, 1f),
+            });
+        }
+
+        // ⛳ THE SAME SIXTEEN, IN GLASS — and the first thing in the game that is genuinely SEEN
+        // THROUGH rather than merely seen past. Plain glass is a hole with a frame round it and is
+        // drawn alpha-tested in the first pass; a coloured pane has to blend, which is what
+        // Translucent is and why it took a field rather than a tile.
+        // ⚠ Not opaque and no attenuation, exactly like plain glass: a coloured window that darkened
+        // the room would make sixteen of these a worse choice than one of those, and the colour a
+        // player wants is on the WALL rather than on the floor under it.
+        for (var i = 0; i < Colours.Length; i++)
+        {
+            var layer = (ushort)(LayerFirstStainedGlass + i);
+
+            registry.Register(new BlockType
+            {
+                Name = $"stained_glass_{Colours[i].Name}", Hardness = 0.3f, Crafted = true,
+                Opaque = false, Translucent = true, Sounds = SoundMaterial.Glass,
+                Model = BlockModel.Cube(layer, layer, layer),
             });
         }
 
@@ -1864,7 +1896,8 @@ public static class StarterBlocks
     /// </param>
     public readonly record struct ConnectedMaterial(
         string Name, ushort Layer, SoundMaterial Sound, ToolClass Harvest, int Tier,
-        float PostHalf, float ArmHalf, (float Low, float High)[] Bars, float CollideHigh);
+        float PostHalf, float ArmHalf, (float Low, float High)[] Bars, float CollideHigh,
+        bool Translucent = false);
 
     /// <summary>
     /// A fence and a wall stop a body half a block higher than they are drawn.
@@ -1895,7 +1928,26 @@ public static class StarterBlocks
             1f, 1f, [(0f, 16f)], 0f),
         new("smokeglass_pane", LayerSmokeglass, SoundMaterial.Glass, ToolClass.None, 0,
             1f, 1f, [(0f, 16f)], 0f),
+
+        // ⛳ Sixteen more panes, appended off the colour table rather than written out — which is the
+        // whole argument for this table being a table. Same geometry as a plain pane in every number;
+        // the only column that differs is the one that says it blends.
+        .. StainedPanes(),
     ];
+
+    /// <summary>A pane of each of the sixteen colours, identical to a plain one but for its tile.</summary>
+    private static ConnectedMaterial[] StainedPanes()
+    {
+        var panes = new ConnectedMaterial[Colours.Length];
+
+        for (var i = 0; i < panes.Length; i++)
+            panes[i] = new ConnectedMaterial(
+                $"stained_glass_pane_{Colours[i].Name}", (ushort)(LayerFirstStainedGlass + i),
+                SoundMaterial.Glass, ToolClass.None, 0,
+                1f, 1f, [(0f, 16f)], 0f, Translucent: true);
+
+        return panes;
+    }
 
     /// <summary>The names of the things that join up with their neighbours.</summary>
     public static IEnumerable<string> ConnectedNames
@@ -1920,6 +1972,7 @@ public static class StarterBlocks
             {
                 Name = $"{m.Name}_{mask}",
                 Hardness = 2f, Opaque = false, Crafted = true, Sounds = m.Sound,
+                Translucent = m.Translucent,
                 HarvestClass = m.Harvest, HarvestTier = m.Tier,
                 Model = BlockModel.Connected(
                     m.Layer, m.Layer, m.Layer, m.PostHalf, m.ArmHalf, m.Bars, mask,
