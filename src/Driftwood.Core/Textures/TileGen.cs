@@ -1316,7 +1316,16 @@ public static class TileGen
         return t;
     }
 
-    /// <summary>The bubble the breath meter is counted in, likewise white.</summary>
+    /// <summary>The bubble the breath meter is counted in — the user's own, or ours.</summary>
+    /// <remarks>
+    /// ⛳ Taken off the sheet whole, with no middle flooded into it: a bubble is a ring of light and
+    /// filling one would give a pearl. That is the difference between this and the heart, whose art
+    /// arrived as the same kind of outline and had to have an inside derived for the red to go in.
+    /// </remarks>
+    public static byte[] BubbleTile() =>
+        PaintedArt.SheetTile(PaintedArt.Breath, Size, keepThinLines: true) ?? Bubble();
+
+    /// <summary>The generated bubble, kept as the fallback when no painted one is carried.</summary>
     public static byte[] Bubble()
     {
         var t = new byte[BytesPerTile];

@@ -40,6 +40,11 @@
          flooded because only the socket was. Measured: 30,123 distinct colours against 1,497. -->
     <EmbeddedResource Include="..\..\assets\foodbar.png" LogicalName="Driftwood.Core.foodbar.png" />
     <EmbeddedResource Include="..\..\assets\emptyfood.png" LogicalName="Driftwood.Core.emptyfood.png" />
+
+    <!-- ⛳ Air, and it is the one of the four that is SUPPOSED to be hollow: a bubble is a rim of
+         light with nothing in it, so unlike the heart there is nothing to flood. Measured: 1207x124,
+         seven cells, a white mask at 18% coverage. -->
+    <EmbeddedResource Include="..\..\assets\bubbles.png" LogicalName="Driftwood.Core.bubbles.png" />
   </ItemGroup>
 
 </Project>

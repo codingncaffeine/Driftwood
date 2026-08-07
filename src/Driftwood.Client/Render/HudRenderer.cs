@@ -439,7 +439,7 @@ public sealed class HudRenderer : IDisposable
         _gl = gl;
         _shader = new Shader(gl, VertexSource, FragmentSource);
 
-        var icons = new List<byte[]> { TileGen.Heart(), TileGen.Bubble() };
+        var icons = new List<byte[]> { TileGen.Heart(), TileGen.BubbleTile() };
         icons.AddRange(TileGen.Digits());
         icons.Add(TileGen.Cursor());
         icons.AddRange(TileGen.EquipGhosts());
@@ -586,7 +586,7 @@ public sealed class HudRenderer : IDisposable
             Hearts(vitals, screen.Drift, w, h);
             Food(vitals, screen.Drift, w, h);
             ArmourBar(vitals, w, h);
-            Bubbles(vitals, w, h);
+            Bubbles(vitals, screen.Drift, w, h);
         }
 
         Toasts(toasts, w);
@@ -2467,22 +2467,33 @@ public sealed class HudRenderer : IDisposable
     /// ⚠ <b>Right-aligned, and it empties toward the middle</b> like the food under it, so the pair
     /// drain the same way rather than in opposite directions.
     /// </remarks>
-    private void Bubbles(PlayerVitals vitals, float w, float h)
+    private void Bubbles(PlayerVitals vitals, float drift, float w, float h)
     {
         if (!vitals.Submerged && vitals.Breath >= PlayerVitals.MaxBreath) return;
 
         const float Icon = BarIcon;
-        const int Count = 10;
+        var count = VitalBars.Icons(VitalBar.Breath);
 
         var right = BarsRight(w);
-        var top = h - 53f;
+        var top = h - VitalBars.FromBottom(VitalBar.Breath);
         var colour = new Vector4(0.72f, 0.88f, 1f, 0.95f);
 
-        var remaining = vitals.Breath * Count / (float)PlayerVitals.MaxBreath;
-        for (var i = 0; i < Count; i++)
+        // ⛳⛳ WHOLE BUBBLES, and this is the one bar that does NOT tear — the user's own call and the
+        // right one. Half a heart is a heart with a bite out of it and half a drumstick is one half
+        // eaten, but half a bubble is not a thing: a bubble pops. So air says how much is left purely
+        // by how many are still there, which is also why it needs no socket under it — a burst bubble
+        // leaves nothing behind, where an eaten drumstick leaves the bone.
+        var remaining = vitals.Breath * count / (float)PlayerVitals.MaxBreath;
+        var left = (int)MathF.Ceiling(remaining);
+
+        for (var i = 0; i < count; i++)
         {
             if (remaining <= i) continue;
-            Rect(_iconQuads, right - (i + 1) * Icon, top, Icon - 1f, Icon - 1f, colour, IconBubble);
+
+            // The last few shiver, exactly as the other three do. Running out of air is the most
+            // urgent thing that happens to a player, so if any row earns the shake it is this one.
+            var y = top + Tremble(drift, i, left);
+            Rect(_iconQuads, right - (i + 1) * Icon, y, Icon - 1f, Icon - 1f, colour, IconBubble);
         }
     }
 

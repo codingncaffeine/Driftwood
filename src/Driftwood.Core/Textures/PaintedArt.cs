@@ -35,6 +35,17 @@ public static class PaintedArt
     /// <summary>And the same drumstick as a hollow outline: the socket under it.</summary>
     public const string FoodSocket = "Driftwood.Core.emptyfood.png";
 
+    /// <summary>
+    /// A bubble of air, drawn as a hollow ring with a highlight in it.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>Hollow is right here, where it was wrong for the heart.</b> A heart is a solid thing and
+    /// its outline is the edge of it, so the middle had to be flooded in. A bubble IS a rim of light
+    /// with nothing inside — filling one would draw a pale disc, which is a pearl. So this takes the
+    /// plain sheet path and no derivation at all.
+    /// </remarks>
+    public const string Breath = "Driftwood.Core.bubbles.png";
+
     private static readonly Dictionary<string, Image?> Loaded = [];
     private static readonly Dictionary<(string, int), byte[]> Tiles = [];
     private static readonly Dictionary<int, byte[]?> Hearts = [];
@@ -219,9 +230,61 @@ public static class PaintedArt
                          + $"{fullInk}, so they are the same picture");
         }
 
+        // ── And the bubble, which is the one that is MEANT to stay hollow ───────────────────────
+        //
+        // ⛔ The opposite claim from the heart's, and that is why it is asked. Both arrived as white
+        // outlines; the heart had to have a middle flooded into it so the red has somewhere to go,
+        // and a bubble must NOT — a filled one is a pearl. Nothing about the two paths makes that
+        // difference visible except saying it out loud here.
+        var bubbleInk = 0;
+        var bubbleHollow = 0;
+
+        if (!Has(Breath))
+        {
+            faults.Add("this build carries no bubbles.png, so breath is drawing the generated one");
+        }
+        else if (SheetTile(Breath, size, keepThinLines: true) is not { } bubble)
+        {
+            faults.Add("bubbles.png is carried but no tile could be taken from it");
+        }
+        else
+        {
+            // Walked across the middle row: rim, then a clear span, then rim. A disc has no gap.
+            var row = size / 2;
+            var seenInk = false;
+
+            for (var x = 0; x < size; x++)
+            {
+                var at = (row * size + x) * 4;
+                if (bubble[at + 3] >= 128) { bubbleInk++; seenInk = true; }
+                else if (seenInk) bubbleHollow++;
+            }
+
+            if (bubbleInk == 0) faults.Add("the bubble has no ink across its middle");
+
+            // ⛳ The fault carries the TILE, not just the claim. "It came out solid" is a sentence
+            // somebody then has to go and reproduce; the sixteen rows say whether the ring closed up,
+            // whether the shape is off centre, or whether this check is reading the wrong row.
+            if (bubbleHollow == 0)
+            {
+                var shape = new System.Text.StringBuilder();
+                for (var y = 0; y < size; y++)
+                {
+                    for (var x = 0; x < size; x++)
+                        shape.Append(bubble[(y * size + x) * 4 + 3] >= 128 ? '#' : '.');
+                    shape.Append(' ');
+                }
+
+                faults.Add("the bubble is solid across its middle, so it has been filled in and "
+                         + $"reads as a pearl rather than as air: {shape}");
+            }
+        }
+
         detail = $"the user's own heart at {size}px: {line} texels of outline round {middle} of "
-               + $"fill, {clear} clear, line met first down the middle; and their drumstick in "
-               + $"{colours} colours over {fullInk} texels against a hollow socket of {socketInk}";
+               + $"fill, {clear} clear, line met first down the middle; their drumstick in "
+               + $"{colours} colours over {fullInk} texels against a hollow socket of {socketInk}; "
+               + $"and their bubble still hollow, {bubbleInk} of rim with {bubbleHollow} clear "
+               + "across the middle";
 
         return faults;
     }
@@ -237,7 +300,23 @@ public static class PaintedArt
     /// at a pitch of 179 to 181 pixels, which is what a hand-laid row looks like and what any fixed
     /// stride would clip.
     /// </remarks>
-    public static byte[]? SheetTile(string name, int size)
+    /// <param name="keepThinLines">
+    /// Take the strongest alpha over each destination texel rather than the average of it.
+    /// </param>
+    /// <remarks>
+    /// ⛔⛔ <b>A DRAWING MADE OF THIN LINES DISINTEGRATES UNDER AN AVERAGE, and the bubble is the
+    /// proof.</b> Its rim is about five pixels in a hundred-and-twenty-two-pixel cell — a bit over
+    /// half a texel once reduced to sixteen — so averaging alpha over each destination square left
+    /// most of the ring below the cutout threshold and it came out as <em>scattered dots</em>, not as
+    /// a circle. The heart survived the identical path only because its outline is twice as thick.
+    /// <para>⛳ Taking the strongest alpha instead is the standard answer for reducing line art: a
+    /// destination texel that any part of a line passes through keeps the line. It thickens slightly,
+    /// which at this size is exactly what is wanted — the alternative is a ring with holes in it.</para>
+    /// <para>⚠ Wrong for anything with a filled body: max-alpha over a drumstick would grow its
+    /// silhouette by a texel all round. So it is asked for per sheet rather than applied to all of
+    /// them, and only the bubble asks.</para>
+    /// </remarks>
+    public static byte[]? SheetTile(string name, int size, bool keepThinLines = false)
     {
         if (size <= 0) return null;
         if (Tiles.TryGetValue((name, size), out var cached)) return cached;
@@ -245,7 +324,7 @@ public static class PaintedArt
         if (Source(name) is not { } sheet) return null;
         if (FirstCell(sheet) is not { } cell) return null;
 
-        var tile = Fit(Crop(sheet, cell), size);
+        var tile = Fit(Crop(sheet, cell), size, keepThinLines);
         Tiles[(name, size)] = tile;
         return tile;
     }
@@ -397,7 +476,7 @@ public static class PaintedArt
     /// panel behind a button shows through round the drawing — which is what makes it a picture ON
     /// the button rather than a smaller button inside it.
     /// </remarks>
-    private static byte[] Fit(Image image, int size)
+    private static byte[] Fit(Image image, int size, bool keepThinLines = false)
     {
         var tile = new byte[size * size * 4];
 
@@ -439,7 +518,7 @@ public static class PaintedArt
             //
             // ⚠ Weighted by alpha, or the transparent margin round the drawing drags its edge
             // toward whatever colour the empty pixels happen to carry.
-            float r = 0f, g = 0f, b = 0f, a = 0f, weight = 0f;
+            float r = 0f, g = 0f, b = 0f, a = 0f, weight = 0f, strongest = 0f;
 
             for (var sy = sy0; sy <= sy1; sy++)
             for (var sx = sx0; sx <= sx1; sx++)
@@ -452,6 +531,7 @@ public static class PaintedArt
                 b += image.Pixels[from + 2] * alpha;
                 a += alpha;
                 weight++;
+                strongest = MathF.Max(strongest, alpha);
             }
 
             if (weight <= 0f || a <= 0f) continue;
@@ -460,7 +540,14 @@ public static class PaintedArt
             tile[to] = (byte)Math.Clamp((int)MathF.Round(r / a), 0, 255);
             tile[to + 1] = (byte)Math.Clamp((int)MathF.Round(g / a), 0, 255);
             tile[to + 2] = (byte)Math.Clamp((int)MathF.Round(b / a), 0, 255);
-            tile[to + 3] = (byte)Math.Clamp((int)MathF.Round(a / weight * 255f), 0, 255);
+
+            // ⛔ The COLOUR is still the average and only the alpha changes, because a line's colour
+            // is the same all along it and its coverage is the thing being destroyed. Taking the
+            // strongest colour too would pick whichever pixel happened to be most opaque, which on an
+            // anti-aliased edge is a coin toss between the line and the highlight beside it.
+            tile[to + 3] = keepThinLines
+                ? (byte)Math.Clamp((int)MathF.Round(strongest * 255f), 0, 255)
+                : (byte)Math.Clamp((int)MathF.Round(a / weight * 255f), 0, 255);
         }
 
         return tile;
