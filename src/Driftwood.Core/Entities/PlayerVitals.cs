@@ -210,6 +210,16 @@ public sealed class PlayerVitals
     /// </remarks>
     public bool ShieldRaised { get; set; }
 
+    /// <summary>
+    /// What the thing in the other hand turns aside, when it is up. Zero for anything but a shield.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ Handed in beside <see cref="ArmourPoints"/> and for the same reason: vitals knows about a
+    /// body and the blocks round it, and giving it an <see cref="Equipment"/> would make every check
+    /// that hurts a player build an inventory first.
+    /// </remarks>
+    public float ShieldShare { get; set; }
+
     /// <summary>Armour-protected damage thrown this frame, before the armour's share came off.</summary>
     private int _armoured;
 
@@ -233,7 +243,7 @@ public sealed class PlayerVitals
         {
             _armoured += halfHearts;
             if (ShieldRaised) _shielded += halfHearts;
-            halfHearts = Armour.Survive(halfHearts, ArmourPoints, ShieldRaised);
+            halfHearts = Armour.Survive(halfHearts, ArmourPoints, ShieldRaised ? ShieldShare : 0f);
         }
 
         Health = Math.Max(0, Health - halfHearts);

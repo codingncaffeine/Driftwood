@@ -126,6 +126,7 @@ public sealed class TerrainGenerator
     private readonly int _seedEmber;
     private readonly int _seedTree;
     private readonly int _seedForest;
+    private readonly int _seedDiamondOre;
     private readonly int _seedCopper;
     private readonly int _seedGold;
     private readonly int _seedDiamond;
@@ -178,7 +179,11 @@ public sealed class TerrainGenerator
         _seedForest = seed.Derive("decor.forest");
         _seedCopper = seed.Derive("ore.copper");
         _seedGold = seed.Derive("ore.gold");
+        // ⚠ The stormglass seam's stream is called "ore.diamond" and must stay called that: a derived
+        // seed is a hash of its own name, so renaming it reshuffles every stormglass vein in every
+        // world that already exists. The real diamond gets a stream of its own.
         _seedDiamond = seed.Derive("ore.diamond");
+        _seedDiamondOre = seed.Derive("ore.deepdiamond");
         _seedAzurite = seed.Derive("ore.azurite");
         _seedGranite = seed.Derive("rock.granite");
         _seedAndesite = seed.Derive("rock.andesite");
@@ -491,8 +496,23 @@ public sealed class TerrainGenerator
         new(ids.GoldOre, "gold", WorldBottom, 32),
         new(ids.AzuriteOre, "azurite", WorldBottom, 30),
         new(ids.StormglassOre, "stormglass", WorldBottom, 16),
+
+        // ⛳ The only ore that lives WHERE THE LAVA IS. Its band starts below the hollows rather than
+        // at the deep floor, so it is not "stormglass but rarer" — it is somewhere else, and the way
+        // you meet it is by going down far enough that the rock is already glowing.
+        new(ids.DiamondOre, "diamond", WorldBottom, DiamondTop),
         new(ids.Emberstone, "emberstone", WorldBottom, 40),
     ];
+
+    /// <summary>
+    /// The highest a diamond ever forms. Well inside the Emberdeep, and nowhere near the hollows.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ Below <see cref="HollowsTop"/> by a long way on purpose: a player who has walked to the
+    /// bottom of the ordinary underground should still have a descent left. The lava core tops out
+    /// around y −84, so this is where the rock starts being lit from below.
+    /// </remarks>
+    public const int DiamondTop = -150;
 
     private ushort OreAt(int x, int y, int z, ushort rock)
     {
@@ -559,6 +579,20 @@ public sealed class TerrainGenerator
         // 0.282% — an ore that is meant to be the rarest thing in the game arriving at the same rate
         // as the metal two rungs above it. Every number below was walked back until the ladder had
         // margin rather than a rounding error.
+        //
+        // ⛳ DIAMOND FIRST, because the first match wins and it has to be the rarest thing there is.
+        // Its own gradient measured from ITS OWN band rather than from the deep floor: gated at
+        // DiamondTop, a seam near the ceiling of the Emberdeep would otherwise be as common as one
+        // on the molten floor, and the whole point of it is that you go all the way down.
+        if (y <= DiamondTop)
+        {
+            var emberness = Math.Clamp(
+                (DiamondTop - y) / (float)(DiamondTop - WorldBottom), 0f, 1f);
+
+            if (Noise.Fbm3(x / 5f, y / 5f, z / 5f, _seedDiamondOre, 2) > 0.60f - 0.035f * emberness)
+                return _ids.DiamondOre;
+        }
+
         if (Noise.Fbm3(x / 6f, y / 6f, z / 6f, _seedDiamond, 2) > 0.545f - 0.015f * deepness)
             return _ids.StormglassOre;
         if (Noise.Fbm3(x / 7f, y / 7f, z / 7f, _seedAzurite, 2) > 0.535f - 0.025f * deepness)

@@ -196,7 +196,9 @@ public static class BlockTextureSet
 
         // Ours are stormglass and azurite; the deep gem and the blue mineral are what a pack has
         // painted, whatever its own game calls them.
-        new("stormglass",  "textures/item/diamond.png",           true),
+        // ⚠ Off the pack's diamond and onto its amethyst, the day the game got a real diamond. The
+        // shard is the nearer picture anyway: stormglass is a cold cut gem and ours is teal.
+        new("stormglass",  "textures/item/amethyst_shard.png",    true),
         new("azurite",     "textures/item/lapis_lazuli.png",      true),
         new("clay_lump",   "textures/item/clay_ball.png",         true),
         new("brick",       "textures/item/brick.png",             true),
@@ -255,10 +257,19 @@ public static class BlockTextureSet
         new("iron_axe",    "textures/item/iron_axe.png",          true),
         new("iron_shovel", "textures/item/iron_shovel.png",       true),
         new("iron_sword",  "textures/item/iron_sword.png",        true),
-        new("stormglass_pickaxe", "textures/item/diamond_pickaxe.png", true),
-        new("stormglass_axe", "textures/item/diamond_axe.png",    true),
-        new("stormglass_shovel", "textures/item/diamond_shovel.png", true),
-        new("stormglass_sword", "textures/item/diamond_sword.png", true),
+        new("stormglass_pickaxe", "textures/item/netherite_pickaxe.png", true),
+        new("stormglass_axe", "textures/item/netherite_axe.png",  true),
+        new("stormglass_shovel", "textures/item/netherite_shovel.png", true),
+        new("stormglass_sword", "textures/item/netherite_sword.png", true),
+
+        // ⚠ Diamond takes the pack's diamond art and stormglass moved off it, for the same reason
+        // their armour did: a pack ships one picture per material and two of ours reading the same
+        // one is a row of tools nobody can tell apart. Stormglass wears netherite's, which is the
+        // only other top-tier set anybody paints.
+        new("diamond_pickaxe", "textures/item/diamond_pickaxe.png", true),
+        new("diamond_axe", "textures/item/diamond_axe.png",       true),
+        new("diamond_shovel", "textures/item/diamond_shovel.png", true),
+        new("diamond_sword", "textures/item/diamond_sword.png",   true),
 
         // ⛳ The fluids, last in the array because THIS ARRAY'S ORDER IS THE LAYER NUMBERING and a
         // face inserted beside water would move every constant after it — see
@@ -288,7 +299,11 @@ public static class BlockTextureSet
         // material is one row there and none here.
         .. ArmourRows(),
 
+        // ⛳ Three shields, faced in three metals. A pack ships exactly one shield picture, so the
+        // other two keep our own art — an empty path is the table saying so out loud.
         new("shield",      "textures/item/shield.png",            true),
+        new("stormglass_shield", "",                              true),
+        new("diamond_shield", "",                                 true),
 
         // The third smelter and the second container, appended for the same reason everything since
         // the fluids has been: this array's order IS the layer numbering.
@@ -298,6 +313,13 @@ public static class BlockTextureSet
         new("smoker_front_lit", "textures/block/smoker_front_on.png", false),
         new("barrel_top",  "textures/block/barrel_top.png",       false),
         new("barrel_side", "textures/block/barrel_side.png",      false),
+
+        // ⚠ Diamond's ore takes the pack's own diamond_ore only where a DEEPSLATE one exists —
+        // stormglass already claimed the plain file, and two of our layers reading one of a pack's
+        // is the fault PackAtlas.Validate exists to catch on the other layout. The deepslate variant
+        // is the right picture anyway: ours forms in the deep and nowhere else.
+        new("diamond_ore", "textures/block/deepslate_diamond_ore.png", false),
+        new("diamond",     "textures/item/diamond.png",           true),
     ];
 
     /// <summary>
@@ -888,9 +910,15 @@ public static class BlockTextureSet
             StarterBlocks.LayerFlame => TileGen.Flame(1102),
             StarterBlocks.LayerSmoke => TileGen.Smoke(1103),
 
-            // Timber with an iron boss and an iron rim: the two materials it is made of, both
-            // visible, which is what makes the recipe legible from the picture.
-            StarterBlocks.LayerShield => TileGen.IconShield(1104, 152, 118, 70, 190, 190, 198),
+            // ⛳ Diamond, in the deepstone it forms in rather than in plain stone: it is the one ore
+            // that never appears above the Emberdeep, so a seam of it drawn in grey rock would be a
+            // picture of somewhere it cannot be.
+            StarterBlocks.LayerDiamondOre => TileGen.Ore(
+                1111, TileGen.Speckle(1016, 58, 58, 66, 16, 0.6f),
+                Items.Armour.DiamondR, Items.Armour.DiamondG, Items.Armour.DiamondB, 5),
+
+            StarterBlocks.LayerDiamond => TileGen.IconGem(
+                1112, Items.Armour.DiamondR, Items.Armour.DiamondG, Items.Armour.DiamondB),
 
             // ⛳ THE SMOKER IS TIMBER, and that is the whole design of its art. The furnace is grey
             // cobble with an arch and the blast furnace dark brick with a letterbox; a third grey
@@ -909,8 +937,22 @@ public static class BlockTextureSet
             StarterBlocks.LayerBarrelTop => TileGen.Scored(1109, TileGen.Planks(1110, 128, 94, 54)),
             StarterBlocks.LayerBarrelSide => TileGen.Panel(TileGen.Planks(1110, 128, 94, 54), 2, 34),
 
-            _ => Wool(layer) ?? Meat(layer) ?? Dye(layer) ?? Armour(layer) ?? Tool(layer),
+            _ => Wool(layer) ?? Meat(layer) ?? Dye(layer) ?? Armour(layer) ?? Shield(layer) ?? Tool(layer),
         };
+    }
+
+    /// <summary>One shield, or null when this layer is not one.</summary>
+    /// <remarks>
+    /// ⚠ Timber in every case — the metal is only the boss and the rim, which is exactly what the
+    /// recipe says, so the picture is readable as its own recipe at sixteen pixels.
+    /// </remarks>
+    private static byte[]? Shield(int layer)
+    {
+        var index = layer - StarterBlocks.LayerFirstShield;
+        if (index < 0 || index >= StarterBlocks.ShieldCount) return null;
+
+        var shield = Items.Armour.Shields[index];
+        return TileGen.IconShield(1104 + index, 152, 118, 70, shield.R, shield.G, shield.B);
     }
 
     /// <summary>One piece of armour, or null when this layer is not one.</summary>
@@ -978,6 +1020,7 @@ public static class BlockTextureSet
         (232, 196, 82),     // gold
         (214, 214, 220),    // iron
         (118, 224, 220),    // stormglass
+        (Items.Armour.DiamondR, Items.Armour.DiamondG, Items.Armour.DiamondB),
     ];
 
     /// <summary>One tool icon, or the loud magenta that says a layer has no art behind it.</summary>

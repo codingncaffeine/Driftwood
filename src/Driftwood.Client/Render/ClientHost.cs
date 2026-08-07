@@ -4166,6 +4166,41 @@ public sealed class ClientHost : IDisposable
         PlaySound(SoundMaterial.Glass, SoundEvent.Place, _viewPosition, 0.35f);
     }
 
+    /// <summary>The last block a "you need a better pickaxe" notice was raised about.</summary>
+    private ushort _warnedAbout;
+
+    /// <summary>
+    /// Says what a block wants, when what is in hand is not it.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ <b>Asked for by the user, and it is the half the tier ladder was missing.</b> Before
+    /// this the gate was entirely silent: you swung at gold ore with a stone pickaxe and either got
+    /// nothing after seven seconds or, now, waited fifteen — with nothing anywhere saying why either
+    /// happened. A rule a player cannot see is a rule that reads as a bug.</para>
+    /// <para>⚠ <b>Once per KIND of block, not per swing.</b> A notice on every blow is a wall of the
+    /// same sentence for as long as somebody holds the button, and the message is worth exactly one
+    /// reading. Remembering the last block warned about also means walking from a gold seam to a
+    /// stormglass one says the new thing, which is when it is worth saying again.</para>
+    /// <para>⚠ The tool it names is <see cref="MiningRules.NeededFor"/>'s answer — the cheapest thing
+    /// that would bring it up — rather than the best, because "go and make a stone pickaxe" is
+    /// actionable and "you need diamond" is not.</para>
+    /// </remarks>
+    private void WarnTooHard(BlockType block)
+    {
+        if (!_settings.RecipeNotices || _warnedAbout == block.Id.Value) return;
+        _warnedAbout = block.Id.Value;
+
+        if (MiningRules.NeededFor(block, _items) is not { } needs) return;
+
+        var refused = MiningRules.TooHard(block, _inventory.HeldType);
+
+        _toasts.Add(new Toast(
+            refused ? "too hard to break" : "will not come up",
+            needs.Label, needs.IconLayer, ToastSeconds));
+
+        while (_toasts.Count > MaxToasts) _toasts.RemoveAt(0);
+    }
+
     /// <summary>Tops the herd up, walks it on, lets it be heard, and buries whatever died.</summary>
     private void StepCreatures(float dt)
     {
@@ -4758,8 +4793,28 @@ public sealed class ClientHost : IDisposable
         // rather than every frame, so the spray keeps the arm's rhythm instead of being a hose.
         if (strikes > 0 && !placing && target is not null && _target is { } struck)
         {
-            _particles.Chip(target, struck.X, struck.Y, struck.Z, struck.Face);
-            PlaySound(target, SoundEvent.Hit, new Vector3(struck.X + 0.5f, struck.Y + 0.5f, struck.Z + 0.5f), 0.55f);
+            var middle = new Vector3(struck.X + 0.5f, struck.Y + 0.5f, struck.Z + 0.5f);
+
+            // ⛳ A SWING THAT BOUNCES OFF, and the tone is the whole message. Two rungs under is a
+            // refusal rather than a very long wait — no progress, no chips, and nothing spent — so
+            // the only thing left to say it with is the sound, and the user's own idea was to say it
+            // by dropping the pitch. ⛔ It must still make a NOISE: a swing that does nothing and is
+            // silent is indistinguishable from a game that has stopped taking input.
+            if (MiningRules.TooHard(target, _inventory.HeldType))
+            {
+                PlaySound(target, SoundEvent.Hit, middle, 0.65f, pitch: 0.55f);
+                WarnTooHard(target);
+            }
+            else
+            {
+                _particles.Chip(target, struck.X, struck.Y, struck.Z, struck.Face);
+                PlaySound(target, SoundEvent.Hit, middle, 0.55f);
+
+                // And the quieter half of the same lesson: it WILL come up, one rung under, and it
+                // is going to take a while. Said once so a player knows the wait is the rule rather
+                // than a stutter.
+                if (!MiningRules.CanHarvest(target, _inventory.HeldType)) WarnTooHard(target);
+            }
         }
 
         if (!_mining.Update(dt, target, cell, !blocking && _holdingBreak, _inventory.HeldType)) return;
@@ -4997,9 +5052,10 @@ public sealed class ClientHost : IDisposable
 
         // ⛔ Only while actually playing. A key held down under an open screen is a key somebody is
         // typing, and a shield raised by the fly camera would be armour on a thing with no body.
+        _vitals.ShieldShare = Armour.ShieldInHand(_equipment, _items);
         _vitals.ShieldRaised =
             _walking && _spawned && !_hudScreen.IsOpen && _bench is null
-            && Armour.ShieldInHand(_equipment, _items)
+            && _vitals.ShieldShare > 0f
             && _keys.Held(_input, GameAction.RaiseShield);
     }
 
@@ -5042,8 +5098,8 @@ public sealed class ClientHost : IDisposable
     }
 
     /// <summary>Plays one of a material's sounds for one situation, at a point in the world.</summary>
-    private void PlaySound(BlockType type, SoundEvent which, Vector3 at, float volume = 1f) =>
-        PlaySound(type.Sounds, which, at, volume);
+    private void PlaySound(BlockType type, SoundEvent which, Vector3 at, float volume = 1f, float pitch = 1f) =>
+        PlaySound(type.Sounds, which, at, volume, pitch);
 
     /// <summary>
     /// What one thing sounds like, for the things that are not blocks.
@@ -5061,7 +5117,14 @@ public sealed class ClientHost : IDisposable
         return block.IsAir ? SoundMaterial.Wood : _registry[block].Sounds;
     }
 
-    private void PlaySound(SoundMaterial material, SoundEvent which, Vector3 at, float volume = 1f)
+    /// <param name="pitch">
+    /// A multiplier over the small random wobble every sound gets. ⛳ One for everything except the
+    /// swing that bounces off a block too hard to break: the user's own idea was to say that with
+    /// TONE rather than with a new recording, and a hit dropped most of an octave reads as the rock
+    /// refusing the tool. A silent swing would read as the game having stopped.
+    /// </param>
+    private void PlaySound(
+        SoundMaterial material, SoundEvent which, Vector3 at, float volume = 1f, float pitch = 1f)
     {
         if (_audio is null) return;
 
@@ -5072,7 +5135,7 @@ public sealed class ClientHost : IDisposable
             names[_soundPick.Next(names.Count)],
             at,
             volume,
-            0.92f + (float)_soundPick.NextDouble() * 0.16f);
+            (0.92f + (float)_soundPick.NextDouble() * 0.16f) * pitch);
     }
 
     /// <summary>

@@ -142,6 +142,17 @@ public sealed class ItemType
     /// </remarks>
     public int ArmourPoints { get; init; }
 
+    /// <summary>
+    /// Share of an incoming blow this turns aside while it is raised in the other hand.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>A share rather than points, and that is what makes a shield worth carrying in a full
+    /// set.</b> Points are capped and the best armour already reaches the cap, so a shield expressed
+    /// in points would do exactly nothing for the player most likely to be holding one. A share of
+    /// whatever got past the plate always does something and never reaches none-gets-through.
+    /// </remarks>
+    public float ShieldShare { get; init; }
+
     /// <summary>Assigned by <see cref="ItemRegistry.Register"/>.</summary>
     public ItemId Id { get; internal set; }
 

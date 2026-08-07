@@ -47,6 +47,12 @@ public static class StarterItems
         new("gold", "gold_ingot", 2, 12f, 33, 3),
         new("iron", "iron_ingot", 4, 8f, 251, 4),
         new("stormglass", "stormglass", 5, 10f, 1562, 5),
+
+        // ⛳ The top, and it gates NOTHING — diamond ore itself wants a stormglass pickaxe, and
+        // there is no tier 6 block. That is what a top tool is once the ladder runs out: speed and
+        // durability. Half again as quick as stormglass and it lasts more than twice as long, which
+        // is what makes the trip to the lava worth making after you already have the gem.
+        new("diamond", "diamond", 6, 14f, 3400, 6),
     ];
 
     /// <summary>The four heads a tier comes in, in <see cref="Textures.TileGen.ToolShapes"/> order.</summary>
@@ -347,6 +353,7 @@ public static class StarterItems
         Loose(items, "iron_ingot", "iron ingot", StarterBlocks.LayerIronIngot);
         Loose(items, "gold_ingot", "gold ingot", StarterBlocks.LayerGoldIngot);
         Loose(items, "stormglass", "stormglass", StarterBlocks.LayerStormglass);
+        Loose(items, "diamond", "diamond", StarterBlocks.LayerDiamond);
         Loose(items, "azurite", "azurite", StarterBlocks.LayerAzurite);
         Loose(items, "clay_lump", "clay lump", StarterBlocks.LayerClayLump);
         Loose(items, "brick", "brick", StarterBlocks.LayerBrick);
@@ -445,20 +452,27 @@ public static class StarterItems
             });
         }
 
-        // ⛳ THE SHIELD, and it is what finally makes the other hand worth having. The offhand has
-        // been real storage since the player screen landed and took anything at all, which is a
-        // place to lose a stack rather than a slot — a shield is the one thing that is only useful
-        // there, so putting it in is a decision rather than a shrug.
+        // ⛳ THE SHIELDS, and they are what makes the other hand worth having. The offhand has been
+        // real storage since the player screen landed and took anything at all, which is a place to
+        // lose a stack rather than a slot — a shield is the one thing that is only useful there, so
+        // putting one in is a decision rather than a shrug.
         //
         // ⚠ `Wears` is Offhand rather than null. Nothing filters on it — the other hand accepts
-        // anything by design — but it is what the tooltip reads to say where a thing goes, and it is
-        // how Armour.ShieldInHand tells a shield from the torch somebody left in there.
-        items.Register(new ItemType
+        // anything by design — but it is what the tooltip reads to say where a thing goes, and a
+        // non-zero ShieldShare is how the game tells a shield from the torch somebody left in there.
+        for (var i = 0; i < Armour.Shields.Length; i++)
         {
-            Name = Armour.ShieldName, Label = "shield",
-            IconLayer = StarterBlocks.LayerShield,
-            MaxStack = 1, Wears = EquipSlot.Offhand, Durability = 340,
-        });
+            var shield = Armour.Shields[i];
+
+            items.Register(new ItemType
+            {
+                Name = shield.Name,
+                Label = shield.Name.Replace('_', ' '),
+                IconLayer = (ushort)(StarterBlocks.LayerFirstShield + i),
+                MaxStack = 1, Wears = EquipSlot.Offhand,
+                Durability = shield.Durability, ShieldShare = shield.Share,
+            });
+        }
     }
 
     /// <summary>Every meat, raw and cooked, off the one table.</summary>
@@ -594,6 +608,7 @@ public static class StarterItems
         new BlockDrops.Rule("iron_ore", "raw_iron"),
         new BlockDrops.Rule("gold_ore", "raw_gold"),
         new BlockDrops.Rule("stormglass_ore", "stormglass"),
+        new BlockDrops.Rule("diamond_ore", "diamond"),
         new BlockDrops.Rule("azurite_ore", "azurite", 4),
 
         new BlockDrops.Rule("driftoak_leaves", null),

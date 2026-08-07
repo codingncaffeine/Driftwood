@@ -22,19 +22,29 @@ public static class Armour
 {
     /// <summary>Points a whole set of the best material is worth, and the cap.</summary>
     /// <remarks>
-    /// ⚠ <b>The cap and stormglass's own total are the same number on purpose.</b> A ceiling above
-    /// what anything can reach is a ceiling nobody ever meets, and a ceiling below it makes the last
-    /// two pieces of the best set do nothing while still costing what they cost.
+    /// <para>⚠ <b>The cap and the best set's own total are the same number on purpose.</b> A ceiling
+    /// above what anything can reach is a ceiling nobody ever meets, and a ceiling below it makes
+    /// the last two pieces of the best set do nothing while still costing what they cost.</para>
+    /// <para>⛳ <b>Which means a new top material moves this, and that is the intended move.</b> The
+    /// user: <em>diamond will be the best equipment you can make until we start working on the
+    /// netherealm stuff.</em> When that lands it is the same two lines it was this time — raise the
+    /// cap, thin <see cref="PerPoint"/> to keep the 80% ceiling where it is — and the check below
+    /// insists the two agree, so forgetting one of them is a red gate rather than a quiet nerf to
+    /// everything already made.</para>
     /// </remarks>
-    public const int MaxPoints = 20;
+    public const int MaxPoints = 24;
 
     /// <summary>Share of a blow one point turns aside.</summary>
     /// <remarks>
-    /// Four percent a point, so a full set of the best stops four fifths and nothing stops all of
-    /// it. Armour that could reach nothing-gets-through would make the deep safe rather than
-    /// survivable, and the whole of the Emberdeep rests on it not being safe.
+    /// <para>A full set of the best stops four fifths and nothing stops all of it. Armour that could
+    /// reach nothing-gets-through would make the deep safe rather than survivable, and the whole of
+    /// the Emberdeep rests on it not being safe.</para>
+    /// <para>⚠ <b>This was 4% of 20 and is now a thirtieth of 24, which is the SAME 80% ceiling.</b>
+    /// Stormglass already reached the old cap exactly, so a better material had nowhere to go —
+    /// raising the cap and thinning each point makes room for diamond above it without moving the
+    /// wall: stormglass now sits at 66.7% under diamond's 80%.</para>
     /// </remarks>
-    public const float PerPoint = 0.04f;
+    public const float PerPoint = 1f / 30f;
 
     /// <summary>One material a set can be made of.</summary>
     /// <param name="Name">Ours, and the stem every item of it is named from.</param>
@@ -67,8 +77,26 @@ public static class Armour
         new("copper", "copper_ingot", "chainmail", 198, 124, 78, [2, 4, 3, 2], 200),
         new("gold", "gold_ingot", "gold", 232, 196, 82, [2, 6, 5, 3], 100),
         new("iron", "iron_ingot", "iron", 214, 214, 220, [2, 6, 5, 2], 280),
-        new("stormglass", "stormglass", "diamond", 118, 224, 220, [3, 8, 6, 3], 600),
+
+        // ⚠ Stormglass moved off the pack's "diamond" sheet the day the game got a real diamond.
+        // A pack ships six materials and each of ours should wear exactly one of them.
+        new("stormglass", "stormglass", "netherite", 118, 224, 220, [3, 8, 6, 3], 600),
+
+        // ⛳ The top, and the only set that reaches the cap. Baby blue at the user's own asking, and
+        // deliberately a long way off stormglass's teal: the two are the last two rungs and a player
+        // has to be able to tell a full set of one from a full set of the other across a room.
+        new("diamond", "diamond", "diamond", DiamondR, DiamondG, DiamondB, [4, 9, 7, 4], 900),
     ];
+
+    /// <summary>
+    /// Diamond's colour, in one place because five different things wear it.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ A pale sky blue rather than the white-cyan the genre uses, at the user's request. It has to
+    /// read as its own material beside stormglass's 118,224,220 teal, and beside azurite, which is
+    /// the other blue in the game — so it is lighter than both and much less saturated.
+    /// </remarks>
+    public const byte DiamondR = 150, DiamondG = 214, DiamondB = 245;
 
     /// <summary>One piece: what it is called, where it is worn, and how it is laid out.</summary>
     /// <param name="Rows">
@@ -126,30 +154,52 @@ public static class Armour
     /// likely to be holding one. A share of the remainder always does something and never reaches
     /// none-gets-through, because it is a share of a share.
     /// </remarks>
-    public const float ShieldShare = 0.5f;
+    /// <summary>One shield: what its board is faced with, and what that buys.</summary>
+    /// <param name="Made">The metal, which is the only thing that varies.</param>
+    /// <param name="Share">Share of whatever got past the plate that raising it turns aside.</param>
+    public readonly record struct Shield(
+        string Name, string Made, float Share, int Durability, byte R, byte G, byte B);
 
-    /// <summary>The one item that is carried in the other hand rather than worn.</summary>
+    /// <summary>
+    /// The three, weakest first. Timber in every case; the facing is the ladder.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ <b>Three, not six.</b> A leather shield is a coat and a gold one is a decoration; what
+    /// makes a board stop a blow is the metal across its face. The plain one keeps the bare name
+    /// <c>shield</c> — ⛔ <b>renaming it would strip the shield out of any save that had one</b>,
+    /// because a save stores items by name through its own palette.
+    /// </remarks>
+    public static readonly Shield[] Shields =
+    [
+        new("shield", "iron_ingot", 0.50f, 340, 190, 190, 198),
+        new("stormglass_shield", "stormglass", 0.58f, 760, 118, 224, 220),
+        new("diamond_shield", "diamond", 0.66f, 1300, DiamondR, DiamondG, DiamondB),
+    ];
+
+    /// <summary>The plainest one, and the name every other part of the game spells.</summary>
     public const string ShieldName = "shield";
 
-    /// <summary>True when what is in the other hand is a shield.</summary>
+    /// <summary>
+    /// What the thing in the other hand turns aside when it is raised. Zero when it is not a shield.
+    /// </summary>
     /// <remarks>
-    /// ⚠ Asked by name in exactly one place. The offhand takes anything — a torch, a stack of
-    /// blocks, dinner — so "is there something in it" is not the question; "is the thing in it a
-    /// shield" is, and it wants one spelling rather than one per caller.
+    /// ⚠ Asked in exactly one place. The offhand takes anything — a torch, a stack of blocks,
+    /// dinner — so "is there something in it" is not the question; "what does the thing in it stop"
+    /// is, and reading it off the item means a fourth shield is a row in the table above.
     /// </remarks>
-    public static bool ShieldInHand(Equipment worn, ItemRegistry items)
+    public static float ShieldInHand(Equipment worn, ItemRegistry items)
     {
         var stack = worn[EquipSlot.Offhand];
-        return !stack.IsEmpty && items[stack.Item].Name == ShieldName;
+        return stack.IsEmpty ? 0f : items[stack.Item].ShieldShare;
     }
 
     /// <summary>What is left of a blow after this much armour and, perhaps, a raised shield.</summary>
-    public static int Survive(int halfHearts, int points, bool shielded = false)
+    public static int Survive(int halfHearts, int points, float shielded = 0f)
     {
         if (halfHearts <= 0) return Math.Max(0, halfHearts);
 
         var through = halfHearts * (1f - Math.Min(MaxPoints, Math.Max(0, points)) * PerPoint);
-        if (shielded) through *= 1f - ShieldShare;
+        through *= 1f - Math.Clamp(shielded, 0f, 0.9f);
 
         // ⛔ Rounded UP, and never to nothing. A blow reduced to zero is a blow a player in a full
         // set can stand in lava and ignore for ever — the reduction is a fraction of the damage, so
@@ -198,7 +248,7 @@ public static class Armour
     /// </remarks>
     public static bool WearShield(Equipment worn, ItemRegistry items, int halfHearts)
     {
-        if (halfHearts <= 0 || !ShieldInHand(worn, items)) return false;
+        if (halfHearts <= 0 || ShieldInHand(worn, items) <= 0f) return false;
 
         var stack = worn[EquipSlot.Offhand];
         var type = items[stack.Item];
@@ -266,27 +316,45 @@ public static class Armour
             faults.Add($"a full set turns a blow of 10 into {capped}");
         if (Survive(1, MaxPoints) < 1) faults.Add("a full set makes the smallest blow free");
 
-        // ⛳ And the shield, which is a share of what got past the plate rather than more plate.
-        // Both halves are asserted: it has to do something to somebody wearing nothing, and it has
+        // ⛳ And the shields, which are a share of what got past the plate rather than more plate.
+        // Both halves are asserted: one has to do something to somebody wearing nothing, and it has
         // to STILL do something to somebody in a full set — which is exactly what expressing it in
-        // points would have failed, since the cap is already reached by the best set alone.
-        if (!items.TryByName(ShieldName, out var shield))
+        // points would have failed, since the cap is reached by the best set alone.
+        var bestShield = 0f;
+
+        foreach (var shield in Shields)
         {
-            faults.Add($"'{ShieldName}' is not a registered item");
-        }
-        else
-        {
-            if (shield.Wears != EquipSlot.Offhand)
-                faults.Add($"the shield is worn on {shield.Wears?.ToString() ?? "nothing"}, not the other hand");
-            if (shield.Durability <= 0) faults.Add("the shield never wears out");
-            if (shield.MaxStack != 1) faults.Add("shields stack, so wear would be shared between them");
+            if (!items.TryByName(shield.Name, out var type))
+            {
+                faults.Add($"'{shield.Name}' is in the shield table and is not a registered item");
+                continue;
+            }
+
+            if (type.Wears != EquipSlot.Offhand)
+                faults.Add($"'{shield.Name}' is worn on {type.Wears?.ToString() ?? "nothing"}, not the other hand");
+            if (type.Durability <= 0) faults.Add($"'{shield.Name}' never wears out");
+            if (type.MaxStack != 1) faults.Add($"'{shield.Name}' stacks, so wear would be shared");
+            if (Math.Abs(type.ShieldShare - shield.Share) > 0.001f)
+                faults.Add($"'{shield.Name}' stops {type.ShieldShare:P0} rather than the table's {shield.Share:P0}");
+
+            bestShield = MathF.Max(bestShield, shield.Share);
         }
 
-        if (Survive(10, 0, shielded: true) >= Survive(10, 0))
-            faults.Add("raising a shield with no armour on changes nothing");
+        if (Survive(10, 0, Shields[0].Share) >= Survive(10, 0))
+            faults.Add("raising the plainest shield with no armour on changes nothing");
 
-        if (Survive(10, MaxPoints, shielded: true) >= Survive(10, MaxPoints))
-            faults.Add("raising a shield in a full set changes nothing, so it is only for the poor");
+        if (Survive(10, MaxPoints, bestShield) >= Survive(10, MaxPoints))
+            faults.Add("raising the best shield in a full set changes nothing, so it is only for the poor");
+
+        // ⛔ And the ladder itself, which nothing else would notice: three shields that all stop the
+        // same share are two items nobody chooses between.
+        for (var i = 1; i < Shields.Length; i++)
+        {
+            if (Shields[i].Share <= Shields[i - 1].Share)
+                faults.Add($"'{Shields[i].Name}' stops no more than '{Shields[i - 1].Name}'");
+            if (Shields[i].Durability <= Shields[i - 1].Durability)
+                faults.Add($"'{Shields[i].Name}' lasts no longer than '{Shields[i - 1].Name}'");
+        }
 
         return faults;
     }

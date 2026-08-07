@@ -1049,10 +1049,11 @@ public static class WorldAudit
         var armourFaults = Armour.Validate(items);
         Check("armour turns aside what the table says", armourFaults.Count == 0,
             armourFaults.Count == 0
-                ? $"{Armour.Materials.Length} materials x {Armour.Pieces.Length} pieces, best set "
-                  + $"{Armour.MaxPoints} points turning a blow of 10 into "
-                  + $"{Armour.Survive(10, Armour.MaxPoints)}, {Armour.Survive(10, Armour.MaxPoints, true)} "
-                  + $"behind a raised shield, and {Armour.Survive(10, 0)} in a shirt"
+                ? $"{Armour.Materials.Length} materials x {Armour.Pieces.Length} pieces and "
+                  + $"{Armour.Shields.Length} shields, best set {Armour.MaxPoints} points turning a "
+                  + $"blow of 10 into {Armour.Survive(10, Armour.MaxPoints)}, "
+                  + $"{Armour.Survive(10, Armour.MaxPoints, Armour.Shields[^1].Share)} behind the best "
+                  + $"shield, and {Armour.Survive(10, 0)} in a shirt"
                 : $"{armourFaults.Count} faults: {armourFaults[0]}");
 
         // And the other half of it: the plates are geometry hung off the body's own joints, wearing
@@ -1130,7 +1131,17 @@ public static class WorldAudit
                 ? $"soft ground {MiningRules.SecondsToBreak(registry[ids.Dirt], null):F2}s, "
                   + $"stone {MiningRules.SecondsToBreak(registry[ids.Stone], null):F2}s by hand and "
                   + $"{MiningRules.SecondsToBreak(registry[ids.Stone], woodPick):F2}s with the first pickaxe, "
-                  + $"ore {MiningRules.SecondsToBreak(registry[ids.IronOre], null):F2}s, bedrock never"
+                  + "bedrock never. The ladder, each ore with the cheapest pickaxe that takes it: "
+                  + string.Join(", ", new[]
+                    {
+                        ("coal_ore", "wood_pickaxe"), ("iron_ore", "stone_pickaxe"),
+                        ("gold_ore", "copper_pickaxe"), ("stormglass_ore", "iron_pickaxe"),
+                        ("diamond_ore", "stormglass_pickaxe"),
+                    }.Select(pair =>
+                        $"{pair.Item1.Replace("_ore", "")} "
+                        + $"{MiningRules.SecondsToBreak(registry.ByName(pair.Item1), items.ByName(pair.Item2)):F2}s"))
+                  + $"; one rung under is {MiningRules.SecondsToBreak(registry.ByName("diamond_ore"), items.ByName("iron_pickaxe")):F0}s "
+                  + "and two is refused"
                 : $"{miningFaults.Count} faults: {string.Join("; ", miningFaults)}");
 
         var crackFaults = CrackSelfTest();
@@ -1516,12 +1527,29 @@ public static class WorldAudit
         if (!shovelStone.IsEmpty) faults.Add("stone taken with a shovel left something, so the class is not read");
         if (pickDirt.IsEmpty) faults.Add("dirt taken bare-handed left nothing, so ordinary digging is gated");
 
-        // And the ladder has rungs: the tier a block asks for is the tier it takes.
+        // ⛳ AND THE LADDER, WHICH IS A LADDER OF TIME NOW RATHER THAN OF DROPS. The rule the user
+        // asked for: one rung under still brings the ore up, it just takes far longer; TWO rungs
+        // under will not move the rock at all. Both halves are asserted and the middle one is what
+        // the old check got wrong — it insisted a copper pickaxe left no stormglass, which is the
+        // behaviour that was replaced.
         var deepGem = registry.ByName("stormglass_ore");
-        if (!drops.Harvest(deepGem, items.ByName("copper_pickaxe")).IsEmpty)
-            faults.Add("a copper pickaxe brought up stormglass, which wants iron");
+
         if (drops.Harvest(deepGem, items.ByName("iron_pickaxe")).IsEmpty)
             faults.Add("an iron pickaxe left no stormglass");
+
+        if (drops.Harvest(deepGem, items.ByName("copper_pickaxe")).IsEmpty)
+            faults.Add("a copper pickaxe left no stormglass — one rung under is meant to be slow, not empty");
+
+        if (!drops.Harvest(deepGem, items.ByName("stone_pickaxe")).IsEmpty)
+            faults.Add("a stone pickaxe brought up stormglass, which is two rungs above it");
+
+        // ⛔ And the refusal itself, which is not a drop rule and would not show up in one. Two rungs
+        // under has to be infinite rather than merely long: a very long wait is a player standing
+        // there wearing a pickaxe out on a rock that will never give.
+        if (!MiningRules.TooHard(deepGem, items.ByName("stone_pickaxe")))
+            faults.Add("a stone pickaxe is allowed to work at stormglass, two rungs above it");
+        if (MiningRules.TooHard(deepGem, items.ByName("copper_pickaxe")))
+            faults.Add("a copper pickaxe is refused at stormglass, which is only one rung above it");
 
         var world = new VoxelWorld(registry);
         for (var z = -4; z <= 4; z++)
@@ -5457,7 +5485,7 @@ public static class WorldAudit
         (StarterBlocks.LayerFirstDye, "dye_white"),
         (StarterBlocks.LayerBone, "bone"),
         (StarterBlocks.LayerFirstTool, "wood_pickaxe"),
-        ((ushort)(StarterBlocks.LayerFirstFluid - 1), "stormglass_sword"),
+        ((ushort)(StarterBlocks.LayerFirstFluid - 1), "diamond_sword"),
         (StarterBlocks.LayerWaterFlow, "water_flow"),
         (StarterBlocks.LayerLava, "lava"),
         (StarterBlocks.LayerLavaFlow, "lava_flow"),
@@ -5472,8 +5500,9 @@ public static class WorldAudit
         // twenty-one rows went on the end. Both ends of every run are pinned by their own constant
         // now, so "the last one" is a fact about the shield rather than about whatever is newest.
         (StarterBlocks.LayerFirstArmour, "leather_helmet"),
-        ((ushort)(StarterBlocks.LayerShield - 1), "stormglass_boots"),
-        (StarterBlocks.LayerShield, "shield"),
+        ((ushort)(StarterBlocks.LayerFirstShield - 1), "diamond_boots"),
+        (StarterBlocks.LayerFirstShield, "shield"),
+        ((ushort)(StarterBlocks.LayerFirstShield + StarterBlocks.ShieldCount - 1), "diamond_shield"),
 
         // ⛳ THE "LAST LAYER" PIN HAS NOW FIRED THREE TIMES IN ONE SESSION and it is right every
         // time: it is a true statement about a table until something is appended, which is what
@@ -5481,7 +5510,8 @@ public static class WorldAudit
         // pin the OLD end by its own constant on the way past — as smoke and the shield are above —
         // so the moving claim only ever covers the newest run.
         (StarterBlocks.LayerSmokerTop, "smoker_top"),
-        ((ushort)(StarterBlocks.LayerCount - 1), "barrel_side"),
+        (StarterBlocks.LayerBarrelSide, "barrel_side"),
+        ((ushort)(StarterBlocks.LayerCount - 1), "diamond"),
     ];
 
     private static List<string> TextureSelfTest()
@@ -8170,26 +8200,105 @@ public static class WorldAudit
         var iron = registry[ids.IronOre];
         var leaves = registry[ids.Leaves];
 
+        // ⚠ MEASURED WITH A WOODEN PICKAXE IN HAND, and it used to be bare-handed. Two rungs under
+        // is a refusal now, so iron ore taken by fist is INFINITE — which is the rule working, and
+        // which made the old spread check report that the ore never broke. The spread is still the
+        // thing being asked about; it just has to be asked with something that can break all four.
+        var starter = items.ByName("wood_pickaxe");
+
         foreach (var type in (ReadOnlySpan<BlockType>)[leaves, dirt, stone, iron])
         {
-            var measured = Break(type);
-            var wanted = MiningRules.SecondsToBreak(type, null);
+            var measured = Break(type, starter);
+            var wanted = MiningRules.SecondsToBreak(type, starter);
 
             if (measured < 0f) faults.Add($"{type.Name} never broke");
             else if (MathF.Abs(measured - wanted) > dt * 2f)
                 faults.Add($"{type.Name} took {measured:F2}s, the rule says {wanted:F2}s");
         }
 
-        var leafTime = Break(leaves);
-        var dirtTime = Break(dirt);
-        var stoneTime = Break(stone);
-        var ironTime = Break(iron);
+        var leafTime = Break(leaves, starter);
+        var dirtTime = Break(dirt, starter);
+        var stoneTime = Break(stone, starter);
+        var ironTime = Break(iron, starter);
 
         if (!(leafTime < dirtTime && dirtTime < stoneTime && stoneTime < ironTime))
             faults.Add($"materials out of order: leaves {leafTime:F2}, dirt {dirtTime:F2}, stone {stoneTime:F2}, ore {ironTime:F2}");
 
         if (ironTime / leafTime < 10f)
             faults.Add($"hardest is only {ironTime / leafTime:F1}x the softest — materials barely differ");
+
+        // ⛳⛳ THE ORE LADDER, WHICH IS THE THING THE USER ASKED FOR AND WHICH USED TO RUN BACKWARDS.
+        // ⛔ Measured with each ore's MINIMUM VIABLE pickaxe, which is the comparison that matters
+        // and the one nothing was making: every ore was Hardness 3 while tool speed ran 2, 4, 6, 8,
+        // 10 — so coal took 2.25s, iron 1.13s, gold 0.75s and stormglass 0.56s. Going deeper made
+        // the work QUICKER. A check on any single ore passes that build; only the sequence catches
+        // it.
+        var ladder = new List<(string Ore, string Pick, float Seconds)>();
+
+        foreach (var (ore, pick) in (ReadOnlySpan<(string, string)>)
+                 [
+                     ("coal_ore", "wood_pickaxe"),
+                     ("iron_ore", "stone_pickaxe"),
+                     ("gold_ore", "copper_pickaxe"),
+                     ("stormglass_ore", "iron_pickaxe"),
+                     ("diamond_ore", "stormglass_pickaxe"),
+                 ])
+        {
+            ladder.Add((ore, pick, MiningRules.SecondsToBreak(registry.ByName(ore), items.ByName(pick))));
+        }
+
+        for (var i = 1; i < ladder.Count; i++)
+        {
+            if (ladder[i].Seconds > ladder[i - 1].Seconds) continue;
+            faults.Add($"{ladder[i].Ore} takes {ladder[i].Seconds:F2}s with its own pickaxe against "
+                     + $"{ladder[i - 1].Ore}'s {ladder[i - 1].Seconds:F2}s — the ladder runs backwards");
+        }
+
+        // ⚠ And it must climb without becoming a chore, which is the other half of what was asked.
+        // A ceiling as well as a floor: a top ore that took thirty seconds with the right tool would
+        // pass every line above and be exactly the thing the user said they did not want.
+        if (ladder[^1].Seconds > ladder[0].Seconds * 3f)
+            faults.Add($"{ladder[^1].Ore} is {ladder[^1].Seconds / ladder[0].Seconds:F1}x the work of "
+                     + $"{ladder[0].Ore} with the right tool — that is a chore, not a climb");
+
+        // ⛳ AND THE PROPERTY THAT MAKES THE RULE TEACHABLE: being one rung under costs about the
+        // same wherever a player meets it, because the hardness curve is matched to the speed curve.
+        // If those two ever drift, one tier of the ladder quietly becomes the painful one.
+        var underhand = new List<float>();
+
+        foreach (var (ore, pick) in (ReadOnlySpan<(string, string)>)
+                 [
+                     ("iron_ore", "wood_pickaxe"),
+                     ("gold_ore", "stone_pickaxe"),
+                     ("stormglass_ore", "copper_pickaxe"),
+                     ("diamond_ore", "iron_pickaxe"),
+                 ])
+        {
+            var seconds = MiningRules.SecondsToBreak(registry.ByName(ore), items.ByName(pick));
+
+            if (float.IsInfinity(seconds))
+                faults.Add($"a {pick} is refused at {ore}, which is only one rung above it");
+            else underhand.Add(seconds);
+        }
+
+        if (underhand.Count > 0 && underhand.Max() > underhand.Min() * 1.5f)
+            faults.Add($"one rung under costs {underhand.Min():F1}s at one tier and "
+                     + $"{underhand.Max():F1}s at another — the lesson is not the same twice");
+
+        // ⛔ The refusal, and the CONTROL beside it. "Two rungs under is refused" is true of a build
+        // that refuses everything; the pair is what says the line is where it should be.
+        if (!MiningRules.TooHard(iron, null))
+            faults.Add("iron ore can be broken bare-handed, two rungs under it");
+        if (MiningRules.TooHard(stone, null))
+            faults.Add("stone cannot be broken bare-handed, so a player with nothing cannot dig at all");
+
+        // And a refused swing must cost nothing whatever — no progress, which is what makes it a
+        // refusal rather than a very long wait somebody is wearing a pickaxe out on.
+        var refused = new PlayerMining();
+        for (var frame = 0; frame < 600; frame++) refused.Update(dt, iron, cell, mining: true, null);
+
+        if (refused.Progress > 0f)
+            faults.Add($"ten seconds of swinging at a refused block made {refused.Progress:P0} of progress");
 
         // The whole point of a tool. Every rung of the ladder has to be quicker than the one below
         // it on the block it is for, and none of them may help on a block of another class — a

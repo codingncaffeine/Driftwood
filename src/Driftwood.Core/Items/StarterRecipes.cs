@@ -383,10 +383,14 @@ public static class StarterRecipes
                 piece.Rows, material.Made, mirrored: false, station: CraftStation.Bench);
         }
 
-        // ⛳ A board round an iron boss, drawn as the shape of a shield. It is the only thing in the
-        // game that is worth having in the other hand, which is what the other hand was waiting for.
-        Shaped("shield", Armour.ShieldName, 1, ["PIP", "PPP", " P "],
-               mirrored: false, station: CraftStation.Bench);
+        // ⛳ A board round a metal boss, drawn as the shape of a shield. It is the only thing in the
+        // game worth having in the other hand, which is what the other hand was waiting for — and
+        // the facing is the ladder, so the pattern is one and the metal is the parameter.
+        foreach (var shield in Armour.Shields)
+        {
+            Shaped(shield.Name.Replace('_', ' '), shield.Name, 1, ["PMP", "PPP", " P "],
+                   shield.Made, mirrored: false, station: CraftStation.Bench);
+        }
 
         // The furnace's whole job. Rubble back into stone is the loop that makes one worth building
         // before there is any metal to melt, and charcoal is what keeps it burning where there is

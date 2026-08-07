@@ -233,8 +233,38 @@ public static class StarterBlocks
     /// <summary>Head shapes a tier comes in — pickaxe, axe, shovel, sword.</summary>
     public const int ToolShapeCount = 4;
 
-    /// <summary>Palettes a head comes in — wood, stone, copper, gold, iron, stormglass.</summary>
-    public const int ToolTierCount = 6;
+    /// <summary>Palettes a head comes in — wood, stone, copper, gold, iron, stormglass, diamond.</summary>
+    public const int ToolTierCount = 7;
+
+    /// <summary>
+    /// How hard an ore of each tier is, indexed by <see cref="BlockType.HarvestTier"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛔⛔ <b>WRITTEN DOWN AS A CURVE BECAUSE A FLAT NUMBER MADE THE LADDER RUN BACKWARDS.</b>
+    /// Every ore used to be Hardness 3 while pickaxe speed ran 2, 4, 6, 8, 10 — so measured with the
+    /// <em>minimum viable</em> tool, coal took 2.25 s, iron 1.13 s, gold 0.75 s and stormglass
+    /// 0.56 s. Going deeper made the work quicker, which is the opposite of what a descent is for.
+    /// </para>
+    /// <para>These are chosen against the speed of the pickaxe each tier actually needs, so what a
+    /// player feels is a gentle climb rather than a cliff — the user's own line was "it should feel
+    /// like more work the deeper you go" and "I don't want it to become a chore":</para>
+    /// <list type="table">
+    /// <item><term>coal, 3.0</term><description>wooden pickaxe, 2.25 s</description></item>
+    /// <item><term>copper and iron, 7.0</term><description>stone pickaxe, 2.63 s</description></item>
+    /// <item><term>gold and azurite, 12.0</term><description>copper pickaxe, 3.00 s</description></item>
+    /// <item><term>stormglass, 19.0</term><description>iron pickaxe, 3.56 s</description></item>
+    /// <item><term>diamond, 27.0</term><description>stormglass pickaxe, 4.05 s</description></item>
+    /// </list>
+    /// <para>⛳ <b>AND THE PROPERTY THAT FELL OUT OF IT, which is worth keeping deliberately:</b>
+    /// because the curve is matched to the speed curve, being <em>one rung under</em> costs almost
+    /// exactly the same wherever a player meets it — 17.5 s on iron with a wooden pickaxe, 15.0 s on
+    /// gold with stone, 15.8 s on stormglass with copper, 16.9 s on diamond with iron. The lesson is
+    /// the same fifteen seconds at every tier, which is how a rule teaches itself.</para>
+    /// <para>⚠ <b>Index 0 is not an ore</b> and is only here so the array can be indexed by tier
+    /// without an offset nobody would remember. <b>Rock is not on this curve</b> — deepstone stays at
+    /// 3 because it is the medium rather than the prize; see its own note.</para>
+    /// </remarks>
+    public static readonly float[] OreHardness = [1.5f, 3f, 7f, 12f, 19f, 27f];
 
     /// <summary>
     /// The fluids, appended past the tools rather than filed beside the other block faces.
@@ -298,19 +328,23 @@ public static class StarterBlocks
     /// <summary>Helmet, chestplate, leggings, boots — <see cref="Items.EquipSlot"/> order.</summary>
     public const int ArmourPieceCount = 4;
 
-    /// <summary>Leather, copper, gold, iron, stormglass.</summary>
-    public const int ArmourMaterialCount = 5;
+    /// <summary>Leather, copper, gold, iron, stormglass, diamond.</summary>
+    public const int ArmourMaterialCount = 6;
 
     /// <summary>
-    /// The shield, which is the only thing in the game carried in the other hand rather than worn.
+    /// The shields, which are the only things in the game carried in the other hand rather than worn.
     /// </summary>
     /// <remarks>
-    /// ⛳ One, not five. A shield is a board with a boss on it and its material barely changes what
-    /// it does — where a set of armour in five metals is the whole progression. A row of five nearly
-    /// identical boards would be four items nobody chooses between.
+    /// ⛳ <b>This was ONE, on the argument that a shield is a board and its facing barely changes
+    /// what it does.</b> The user asked for a diamond one, and they are right that a shield with no
+    /// ladder at all was the odd item out beside six materials of armour. Three, not six: leather
+    /// and gold shields are silly, and what varies is the metal the board is faced with.
     /// </remarks>
-    public const ushort LayerShield =
+    public const ushort LayerFirstShield =
         LayerFirstArmour + ArmourPieceCount * ArmourMaterialCount;
+
+    /// <summary>Iron, stormglass, diamond.</summary>
+    public const int ShieldCount = 3;
 
     /// <summary>
     /// The smoker: the third smelter, and the one that is told apart by its MATERIAL.
@@ -322,16 +356,28 @@ public static class StarterBlocks
     /// road, so this one is made of timber: it is a different colour from ten blocks away, which is
     /// what "told apart in a row along a wall" actually asks for.
     /// </remarks>
-    public const ushort LayerSmokerTop = LayerShield + 1;
-    public const ushort LayerSmokerSide = LayerShield + 2;
-    public const ushort LayerSmokerFront = LayerShield + 3;
-    public const ushort LayerSmokerFrontLit = LayerShield + 4;
+    public const ushort LayerSmokerTop = LayerFirstShield + ShieldCount;
+    public const ushort LayerSmokerSide = LayerSmokerTop + 1;
+    public const ushort LayerSmokerFront = LayerSmokerTop + 2;
+    public const ushort LayerSmokerFrontLit = LayerSmokerTop + 3;
 
     /// <summary>The barrel: a chest that opens upward, so it has a lid and a stave.</summary>
-    public const ushort LayerBarrelTop = LayerShield + 5;
-    public const ushort LayerBarrelSide = LayerShield + 6;
+    public const ushort LayerBarrelTop = LayerSmokerTop + 4;
+    public const ushort LayerBarrelSide = LayerSmokerTop + 5;
 
-    public const int LayerCount = LayerBarrelSide + 1;
+    /// <summary>
+    /// Diamond: the seam in the Emberdeep wall, and the cut gem it leaves.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ Appended rather than filed beside the other ores, for the reason every append since the
+    /// fluids has been: <see cref="Textures.BlockTextureSet.Layers"/>' order IS this numbering, and
+    /// a face slipped in beside <see cref="LayerStormglassOre"/> would move a hundred and sixty
+    /// constants while every texture check went on passing.
+    /// </remarks>
+    public const ushort LayerDiamondOre = LayerBarrelSide + 1;
+    public const ushort LayerDiamond = LayerBarrelSide + 2;
+
+    public const int LayerCount = LayerDiamond + 1;
 
     public sealed record Ids(
         BlockId Stone,
@@ -355,6 +401,7 @@ public static class StarterBlocks
         BlockId CopperOre,
         BlockId GoldOre,
         BlockId StormglassOre,
+        BlockId DiamondOre,
         BlockId AzuriteOre,
         BlockId Clay,
         BlockId Sandstone,
@@ -377,7 +424,8 @@ public static class StarterBlocks
         public BlockId[] Rock => [Stone, Deepstone, Coralstone, Driftstone, Saltstone];
 
         /// <summary>Everything mining is meant to yield, for the census to weigh against rock.</summary>
-        public BlockId[] Ores => [CoalOre, IronOre, CopperOre, GoldOre, StormglassOre, AzuriteOre, Emberstone];
+        public BlockId[] Ores =>
+            [CoalOre, IronOre, CopperOre, GoldOre, StormglassOre, DiamondOre, AzuriteOre, Emberstone];
 
         /// <summary>Everything that grows on open ground, for the census to weigh together.</summary>
         public BlockId[] GroundCover => [Meadowgrass, Seaflax, Marshlily, Emberbloom, Sunwort];
@@ -493,16 +541,22 @@ public static class StarterBlocks
         });
 
         // The ore ladder is a tier ladder. Coal comes up with the first wooden pickaxe, the two
-        // working metals want stone, the two showy ones want copper, and the gem at the floor of
-        // the world wants iron — so each rung is the reason to make the next.
+        // working metals want stone, the two showy ones want copper, the gem at the floor of the
+        // ordinary underground wants iron, and the one in the Emberdeep wants that gem — so each
+        // rung is the reason to make the next.
+        //
+        // ⛔⛔ HARDNESS CLIMBS WITH THE TIER, AND MEASUREMENT IS WHY. Every ore used to be Hardness
+        // 3 while tool speed ran 2, 4, 6, 8 — so with the MINIMUM VIABLE pickaxe, coal took 2.25 s,
+        // iron 1.13 s, gold 0.75 s and stormglass 0.56 s. The deeper ore was the quicker one and
+        // the whole ladder ran backwards. See OreHardness for the numbers and what they buy.
         var coal = registry.Register(new BlockType
         {
-            Name = "coal_ore", Hardness = 3f, HarvestClass = ToolClass.Pickaxe, HarvestTier = 1,
+            Name = "coal_ore", Hardness = OreHardness[1], HarvestClass = ToolClass.Pickaxe, HarvestTier = 1,
             TopLayer = LayerCoalOre, SideLayer = LayerCoalOre, BottomLayer = LayerCoalOre,
         });
         var iron = registry.Register(new BlockType
         {
-            Name = "iron_ore", Hardness = 3f, HarvestClass = ToolClass.Pickaxe, HarvestTier = 2,
+            Name = "iron_ore", Hardness = OreHardness[2], HarvestClass = ToolClass.Pickaxe, HarvestTier = 2,
             TopLayer = LayerIronOre, SideLayer = LayerIronOre, BottomLayer = LayerIronOre,
         });
 
@@ -541,6 +595,18 @@ public static class StarterBlocks
 
         // Rock below the metals' reach. Harder than stone, and it is what makes going deep read as
         // going somewhere rather than as more of the same grey.
+        //
+        // ⛳ TIER TWO, DELIBERATELY, AND IT WAS ARGUED. Two tiers under is a refusal now, and this is
+        // 98.6% of everything below y 0 — so at tier 2 a player with NO pickaxe at all cannot move a
+        // single cell of the deep. That was raised as an entombment and the user's answer was the
+        // right one: rubble is everywhere in the ordinary underground, a stone pickaxe costs three of
+        // it, so arriving in the Emberdeep empty-handed is a CHOICE rather than an accident. And the
+        // worst case is not a lost world — it is dying and walking back down.
+        //
+        // ⚠ THE CONSEQUENCE, NAMED SO IT STAYS A DECISION: a player who loses their last pickaxe
+        // below the deepstone line has no way out but death. A wooden one still works (one tier
+        // under, 7.5 s a cell); bare hands do not work at all. That is what makes the deep somewhere
+        // you prepare for, and it is the rule to revisit first if it ever reads as unfair.
         var deepstone = registry.Register(new BlockType
         {
             Name = "deepstone", Hardness = 3f, HarvestClass = ToolClass.Pickaxe, HarvestTier = 2,
@@ -572,24 +638,35 @@ public static class StarterBlocks
         // a cold gem found only at the floor of the world.
         var copper = registry.Register(new BlockType
         {
-            Name = "copper_ore", Hardness = 3f, HarvestClass = ToolClass.Pickaxe, HarvestTier = 2,
+            Name = "copper_ore", Hardness = OreHardness[2], HarvestClass = ToolClass.Pickaxe, HarvestTier = 2,
             TopLayer = LayerCopperOre, SideLayer = LayerCopperOre, BottomLayer = LayerCopperOre,
         });
         var gold = registry.Register(new BlockType
         {
-            Name = "gold_ore", Hardness = 3f, HarvestClass = ToolClass.Pickaxe, HarvestTier = 3,
+            Name = "gold_ore", Hardness = OreHardness[3], HarvestClass = ToolClass.Pickaxe, HarvestTier = 3,
             TopLayer = LayerGoldOre, SideLayer = LayerGoldOre, BottomLayer = LayerGoldOre,
         });
         var stormglass = registry.Register(new BlockType
         {
-            Name = "stormglass_ore", Hardness = 3f, HarvestClass = ToolClass.Pickaxe, HarvestTier = 4,
+            Name = "stormglass_ore", Hardness = OreHardness[4], HarvestClass = ToolClass.Pickaxe, HarvestTier = 4,
             TopLayer = LayerStormglassOre, SideLayer = LayerStormglassOre, BottomLayer = LayerStormglassOre,
+        });
+
+        // ⛳ THE NEW TOP OF THE LADDER, and the only ore in the game that lives where the lava is.
+        // It wants a stormglass pickaxe, which is the gem out of the floor of the ordinary
+        // underground — so reaching it is a second descent rather than a deeper version of the
+        // first. Nothing needs a DIAMOND pickaxe: the top tool is speed and durability, which is
+        // what a top tool is for once there is nothing left to gate.
+        var diamond = registry.Register(new BlockType
+        {
+            Name = "diamond_ore", Hardness = OreHardness[5], HarvestClass = ToolClass.Pickaxe, HarvestTier = 5,
+            TopLayer = LayerDiamondOre, SideLayer = LayerDiamondOre, BottomLayer = LayerDiamondOre,
         });
 
         // Azurite is a real blue copper mineral, and ours rather than anybody's coined name.
         var azurite = registry.Register(new BlockType
         {
-            Name = "azurite_ore", Hardness = 3f, HarvestClass = ToolClass.Pickaxe, HarvestTier = 3,
+            Name = "azurite_ore", Hardness = OreHardness[3], HarvestClass = ToolClass.Pickaxe, HarvestTier = 3,
             TopLayer = LayerAzuriteOre, SideLayer = LayerAzuriteOre, BottomLayer = LayerAzuriteOre,
         });
 
@@ -901,7 +978,7 @@ public static class StarterBlocks
         return new Ids(
             stone, dirt, grass, sand, water, gravel, log, leaves, planks, coal, iron, bedrock,
             emberstone, vine, deepstone, coralstone, driftstone, saltstone, copper, gold, stormglass,
-            azurite, clay, sandstone, snow, snowLayer, meadowgrass, seaflax, marshlily,
+            diamond, azurite, clay, sandstone, snow, snowLayer, meadowgrass, seaflax, marshlily,
             emberbloom, sunwort,
             rubble, glass, bricks, bench, furnace, furnaceLit, lava);
     }
