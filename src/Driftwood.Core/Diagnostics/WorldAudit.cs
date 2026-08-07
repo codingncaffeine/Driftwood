@@ -2265,6 +2265,63 @@ public static class WorldAudit
             Check(Path.Combine(root, "bedrock"), PackDialect.Bedrock, "textures/block/stone.png", "textures/blocks/stone.png");
             Check(Path.Combine(root, "java"), PackDialect.Java, "textures/block/stone.png", "assets/minecraft/textures/block/stone.png");
             Check(Path.Combine(root, "legacy"), PackDialect.JavaLegacy, "textures/block/oak_log.png", "assets/minecraft/textures/blocks/log_oak.png");
+
+            // ⛔ THE SHAPE THAT LOADS NOTHING AND REPORTS SUCCESS, and it is the commonest way a
+            // pack gets packaged by hand: zipping the FOLDER rather than its contents puts the whole
+            // pack under 'MyPack/', which no literal 'assets/minecraft/...' lookup can ever match. A
+            // player sees the import run, say nothing and change nothing.
+            //
+            // ⚠ It is checked with a REAL PNG rather than four junk bytes, unlike the three above,
+            // because "it found the entry" is a weaker claim than the one that matters. The texture
+            // has to come back decoded.
+            var nested = Path.Combine(root, "nested.zip");
+            WriteZip(nested,
+            [
+                ("MyPack/pack.mcmeta", Encoding.UTF8.GetBytes("{\"pack\":{\"pack_format\":34}}")),
+                ("MyPack/assets/minecraft/textures/block/stone.png", SmallPng()),
+
+                // And a second namespace, which a real pack has (Vintage ships three) and which is
+                // silently dropped by a reader that only ever looks under 'minecraft'.
+                ("MyPack/assets/sham/textures/block/stone.png", SmallPng()),
+            ]);
+
+            CheckArchive(nested, "a zip with its pack inside a folder", 2);
+
+            // ⛳ A .jar is a zip with a different name on it, and packs from the era when a resource
+            // pack and a mod were one download still ship as one.
+            var jar = Path.Combine(root, "packed.jar");
+            WriteZip(jar,
+            [
+                ("pack.mcmeta", Encoding.UTF8.GetBytes("{\"pack\":{\"pack_format\":34}}")),
+                ("assets/minecraft/textures/block/stone.png", SmallPng()),
+            ]);
+
+            CheckArchive(jar, "a .jar", 1);
+
+            // ⛔ AND THE REFUSAL HAS TO NAME THE FORMAT. A .rar is somebody's pack — they downloaded
+            // it and can see the textures inside it — so answering "there is no pack there" sends
+            // them hunting a corrupt download instead of an unzip program.
+            var rar = Path.Combine(root, "pack.rar");
+            File.WriteAllBytes(rar, [0x52, 0x61, 0x72, 0x21, 0x1A, 0x07]);
+
+            if (TexturePack.Open(rar, out var rarWhy) is not null)
+                faults.Add("a .rar opened as a pack");
+            else if (rarWhy is null || !rarWhy.Contains("RAR", StringComparison.Ordinal))
+                faults.Add($"a .rar was refused with '{rarWhy ?? "no reason"}', which does not name the format");
+
+            // ⛔ The other arm, and without it "always blame the archive format" passes: a path with
+            // nothing at it is a different problem and must not be told it is a compression one.
+            if (TexturePack.Open(Path.Combine(root, "not-here.zip"), out var missingWhy) is not null)
+                faults.Add("a path with nothing at it opened as a pack");
+            else if (missingWhy is null || missingWhy.Contains("RAR", StringComparison.Ordinal))
+                faults.Add($"a missing path was refused with '{missingWhy ?? "no reason"}'");
+
+            // ⛳ And the two extension lists are one list. They were two, which is a shelf that takes
+            // a .jar and a file browser that hides it.
+            if (!PackLibrary.Extensions.SequenceEqual(TexturePack.Extensions, StringComparer.Ordinal))
+                faults.Add(
+                    $"the shelf takes {string.Join(",", PackLibrary.Extensions)} and the reader "
+                    + $"takes {string.Join(",", TexturePack.Extensions)}");
         }
         catch (IOException ex)
         {
@@ -2306,9 +2363,54 @@ public static class WorldAudit
                 faults.Add($"a {want} pack reported a texture that cannot exist as something it had");
         }
 
+        // A real one-pixel PNG, so a pack built here is loaded rather than merely found.
+        static byte[] SmallPng() => Png.Encode(new Image(1, 1, [128, 128, 128, 255]));
+
+        static void WriteZip(string path, (string Name, byte[] Bytes)[] entries)
+        {
+            using var stream = File.Create(path);
+            using var zip = new System.IO.Compression.ZipArchive(
+                stream, System.IO.Compression.ZipArchiveMode.Create);
+
+            foreach (var (name, bytes) in entries)
+            {
+                using var writer = zip.CreateEntry(name).Open();
+                writer.Write(bytes, 0, bytes.Length);
+            }
+        }
+
+        void CheckArchive(string path, string what, int namespaces)
+        {
+            using var pack = TexturePack.Open(path, out var why);
+
+            if (pack is null)
+            {
+                faults.Add($"{what} would not open: {why ?? "no reason given"}");
+                return;
+            }
+
+            const string Ask = "textures/block/stone.png";
+            const string Where = "assets/minecraft/textures/block/stone.png";
+
+            var tile = pack.TryLoadTile(Ask, 16, out var from);
+
+            if (tile is null)
+                faults.Add(
+                    $"{what} gave nothing back for '{Ask}'"
+                    + (pack.Faults.Count > 0 ? $": {pack.Faults[0]}" : " and did not say why"));
+            else if (!string.Equals(from, Where, StringComparison.OrdinalIgnoreCase))
+                faults.Add($"{what} answered '{Ask}' from '{from}' rather than '{Where}'");
+
+            if (pack.Namespaces.Count != namespaces)
+                faults.Add(
+                    $"{what} found {pack.Namespaces.Count} namespaces "
+                    + $"({string.Join(", ", pack.Namespaces)}) rather than {namespaces}");
+        }
+
         detail = $"{translated} layers translate and {renamed} are called something else over there, "
             + $"none colliding, {measured.Length} of them pinned to what a real pack ships; "
-            + "a pack of each layout built on disk, recognised, and read from the right folder";
+            + "a pack of each layout built on disk, recognised, and read from the right folder; "
+            + "a zip nested in its own folder, a .jar, and a .rar refused by name";
 
         return faults;
     }

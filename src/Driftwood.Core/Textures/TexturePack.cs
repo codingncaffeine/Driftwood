@@ -85,9 +85,15 @@ public sealed class TexturePack : IDisposable
     /// Whatever directory holds <c>pack.mcmeta</c>, as a prefix ending in a slash.
     /// </summary>
     /// <remarks>
-    /// The manifest is the one file every pack has exactly one of, so finding it finds the root
-    /// without having to guess at folder names. The shallowest wins, because a pack that also
-    /// carries somebody else's pack inside it should be read as itself.
+    /// <para>The manifest is the one file every pack has exactly one of, so finding it finds the
+    /// root without having to guess at folder names. The shallowest wins, because a pack that also
+    /// carries somebody else's pack inside it should be read as itself.</para>
+    /// <para>⚠ <b>TWO INDEPENDENT MECHANISMS ANSWER THE NESTED CASE, and a control run on either one
+    /// alone stays GREEN.</b> Measured: with the manifest search disabled the <c>assets/</c> fallback
+    /// below finds the same prefix, and the audit's nested-zip check goes on passing. That is a good
+    /// property of the reader and a trap for anybody testing it — the control that actually fires is
+    /// the whole function returning nothing. Worth knowing before deleting either half as redundant.
+    /// </para>
     /// </remarks>
     private string FindRoot()
     {
@@ -391,29 +397,78 @@ public sealed class TexturePack : IDisposable
     /// The archive extensions a pack is actually distributed under.
     /// </summary>
     /// <remarks>
-    /// All of them are zips. <c>.mcpack</c> is how Bedrock packs are handed round — it opens on a
-    /// double-click and installs itself, which is why nobody renames them — and <c>.mcaddon</c> is
+    /// <para>All of them are zips. <c>.mcpack</c> is how Bedrock packs are handed round — it opens on
+    /// a double-click and installs itself, which is why nobody renames them — and <c>.mcaddon</c> is
     /// the same container holding one or more of those. Refusing an extension is refusing a file
-    /// that would have loaded perfectly.
+    /// that would have loaded perfectly.</para>
+    /// <para>⛳ <c>.jar</c> is a zip with a different name on it, and packs from the era when a
+    /// resource pack and a mod were the same download still ship as one. It cost one array entry.
+    /// </para>
     /// </remarks>
-    public static readonly string[] Extensions = [".zip", ".mcpack", ".mcaddon"];
+    public static readonly string[] Extensions = [".zip", ".jar", ".mcpack", ".mcaddon"];
+
+    /// <summary>
+    /// Archives we can see are archives and cannot open, and what each one is.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>Refused BY NAME with a reason, because the alternative is indistinguishable from "that
+    /// is not a pack".</b> A <c>.rar</c> is somebody's pack — they downloaded it, they can see the
+    /// textures inside it — and answering "there is no pack there" sends them looking for a
+    /// corrupted download instead of for an unzip program. We read zips and only zips; saying which
+    /// of the two problems they have is the entire difference between a message and a shrug.
+    /// </remarks>
+    public static readonly (string Extension, string Format)[] UnreadableArchives =
+    [
+        (".rar", "RAR"),
+        (".7z", "7-Zip"),
+        (".tar", "tar"),
+        (".gz", "gzip"),
+        (".tgz", "gzipped tar"),
+        (".bz2", "bzip2"),
+        (".xz", "xz"),
+    ];
 
     /// <summary>Opens a pack from a directory or an archive. Returns null if the path is neither.</summary>
-    public static TexturePack? Open(string path)
+    public static TexturePack? Open(string path) => Open(path, out _);
+
+    /// <summary>
+    /// Opens a pack, and says why when it will not.
+    /// </summary>
+    /// <param name="why">
+    /// Null on success. Otherwise a sentence a player can act on — which is the point of the
+    /// overload: <see cref="Open(string)"/> answering null makes "an archive we cannot read", "a
+    /// path with nothing at it" and "a folder full of holiday photographs" the same answer.
+    /// </param>
+    public static TexturePack? Open(string path, out string? why)
     {
         var name = Path.GetFileNameWithoutExtension(path);
+        why = null;
 
         TexturePack pack;
         if (Directory.Exists(path))
         {
             pack = new TexturePack(name, null, path);
         }
-        else if (File.Exists(path) && Extensions.Contains(Path.GetExtension(path), StringComparer.OrdinalIgnoreCase))
+        else if (!File.Exists(path))
+        {
+            why = "there is nothing at that path";
+            return null;
+        }
+        else if (Extensions.Contains(Path.GetExtension(path), StringComparer.OrdinalIgnoreCase))
         {
             pack = new TexturePack(name, ZipFile.OpenRead(path), null);
         }
         else
         {
+            var extension = Path.GetExtension(path);
+
+            var known = UnreadableArchives.FirstOrDefault(
+                a => string.Equals(a.Extension, extension, StringComparison.OrdinalIgnoreCase));
+
+            why = known.Extension is not null
+                ? $"{known.Format} archives cannot be read — unpack it, or re-zip it as {string.Join(" or ", Extensions)}"
+                : $"a pack is a folder or {string.Join(", ", Extensions)} — not {extension}";
+
             return null;
         }
 

@@ -23,7 +23,14 @@ namespace Driftwood.Core.Textures;
 public static class PackLibrary
 {
     /// <summary>The shapes a pack arrives in. Everything else is refused by name rather than tried.</summary>
-    public static IReadOnlyList<string> Extensions { get; } = [".zip", ".mcpack", ".mcaddon"];
+    /// <remarks>
+    /// ⛔ <b>The reader's own list, not a second copy of it.</b> It was written out here as well, and
+    /// two lists of the same extensions is exactly the drift <see cref="FilterSpec"/>'s own note
+    /// warns about one line further down — the shelf would take a <c>.jar</c>, the browser would
+    /// hide it, and a player with a perfectly good pack would be staring at a folder the game says
+    /// is empty. One list, in the file that does the opening.
+    /// </remarks>
+    public static IReadOnlyList<string> Extensions { get; } = TexturePack.Extensions;
 
     /// <summary>What a file chooser should call these in its "files of type" line.</summary>
     public static string FilterLabel => $"texture packs ({string.Join(", ", Extensions)})";
@@ -125,10 +132,12 @@ public static class PackLibrary
             return null;
         }
 
+        // ⛳ The reader answers this now, so a .rar is told it is a .rar rather than told it is not
+        // a pack — and the sentence is written once, where the extension list lives.
         if (!isFolder && !Extensions.Contains(
                 System.IO.Path.GetExtension(from), StringComparer.OrdinalIgnoreCase))
         {
-            why = $"a pack is a folder, a .zip, a .mcpack or a .mcaddon — not {System.IO.Path.GetExtension(from)}";
+            TexturePack.Open(from, out why);
             return null;
         }
 

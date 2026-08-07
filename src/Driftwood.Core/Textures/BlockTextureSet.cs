@@ -499,15 +499,19 @@ public static class BlockTextureSet
                 grass, foliage, Untouched(), ownMoving);
         }
 
-        using var pack = TexturePack.Open(packPath);
+        using var pack = TexturePack.Open(packPath, out var refused);
         if (pack is null)
         {
             var own = size > 0 ? size : TileGen.Size;
             var plain = new byte[Layers.Length][];
             for (var i = 0; i < Layers.Length; i++) plain[i] = Own(i, own);
 
+            // ⛳ WHY, not merely that. "No pack at '...'" is the same four words for a mistyped path
+            // and for a .rar full of the textures the player can see with their own eyes, and only
+            // one of those is fixed by looking harder at the path.
             return new Result(
-                plain, own, $"no pack at '{packPath}' — using built-in tiles at {own}x{own}{reduced}",
+                plain, own,
+                $"'{packPath}' — {refused ?? "not a pack"}; using built-in tiles at {own}x{own}{reduced}",
                 grass, foliage, Untouched(), OwnAnimations(plain, own));
         }
 
