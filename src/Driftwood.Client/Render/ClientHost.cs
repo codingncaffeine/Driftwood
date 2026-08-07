@@ -741,8 +741,12 @@ public sealed class ClientHost : IDisposable
     {
         const long Budget = 512L * 1024 * 1024;
 
-        // A full mip chain is a third again on top of the base level.
-        const double WithMips = 4.0 * 4.0 / 3.0;
+        // ⛔ BYTES A TEXEL, MIPS INCLUDED — four for the RGBA and a third again for the chain. It
+        // was called WithMips and its comment mentioned only the third, so it read as 1.33 and is
+        // 5.33; the first line written to report the ceiling multiplied by four again on top of it
+        // and announced 1088 MiB against a 512 MiB budget. The value was always right. Saying the
+        // number out loud is what made the name being wrong cost something.
+        const double BytesPerTexelWithMips = 4.0 * 4.0 / 3.0;
 
         var maxSide = _gl.GetInteger(GLEnum.MaxTextureSize);
         var maxLayers = _gl.GetInteger(GLEnum.MaxArrayTextureLayers);
@@ -751,12 +755,22 @@ public sealed class ClientHost : IDisposable
         if (maxLayers > 0 && layers > maxLayers)
             Console.Error.WriteLine($"driftwood: {layers} texture layers but the card takes {maxLayers}");
 
-        var affordable = (int)Math.Sqrt(Budget / (layers * WithMips));
+        var affordable = (int)Math.Sqrt(Budget / (layers * BytesPerTexelWithMips));
 
         // Down to a power of two. Every pack is painted at one, and a mip chain built from an
         // awkward size loses a level to rounding at the bottom.
         var ceiling = 16;
         while (ceiling * 2 <= affordable && ceiling * 2 <= maxSide) ceiling *= 2;
+
+        // ⛳ SAID OUT LOUD, because the whole point of asking the card was that the answer stops
+        // being a number somebody typed — and an answer nobody can see is indistinguishable from
+        // one. Every input goes in the line: a ceiling that is wrong is wrong because one of these
+        // is, and which one is not guessable from the result on its own.
+        var cost = layers * (double)ceiling * ceiling * BytesPerTexelWithMips / (1024 * 1024);
+        Console.WriteLine(
+            $"textures    ceiling {ceiling}px — {layers} layers at {ceiling} is {cost:F0} MiB with mips "
+            + $"against a {Budget / (1024 * 1024)} MiB budget; the card takes {maxSide}px "
+            + $"and {maxLayers} layers");
 
         return ceiling;
     }

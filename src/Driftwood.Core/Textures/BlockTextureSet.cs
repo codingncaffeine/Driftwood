@@ -459,19 +459,32 @@ public static class BlockTextureSet
     /// Draws Driftwood's own tiles, then lets a pack replace the ones it has.
     /// </summary>
     /// <param name="packPath">A folder or .zip to import from, or null for Driftwood's own art.</param>
-    /// <summary>
-    /// Draws Driftwood's own tiles, then lets a pack replace the ones it has.
-    /// </summary>
-    /// <param name="packPath">A folder or .zip to import from, or null for Driftwood's own art.</param>
     /// <param name="size">
     /// The tile size to build at, or 0 to take the pack's own. Zero is the default because a
     /// player who chose a pack has already said what resolution they want.
     /// </param>
     /// <param name="ceiling">The largest tile the machine will take. See <c>--texture-size</c>.</param>
+    /// <remarks>
+    /// ⛔ <b>The ceiling is applied HERE, once, and it used to be applied on the pack path only.</b>
+    /// Which is the wrong path: a player running with no pack at all is the ordinary case, and
+    /// <c>--texture-size 4096</c> with no pack asked for two hundred layers of 4096², which is
+    /// <b>13.7 GB</b> and a process that dies before the window opens. The pack path was clamped
+    /// because that is where somebody was thinking about resolution; the two paths that were not
+    /// are the two where nobody was.
+    /// </remarks>
     public static Result Build(string? packPath, int size = 0, int ceiling = 512)
     {
         var grass = Colormap.Grass();
         var foliage = Colormap.Foliage();
+
+        var limit = Math.Max(TileGen.Size, ceiling);
+        var asked = size;
+        if (size > 0) size = Math.Clamp(size, TileGen.Size, limit);
+
+        // ⚠ Said out loud rather than done quietly. A player who typed a number and got a different
+        // one has to be told which, or the only evidence is that the game looks softer than they
+        // asked for — and the number they typed is right there in their own command line.
+        var reduced = asked > size ? $" (asked {asked}, {limit} is what this machine affords)" : "";
 
         if (string.IsNullOrWhiteSpace(packPath))
         {
@@ -481,7 +494,8 @@ public static class BlockTextureSet
 
             var ownMoving = OwnAnimations(plain, own);
             return new Result(
-                plain, own, $"{Layers.Length} built-in tiles at {own}x{own}, {ownMoving.Count} moving",
+                plain, own,
+                $"{Layers.Length} built-in tiles at {own}x{own}{reduced}, {ownMoving.Count} moving",
                 grass, foliage, Untouched(), ownMoving);
         }
 
@@ -493,7 +507,7 @@ public static class BlockTextureSet
             for (var i = 0; i < Layers.Length; i++) plain[i] = Own(i, own);
 
             return new Result(
-                plain, own, $"no pack at '{packPath}' — using built-in tiles",
+                plain, own, $"no pack at '{packPath}' — using built-in tiles at {own}x{own}{reduced}",
                 grass, foliage, Untouched(), OwnAnimations(plain, own));
         }
 
@@ -585,7 +599,7 @@ public static class BlockTextureSet
 
         var summary = $"pack '{pack.Name}'"
                     + (pack.Description.Length > 0 ? $" — {pack.Description}" : "")
-                    + $" ({pack.Dialect.ToString().ToLowerInvariant()} format {pack.Format}, {resolution}): "
+                    + $" ({pack.Dialect.ToString().ToLowerInvariant()} format {pack.Format}, {resolution}{reduced}): "
                     + $"{pack.Loaded - colormaps} of {Layers.Length} layers replaced"
                     + (colormaps > 0 ? $", {colormaps} colormaps" : ", built-in colormaps")
                     + (pack.Namespaces.Count > 1 ? $", {pack.Namespaces.Count} namespaces" : "")

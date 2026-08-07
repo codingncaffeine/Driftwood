@@ -5585,6 +5585,50 @@ public static class WorldAudit
             if (islands > 6) faults.Add($"{name} is {islands} disconnected pieces of ink, which is a spray not a drawing");
         }
 
+        faults.AddRange(TextureCeilingSelfTest());
+        return faults;
+    }
+
+    /// <summary>
+    /// Checks a requested tile size is held to what the machine will take, and said out loud.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛔ <b>The ceiling used to be applied on the pack path only.</b> Which is exactly the
+    /// wrong path — a player running with no pack at all is the ordinary case, and
+    /// <c>--texture-size 4096</c> with no pack asked for two hundred layers of 4096², which is
+    /// <b>13.7 GB</b> and a process that dies before its window opens. The pack branch was clamped
+    /// because that is the branch where somebody was thinking about resolution; the two that were
+    /// not are the two where nobody was.</para>
+    /// <para>⛔ <b>Both arms, and the second is the one that matters.</b> "A request over the
+    /// ceiling comes down" is satisfied by a build that ignores the request entirely and always
+    /// returns the ceiling — which would silently pin every machine to one resolution. Asking that
+    /// a request <em>under</em> the ceiling is honoured is what tells a clamp from a constant.</para>
+    /// <para>⚠ And each arm checks what was <em>said</em> as well as what was built. Reducing a
+    /// number a player typed on their own command line without a word is the failure this exists to
+    /// prevent: the only other evidence is that the game looks softer than they asked for.</para>
+    /// </remarks>
+    private static List<string> TextureCeilingSelfTest()
+    {
+        var faults = new List<string>();
+
+        var over = BlockTextureSet.Build(packPath: null, size: 512, ceiling: 64);
+        if (over.Size != 64)
+            faults.Add($"512 asked for against a ceiling of 64 built at {over.Size}");
+        if (!over.Summary.Contains("asked 512", StringComparison.Ordinal))
+            faults.Add($"a request cut from 512 to 64 said nothing about it: {over.Summary}");
+
+        var under = BlockTextureSet.Build(packPath: null, size: 32, ceiling: 512);
+        if (under.Size != 32)
+            faults.Add($"32 asked for against a ceiling of 512 built at {under.Size}");
+        if (under.Summary.Contains("asked", StringComparison.Ordinal))
+            faults.Add($"a request that was honoured claimed it had been cut: {under.Summary}");
+
+        // And the floor, which is the same argument from the other end: our own art is drawn at
+        // sixteen and a tile smaller than that is a downscale of the only original there is.
+        var tiny = BlockTextureSet.Build(packPath: null, size: 4, ceiling: 512);
+        if (tiny.Size != TileGen.Size)
+            faults.Add($"4 asked for came back at {tiny.Size} rather than {TileGen.Size}");
+
         return faults;
     }
 
