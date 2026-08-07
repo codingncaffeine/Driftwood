@@ -57,7 +57,10 @@ public sealed class PlayerRenderer : IDisposable
 
     public ArmStyle Arms { get; }
 
-    public unsafe PlayerRenderer(GL gl, PlayerSkinData skin)
+    /// <param name="pack">
+    /// The pack being worn, for the armour nets. Null paints all of them.
+    /// </param>
+    public unsafe PlayerRenderer(GL gl, PlayerSkinData skin, TexturePack? pack = null)
     {
         _gl = gl;
         Arms = skin.Arms;
@@ -131,15 +134,23 @@ public sealed class PlayerRenderer : IDisposable
 
         _skin = UploadSkin(gl, skin);
 
-        _armourSheets = new uint[Armour.Materials.Length * 2];
-        for (var m = 0; m < Armour.Materials.Length; m++)
-        {
-            var sheets = ArmourArt.Build(Armour.Materials[m]);
-            for (var layer = 0; layer < 2; layer++)
-                _armourSheets[m * 2 + layer] =
-                    UploadSheet(gl, sheets[layer], ArmourArt.Width, ArmourArt.Height);
-        }
+        // ⛳ THE PACK'S OWN NETS WHERE IT HAS THEM. A pack paints armour twice — an icon for the
+        // slot and a net for the body — and we read the first and generated the second, so a player
+        // in a fully skinned world still wore our painted plate. ⚠ Each sheet is uploaded at its
+        // OWN resolution rather than resampled to ours: the layout is the same proportions at any
+        // size, so normalised UVs land in the same place and a 256-pixel net keeps its detail.
+        var armour = ArmourSheets.Load(pack);
+        _armourFromPack = ArmourSheets.FromPack(armour);
+
+        _armourSheets = new uint[armour.Length];
+        for (var i = 0; i < armour.Length; i++)
+            _armourSheets[i] = UploadSheet(gl, armour[i].Pixels, armour[i].Width, armour[i].Height);
     }
+
+    /// <summary>How many of the twelve armour nets came from the pack, for the startup line.</summary>
+    public int ArmourFromPack => _armourFromPack;
+
+    private readonly int _armourFromPack;
 
     /// <summary>
     /// Uploads the sheet. Nearest filtering and no mipmaps.

@@ -956,9 +956,22 @@ public sealed class ClientHost : IDisposable
         _startup.Mark("texture upload");
 
         var skin = PlayerSkin.Build(_options.SkinPath, _options.Arms);
-        _playerRenderer = new PlayerRenderer(_gl, skin);
-        _hud.SetSkin(skin);
-        Console.WriteLine($"skin        {skin.Summary}");
+
+        // ⚠ Opened once and handed to both, rather than a path each. Two openings of a quarter-
+        // gigabyte zip to answer twelve lookups is a load turned into a wait — and it is the same
+        // twelve nets either way, so the two would have to agree about them anyway.
+        using (var pack = string.IsNullOrWhiteSpace(_packPath) ? null : TexturePack.Open(_packPath))
+        {
+            _playerRenderer = new PlayerRenderer(_gl, skin, pack);
+            _hud.SetSkin(skin, pack);
+        }
+
+        Console.WriteLine(
+            $"skin        {skin.Summary}"
+            + (_playerRenderer.ArmourFromPack > 0
+                ? $"; {_playerRenderer.ArmourFromPack} of {Armour.Materials.Length * ArmourSheets.Layers} "
+                  + "armour nets from the pack"
+                : "; every armour net ours"));
 
         // The same size the block tiles came out at, whatever decided it — cracks are laid over a
         // block face and a crack chain at a different resolution is visible as a crack chain.

@@ -1702,13 +1702,14 @@ public sealed class HudRenderer : IDisposable
 
             var (fx, fy, fw, fh) = ArmourModel.FaceRect(plate, 0);
 
-            // ⚠ Normalised against the sheet's WIDTH on both axes, because the array is square and
-            // the 64x32 net was padded into it. Dividing v by the net's own height would read the
-            // bottom half of the sheet, which is the part nobody painted.
+            // ⚠ Against the NET's own 64x32 for the fraction, then scaled by how much of the square
+            // layer the net occupies. The rects come back in 64-wide texels whatever resolution the
+            // sheet arrived at, so the two steps are "where on the net" and "where the net sits in
+            // the layer" — folding them into one division is how a sleeve reads a kneecap.
             var u0 = fx / (float)ArmourArt.Width;
             var u1 = (fx + fw) / (float)ArmourArt.Width;
-            var v0 = fy / (float)ArmourArt.Width;
-            var v1 = (fy + fh) / (float)ArmourArt.Width;
+            var v0 = fy / (float)ArmourArt.Height * _armourV;
+            var v1 = (fy + fh) / (float)ArmourArt.Height * _armourV;
 
             if (plate.Mirror) (u0, u1) = (u1, u0);
 
@@ -1758,13 +1759,13 @@ public sealed class HudRenderer : IDisposable
     /// anybody has decided which skin is being worn — and because a skin can change without the
     /// overlay needing to be built again.
     /// </remarks>
-    public void SetSkin(PlayerSkinData skin)
+    public void SetSkin(PlayerSkinData skin, TexturePack? pack = null)
     {
         _skin?.Dispose();
         _skin = new BlockTextureArray(_gl, [skin.Pixels], skin.Size);
         _dollBoxes = PlayerModel.Build(skin.Arms, skin.Legacy);
 
-        BuildArmourSheets();
+        BuildArmourSheets(pack);
     }
 
     /// <summary>
@@ -1776,28 +1777,33 @@ public sealed class HudRenderer : IDisposable
     /// because both are the same question — what is this body wearing — and doing it once means the
     /// figure never binds a texture per piece.
     /// </remarks>
-    private void BuildArmourSheets()
+    private void BuildArmourSheets(TexturePack? pack)
     {
-        if (_armour is not null) return;
+        _armour?.Dispose();
 
-        var sheets = new List<byte[]>(Armour.Materials.Length * 2);
+        var sheets = ArmourSheets.Load(pack);
 
-        foreach (var material in Armour.Materials)
-            sheets.AddRange(ArmourArt.Build(material));
+        // ⛔ ONE SIZE FOR THE WHOLE ARRAY, and it has to be the widest. A pack's nets arrive at its
+        // own resolution and ours are painted at 64, so a set that mixes them — a copper plate of
+        // ours beside an iron one of theirs — has two shapes in it, and an array takes one. Taking
+        // the widest upscales ours rather than throwing away the pack's detail, which is the trade
+        // this project already makes everywhere else.
+        var size = ArmourArt.Width;
+        foreach (var sheet in sheets) size = Math.Max(size, sheet.Width);
 
-        // ⚠ Square, because the array wants one size and the net is 64x32. The painter fills the
-        // top half and the bottom stays clear, which is exactly what the skin loader does to a
-        // legacy sheet — same trade, same reason: one shape for every layer in an array.
-        var square = new List<byte[]>(sheets.Count);
-        foreach (var sheet in sheets)
-        {
-            var padded = new byte[ArmourArt.Width * ArmourArt.Width * 4];
-            Array.Copy(sheet, padded, Math.Min(sheet.Length, padded.Length));
-            square.Add(padded);
-        }
+        var square = new byte[sheets.Length][];
+        for (var i = 0; i < sheets.Length; i++) square[i] = ArmourSheets.Square(sheets[i], size);
 
-        _armour = new BlockTextureArray(_gl, [.. square], ArmourArt.Width);
+        _armour = new BlockTextureArray(_gl, square, size);
+
+        // ⚠ The net occupies the top HALF of the square, so the figure's v coordinates run to this
+        // rather than to one. Kept as a number rather than assumed, because a format that ever
+        // ships a square net would make the assumption silently wrong.
+        _armourV = ArmourArt.Height / (float)ArmourArt.Width;
     }
+
+    /// <summary>How far down the square array's layer the armour net actually reaches.</summary>
+    private float _armourV = ArmourArt.Height / (float)ArmourArt.Width;
 
     /// <summary>A furnace's flame burning down, and the work filling toward the output.</summary>
     private void Hearth(ScreenLayout layout, HudScreen screen)
