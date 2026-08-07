@@ -1050,6 +1050,18 @@ public static class WorldAudit
         // registered items are two statements of the same twenty numbers and nothing else in the
         // game would notice them disagreeing — a helmet worth the chestplate's points looks exactly
         // like working armour from every screen there is.
+        var hungerFaults = PlayerVitals.Validate(registry, out var hungerDetail);
+        Check("hunger drains, gates mending, and stops short of killing", hungerFaults.Count == 0,
+            hungerFaults.Count == 0 ? hungerDetail : $"{hungerFaults.Count} faults: {hungerFaults[0]}");
+
+        var shakeFaults = BarShake.Validate(out var shakeDetail);
+        Check("a bar shivers only when it is nearly out", shakeFaults.Count == 0,
+            shakeFaults.Count == 0 ? shakeDetail : $"{shakeFaults.Count} faults: {shakeFaults[0]}");
+
+        var heartFaults = PaintedArt.ValidateHeart(TileGen.Size, out var heartDetail);
+        Check("the bars are the painted art, and they fill", heartFaults.Count == 0,
+            heartFaults.Count == 0 ? heartDetail : $"{heartFaults.Count} faults: {heartFaults[0]}");
+
         var swapFaults = Equipment.Validate(items);
         Check("the two hands trade what is in them", swapFaults.Count == 0,
             swapFaults.Count == 0

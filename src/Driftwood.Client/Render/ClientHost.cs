@@ -4498,14 +4498,18 @@ public sealed class ClientHost : IDisposable
     /// Eats what is in hand, and says whether any of it landed.
     /// </summary>
     /// <remarks>
-    /// ⚠ <b>Refused at full health rather than swallowed.</b> <see cref="PlayerVitals.Heal"/> answers
-    /// with what it actually took, so this is one question rather than a second copy of the clamp —
-    /// and the food stays in the pocket instead of being spent on nothing.
+    /// ⛔ <b>Eating FEEDS now, and no longer heals.</b> That is the change hunger is for: a meal
+    /// fills the food bar and the food bar is what mends, so the loop is eat to stay fed, stay fed to
+    /// mend — rather than food being a potion. <see cref="ItemType.Feeds"/> has always been the
+    /// number; what it counts changed from half-hearts to half-drumsticks.
+    /// ⚠ <b>Refused at a full bar rather than swallowed.</b> <see cref="PlayerVitals.Eat"/> answers
+    /// with what it actually took, so this is one question rather than a second copy of the clamp,
+    /// and a roast eaten at nineteen of twenty stays in the pocket instead of being spent for one.
     /// </remarks>
     private bool EatHeld()
     {
         if (_inventory.HeldType is not { IsFood: true } food) return false;
-        if (_vitals.Heal(food.Feeds) == 0) return false;
+        if (_vitals.Eat(food.Feeds) == 0) return false;
 
         _inventory.SpendHeld();
         _audio?.Play(Pick(CreatureSounds.Meals), _viewPosition, 0.45f, Wobble());
@@ -5392,6 +5396,11 @@ public sealed class ClientHost : IDisposable
 
         _streamer.EditBlock(hit.X, hit.Y, hit.Z, BlockId.Air);
         ShedUnsupported(hit.X, hit.Y, hit.Z);
+
+        // ⛳ Digging is work, and it is most of what a player does. Charged here rather than per
+        // frame of swinging, so a block that took eight seconds and one that took one cost the same
+        // — the hunger is in the block coming out, not in how stubborn it was.
+        _vitals.Spend(PlayerVitals.EffortPerBlockMined);
 
         // Standing in front of a furnace that is no longer there.
         if (_hudScreen.IsOpen && _station == (hit.X, hit.Y, hit.Z)) CloseScreen();

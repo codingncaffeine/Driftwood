@@ -1137,12 +1137,76 @@ public static class TileGen
 
     /// <summary>The heart the health bar is counted in, as a white shape to be tinted.</summary>
     /// <remarks>
-    /// Drawn white and coloured at the point of use, so full, half and empty are one tile and three
-    /// tints rather than three tiles that can drift apart. The outline is part of the shape rather
-    /// than a separate pass: an empty heart is the same pixels in a dark colour, and it has to read
-    /// as the same heart or the bar looks like two different rows.
+    /// <para>Drawn white and coloured at the point of use, so full, half and empty are one tile and
+    /// three tints rather than three tiles that can drift apart. The outline is part of the shape
+    /// rather than a separate pass: an empty heart is the same pixels in a dark colour, and it has to
+    /// read as the same heart or the bar looks like two different rows.</para>
+    /// <para>⛳ <b>The user's own drawing is used when this build carries it</b>, and the generated
+    /// one below is the fallback. Their sheet is an outline, so its middle is flooded rather than
+    /// drawn — see <see cref="PaintedArt.HeartTile"/>, which hands back exactly the shape this
+    /// produces: the line darker than the middle, so one tile still serves both tints.</para>
     /// </remarks>
-    public static byte[] Heart()
+    public static byte[] Heart() => PaintedArt.HeartTile(Size) ?? GeneratedHeart();
+
+    /// <summary>The drumstick a full notch of the hunger bar is, in the user's own colours.</summary>
+    /// <remarks>
+    /// ⛳ <b>Drawn rather than tinted, unlike every other icon on the bar.</b> The user painted this
+    /// one in full colour — measured at thirty thousand distinct shades against the socket's fifteen
+    /// hundred — so it is put on screen as it is, with a white tint that changes nothing. Tinting a
+    /// finished drawing is how a piece of roast meat becomes a red silhouette of one.
+    /// </remarks>
+    public static byte[] DrumstickFull() => PaintedArt.SheetTile(PaintedArt.Food, Size) ?? Drumstick();
+
+    /// <summary>And the hollow one under it, white so the empty tint can darken it.</summary>
+    public static byte[] DrumstickSocket() =>
+        PaintedArt.SheetTile(PaintedArt.FoodSocket, Size) ?? Drumstick();
+
+    /// <summary>
+    /// The generated drumstick, kept as the fallback when this build carries no painted one.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>A leg of meat, and it has to be nothing like a heart at nine pixels.</b> The two bars sit
+    /// either side of the crosshair and are read at a glance in the dark; a round shape opposite a
+    /// round shape is two rows a player has to count to tell apart. This is a bone running corner to
+    /// corner with the meat on one end — diagonal where a heart is upright, which is the difference
+    /// that survives being small.
+    /// ⚠ Same two values as the heart: a darker rim at 176 and the body at 255, so the identical
+    /// socket-and-fill tinting works on it and a partly-eaten drumstick tears the same way.
+    /// </remarks>
+    public static byte[] Drumstick()
+    {
+        var t = new byte[BytesPerTile];
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var u = (x + 0.5f) / Size;
+            var v = (y + 0.5f) / Size;
+
+            // The bone: a bar along the up-right diagonal, from the middle to the bottom left.
+            var alongBone = MathF.Abs((u - v) - 0.16f);
+            var bone = alongBone < 0.085f && u + v > 0.62f && u + v < 1.62f;
+
+            // The meat: a fat lobe on the top-right end of it.
+            var mx = u - 0.66f;
+            var my = v - 0.34f;
+            var meat = mx * mx * 1.35f + my * my < 0.075f;
+
+            if (!bone && !meat) continue;
+
+            // The rim is wherever the shape is about to stop, which is what gives the tint an edge.
+            var edge = meat
+                ? mx * mx * 1.35f + my * my > 0.050f
+                : alongBone > 0.055f || u + v < 0.70f || u + v > 1.54f;
+
+            var value = edge ? (byte)176 : (byte)255;
+            Put(t, x, y, value, value, value, 255);
+        }
+
+        return t;
+    }
+
+    private static byte[] GeneratedHeart()
     {
         var t = new byte[BytesPerTile];
 

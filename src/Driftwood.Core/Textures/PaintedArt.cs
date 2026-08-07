@@ -26,8 +26,18 @@ public static class PaintedArt
     /// <summary>The recipe book: a closed, clasped, leather-bound one seen corner-on.</summary>
     public const string RecipeBook = "Driftwood.Core.recipe-book.png";
 
+    /// <summary>The heart the health bar is counted in — a hollow pixel-art outline.</summary>
+    public const string Heart = "Driftwood.Core.health.png";
+
+    /// <summary>A drumstick, painted in full colour: what a filled notch of the hunger bar is.</summary>
+    public const string Food = "Driftwood.Core.foodbar.png";
+
+    /// <summary>And the same drumstick as a hollow outline: the socket under it.</summary>
+    public const string FoodSocket = "Driftwood.Core.emptyfood.png";
+
     private static readonly Dictionary<string, Image?> Loaded = [];
     private static readonly Dictionary<(string, int), byte[]> Tiles = [];
+    private static readonly Dictionary<int, byte[]?> Hearts = [];
 
     /// <summary>
     /// One painted tile at the size the texture array is being built at, or null when it is absent.
@@ -53,6 +63,311 @@ public static class PaintedArt
 
     /// <summary>True when this painted tile is actually carried by this build.</summary>
     public static bool Has(string name) => Source(name) is not null;
+
+    /// <summary>
+    /// The heart, as a white shape whose OUTLINE and INSIDE are two different values.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳⛳ <b>The art is an outline, and the bar needs something that fills.</b> Measured off
+    /// the user's own sheet 2026-08-07: 1242×140, seven cells, every opaque pixel pure white and
+    /// every cell the same drawing — so it is one hollow heart laid out seven times, not a
+    /// full/half/empty set and not a fill sequence. What is drawn is the <em>socket</em>.</para>
+    /// <para>⛳ So the inside is derived rather than drawn: flood from the edges of the cell, and
+    /// anything the flood cannot reach and the outline does not occupy is the middle of the heart.
+    /// The tile comes out with the outline at 176 and the middle at 255, which is exactly the shape
+    /// the old generated heart handed the HUD — <b>so the two tints and the half-heart uv trick keep
+    /// working unchanged, and the red now fills INSIDE the user's own line.</b></para>
+    /// <para>⛔ <b>Filled at the SOURCE's resolution, not the tile's.</b> The outline is about twelve
+    /// pixels thick in a 160-pixel cell and a little over one in a 16-pixel tile; reduced first, its
+    /// thinnest corners drop below the alpha threshold, the flood leaks out through the gap and the
+    /// whole heart comes back empty. Reducing afterwards also lets the outline keep its
+    /// anti-aliasing, which is what stops a 16-pixel heart looking like a staircase.</para>
+    /// <para>⚠ <b>The cell is FOUND, not written down.</b> The first run of columns holding any ink
+    /// is the first heart, so the sheet can be redrawn — more hearts, different spacing, a different
+    /// size — without a constant here going stale. The measured pitch was already uneven (179 to 181
+    /// pixels), which is what a hand-laid sheet looks like and what a hard-coded stride would clip.
+    /// </para>
+    /// </remarks>
+    public static byte[]? HeartTile(int size)
+    {
+        if (size <= 0) return null;
+        if (Hearts.TryGetValue(size, out var cached)) return cached;
+
+        var built = BuildHeart(size);
+        Hearts[size] = built;
+        return built;
+    }
+
+    /// <summary>
+    /// That the heart on the bar is the user's drawing, and that it has a middle to fill.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b><see cref="HeartTile"/> answers null on every failure and the caller quietly draws the
+    /// generated heart instead.</b> That is the right behaviour and it is also invisible: a build
+    /// whose embedded resource did not make it, or whose flood leaked out through a thin corner of
+    /// the outline, looks exactly like a build that is working. Nothing else in the project would
+    /// ever say so — the bar would simply be the old heart again.
+    /// ⚠ <b>Both values are asserted, not just that a tile came back.</b> The whole point of the
+    /// derivation is that the line and the middle are different, because that is what lets one tile
+    /// serve the socket and the fill; a tile that is uniformly white passes "it exists" and gives a
+    /// bar with no visible outline at all.
+    /// </remarks>
+    public static List<string> ValidateHeart(int size, out string detail)
+    {
+        var faults = new List<string>();
+        detail = "";
+
+        if (!Has(Heart))
+        {
+            faults.Add("this build carries no health.png, so the bar is drawing the generated heart");
+            return faults;
+        }
+
+        if (HeartTile(size) is not { } tile)
+        {
+            faults.Add("health.png is carried but no heart could be derived from it — the flood "
+                     + "found no middle, so the bar has fallen back to the generated heart");
+            return faults;
+        }
+
+        int line = 0, middle = 0, clear = 0;
+
+        for (var i = 0; i < size * size; i++)
+        {
+            var alpha = tile[i * 4 + 3];
+            if (alpha < 128) { clear++; continue; }
+
+            if (tile[i * 4] >= 216) middle++;
+            else line++;
+        }
+
+        if (middle == 0)
+            faults.Add("the heart has no middle, so a filled one and an empty one are the same picture");
+
+        if (line == 0)
+            faults.Add("the heart has no outline, so an empty socket has no edge to read");
+
+        if (clear == 0)
+            faults.Add($"the heart fills all {size * size} texels of its tile, which is a square");
+
+        // ⛔ The middle has to be ENCLOSED, or the flood escaped and what is being called a middle is
+        // the background. Walked down the centre column: outside, then line, then middle.
+        var mid = size / 2;
+        int firstLine = -1, firstMiddle = -1;
+
+        for (var y = 0; y < size; y++)
+        {
+            var at = (y * size + mid) * 4;
+            if (tile[at + 3] < 128) continue;
+
+            if (tile[at] < 216 && firstLine < 0) firstLine = y;
+            else if (tile[at] >= 216 && firstMiddle < 0) firstMiddle = y;
+        }
+
+        if (firstMiddle >= 0 && firstLine >= 0 && firstMiddle < firstLine)
+            faults.Add($"down the middle of the heart the fill starts at row {firstMiddle} and the "
+                     + $"outline at {firstLine}, so the fill is outside the line");
+
+        // ── And the hunger bar's pair, which fails the same way and for the same reason ──────────
+        //
+        // ⛔ The two are drawn rather than derived, so what has to be proved is that they are two
+        // DIFFERENT pictures. Both falling back to the generated drumstick gives a bar whose full
+        // and empty states are the same tile under two tints — which looks like a working bar until
+        // you notice it never appears to empty.
+        var colours = 0;
+        var socketInk = 0;
+        var fullInk = 0;
+
+        if (!Has(Food) || !Has(FoodSocket))
+        {
+            faults.Add("this build carries no foodbar.png/emptyfood.png, so the hunger bar is "
+                     + "drawing the generated drumstick for both states");
+        }
+        else if (SheetTile(Food, size) is not { } meat || SheetTile(FoodSocket, size) is not { } socket)
+        {
+            faults.Add("the hunger bar's art is carried but no tile could be taken from it");
+        }
+        else
+        {
+            var seen = new HashSet<int>();
+
+            for (var i = 0; i < size * size; i++)
+            {
+                if (meat[i * 4 + 3] >= 128)
+                {
+                    fullInk++;
+                    seen.Add((meat[i * 4] << 16) | (meat[i * 4 + 1] << 8) | meat[i * 4 + 2]);
+                }
+
+                if (socket[i * 4 + 3] >= 128) socketInk++;
+            }
+
+            colours = seen.Count;
+
+            // ⚠ The painted one is a drawing and the socket is a mask, so the first has many colours
+            // and the second has almost one. Equal counts means both came from the same fallback.
+            if (colours < 8)
+                faults.Add($"the filled drumstick has {colours} colours in it, so it is a "
+                         + "silhouette rather than the painting — the tint would be flattening it");
+
+            if (socketInk == 0) faults.Add("the empty drumstick has no ink at all");
+            if (fullInk == 0) faults.Add("the filled drumstick has no ink at all");
+
+            // A hollow socket has to cover LESS than a solid painted one, or it is not hollow.
+            if (socketInk >= fullInk)
+                faults.Add($"the empty drumstick covers {socketInk} texels against the full one's "
+                         + $"{fullInk}, so they are the same picture");
+        }
+
+        detail = $"the user's own heart at {size}px: {line} texels of outline round {middle} of "
+               + $"fill, {clear} clear, line met first down the middle; and their drumstick in "
+               + $"{colours} colours over {fullInk} texels against a hollow socket of {socketInk}";
+
+        return faults;
+    }
+
+    /// <summary>
+    /// The first drawing on a sheet of them, at the size the array is being built at.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>Every sheet in this project is one shape laid out several times</b> — seven hearts, seven
+    /// drumsticks — because that is how they were drawn rather than because the game wants seven of
+    /// anything. Taking the first and finding it by its ink means the sheets can be redrawn at a
+    /// different size, spacing or count without a constant here going stale. Measured: the hearts sit
+    /// at a pitch of 179 to 181 pixels, which is what a hand-laid row looks like and what any fixed
+    /// stride would clip.
+    /// </remarks>
+    public static byte[]? SheetTile(string name, int size)
+    {
+        if (size <= 0) return null;
+        if (Tiles.TryGetValue((name, size), out var cached)) return cached;
+
+        if (Source(name) is not { } sheet) return null;
+        if (FirstCell(sheet) is not { } cell) return null;
+
+        var tile = Fit(Crop(sheet, cell), size);
+        Tiles[(name, size)] = tile;
+        return tile;
+    }
+
+    /// <summary>The bounds of the first drawing on a sheet, or null when there is no ink at all.</summary>
+    private static (int X0, int Y0, int X1, int Y1)? FirstCell(Image sheet)
+    {
+        int x0 = -1, x1 = -1;
+        for (var x = 0; x < sheet.Width; x++)
+        {
+            var ink = false;
+            for (var y = 0; y < sheet.Height && !ink; y++)
+                ink = sheet.Pixels[(y * sheet.Width + x) * 4 + 3] > 8;
+
+            if (ink && x0 < 0) x0 = x;
+            else if (!ink && x0 >= 0) { x1 = x - 1; break; }
+        }
+
+        if (x0 < 0) return null;
+        if (x1 < 0) x1 = sheet.Width - 1;
+
+        int y0 = -1, y1 = -1;
+        for (var y = 0; y < sheet.Height; y++)
+        {
+            var ink = false;
+            for (var x = x0; x <= x1 && !ink; x++)
+                ink = sheet.Pixels[(y * sheet.Width + x) * 4 + 3] > 8;
+
+            if (!ink) continue;
+            if (y0 < 0) y0 = y;
+            y1 = y;
+        }
+
+        return y0 < 0 ? null : (x0, y0, x1, y1);
+    }
+
+    private static Image Crop(Image sheet, (int X0, int Y0, int X1, int Y1) cell)
+    {
+        var w = cell.X1 - cell.X0 + 1;
+        var h = cell.Y1 - cell.Y0 + 1;
+        var pixels = new byte[w * h * 4];
+
+        for (var y = 0; y < h; y++)
+            Array.Copy(
+                sheet.Pixels, ((cell.Y0 + y) * sheet.Width + cell.X0) * 4,
+                pixels, y * w * 4, w * 4);
+
+        return new Image(w, h, pixels);
+    }
+
+    private static byte[]? BuildHeart(int size)
+    {
+        if (Source(Heart) is not { } sheet) return null;
+        if (FirstCell(sheet) is not { } cell) return null;
+
+        var (x0, y0, x1, y1) = cell;
+
+        // ⚠ One clear row and column all round, so the flood below always has an outside to start
+        // from even when the drawing runs right to the edge of its cell — which this one does.
+        var w = x1 - x0 + 3;
+        var h = y1 - y0 + 3;
+
+        var line = new bool[w * h];
+        for (var y = y0; y <= y1; y++)
+        for (var x = x0; x <= x1; x++)
+            line[(y - y0 + 1) * w + (x - x0 + 1)] = sheet.Pixels[(y * sheet.Width + x) * 4 + 3] > 96;
+
+        // ── Flood the outside, four-connected. What is left is the middle of the heart. ──
+        //
+        // ⚠ Four-connected, not eight: an eight-connected flood squeezes diagonally between two
+        // pixels that touch only at a corner, which is exactly what the notch at the top of a heart
+        // is made of — and it would drain the fill out through the dip between the two lobes.
+        var outside = new bool[w * h];
+        var queue = new Queue<int>();
+
+        outside[0] = true;
+        queue.Enqueue(0);
+
+        while (queue.Count > 0)
+        {
+            var at = queue.Dequeue();
+            var ax = at % w;
+            var ay = at / w;
+
+            foreach (var (dx, dy) in (ReadOnlySpan<(int, int)>)[(1, 0), (-1, 0), (0, 1), (0, -1)])
+            {
+                int nx = ax + dx, ny = ay + dy;
+                if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+
+                var next = ny * w + nx;
+                if (outside[next] || line[next]) continue;
+
+                outside[next] = true;
+                queue.Enqueue(next);
+            }
+        }
+
+        // ── Paint it back out at source resolution: the line darker, the middle bright. ──
+        var full = new byte[w * h * 4];
+        var inside = 0;
+
+        for (var i = 0; i < line.Length; i++)
+        {
+            byte value;
+
+            if (line[i]) value = 176;
+            else if (!outside[i]) { value = 255; inside++; }
+            else continue;
+
+            full[i * 4] = value;
+            full[i * 4 + 1] = value;
+            full[i * 4 + 2] = value;
+            full[i * 4 + 3] = 255;
+        }
+
+        // ⛔ A heart with no middle is a flood that leaked, and it would ship as a bar that never
+        // appears to fill. Falling back to the generated heart is the honest answer, and the texture
+        // check says which one is being used.
+        if (inside < line.Length / 20) return null;
+
+        return Fit(new Image(w, h, full), size);
+    }
 
     private static Image? Source(string name)
     {

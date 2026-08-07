@@ -668,6 +668,14 @@ public static class WorldSave
         into.Write(Equipment.Slots);
         for (var slot = 0; slot < Equipment.Slots; slot++)
             Stack(into, state.Worn.At(slot), items, state.Catalogue);
+
+        // ⛔ HUNGER GOES ON THE END, NOT BESIDE HEALTH WHERE IT BELONGS. This section's fields are a
+        // flat run with no per-field tag, so a value inserted next to Breath would be read as
+        // Selected by every save written before hunger existed — and everything after it would shift
+        // by four bytes, which is a pocket full of the wrong items rather than an error.
+        // ⛳ The section is length-prefixed and read from its own byte array, so the reader can ask
+        // whether there is anything after the worn slots. An older save simply has nothing there.
+        into.Write(state.Vitals.Food);
     });
 
     private static void ReadPlayer(BinaryReader from, WorldState into, int[] toItem)
@@ -678,8 +686,6 @@ public static class WorldSave
 
         var health = from.ReadInt32();
         var breath = from.ReadInt32();
-        into.Vitals.Restore(health, breath);
-
         var selected = from.ReadInt32();
 
         into.Pockets.Clear();
@@ -699,5 +705,14 @@ public static class WorldSave
             var stack = Stack(from, toItem);
             if (slot < Equipment.Slots && !stack.IsEmpty) into.Worn.Restore((EquipSlot)slot, stack);
         }
+
+        // ⛳ Hunger, if this save is new enough to carry any. A world written before it existed has
+        // nothing left in the section, and the player opens it fed rather than starving — which is
+        // the only honest reading of "this file does not say".
+        var food = from.BaseStream.Position < from.BaseStream.Length
+            ? from.ReadInt32()
+            : PlayerVitals.MaxFood;
+
+        into.Vitals.Restore(health, breath, food);
     }
 }

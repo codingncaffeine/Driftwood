@@ -24,6 +24,22 @@
        BlockTextureSet.Layers pointing at the file a pack would keep its own in. -->
   <ItemGroup>
     <EmbeddedResource Include="..\..\assets\recipe_book.png" LogicalName="Driftwood.Core.recipe-book.png" />
+
+    <!-- ⛳ The health bar's heart, the user's own drawing, for the same reason the book is here: it
+         is one small shape seen at one size whose whole job is to be recognised instantly, and a
+         procedural heart is a blob that can never be argued into being a better heart.
+
+         ⚠ It is an OUTLINE and the bar needs something that fills, so the inside is derived from it
+         rather than drawn — see PaintedArt.HeartTile. The sheet holds seven copies of one heart;
+         only the first is read, and it is FOUND rather than measured into a constant. -->
+    <EmbeddedResource Include="..\..\assets\health.png" LogicalName="Driftwood.Core.health.png" />
+
+    <!-- ⛳ And the hunger bar, which the user drew as a PAIR: foodbar.png is a finished full-colour
+         drumstick and emptyfood.png is the same shape as a hollow outline. So this bar needs no
+         derivation at all — the two states are both drawn, where the heart had to have its middle
+         flooded because only the socket was. Measured: 30,123 distinct colours against 1,497. -->
+    <EmbeddedResource Include="..\..\assets\foodbar.png" LogicalName="Driftwood.Core.foodbar.png" />
+    <EmbeddedResource Include="..\..\assets\emptyfood.png" LogicalName="Driftwood.Core.emptyfood.png" />
   </ItemGroup>
 
 </Project>

@@ -348,6 +348,31 @@ public sealed class PlayerBody
         FallDistance = 0f;
     }
 
+    /// <summary>
+    /// Ground actually covered since this was last read, in blocks. Reading it clears it.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ <b>What hunger is spent on, and it is MEASURED rather than inferred from the keys.</b>
+    /// A player holding forward against a wall is going nowhere; one carried by a current or sliding
+    /// down a slope is holding nothing and covering ground. Distance is the honest question — and it
+    /// makes sprinting cost more with no multiplier anywhere, because a sprint covers more blocks in
+    /// the same second and so spends more of the bar by arithmetic. A constant would be one more
+    /// number to keep in step with the movement speeds.</para>
+    /// <para>⚠ <b>Horizontal only.</b> Vertical movement is falling, climbing and being shoved by
+    /// water, none of which is walking; counting it would make treading water the hungriest thing in
+    /// the game.</para>
+    /// <para>⚠ <b>Reading it clears it</b>, so it cannot be counted twice and cannot grow without
+    /// bound across a session. There is exactly one reader.</para>
+    /// </remarks>
+    public float TakeDistanceWalked()
+    {
+        var walked = _walked;
+        _walked = 0f;
+        return walked;
+    }
+
+    private float _walked;
+
     private void MoveWithCollisions(VoxelWorld world, Vector3 motion)
     {
         var steps = 1 + (int)(motion.Length() / MaxSubstep);
@@ -360,6 +385,7 @@ public sealed class PlayerBody
     {
         var wasOnGround = OnGround;
         var before = Position;
+        var started = Position;
 
         // X and Z before Y. Resolving the vertical first would let a body that is falling past a
         // ledge land on top of it when it should have slid down the face.
@@ -416,6 +442,12 @@ public sealed class PlayerBody
         {
             OnGround = StandingOnGround(world, Position);
         }
+
+        // Whatever ground this slice actually covered, after every collision has had its say — so a
+        // step into a wall adds nothing and a step along it adds only the part that happened.
+        var dx = Position.X - started.X;
+        var dz = Position.Z - started.Z;
+        _walked += MathF.Sqrt(dx * dx + dz * dz);
     }
 
     /// <summary>

@@ -1,3 +1,4 @@
+using System.Numerics;
 using Driftwood.Core.Blocks;
 using Driftwood.Core.Items;
 using Driftwood.Core.Physics;
@@ -39,6 +40,53 @@ public sealed class PlayerVitals
     public const int MaxBreath = 300;
 
     /// <summary>
+    /// Half-drumsticks at full. Ten of them, counted in the same unit the bar draws.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>The same shape as health on purpose</b> — twenty units drawn as ten icons — so the two
+    /// rows either side of the crosshair are read the same way, and so the torn-fill the health bar
+    /// uses works on this one without a second idea about what a partly-full icon means.
+    /// </remarks>
+    public const int MaxFood = 20;
+
+    /// <summary>
+    /// How fed a player has to be before health comes back on its own.
+    /// </summary>
+    /// <remarks>
+    /// ⛳⛳ <b>THIS IS THE WHOLE POINT OF HUNGER, and without it the bar is a nuisance.</b> Eating no
+    /// longer heals directly — <see cref="ItemType.Feeds"/> fills this instead — so the loop is: eat
+    /// to stay fed, stay fed to mend. A hunger bar that only threatens starvation is a chore with a
+    /// timer; one that gates healing is the reason to keep a farm.
+    /// ⛔ <b>Fourteen of twenty, and eighteen was WRONG — the existing rest check caught it.</b>
+    /// Mending spends food, so the gate and the cost together decide how much a full belly is worth:
+    /// at eighteen there were two units of room, mending stopped after a single heart, and half a
+    /// minute of rest left a hurt player at 16 of 20 with no way to finish. The reference gets away
+    /// with a tight gate because it burns a hidden saturation buffer first; we have no such buffer,
+    /// so the gate has to leave the room itself. Fourteen buys twelve half-hearts on a full bar.
+    /// </remarks>
+    public const int WellFed = 14;
+
+    /// <summary>
+    /// Below this, health drains rather than returns.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ Zero, so being merely hungry costs nothing but the healing. Starving is a state a player
+    /// arrives at, not a slope they are on from the first minute.
+    /// </remarks>
+    public const int Starving = 0;
+
+    /// <summary>
+    /// Health starvation will not take a player past.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>Two half-hearts, and it does NOT kill.</b> Hunger is the one thing in this game that can
+    /// run a player down while they are doing nothing wrong and looking at something else — a bar
+    /// they have never been taught to watch. Starving to death the first time is a lesson delivered
+    /// by taking the session away. It leaves them at one heart, which is unmistakable.
+    /// </remarks>
+    public const int StarvationFloor = 2;
+
+    /// <summary>
     /// Blocks of falling that cost nothing.
     /// </summary>
     /// <remarks>
@@ -61,6 +109,45 @@ public sealed class PlayerVitals
     /// <summary>Seconds a half-heart takes to return.</summary>
     private const float RegenerationPeriod = 1.6f;
 
+    /// <summary>
+    /// Effort a half-drumstick is worth.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>Hunger is spent by DOING THINGS, not by the clock.</b> A timer makes eating a chore that
+    /// arrives whatever the player was up to; effort makes a long dig or a fight cost something, and
+    /// makes standing still in a shelter nearly free. It is also the only version a check can state:
+    /// walking a hundred blocks costs this much, and that is a number rather than a feeling.
+    /// ⚠ Four, against the costs below, puts a quiet hour at roughly half a bar.
+    /// </remarks>
+    private const float EffortPerFood = 4f;
+
+    /// <summary>
+    /// Effort one block of ground covered costs.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ One hundredth, so four hundred blocks of walking is one half-drumstick and a full bar is
+    /// eight thousand blocks of it. Walking is deliberately the cheapest thing a player does —
+    /// mending and fighting are what actually empty the bar.
+    /// </remarks>
+    private const float EffortPerBlockWalked = 0.01f;
+
+    /// <summary>Effort one block broken costs, and one blow taken.</summary>
+    public const float EffortPerBlockMined = 0.025f;
+    public const float EffortPerWound = 0.1f;
+
+    /// <summary>Effort a half-heart of regeneration costs, on top of everything else.</summary>
+    /// <remarks>
+    /// ⚠ <b>Mending is by far the expensive thing</b> — two hundred blocks of walking buys one
+    /// half-heart of it — which is what makes food the resource a fight costs rather than the fight
+    /// costing only health. ⛔ But not so expensive that a belly cannot finish the job: at six, one
+    /// heart of healing dropped a full player under <see cref="WellFed"/> and mending stopped
+    /// mid-way. Two spends five of the bar to heal from half dead to full.
+    /// </remarks>
+    private const float EffortPerHeal = 2f;
+
+    /// <summary>Seconds a half-heart of starvation takes.</summary>
+    private const float StarvationPeriod = 4f;
+
     private readonly bool[] _drownsIn;
 
     private float _sinceHurt;
@@ -68,9 +155,32 @@ public sealed class PlayerVitals
     private float _drowningFor;
     private bool _wasOnGround = true;
     private float _fallInAir;
+    /// <summary>
+    /// Effort banked toward the next half-drumstick.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>A double, and the check is what forced it.</b> Effort arrives sixty times a second for
+    /// hours, and in single precision the same total paid in sixty pieces comes to very slightly
+    /// LESS than the same total paid at once — so <c>_effort >= EffortPerFood</c> never trips and the
+    /// bar does not move. It read as hunger simply not existing, which is exactly what a rate that
+    /// rounds to nothing looks like from the outside. The same drift is why an accumulator summed
+    /// across a session should not be a float in the first place.
+    /// </remarks>
+    private double _effort;
+
+    private float _starvingFor;
 
     /// <summary>Half-hearts remaining, 0 to <see cref="MaxHealth"/>.</summary>
     public int Health { get; private set; } = MaxHealth;
+
+    /// <summary>Half-drumsticks remaining, 0 to <see cref="MaxFood"/>.</summary>
+    public int Food { get; private set; } = MaxFood;
+
+    /// <summary>True when health is coming back on its own rather than draining.</summary>
+    public bool Mending => Food >= WellFed && Health < MaxHealth;
+
+    /// <summary>True when there is nothing left to burn and health is going instead.</summary>
+    public bool StarvingNow => Food <= Starving && Health > StarvationFloor;
 
     /// <summary>Ticks of breath remaining, 0 to <see cref="MaxBreath"/>.</summary>
     public int Breath { get; private set; } = MaxBreath;
@@ -165,11 +275,14 @@ public sealed class PlayerVitals
     public void Restore()
     {
         Health = MaxHealth;
+        Food = MaxFood;
         Breath = MaxBreath;
         _sinceHurt = 0f;
         _regenerating = 0f;
         _drowningFor = 0f;
         _fallInAir = 0f;
+        _effort = 0f;
+        _starvingFor = 0f;
         _wasOnGround = true;
     }
 
@@ -181,11 +294,16 @@ public sealed class PlayerVitals
     /// four hundred is the kind of thing a corrupted save says — neither should be a state the
     /// game can be put into by opening one.
     /// </remarks>
-    public void Restore(int health, int breath)
+    public void Restore(int health, int breath, int food = MaxFood)
     {
         Restore();
         Health = Math.Clamp(health, 0, MaxHealth);
         Breath = Math.Clamp(breath, 0, MaxBreath);
+
+        // ⚠ Defaulted to full rather than to zero, because a save written before hunger existed
+        // carries no food at all — and reading that as "starving" would open every existing world
+        // with the health bar already draining.
+        Food = Math.Clamp(food, 0, MaxFood);
     }
 
     /// <summary>
@@ -382,21 +500,222 @@ public sealed class PlayerVitals
             _drowningFor = 0f;
         }
 
-        var hurt = before - Health;
-        if (hurt > 0) return new VitalsEvent(hurt, !Alive, Submerged && Breath == 0);
+        // ⛳ Moving costs, taken from how far the body actually went rather than from which keys are
+        // down — so walking into a wall costs nothing, and sprinting costs more without a multiplier
+        // because it covers more ground in the same second.
+        Spend(body.TakeDistanceWalked() * EffortPerBlockWalked);
 
-        // Nothing hurt this frame, so rest counts toward getting some of it back.
+        var hurt = before - Health;
+        if (hurt > 0)
+        {
+            Spend(hurt * EffortPerWound);
+            return new VitalsEvent(hurt, !Alive, Submerged && Breath == 0);
+        }
+
+        // ── Being fed, or not ───────────────────────────────────────────────────────────────────
+        //
+        // ⛔ REGENERATION IS GATED ON FOOD NOW, and that is the change that makes hunger a system
+        // rather than a second bar. Eating used to put health back directly; it fills the food bar,
+        // and the food bar is what mends. ⚠ Mending SPENDS food, so a player who heals from half is
+        // hungry afterwards — which is the cost of a fight actually being paid.
         _sinceHurt += dt;
-        if (Health < MaxHealth && _sinceHurt >= RegenerationDelay)
+
+        if (Food <= Starving)
+        {
+            // Nothing left to burn. Health goes instead, down to a floor rather than to death.
+            _regenerating = 0f;
+
+            if (Health > StarvationFloor)
+            {
+                _starvingFor += dt;
+                while (_starvingFor >= StarvationPeriod && Health > StarvationFloor)
+                {
+                    _starvingFor -= StarvationPeriod;
+                    Health--;
+                }
+            }
+
+            return new VitalsEvent(0, false, Submerged && Breath == 0);
+        }
+
+        _starvingFor = 0f;
+
+        if (Food >= WellFed && Health < MaxHealth && _sinceHurt >= RegenerationDelay)
         {
             _regenerating += dt;
             while (_regenerating >= RegenerationPeriod && Health < MaxHealth)
             {
                 _regenerating -= RegenerationPeriod;
                 Health++;
+                Spend(EffortPerHeal);
             }
         }
 
         return new VitalsEvent(0, false, Submerged && Breath == 0);
+    }
+
+    /// <summary>
+    /// Puts effort in, and takes a half-drumstick off for every <see cref="EffortPerFood"/> of it.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ <b>The remainder is KEPT rather than dropped.</b> Effort arrives a fraction at a time, sixty
+    /// times a second; rounding each frame's worth to a whole unit would either round everything to
+    /// zero and make hunger free, or round everything up and empty the bar in seconds.
+    /// </remarks>
+    public void Spend(float effort)
+    {
+        if (effort <= 0f || Food <= 0) return;
+
+        _effort += effort;
+
+        while (_effort >= EffortPerFood && Food > 0)
+        {
+            _effort -= EffortPerFood;
+            Food--;
+        }
+    }
+
+    /// <summary>
+    /// Eats something worth this many half-drumsticks, and answers how many it actually took.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>Answers zero when the bar is already full, and the caller is what refuses the meal.</b>
+    /// Eating a whole roast at nineteen of twenty and getting one unit of it is how a player loses
+    /// food without noticing; refusing outright means it is still in their pocket for later.
+    /// ⚠ It also clears the part-spent effort, so a meal is a clean start rather than something that
+    /// is a little short because of the last few steps before it.
+    /// </remarks>
+    public int Eat(int halfDrumsticks)
+    {
+        if (halfDrumsticks <= 0 || Food >= MaxFood) return 0;
+
+        var before = Food;
+        Food = Math.Min(MaxFood, Food + halfDrumsticks);
+        _effort = 0f;
+
+        return Food - before;
+    }
+
+    /// <summary>
+    /// Hunger, walked end to end: it drains, it gates mending, it starves, and it stops.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛔ <b>Every arm here has a control beside it, because hunger fails SILENTLY.</b> A drain
+    /// rate that rounds to nothing gives a bar that never moves and looks exactly like a bar that is
+    /// working; one that gates healing on the wrong side of a comparison gives a player who mends
+    /// while starving and starves while fed. Neither shows up in a screenshot, and both are the sort
+    /// of thing a player discovers by dying to it three hours in.</para>
+    /// <para>⛳ <b>The starvation floor is the one to gate hardest.</b> It is the only rule here whose
+    /// failure is losing somebody's session, and "it stopped at the floor" is not the same claim as
+    /// "it went down" — a build that never starves at all satisfies the second.</para>
+    /// </remarks>
+    public static List<string> Validate(BlockRegistry registry, out string detail)
+    {
+        var faults = new List<string>();
+
+        // ── Effort drains the bar, and by a stated amount ───────────────────────────────────────
+        var walker = new PlayerVitals(registry);
+        walker.Spend(EffortPerFood * 4f);
+
+        if (walker.Food != MaxFood - 4)
+            faults.Add($"four drumsticks of effort took {MaxFood - walker.Food} half-drumsticks");
+
+        // ⛔ THE CONTROL: a rate that rounds to nothing looks identical from the bar. A quarter of a
+        // unit of effort, sixty times, has to move it exactly one — not zero and not sixty.
+        var trickle = new PlayerVitals(registry);
+        for (var i = 0; i < 60; i++) trickle.Spend(EffortPerFood / 60f);
+
+        if (trickle.Food != MaxFood - 1)
+            faults.Add($"a drumstick of effort paid in sixty pieces took {MaxFood - trickle.Food}, "
+                     + "so the remainder between frames is being dropped or double-counted");
+
+        // ── Eating fills, and is refused rather than wasted at a full bar ───────────────────────
+        var eater = new PlayerVitals(registry);
+        if (eater.Eat(6) != 0) faults.Add("a full player ate something and it went nowhere");
+
+        eater.Spend(EffortPerFood * 10f);
+        if (eater.Eat(6) != 6) faults.Add("a half-empty player could not eat a whole meal");
+
+        // ⚠ A meal bigger than the room left has to report only what it actually put in, or the
+        // caller spends a roast and is told it landed whole.
+        var room = MaxFood - eater.Food;
+        var took = eater.Eat(999);
+
+        if (took != room) faults.Add($"a huge meal reported {took} into {room} of room");
+        if (eater.Food != MaxFood) faults.Add($"eating past full left {eater.Food} of {MaxFood}");
+
+        // ── Being fed is what mends, and being hungry is what does not ──────────────────────────
+        var fed = new PlayerVitals(registry);
+        fed.Hurt(10);
+        var mendedFed = RunQuiet(fed, 20f);
+
+        if (mendedFed <= 0)
+            faults.Add("a well-fed player at half health did not mend at all in twenty seconds");
+
+        // ⛔ THE CONTROL, and without it the arm above passes a build that mends unconditionally.
+        var starved = new PlayerVitals(registry);
+        starved.Hurt(10);
+        starved.Spend(EffortPerFood * MaxFood);
+
+        if (starved.Food != 0) faults.Add("a player cannot be emptied of food at all");
+
+        var mendedStarving = RunQuiet(starved, 20f);
+        if (mendedStarving > 0)
+            faults.Add($"a starving player mended {mendedStarving} half-hearts, so food does not "
+                     + "gate healing and the bar is decoration");
+
+        // ── Starving costs health, and stops at the floor rather than killing ───────────────────
+        if (starved.Health >= MaxHealth - 10)
+            faults.Add("twenty seconds of starving cost no health at all");
+
+        // Long enough to kill several times over if there were no floor.
+        var dying = new PlayerVitals(registry);
+        dying.Spend(EffortPerFood * MaxFood);
+        RunQuiet(dying, StarvationPeriod * (MaxHealth + 10));
+
+        if (dying.Health != StarvationFloor)
+            faults.Add($"starving ran a player to {dying.Health} half-hearts rather than stopping "
+                     + $"at {StarvationFloor}");
+
+        if (!dying.Alive)
+            faults.Add("starving killed a player, and it is the one thing in the game that must not");
+
+        detail = $"{EffortPerFood} effort a half-drumstick: a block walked costs "
+               + $"{EffortPerBlockWalked}, a block mined {EffortPerBlockMined}, a half-heart mended "
+               + $"{EffortPerHeal}. Mending needs {WellFed} of {MaxFood}; at 0 health falls to "
+               + $"{StarvationFloor} and stops there";
+
+        return faults;
+
+        // ⛔ THE REAL Update, AGAINST A REAL BODY ON REAL GROUND — not a copy of the rule.
+        //
+        // Eight fluid checks in this project were green while the feature did nothing in the game,
+        // because every one of them drove the engine in a box it had filled itself. A hunger check
+        // that re-implemented the drain and the gate here would pass whatever Update actually did,
+        // which is the entire thing worth knowing. Standing still on a floor of stone costs no
+        // walking, so what runs is exactly the food clock and nothing else.
+        int RunQuiet(PlayerVitals vitals, float seconds)
+        {
+            var world = new VoxelWorld(registry);
+            var stone = registry.ByName("stone").Id;
+
+            for (var z = -2; z <= 2; z++)
+            for (var x = -2; x <= 2; x++)
+                world.SetBlock(x, 59, z, stone);
+
+            var body = new PlayerBody(registry);
+            body.Teleport(new Vector3(0.5f, 60f, 0.5f));
+
+            var before = vitals.Health;
+            var step = 1f / 60f;
+
+            for (var t = 0f; t < seconds; t += step)
+            {
+                body.Step(world, step, Vector3.Zero, false, false, false);
+                vitals.Update(world, body, step);
+            }
+
+            return vitals.Health - before;
+        }
     }
 }

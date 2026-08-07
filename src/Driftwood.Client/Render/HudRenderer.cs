@@ -422,6 +422,18 @@ public sealed class HudRenderer : IDisposable
     /// </remarks>
     private const int IconPlate = IconBloom + 1;
 
+    /// <summary>
+    /// The hunger bar's two drumsticks: the hollow socket, then the painted one over it.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>Two tiles here where the health bar has one, and the art is the reason.</b> The heart
+    /// arrived as an outline alone, so its middle is flooded and one tile serves both states under
+    /// two tints. The drumstick arrived as a PAIR — a finished full-colour one and a hollow one — so
+    /// there is nothing to derive and nothing to tint: each state is simply drawn.
+    /// </remarks>
+    private const int IconFoodSocket = IconPlate + 1;
+    private const int IconFoodFull = IconFoodSocket + 1;
+
     public unsafe HudRenderer(GL gl)
     {
         _gl = gl;
@@ -433,6 +445,8 @@ public sealed class HudRenderer : IDisposable
         icons.AddRange(TileGen.EquipGhosts());
         icons.Add(TileGen.Bloom());
         icons.Add(TileGen.Plate());
+        icons.Add(TileGen.DrumstickSocket());
+        icons.Add(TileGen.DrumstickFull());
         _icons = new BlockTextureArray(gl, [.. icons], TileGen.Size);
 
         _font = new BlockTextureArray(gl, TileGen.Font(), TileGen.Size);
@@ -569,7 +583,8 @@ public sealed class HudRenderer : IDisposable
 
         if (!screen.IsOpen)
         {
-            Hearts(vitals, w, h);
+            Hearts(vitals, screen.Drift, w, h);
+            Food(vitals, screen.Drift, w, h);
             ArmourBar(vitals, w, h);
             Bubbles(vitals, w, h);
         }
@@ -2172,30 +2187,152 @@ public sealed class HudRenderer : IDisposable
         while (value > 0);
     }
 
-    /// <summary>Ten hearts, each worth two of the model's units.</summary>
-    private void Hearts(PlayerVitals vitals, float w, float h)
+    /// <summary>
+    /// How many bands a partly-filled heart is torn into.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ <b>Eight, against a sixteen-pixel tile, so a band is two texels tall.</b> Sixteen would put
+    /// the tear on every row and read as a fringe rather than a rip; four is coarse enough that the
+    /// steps look like a staircase somebody drew on purpose. Eight is the one that reads as torn.
+    /// </remarks>
+    private const int TearBands = 8;
+
+    /// <summary>
+    /// How far one icon of a nearly-empty bar is shifted this instant, in whole screen pixels.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ The rule itself is <see cref="BarShake"/>'s, in Core, so <c>--audit</c> can walk it: the way
+    /// it fails — a comparison the wrong way round, so every bar shivers permanently — is invisible
+    /// in a screenshot taken at one instant and needs no window to catch.
+    /// ⚠ Driven by <see cref="HudScreen.Drift"/>, which the client winds on, so the same number twice
+    /// draws the same frame.
+    /// </remarks>
+    private static float Tremble(float drift, int index, int filled) =>
+        BarShake.Offset(drift, index, filled);
+
+    /// <summary>Ten hearts, drained by however much of one a blow actually cost.</summary>
+    /// <remarks>
+    /// <para>⛳⛳ <b>Torn, not sliced, and the user asked for exactly this:</b> <i>"we need to be able
+    /// to reduce those hearts by portions depending on how much damage is taken … like a half heart
+    /// would have like a jagged half filled with red?"</i> A single quad cuts its texture on a
+    /// straight vertical line whatever the art behind it is, so the old half-heart was a heart
+    /// guillotined down the middle. The red is drawn as eight bands now, each stopping a little
+    /// short of or past the true level, so the edge between full and empty is ragged.</para>
+    /// <para>⛳ <b>And it takes ANY fraction, not just a half.</b> The level is the real proportion of
+    /// the heart that is left. Today <see cref="PlayerVitals.Health"/> counts in whole half-hearts so
+    /// the only partial state a player can reach is a half — but the bar no longer assumes that, so
+    /// the day a blow costs a third of a heart it already shows one.</para>
+    /// <para>⚠ <b>The tear is a function of which band and which heart, so it does not move.</b> A
+    /// wobble rolled per frame is a heart that boils while a player stands still, and a wobble rolled
+    /// per band alone makes all ten hearts tear along the same line, which reads as a printing fault
+    /// rather than as damage.</para>
+    /// </remarks>
+    private void Hearts(PlayerVitals vitals, float drift, float w, float h)
     {
         const float Icon = 9f;
         const int Count = PlayerVitals.MaxHealth / 2;
 
-        var left = MathF.Round(w / 2f) - Count * Icon;
+        var start = MathF.Round(w / 2f) - Count * Icon;
         var top = h - 44f;
 
         var empty = new Vector4(0.10f, 0.05f, 0.06f, 0.85f);
         var full = new Vector4(0.86f, 0.16f, 0.20f, 1f);
 
+        // Icons still holding any red at all. Rounded UP, so a last half-heart still counts as one
+        // thing left rather than as none — which is the moment the shiver matters most.
+        var filled = (vitals.Health + 1) / 2;
+
         for (var i = 0; i < Count; i++)
         {
-            var x = left + i * Icon;
-            Rect(_iconQuads, x, top, Icon - 1f, Icon - 1f, empty, IconHeart);
+            var x = start + i * Icon;
+            var y = top + Tremble(drift, i, filled);
+            var size = Icon - 1f;
 
-            var filled = Math.Clamp(vitals.Health - i * 2, 0, 2);
-            if (filled == 0) continue;
+            // ⚠ The socket shivers with its heart rather than staying put. A fill that moves out of
+            // a stationary socket is a heart coming apart, not a heart shaking.
+            Rect(_iconQuads, x, y, size, size, empty, IconHeart);
 
-            // A half heart is the left half of the same shape, uv and all, which is what keeps the
-            // two states looking like one heart in two conditions.
-            var portion = filled == 2 ? 1f : 0.5f;
-            Rect(_iconQuads, x, top, (Icon - 1f) * portion, Icon - 1f, full, IconHeart, uWidth: portion);
+            var level = Math.Clamp((vitals.Health - i * 2) / 2f, 0f, 1f);
+            if (level <= 0f) continue;
+
+            // A whole heart has no edge to tear, so it stays one quad — which also keeps the common
+            // case, ten untouched hearts, at ten quads rather than eighty.
+            if (level >= 1f)
+            {
+                Rect(_iconQuads, x, y, size, size, full, IconHeart);
+                continue;
+            }
+
+            TornFill(x, y, size, level, full, IconHeart, i);
+        }
+    }
+
+    /// <summary>
+    /// Ten drumsticks, opposite the hearts, draining right to left.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ <b>It empties from the crosshair OUTWARD, which is the mirror of the hearts.</b> Both
+    /// bars lose their last icon at the far edge and their first beside the middle, so the two rows
+    /// drain toward each other rather than both running the same way — and a glance at the gap in the
+    /// middle reads as "how am I doing" without counting either row.</para>
+    /// <para>⚠ <b>Drawn even when full, unlike the armour bar.</b> Armour is hidden at zero because a
+    /// row of empty plates advertises a system a player has not met; hunger is the opposite — it is a
+    /// bar that will kill you if you never notice it, so it is on screen from the first frame.</para>
+    /// </remarks>
+    private void Food(PlayerVitals vitals, float drift, float w, float h)
+    {
+        const float Icon = 9f;
+        const int Count = PlayerVitals.MaxFood / 2;
+
+        var right = MathF.Round(w / 2f) + Count * Icon;
+        var top = h - 44f;
+        var filled = (vitals.Food + 1) / 2;
+
+        var empty = new Vector4(0.09f, 0.07f, 0.04f, 0.85f);
+
+        // ⛔ WHITE, and it is not a colour choice. The drumstick is a finished painting — meat, fat
+        // and a bone, thirty thousand shades of it — so the tint has to be the identity or the whole
+        // drawing collapses into one flat silhouette of itself. Every other icon on this bar is a
+        // white mask being coloured here; this one is the exception and says so.
+        var full = Vector4.One;
+
+        for (var i = 0; i < Count; i++)
+        {
+            var x = right - (i + 1) * Icon;
+            var y = top + Tremble(drift, i, filled);
+            var size = Icon - 1f;
+
+            Rect(_iconQuads, x, y, size, size, empty, IconFoodSocket);
+
+            var level = Math.Clamp((vitals.Food - i * 2) / 2f, 0f, 1f);
+            if (level <= 0f) continue;
+
+            if (level >= 1f)
+            {
+                Rect(_iconQuads, x, y, size, size, full, IconFoodFull);
+                continue;
+            }
+
+            TornFill(x, y, size, level, full, IconFoodFull, i);
+        }
+    }
+
+    /// <summary>Fills part of an icon, left to right, with a ragged edge instead of a straight one.</summary>
+    private void TornFill(float x, float y, float size, float level, Vector4 tint, int layer, int seed)
+    {
+        var band = size / TearBands;
+
+        for (var i = 0; i < TearBands; i++)
+        {
+            // ⚠ Two bands in three are pulled off the true level and the third sits on it, so the
+            // edge is uneven without any band being far enough out to read as the wrong amount.
+            var jag = ((seed * 7 + i * 13) % 3 - 1) * (0.5f / TearBands);
+            var cut = Math.Clamp(level + jag, 0f, 1f);
+            if (cut <= 0f) continue;
+
+            Band(
+                _iconQuads, x, y + i * band, size * cut, band, tint, layer,
+                uWidth: cut, vStart: i / (float)TearBands, vHeight: 1f / TearBands);
         }
     }
 
@@ -2306,6 +2443,28 @@ public sealed class HudRenderer : IDisposable
         Vertex(into, x + w, y, uWidth, 0f, layer, colour);
         Vertex(into, x + w, y + h, uWidth, 1f, layer, colour);
         Vertex(into, x, y + h, 0f, 1f, layer, colour);
+    }
+
+    /// <summary>
+    /// A rectangle showing one horizontal band of its tile, rather than the whole of it.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>What the torn fill on the health bar is made of.</b> A quad can only ever cut its texture
+    /// on a straight line, so a partly-filled heart drawn as one rectangle is a heart sliced by a
+    /// razor however jagged the art behind it is. Bands let each row of the shape stop in a different
+    /// place, and the tear is the difference between where they stop.
+    /// </remarks>
+    private static void Band(
+        List<float> into, float x, float y, float w, float h, Vector4 colour, float layer,
+        float uWidth, float vStart, float vHeight)
+    {
+        var v0 = vStart;
+        var v1 = vStart + vHeight;
+
+        Vertex(into, x, y, 0f, v0, layer, colour);
+        Vertex(into, x + w, y, uWidth, v0, layer, colour);
+        Vertex(into, x + w, y + h, uWidth, v1, layer, colour);
+        Vertex(into, x, y + h, 0f, v1, layer, colour);
     }
 
     /// <summary>
