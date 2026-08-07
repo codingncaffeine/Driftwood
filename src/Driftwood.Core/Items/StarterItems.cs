@@ -358,6 +358,11 @@ public static class StarterItems
         Loose(items, "clay_lump", "clay lump", StarterBlocks.LayerClayLump);
         Loose(items, "brick", "brick", StarterBlocks.LayerBrick);
 
+        // ⚠ Paper burns, and cheaply — a sheet is worth a fifth of a stick. It is pulped wood, so
+        // refusing to burn would be the odd claim; and it being poor fuel is what stops anybody
+        // turning a forest into paper to feed a furnace when the planks would do it five times over.
+        Loose(items, "paper", "paper", StarterBlocks.LayerPaper, burn: 1f);
+
         // What an animal leaves. ⚠ Leather and feather are components with nothing yet to spend
         // them on, and that is honest rather than an oversight — armour and arrows are the two
         // things they are for, and both are their own work. They are obtainable, which is what the

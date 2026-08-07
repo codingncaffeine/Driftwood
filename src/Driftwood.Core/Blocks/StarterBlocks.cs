@@ -377,7 +377,19 @@ public static class StarterBlocks
     public const ushort LayerDiamondOre = LayerBarrelSide + 1;
     public const ushort LayerDiamond = LayerBarrelSide + 2;
 
-    public const int LayerCount = LayerDiamond + 1;
+    /// <summary>
+    /// Paper: the first base material added for something that does not exist yet.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>Not a magic item, and it should not be scoped as one.</b> It arrived with the spellbook's
+    /// design and it is wanted by four things that have nothing to do with spells — a map is paper, a
+    /// handbook is a book you make, the cartography table is listed as blocked on maps, and every pack
+    /// in the genre ships a <c>paper.png</c> we have had nothing to put on. It is a hole in the base
+    /// set rather than a component of a feature.
+    /// </remarks>
+    public const ushort LayerPaper = LayerBarrelSide + 3;
+
+    public const int LayerCount = LayerPaper + 1;
 
     public sealed record Ids(
         BlockId Stone,

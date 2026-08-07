@@ -266,6 +266,75 @@ public static class TileGen
     }
 
     /// <summary>
+    /// A sheet of parchment rolled at both ends: paper.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛔ <b>At sixteen pixels a flat rectangle of tan is a PLANK</b>, and that is the whole
+    /// difficulty of this drawing. Plank is one of the commonest things in the game, it is the same
+    /// family of browns, and it sits in the same bar. The curls at top and bottom are therefore not
+    /// decoration — they are the entire read, and they are drawn <em>wider than the sheet</em> so the
+    /// silhouette alone says scroll before a single interior pixel is looked at.</para>
+    /// <para>Three rows per roll rather than one: a tube needs a curve away, a highlight along its
+    /// top, and a shaded underside, and one row of a lighter colour reads as a stripe. The ends are
+    /// darkened because the cut face of a rolled sheet is what stops the two rolls reading as a pair
+    /// of bands drawn across a rectangle.</para>
+    /// <para>⚠ The ink stays one square in from the tile's edge, as everything held does — a sprite
+    /// extruded into the fist wears the square one step in from the edge it stands on.</para>
+    /// </remarks>
+    public static byte[] IconScroll(int seed)
+    {
+        var t = new byte[BytesPerTile];
+
+        const int SheetLeft = 4;
+        const int SheetRight = 11;
+        const int SheetTop = 4;
+        const int SheetBottom = 11;
+
+        const int RollLeft = 2;
+        const int RollRight = 13;
+
+        // Parchment, lit from the left like every other icon here.
+        const int R = 214, G = 196, B = 158;
+
+        for (var y = SheetTop; y <= SheetBottom; y++)
+        for (var x = SheetLeft; x <= SheetRight; x++)
+        {
+            var d = (int)((Noise(x, y, seed) * 2f - 1f) * 7f);
+
+            if (x == SheetLeft) d += 20;            // the lit edge
+            else if (x == SheetRight) d -= 30;      // and the one turned away
+            if (y == SheetTop) d -= 24;             // in the shadow of the roll above it
+
+            Put(t, x, y, Clamp(R + d), Clamp(G + d), Clamp(B + d), 255);
+        }
+
+        // Curve away, highlight, shaded underside — and the bottom roll is lit from above too, so
+        // its dark row is the one the sheet casts onto rather than the one furthest from the light.
+        int[] top = [-24, 26, -12];
+        int[] bottom = [-12, 26, -30];
+
+        for (var roll = 0; roll < 2; roll++)
+        {
+            var first = roll == 0 ? 1 : 12;
+            var tones = roll == 0 ? top : bottom;
+
+            for (var row = 0; row < 3; row++)
+            for (var x = RollLeft; x <= RollRight; x++)
+            {
+                var y = first + row;
+                var d = tones[row] + (int)((Noise(x, y, seed + 53) * 2f - 1f) * 6f);
+
+                if (x == RollLeft || x == RollRight) d -= 34;
+                else if (x == RollLeft + 1) d += 10;
+
+                Put(t, x, y, Clamp(R + d), Clamp(G + d), Clamp(B + d), 255);
+            }
+        }
+
+        return t;
+    }
+
+    /// <summary>
     /// A tongue of fire: bright at the base, yellow through orange to a dark tip, and ragged.
     /// </summary>
     /// <remarks>

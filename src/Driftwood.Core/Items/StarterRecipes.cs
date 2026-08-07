@@ -214,6 +214,21 @@ public static class StarterRecipes
         // than a chest because being able to reach it is a condition rather than a given.
         Shaped("barrel", "barrel", 1, ["PSP", "P P", "PSP"]);
 
+        // ⛳ Paper is PULPED WOOD, which is both the real answer and the one that uses a material
+        // every player has by their first afternoon. The reference presses it out of a swamp reed;
+        // we have no reed and are not adding a plant to the world to serve a single recipe.
+        //
+        // ⚠ Three from three, not one from three. A spell page, a book, a map and a sign all want
+        // paper, and one-for-three would make the first book cost most of a tree.
+        //
+        // ⛔ STACKED, NOT IN A ROW, AND THE DUPLICATE-SIGNATURE CHECK IS WHY. Three planks laid in a
+        // row is already the slab, and this went in shapeless first — which is worse than colliding
+        // with one recipe, because a shapeless plank recipe matches EVERY arrangement of that many
+        // planks: two of them is the stick, four is the bench. Planks are the most reused ingredient
+        // in the game, so anything made of nothing but planks has to name its shape. A stack of
+        // sheets is at least the right picture for a ream.
+        Shaped("paper", "paper", 3, ["P", "P", "P"], mirrored: false);
+
         // Light. Either coal will do — the one that comes out of the ground and the one that comes
         // out of a furnace are the same thing on the end of a stick.
         Shaped("torch", "torch", 4, ["C", "S"]);

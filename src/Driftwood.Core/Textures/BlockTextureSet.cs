@@ -320,6 +320,9 @@ public static class BlockTextureSet
         // is the right picture anyway: ours forms in the deep and nowhere else.
         new("diamond_ore", "textures/block/deepslate_diamond_ore.png", false),
         new("diamond",     "textures/item/diamond.png",           true),
+
+        // ⛳ Every pack in the genre ships this file and until now there was nothing to hang it on.
+        new("paper",       "textures/item/paper.png",             true),
     ];
 
     /// <summary>
@@ -919,6 +922,8 @@ public static class BlockTextureSet
 
             StarterBlocks.LayerDiamond => TileGen.IconGem(
                 1112, Items.Armour.DiamondR, Items.Armour.DiamondG, Items.Armour.DiamondB),
+
+            StarterBlocks.LayerPaper => TileGen.IconScroll(1113),
 
             // ⛳ THE SMOKER IS TIMBER, and that is the whole design of its art. The furnace is grey
             // cobble with an arch and the blast furnace dark brick with a letterbox; a third grey

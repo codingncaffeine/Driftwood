@@ -5511,7 +5511,12 @@ public static class WorldAudit
         // so the moving claim only ever covers the newest run.
         (StarterBlocks.LayerSmokerTop, "smoker_top"),
         (StarterBlocks.LayerBarrelSide, "barrel_side"),
-        ((ushort)(StarterBlocks.LayerCount - 1), "diamond"),
+
+        // ⛳ And a fourth firing, exactly as predicted. "The last layer is diamond" was true until
+        // paper went on the end of the array; diamond is pinned by its own constant on the way past
+        // and the moving claim covers the newest run only.
+        (StarterBlocks.LayerDiamond, "diamond"),
+        ((ushort)(StarterBlocks.LayerCount - 1), "paper"),
     ];
 
     private static List<string> TextureSelfTest()
