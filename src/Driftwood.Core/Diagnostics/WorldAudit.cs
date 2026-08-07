@@ -5660,7 +5660,8 @@ public static class WorldAudit
         // paper went on the end of the array; diamond is pinned by its own constant on the way past
         // and the moving claim covers the newest run only.
         (StarterBlocks.LayerDiamond, "diamond"),
-        ((ushort)(StarterBlocks.LayerCount - 1), "paper"),
+        (StarterBlocks.LayerPaper, "paper"),
+        ((ushort)(StarterBlocks.LayerCount - 1), "recipe_book"),
     ];
 
     private static List<string> TextureSelfTest()
@@ -5730,6 +5731,36 @@ public static class WorldAudit
         }
 
         faults.AddRange(TextureCeilingSelfTest());
+        faults.AddRange(PaintedArtSelfTest());
+        return faults;
+    }
+
+    /// <summary>
+    /// Checks the painted tiles are actually carried by this build rather than quietly fallen back.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>Losing an embedded resource has no symptom.</b> <c>BlockTextureSet.Own</c> falls through
+    /// to a generated stand-in when the resource is missing, which is the right behaviour for a
+    /// player — a plain brown book beats a magenta placeholder or a game that will not start — and
+    /// it is exactly the shape of failure nobody ever notices. Every check downstream goes on
+    /// passing: the layer count is right, the tile is painted, the cut-out has holes.
+    /// <para>⚠ So it is asked of the RESOURCE, not of the picture. "The tile has colours in it" is
+    /// true of the fallback too.</para>
+    /// </remarks>
+    private static List<string> PaintedArtSelfTest()
+    {
+        var faults = new List<string>();
+
+        for (var layer = 0; layer < StarterBlocks.LayerCount; layer++)
+        {
+            if (BlockTextureSet.Painted(layer) is not { } name) continue;
+
+            if (!PaintedArt.Has(name))
+                faults.Add(
+                    $"'{BlockTextureSet.Layers[layer].Name}' is meant to be painted and this build "
+                    + $"does not carry '{name}', so it has quietly fallen back to a drawn one");
+        }
+
         return faults;
     }
 

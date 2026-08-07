@@ -1296,13 +1296,20 @@ public sealed class HudRenderer : IDisposable
             Bevel(zone.X, zone.Y, zone.W, zone.H, raised: !screen.BookOut,
                 hot ? PanelLight : screen.BookOut ? SlotFill : PanelFill);
 
-            // An open book on the face of it, which is the one picture that needs no label.
-            var ink = screen.BookOut ? Highlight : Ink;
-            var pad = MathF.Max(1f, MathF.Round(z * 1.5f));
-            Rect(_plain, zone.X + pad, zone.Y + pad, zone.W - pad * 2f, zone.H - pad * 2f,
-                new Vector4(0.10f, 0.10f, 0.10f, 0.9f));
-            Rect(_plain, zone.X + pad + z, zone.Y + pad + z, (zone.W - pad * 2f) / 2f - z, zone.H - pad * 2f - z * 2f, ink);
-            Rect(_plain, zone.X + zone.W / 2f + z * 0.5f, zone.Y + pad + z, (zone.W - pad * 2f) / 2f - z, zone.H - pad * 2f - z * 2f, ink);
+            // ⛳ A DRAWING OF A BOOK, which was three flat rectangles until the user pointed out that
+            // it looked like nothing. That is the honest limit of generated chrome: the world's
+            // tiles gain from being procedural — grain, variation, a whole set from two tables —
+            // and a single button-sized picture gains nothing from it at all. This one is painted,
+            // carried in the assembly, and reskinnable by a pack like every other layer.
+            //
+            // ⚠ Inset by the bevel so the raised edge still reads as a button under it, and drawn
+            // at full brightness when the book is out — the same "this is a state, not chrome" the
+            // mint selection is, and the only thing on the button that says which way it is set.
+            var pad = MathF.Max(1f, MathF.Round(z * 2f));
+            var tint = screen.BookOut ? Vector4.One : new Vector4(0.82f, 0.82f, 0.82f, 1f);
+
+            Rect(_blocks, zone.X + pad, zone.Y + pad, zone.W - pad * 2f, zone.H - pad * 2f,
+                tint, StarterBlocks.LayerRecipeBook);
         }
 
         // A rule where the player's own pockets begin, which is where the pack's sheet puts one too.

@@ -323,6 +323,10 @@ public static class BlockTextureSet
 
         // ⛳ Every pack in the genre ships this file and until now there was nothing to hang it on.
         new("paper",       "textures/item/paper.png",             true),
+
+        // ⛳ Chrome rather than a block, and a layer anyway so a pack reskins the button with the
+        // same machinery it reskins the world. The pack's own is the item they put in a lectern.
+        new("recipe_book", "textures/item/book.png",              true),
     ];
 
     /// <summary>
@@ -758,16 +762,39 @@ public static class BlockTextureSet
     /// is the wrong shape for a sheet that wants to show what we ship — and a second copy of the
     /// layer-to-drawing table written for the instrument would be a copy that drifts.
     /// </remarks>
-    public static byte[] OwnTile(int layer) => Draw(layer);
+    /// <summary>
+    /// One layer exactly as a no-pack build would wear it, for the icon sheet.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>This was <c>Draw(layer)</c>, and for every generated layer that is the same picture —
+    /// which is precisely why it went unnoticed.</b> The moment one layer was PAINTED rather than
+    /// drawn, the instrument built to look at our art started showing something the game does not
+    /// use: the sheet reported the generated stand-in while the button wore the painting, and the
+    /// two look different enough that the difference was mistaken for the feature not working. An
+    /// instrument that answers a slightly different question than the game is the failure this
+    /// project has already paid for once with <c>--pack-coverage</c>.
+    /// </remarks>
+    public static byte[] OwnTile(int layer) => Own(layer, TileGen.Size);
 
     /// <summary>Driftwood's own art for one layer.</summary>
     private static byte[] Own(int layer, int size)
     {
+        // ⛳ The painted ones go straight to the size the array is being built at, rather than
+        // through a sixteen-pixel intermediate. They have real pixels to give and upscaling from 16
+        // would throw all of them away — see PaintedArt. Falls through to the generator when a build
+        // does not carry the resource, so a mis-assembled artifact is a plain button rather than a
+        // game that will not start.
+        if (Painted(layer) is { } name && PaintedArt.Tile(name, size) is { } painted) return painted;
+
         // Drawn at the native tile size and then scaled, so the generators stay written for one
         // size rather than being parameterised over every resolution a pack might arrive at.
         var tile = Draw(layer);
         return TileGen.Upscale(tile, size);
     }
+
+    /// <summary>Which painted resource a layer takes, or null when it is generated like the rest.</summary>
+    public static string? Painted(int layer) =>
+        layer == StarterBlocks.LayerRecipeBook ? PaintedArt.RecipeBook : null;
 
     private static byte[] Draw(int layer)
     {
@@ -942,6 +969,11 @@ public static class BlockTextureSet
                 1112, Items.Armour.DiamondR, Items.Armour.DiamondG, Items.Armour.DiamondB),
 
             StarterBlocks.LayerPaper => TileGen.IconScroll(1113),
+
+            // ⚠ The generated stand-in for the painted one, reached only by a build that lost its
+            // embedded resource. It exists so that failure is a plain book rather than the magenta
+            // placeholder, which reads as a missing texture in a pack and sends somebody hunting.
+            StarterBlocks.LayerRecipeBook => TileGen.IconBook(1114),
 
             // ⛳ THE SMOKER IS TIMBER, and that is the whole design of its art. The furnace is grey
             // cobble with an arch and the blast furnace dark brick with a letterbox; a third grey

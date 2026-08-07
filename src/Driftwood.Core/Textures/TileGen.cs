@@ -335,6 +335,50 @@ public static class TileGen
     }
 
     /// <summary>
+    /// A closed book: a leather cover, a spine down one side and page edges down the other.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ <b>The stand-in for a painted tile, not the tile itself.</b> The recipe book ships as a
+    /// drawing (see <c>PaintedArt</c>); this is what a build that lost the embedded resource falls
+    /// back to, and it exists so that failure is a plain brown book rather than the magenta
+    /// placeholder — which reads as a hole in a texture pack and sends somebody looking in the
+    /// wrong place entirely.
+    /// </remarks>
+    public static byte[] IconBook(int seed)
+    {
+        var t = new byte[BytesPerTile];
+
+        const int Left = 2, Right = 13, Top = 2, Bottom = 13;
+
+        for (var y = Top; y <= Bottom; y++)
+        for (var x = Left; x <= Right; x++)
+        {
+            var d = (int)((Noise(x, y, seed) * 2f - 1f) * 8f);
+
+            // The last two columns are the cut edges of the pages; everything else is the cover.
+            if (x >= Right - 1)
+            {
+                var v = Clamp(226 + d);
+                Put(t, x, y, v, Clamp(v - 12), Clamp(v - 42), 255);
+                continue;
+            }
+
+            // The spine is darker than the board, which is what makes it read as a book edge-on
+            // rather than as a brown card.
+            var spine = x <= Left + 1;
+            var r = spine ? 96 : 138;
+            var g = spine ? 58 : 88;
+            var b = spine ? 36 : 54;
+
+            if (y == Top || y == Bottom) { r -= 26; g -= 18; b -= 12; }
+
+            Put(t, x, y, Clamp(r + d), Clamp(g + d), Clamp(b + d), 255);
+        }
+
+        return t;
+    }
+
+    /// <summary>
     /// A tongue of fire: bright at the base, yellow through orange to a dark tip, and ragged.
     /// </summary>
     /// <remarks>

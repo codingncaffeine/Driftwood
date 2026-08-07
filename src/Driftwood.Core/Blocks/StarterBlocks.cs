@@ -389,7 +389,20 @@ public static class StarterBlocks
     /// </remarks>
     public const ushort LayerPaper = LayerBarrelSide + 3;
 
-    public const int LayerCount = LayerPaper + 1;
+    /// <summary>
+    /// The recipe book, for the button that folds it out.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>The first layer here that no block and no item wears.</b> The flame and the smoke were
+    /// the first two nothing was made of; this is the first that is not in the world at all — it is
+    /// interface chrome, and it is a layer anyway so that a pack can reskin it exactly like every
+    /// other picture in the game. It is also the first tile we <em>painted</em> rather than
+    /// generated; see <see cref="Textures.PaintedArt"/> for why that line is drawn here and nowhere
+    /// else yet.
+    /// </remarks>
+    public const ushort LayerRecipeBook = LayerBarrelSide + 4;
+
+    public const int LayerCount = LayerRecipeBook + 1;
 
     public sealed record Ids(
         BlockId Stone,

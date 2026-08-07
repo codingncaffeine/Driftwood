@@ -7,4 +7,23 @@
     <RootNamespace>Driftwood.Core</RootNamespace>
   </PropertyGroup>
 
+  <!-- ⛳ THE FIRST PAINTED ART THIS PROJECT SHIPS, and it is deliberately narrow.
+
+       Every tile in the game is drawn in code by TileGen, which is what makes the whole set
+       unambiguously ours and what lets a texture pack layer over a complete world rather than a
+       half-finished one. That argument is about the WORLD. It has never been an argument about
+       interface chrome, and a book on a button is exactly the case where sixteen procedural pixels
+       lose to a drawing: it is one picture, seen at one size, that has to read as a book at a
+       glance and can never be generated into being more legible.
+
+       ⚠ Embedded rather than shipped beside the exe, like the window icons and unlike the sounds:
+       it is a quarter of a megabyte, it is needed on the first frame an interface opens, and a
+       missing file here is a button with a hole in it rather than a missing sound effect.
+
+       ⚠ A pack can still replace it — it is a texture layer like any other, with a row in
+       BlockTextureSet.Layers pointing at the file a pack would keep its own in. -->
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\assets\recipe_book.png" LogicalName="Driftwood.Core.recipe-book.png" />
+  </ItemGroup>
+
 </Project>
