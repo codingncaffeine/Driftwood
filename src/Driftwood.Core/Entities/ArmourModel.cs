@@ -100,6 +100,20 @@ public static class ArmourModel
         return [.. boxes];
     }
 
+    /// <summary>
+    /// Where one face of an armour box is cut from its sheet.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ Straight through <see cref="PlayerModel.FaceRect"/> rather than worked out again. An
+    /// armour sheet is a net laid out by exactly the same rule as a skin — that is the whole reason
+    /// a plate can hang off the body's own joints — and a second copy of that arithmetic is how a
+    /// sleeve ends up reading a kneecap in one view and not the other.
+    /// </remarks>
+    public static (int X, int Y, int W, int H) FaceRect(in ArmourBox box, int face) =>
+        PlayerModel.FaceRect(
+            box.U, box.V, (int)MathF.Round(box.Width), (int)MathF.Round(box.Height),
+            (int)MathF.Round(box.Depth), box.Mirror, face);
+
     /// <summary>Writes one box's corners, in blocks, relative to its own pivot.</summary>
     public static void Emit(in ArmourBox box, List<ModelVertex> vertices, List<uint> indices)
     {

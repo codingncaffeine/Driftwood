@@ -5938,6 +5938,18 @@ public sealed class ClientHost : IDisposable
         // every icon in this game is drawn in code against a grid measured off a pack's own sheet,
         // and the only way to look at any of it was to start the game and open it.
         new(164, "12-player", "stone", ViewMode.First, false, ShotScreen.Player),
+
+        // ⛳ AND THE SAME SCREEN WEARING SOMETHING, which is the only frame that shows the figure
+        // doing its job. The bare one above is a doll in a skin and looks identical whether the
+        // player is in rags or a full set — which was the complaint. This one has plate on all four
+        // slots, a sword in the hand and a shield in the other, so every path the window has is on
+        // screen at once.
+        // ⛔ ITS OWN FRAME. This first went in at 176, which 13-book already owns — two shots on one
+        // frame means the second one's setup runs before the picture is taken, so this was
+        // photographed after the book shot had cleared the armour off. The doll came out bare, which
+        // looks exactly like the feature not working.
+        new(170, "12b-player-armoured", "iron_sword", ViewMode.First, false, ShotScreen.Player,
+            Wears: "iron"),
         new(176, "13-book", "stone", ViewMode.First, false, ShotScreen.Book),
         new(188, "14-bench", "stone", ViewMode.First, false, ShotScreen.Bench),
         new(200, "15-furnace", "stone", ViewMode.First, false, ShotScreen.Furnace),

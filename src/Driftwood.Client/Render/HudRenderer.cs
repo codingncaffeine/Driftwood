@@ -378,8 +378,21 @@ public sealed class HudRenderer : IDisposable
     private readonly List<float> _text = new(8192);
     private readonly List<float> _skinQuads = new(256);
 
+    private readonly List<float> _armourQuads = new(256);
+
     /// <summary>The player's own sheet, as a single-layer array so the batcher can sample it.</summary>
     private BlockTextureArray? _skin;
+
+    /// <summary>
+    /// Every armour sheet in one array, material-major, two layers each.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ Built once and not per material, because the figure has to draw a helmet of one metal over
+    /// a chestplate of another in the same frame and a texture bound per piece would be nine binds
+    /// inside one small window. It is the same array the world renderer holds as ten separate
+    /// textures — this one is layered so the overlay's single batch can sample all of them.
+    /// </remarks>
+    private BlockTextureArray? _armour;
 
     /// <summary>The model the sheet dresses, so the figure follows it rather than a copy of it.</summary>
     private ModelBox[] _dollBoxes = [];
@@ -493,6 +506,7 @@ public sealed class HudRenderer : IDisposable
         _iconQuads.Clear();
         _text.Clear();
         _skinQuads.Clear();
+        _armourQuads.Clear();
         layout.Clear();
 
         // A whole number of screen pixels per layout unit, never a half. Everything here is pixel
@@ -612,6 +626,10 @@ public sealed class HudRenderer : IDisposable
 
         Flush(_plain, textured: false, null);
         Flush(_skinQuads, textured: true, _skin);
+
+        // ⚠ After the skin and before the items, because these three are one picture in painter's
+        // order: a plate goes over the body it is worn on and under the thing the hand is holding.
+        Flush(_armourQuads, textured: true, _armour);
         Flush(_blocks, textured: true, blocks);
         Flush(_iconQuads, textured: true, _icons);
         Flush(_text, textured: true, _font);
@@ -1319,7 +1337,7 @@ public sealed class HudRenderer : IDisposable
         switch (kind)
         {
             case PanelKind.Player:
-                Figure(layout, screen);
+                Figure(layout, screen, catalogue, equipment, inventory.Held);
                 Arrow(layout, ScreenLayout.PlayerArrow, 1f);
                 break;
 
@@ -1574,7 +1592,27 @@ public sealed class HudRenderer : IDisposable
     /// <para>The model's own right appears on the viewer's left, which is why screen x runs against
     /// model x — and it is the same reason a skin's face looks back at you.</para>
     /// </remarks>
-    private void Figure(ScreenLayout layout, HudScreen screen)
+    /// <summary>
+    /// The paperdoll: the player, wearing what they are wearing and holding what they are holding.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ <b>From the user, and they are right:</b> <i>"the inventory paperdoll should show a
+    /// live version of the player, showing the weapon/armor that the player is using otherwise
+    /// there's no point in having it there"</i>. It was the bare skin — a window that showed the
+    /// same picture whether you were in rags or a full stormglass set, next to four slots whose
+    /// entire subject is which of those you are in.</para>
+    /// <para>⛳ <b>The plates are the body's own boxes at a stand-off</b>, so this is the same loop
+    /// the skin runs with a different sheet and a bigger inflation — no second model, no second net,
+    /// and the figure cannot drift out of step with what the world draws because both read
+    /// <c>ArmourModel.Build</c>. Painter's order does the rest: skin, inner layer, outer layer.</para>
+    /// <para>⚠ <b>Front faces only, as before.</b> This is a flat cut-out rather than a projection —
+    /// a turned figure is the recipe book's trick and it costs a sort per frame for a window nobody
+    /// looks at from an angle. What was missing was never the third dimension, it was the armour.
+    /// </para>
+    /// </remarks>
+    private void Figure(
+        ScreenLayout layout, HudScreen screen, ItemRegistry catalogue, Equipment equipment,
+        ItemStack held)
     {
         _ = screen;
         var box = ScreenLayout.Figure;
@@ -1625,6 +1663,91 @@ public sealed class HudRenderer : IDisposable
                 u0, v0, u1, v1,
                 Vector4.One);
         }
+
+        Plates(layout, catalogue, equipment, left, top, Across, Units, PerUnit);
+        InHand(layout, catalogue, held, equipment[EquipSlot.Offhand], box);
+    }
+
+    /// <summary>Whatever armour is worn, over the body it is worn on.</summary>
+    /// <remarks>
+    /// ⛔ <b>The INNER layer first and the outer over it, which is the order the two inflations
+    /// exist for.</b> Leggings and a chestplate both cover the waist; drawn the other way round the
+    /// belt sits on top of the breastplate and the figure reads as somebody wearing their trousers
+    /// outside their armour. The world renderer draws them in this order for the same reason and
+    /// gets away with a depth buffer — a flat cut-out has nothing but the order.
+    /// </remarks>
+    private void Plates(
+        ScreenLayout layout, ItemRegistry catalogue, Equipment equipment,
+        float left, float top, float across, float units, float perUnit)
+    {
+        if (_armour is null) return;
+
+        // Sheet 1 is the tighter one, so it goes down first.
+        foreach (var pass in (ReadOnlySpan<int>)[1, 0])
+        foreach (var plate in ArmourModel.Build())
+        {
+            if (plate.Sheet != pass) continue;
+
+            var worn = equipment[plate.Slot];
+            if (worn.IsEmpty) continue;
+
+            var material = Armour.MaterialOf(catalogue[worn.Item]);
+            if (material < 0) continue;
+
+            var grow = plate.Inflate;
+            var minX = plate.Pivot.X + plate.Offset.X - grow;
+            var maxX = minX + plate.Width + grow * 2f;
+            var minY = plate.Pivot.Y + plate.Offset.Y - grow;
+            var maxY = minY + plate.Height + grow * 2f;
+
+            var (fx, fy, fw, fh) = ArmourModel.FaceRect(plate, 0);
+
+            // ⚠ Normalised against the sheet's WIDTH on both axes, because the array is square and
+            // the 64x32 net was padded into it. Dividing v by the net's own height would read the
+            // bottom half of the sheet, which is the part nobody painted.
+            var u0 = fx / (float)ArmourArt.Width;
+            var u1 = (fx + fw) / (float)ArmourArt.Width;
+            var v0 = fy / (float)ArmourArt.Width;
+            var v1 = (fy + fh) / (float)ArmourArt.Width;
+
+            if (plate.Mirror) (u0, u1) = (u1, u0);
+
+            RectUv(
+                _armourQuads,
+                layout.X(left + (across * 0.5f - maxX) * perUnit),
+                layout.Y(top + (units - maxY) * perUnit),
+                layout.Size((maxX - minX) * perUnit),
+                layout.Size((maxY - minY) * perUnit),
+                u0, v0, u1, v1,
+                Vector4.One,
+                material * 2 + plate.Sheet);
+        }
+    }
+
+    /// <summary>What each hand is holding, beside the hand holding it.</summary>
+    /// <remarks>
+    /// ⚠ <b>Beside the fists rather than in them.</b> A held thing in the world is a projection, a
+    /// grip and a swing; here it is a sixteen-pixel icon and the figure is a flat cut-out, so
+    /// putting it "in" a hand means overlapping the arm with a picture drawn at a different scale
+    /// and from a different angle. Set against the hand it reads as carried and stays legible,
+    /// which is the whole job of a doll.
+    /// </remarks>
+    private void InHand(
+        ScreenLayout layout, ItemRegistry catalogue, ItemStack held, ItemStack other,
+        (int X, int Y, int W, int H) box)
+    {
+        const float Size = 14f;
+
+        var y = box.Y + box.H - Size - 2f;
+
+        // The model faces us, so the hand it swings with is on our left.
+        if (!held.IsEmpty)
+            Rect(_blocks, layout.X(box.X + 2f), layout.Y(y),
+                layout.Size(Size), layout.Size(Size), Vector4.One, catalogue[held.Item].IconLayer);
+
+        if (!other.IsEmpty)
+            Rect(_blocks, layout.X(box.X + box.W - Size - 2f), layout.Y(y),
+                layout.Size(Size), layout.Size(Size), Vector4.One, catalogue[other.Item].IconLayer);
     }
 
     /// <summary>
@@ -1640,6 +1763,40 @@ public sealed class HudRenderer : IDisposable
         _skin?.Dispose();
         _skin = new BlockTextureArray(_gl, [skin.Pixels], skin.Size);
         _dollBoxes = PlayerModel.Build(skin.Arms, skin.Legacy);
+
+        BuildArmourSheets();
+    }
+
+    /// <summary>
+    /// Paints every material's two armour sheets into one array for the figure to cut from.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ Painted rather than imported: <c>ArmourArt</c> draws these the way <c>TileGen</c> draws a
+    /// tile, so there is nothing to wait for and nothing to fall back to. Built beside the skin
+    /// because both are the same question — what is this body wearing — and doing it once means the
+    /// figure never binds a texture per piece.
+    /// </remarks>
+    private void BuildArmourSheets()
+    {
+        if (_armour is not null) return;
+
+        var sheets = new List<byte[]>(Armour.Materials.Length * 2);
+
+        foreach (var material in Armour.Materials)
+            sheets.AddRange(ArmourArt.Build(material));
+
+        // ⚠ Square, because the array wants one size and the net is 64x32. The painter fills the
+        // top half and the bottom stays clear, which is exactly what the skin loader does to a
+        // legacy sheet — same trade, same reason: one shape for every layer in an array.
+        var square = new List<byte[]>(sheets.Count);
+        foreach (var sheet in sheets)
+        {
+            var padded = new byte[ArmourArt.Width * ArmourArt.Width * 4];
+            Array.Copy(sheet, padded, Math.Min(sheet.Length, padded.Length));
+            square.Add(padded);
+        }
+
+        _armour = new BlockTextureArray(_gl, [.. square], ArmourArt.Width);
     }
 
     /// <summary>A furnace's flame burning down, and the work filling toward the output.</summary>
@@ -2531,12 +2688,12 @@ public sealed class HudRenderer : IDisposable
     /// </remarks>
     private static void RectUv(
         List<float> into, float x, float y, float w, float h,
-        float u0, float v0, float u1, float v1, Vector4 colour)
+        float u0, float v0, float u1, float v1, Vector4 colour, int layer = 0)
     {
-        Vertex(into, x, y, u0, v0, 0f, colour);
-        Vertex(into, x + w, y, u1, v0, 0f, colour);
-        Vertex(into, x + w, y + h, u1, v1, 0f, colour);
-        Vertex(into, x, y + h, u0, v1, 0f, colour);
+        Vertex(into, x, y, u0, v0, layer, colour);
+        Vertex(into, x + w, y, u1, v0, layer, colour);
+        Vertex(into, x + w, y + h, u1, v1, layer, colour);
+        Vertex(into, x, y + h, u0, v1, layer, colour);
     }
 
     private static void Vertex(List<float> into, float x, float y, float u, float v, float layer, Vector4 colour)

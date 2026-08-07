@@ -71,6 +71,27 @@ public static class Armour
     }
 
     /// <summary>
+    /// Which material an item of armour is, as an index, or −1 when it is not a piece at all.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ Matched on the stem the item was NAMED from rather than on a second table. Every piece is
+    /// <c>&lt;material&gt;_&lt;piece&gt;</c> by construction — see <see cref="ItemName"/> — so asking the
+    /// name back is asking the same table that built it, and a material added to the array is
+    /// answered here without an edit.
+    /// </remarks>
+    public static int MaterialOf(ItemType? item)
+    {
+        if (item is null) return -1;
+
+        for (var m = 0; m < Materials.Length; m++)
+        foreach (var piece in Pieces)
+            if (string.Equals(ItemName(Materials[m], piece), item.Name, StringComparison.Ordinal))
+                return m;
+
+        return -1;
+    }
+
+    /// <summary>
     /// The five, weakest first.
     /// </summary>
     /// <remarks>
