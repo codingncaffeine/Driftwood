@@ -996,6 +996,10 @@ public static class WorldAudit
         Check("a herd survives the trip through a save", herdSaveFaults.Count == 0,
             herdSaveFaults.Count == 0 ? herdSaveDetail : $"{herdSaveFaults.Count} faults: {herdSaveFaults[0]}");
 
+        var breedFaults = BreedingSelfTest(items, out var breedDetail);
+        Check("two fed animals meet and make a third, on every gate", breedFaults.Count == 0,
+            breedFaults.Count == 0 ? breedDetail : $"{breedFaults.Count} faults: {breedFaults[0]}");
+
         // The model is drawn from a table of measurements and a UV net worked out on paper. None of
         // it throws when it is wrong: a reversed winding is an invisible limb, a transposed patch is
         // an elbow wearing a kneecap, and both draw perfectly happily.
@@ -4156,6 +4160,93 @@ public static class WorldAudit
     }
 
     /// <summary>
+    /// Feeds a fixture herd and checks every gate on the way to a calf — and past it.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛔ <b>Every arm has its refusal beside it, the field check's own rule.</b> "A calf was
+    /// born" is true of a build that pays a calf per meal: the arms that matter are that a rock is
+    /// not food, that a LONE courting cow times out childless, that the calf is born small and
+    /// cannot itself court, and that the parents rest — a second meal straight after the birth is
+    /// refused.</para>
+    /// <para>⚠ Walked through the real Update at real frame steps, so the courtship is the same
+    /// walk-toward-and-meet the player watches, not a distilled restatement of it.</para>
+    /// </remarks>
+    private static List<string> BreedingSelfTest(ItemRegistry items, out string detail)
+    {
+        var faults = new List<string>();
+
+        // Every food the table names is a real item, or the gesture points at nothing.
+        foreach (var food in Breeding.AllFoods())
+            if (!items.TryByName(food, out _))
+                faults.Add($"breeding wants '{food}', which is not an item");
+
+        var herd = new CreatureHerd(11);
+        var solid = (int x, int y, int z) => y < 64;
+
+        herd.Spawn(
+            solid, [new SpawnKind("cow", new Vector3(0.9f, 1.4f, 0.9f))],
+            new Vector3(0f, 64f, 0f), 2, minRadius: 1f);
+
+        if (herd.Count != 2)
+        {
+            faults.Add($"the fixture placed {herd.Count} of 2 cows, so there is nothing to measure");
+            detail = "fixture failed";
+            return faults;
+        }
+
+        if (herd.Feed(herd.All[0], "rubble") != CreatureHerd.FeedResult.Refused)
+            faults.Add("a cow was courted with a rock");
+        if (herd.Feed(herd.All[0], "wheat") != CreatureHerd.FeedResult.Courting)
+            faults.Add("wheat did not put a cow in the mood");
+
+        // ⛔ The childless arm: one courting cow, walked well past the whole mood, adds nobody.
+        for (var i = 0; i < 40 * 60; i++) herd.Update(1f / 60f, solid);
+        if (herd.Count != 2)
+            faults.Add($"a lone courting cow produced {herd.Count - 2} calves out of nobody");
+
+        // ⚠ Stood back within courting range first — the lone-suitor arm above let them graze for
+        // forty seconds, and a fixture that leaves its actors wherever the last scene dropped them
+        // is measuring the wander, not the courtship.
+        herd.All[0].Position = new Vector3(0.5f, 64f, 0.5f);
+        herd.All[1].Position = new Vector3(4.5f, 64f, 0.5f);
+
+        herd.Feed(herd.All[0], "wheat");
+        herd.Feed(herd.All[1], "wheat");
+        for (var i = 0; i < 35 * 60 && herd.Count == 2; i++) herd.Update(1f / 60f, solid);
+
+        if (herd.Count != 3)
+        {
+            faults.Add("two courting cows a few blocks apart never met");
+        }
+        else
+        {
+            var calf = herd.All[2];
+
+            if (calf.Adult) faults.Add("the calf was born grown");
+            if (calf.Scale >= 0.7f) faults.Add($"a newborn draws at {calf.Scale:F2} of adult size");
+
+            if (herd.Feed(calf, "wheat") != CreatureHerd.FeedResult.Grew)
+                faults.Add("feeding the calf did not grow it");
+            if (calf.LovedFor > 0f)
+                faults.Add("a calf was put in the mood, which is a nursery with a problem");
+
+            if (herd.Feed(herd.All[0], "wheat") != CreatureHerd.FeedResult.Refused)
+                faults.Add("a parent courted again straight after the birth");
+
+            // The clock alone raises it: run the growing time out and it is an adult.
+            for (var i = 0; i < 2500 && !calf.Adult; i++) herd.Update(0.5f, solid);
+            if (!calf.Adult) faults.Add("a calf given its whole growing time never grew up");
+        }
+
+        detail = $"wheat courts, a rock does not; a lone suitor times out childless; a pair meet "
+               + $"within {Breeding.CourtSeconds:F0}s and the calf is born at "
+               + $"{0.55f:F2} scale, grows on meals or {Breeding.GrowSeconds / 60f:F0} minutes, and "
+               + $"cannot itself court; the parents rest {Breeding.RestSeconds / 60f:F0} minutes";
+
+        return faults;
+    }
+
+    /// <summary>
     /// Walks a herd through the save bytes and back, and checks what survives — and what must not.
     /// </summary>
     /// <remarks>
@@ -4184,11 +4275,13 @@ public static class WorldAudit
             return faults;
         }
 
-        // Dress the herd in the state that has to survive: a shorn one, a crossed one, a hurt one.
+        // Dress the herd in the state that has to survive: a shorn one, a crossed one, a hurt
+        // one — and the crossed wolf is also half-grown, so a calf makes the trip a calf.
         herd.All[0].Shorn = true;
         herd.All[0].Regrows = 33f;
         herd.All[1].Health = 3;
         herd.All[3].Provoked = true;
+        herd.All[3].Grown = 0.3f;
 
         // And a dead one, which must not make the trip.
         herd.Hurt(herd.All[2], 999, Vector3.Zero);
@@ -4228,6 +4321,7 @@ public static class WorldAudit
 
         if (!back.All.Any(c => c.Health == 3)) faults.Add("the hurt one came back mended");
         if (!back.All.Any(c => c.Provoked)) faults.Add("the crossed one came back calm");
+        if (!back.All.Any(c => c.Grown < 0.9f)) faults.Add("the half-grown one came back an adult");
 
         foreach (var one in back.All)
             if (one.Position.Y is < 60f or > 70f)

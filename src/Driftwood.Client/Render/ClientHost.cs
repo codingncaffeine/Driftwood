@@ -4891,6 +4891,15 @@ public sealed class ClientHost : IDisposable
             if (cry.Length > 0) _audio?.Play(Pick(cry), blow.Position, 0.8f, 1.1f);
         }
 
+        // A birth is its parents' voice pitched small, and a flutter where the calf stands.
+        foreach (var birth in _herd.TakeBirths())
+        {
+            var voice = CreatureSounds.VoicesFor(birth.Kind);
+            if (voice.Length > 0) _audio?.Play(Pick(voice), birth.Position, 0.7f, 1.3f);
+
+            _particles.Puff(_registry[_ids.Emberbloom], birth.Position + new Vector3(0f, 0.4f, 0f), 12);
+        }
+
         foreach (var creature in _herd.All)
         {
             if (creature.Shed)
@@ -4954,13 +4963,59 @@ public sealed class ClientHost : IDisposable
             // ⛳ What it leaves. ⚠ The kill roll is asked with nothing in hand: what a blow was
             // struck with is already spent — it decided how many blows it took — and a table that
             // read the tool here would hand out more leather to whoever happened to be holding a
-            // sword when the last one landed.
-            foreach (var left in _creatureDropTable.Roll(
-                         death.Kind, DropTrigger.Killed, null, death.Shorn, Random.Shared))
+            // sword when the last one landed. ⛔ A young one leaves NOTHING: a calf that dropped
+            // leather would make the nursery the farm, and killing calves must not pay.
+            if (death.Grown)
             {
-                _drops.Drop(left, death.Position);
+                foreach (var left in _creatureDropTable.Roll(
+                             death.Kind, DropTrigger.Killed, null, death.Shorn, Random.Shared))
+                {
+                    _drops.Drop(left, death.Position);
+                }
             }
         }
+    }
+
+    /// <summary>
+    /// Offers an animal what is in hand, when it is that animal's courting food.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ The pairings and the calf are Core's (<see cref="Breeding"/>, the herd's own Court); this
+    /// is the gesture and the noise. ⚠ The right food at the wrong moment CLAIMS the click and says
+    /// why — wheat swallowed silently by a resting cow, or worse, placed as a block through it,
+    /// would be the fire-book fault again: a working mechanic read as a missing one.
+    /// </remarks>
+    private bool FeedCreature(Creature quarry)
+    {
+        if (_herd is null || _inventory.HeldType is not { } held) return false;
+        if (!Breeding.Takes(quarry.Kind, held.Name)) return false;
+
+        var result = _herd.Feed(quarry, held.Name);
+
+        if (result == CreatureHerd.FeedResult.Refused)
+        {
+            if (Environment.TickCount64 - _fullNoticeAt > 2000)
+            {
+                _fullNoticeAt = Environment.TickCount64;
+                Notice(quarry.LovedFor > 0f ? "already courting" : "not ready again yet", held);
+            }
+
+            return true;
+        }
+
+        _inventory.SpendHeld();
+
+        _audio?.Play(Pick(CreatureSounds.Meals), quarry.Middle, 0.5f, Wobble());
+        var voice = CreatureSounds.VoicesFor(quarry.Kind);
+        if (voice.Length > 0) _audio?.Play(Pick(voice), quarry.Middle, 0.6f, 1.05f);
+
+        // A warm flutter over its head — the emberbloom's reds, which is as near as the particle
+        // system comes to hearts.
+        _particles.Puff(
+            _registry[_ids.Emberbloom], quarry.Middle + new Vector3(0f, 0.5f, 0f),
+            result == CreatureHerd.FeedResult.Courting ? 10 : 5);
+
+        return true;
     }
 
     /// <summary>
@@ -6106,7 +6161,7 @@ public sealed class ClientHost : IDisposable
     /// </remarks>
     private void UseOrPlace()
     {
-        if (_creatureTarget is { } quarry && HarvestCreature(quarry)) return;
+        if (_creatureTarget is { } quarry && (FeedCreature(quarry) || HarvestCreature(quarry))) return;
 
         // ⛔ EATING IS LAST IN FACT NOW, not only in the comment above. It used to run second,
         // gated on "is the aimed block interactive" — the wrong question, because planting and
@@ -9862,7 +9917,8 @@ public sealed class ClientHost : IDisposable
                 _creatureRenderer.Draw(
                     viewProj, _viewPosition, sky, SampleLight(creature.Position + new Vector3(0f, 0.6f, 0f)),
                     creature.Kind, creature.Position, creature.Yaw,
-                    creature.HurtFor / CreatureHerd.HurtSeconds, creature.TippedOver);
+                    creature.HurtFor / CreatureHerd.HurtSeconds, creature.TippedOver,
+                    creature.Scale);
             }
         }
 

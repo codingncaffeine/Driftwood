@@ -223,7 +223,8 @@ public sealed class CreatureRenderer : IDisposable
     /// </param>
     public unsafe void Draw(
         Matrix4x4 viewProj, Vector3 cameraPos, in SkyParams sky, EntityLight light,
-        string kind, Vector3 feet, float yawDegrees, float hurt = 0f, float tipped = 0f)
+        string kind, Vector3 feet, float yawDegrees, float hurt = 0f, float tipped = 0f,
+        float scale = 1f)
     {
         if (!_kinds.TryGetValue(kind, out var found)) return;
 
@@ -252,6 +253,10 @@ public sealed class CreatureRenderer : IDisposable
         // and every animal walks sideways.
         var yaw = float.DegreesToRadians(yawDegrees);
         var root = Matrix4x4.CreateRotationY(-(yaw + MathF.PI / 2f)) * Matrix4x4.CreateTranslation(feet);
+
+        // A calf is its parents at small — same skeleton, same skin, scaled about its own feet
+        // before anything else moves it.
+        if (scale != 1f) root = Matrix4x4.CreateScale(scale) * root;
 
         // ⚠ Going over is a roll about the model's OWN forward axis, applied before the yaw — which
         // is what makes an animal fall on its side whichever way it happened to be facing. Rolled

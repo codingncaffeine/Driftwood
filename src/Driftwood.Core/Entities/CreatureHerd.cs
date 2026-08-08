@@ -79,6 +79,25 @@ public sealed class Creature
     /// <summary>How far it has fallen without touching down, in blocks.</summary>
     public float FellFor { get; set; }
 
+    /// <summary>How grown it is: 0 for a newborn, 1 for an adult. Everything spawns grown.</summary>
+    public float Grown { get; set; } = 1f;
+
+    /// <summary>True once it is full-grown — what may court, and what drops anything.</summary>
+    public bool Adult => Grown >= 1f;
+
+    /// <summary>Its present size against its adult size: drawn at this, and hit at this.</summary>
+    /// <remarks>
+    /// ⚠ A floor of just over half rather than a straight lerp from nothing — a newborn a tenth
+    /// of its mother's size is a rodent wearing her skin, and it would be nearly unclickable.
+    /// </remarks>
+    public float Scale => 0.55f + 0.45f * Math.Clamp(Grown, 0f, 1f);
+
+    /// <summary>Seconds of courtship left after being fed. Two courting adults of a kind pair.</summary>
+    public float LovedFor { get; set; }
+
+    /// <summary>Seconds until it may court again.</summary>
+    public float BreedRest { get; set; }
+
     /// <summary>True once its fleece has been taken and until it has grown back.</summary>
     public bool Shorn { get; set; }
 
@@ -116,18 +135,22 @@ public sealed class Creature
     /// </remarks>
     public (Vector3 Min, Vector3 Max) Bounds()
     {
-        var half = MathF.Max(MathF.Max(Size.X, Size.Z), 0.3f) * 0.5f;
+        var half = MathF.Max(MathF.Max(Size.X, Size.Z), 0.3f) * 0.5f * Scale;
         return (
             new Vector3(Position.X - half, Position.Y, Position.Z - half),
-            new Vector3(Position.X + half, Position.Y + MathF.Max(Size.Y, 0.3f), Position.Z + half));
+            new Vector3(Position.X + half, Position.Y + MathF.Max(Size.Y, 0.3f) * Scale, Position.Z + half));
     }
 
     /// <summary>Where a blow lands and a sound comes from — its middle, not its feet.</summary>
-    public Vector3 Middle => Position + new Vector3(0f, MathF.Max(Size.Y, 0.3f) * 0.5f, 0f);
+    public Vector3 Middle => Position + new Vector3(0f, MathF.Max(Size.Y, 0.3f) * Scale * 0.5f, 0f);
 }
 
 /// <summary>One animal that has just died, for whoever turns that into drops and a noise.</summary>
-public readonly record struct CreatureDeath(string Kind, Vector3 Position, bool Shorn);
+/// <param name="Grown">False for a young one, which leaves nothing — killing calves must not pay.</param>
+public readonly record struct CreatureDeath(string Kind, Vector3 Position, bool Shorn, bool Grown);
+
+/// <summary>One animal that has just been born, for whoever plays the moment.</summary>
+public readonly record struct CreatureBirth(string Kind, Vector3 Position);
 
 /// <summary>
 /// What each creature sounds like: our name for it against a clip's name.
@@ -372,6 +395,8 @@ public sealed class CreatureHerd
     private readonly List<Creature> _creatures = [];
     private readonly List<CreatureDeath> _dead = [];
     private readonly List<CreatureAttack> _attacks = [];
+    private readonly List<CreatureBirth> _births = [];
+    private readonly List<Creature> _newborn = [];
     private readonly Random _random;
 
     public CreatureHerd(int seed) => _random = new Random(seed);
@@ -497,7 +522,7 @@ public sealed class CreatureHerd
         if (!creature.Alive)
         {
             creature.DyingFor = DyingSeconds;
-            _dead.Add(new CreatureDeath(creature.Kind, creature.Middle, creature.Shorn));
+            _dead.Add(new CreatureDeath(creature.Kind, creature.Middle, creature.Shorn, creature.Adult));
             return true;
         }
 
@@ -559,6 +584,125 @@ public sealed class CreatureHerd
         return taken;
     }
 
+    /// <summary>Births since last asked, cleared by the asking — the deaths' own shape.</summary>
+    public List<CreatureBirth> TakeBirths()
+    {
+        var births = new List<CreatureBirth>(_births);
+        _births.Clear();
+        return births;
+    }
+
+    /// <summary>What feeding an animal did, so the client can spend the food or keep it.</summary>
+    public enum FeedResult
+    {
+        /// <summary>Not its food, or not the moment — nothing was taken.</summary>
+        Refused,
+
+        /// <summary>An adult took it and is courting.</summary>
+        Courting,
+
+        /// <summary>A young one took it and grew a little.</summary>
+        Grew,
+    }
+
+    /// <summary>
+    /// Offers an animal something from the hand.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ The pairings are <see cref="Breeding"/>'s and the moods are here, because whether THIS
+    /// animal is resting or already courting is herd state no table can know. A refusal takes
+    /// nothing — the caller keeps the food and decides what to say.
+    /// </remarks>
+    public FeedResult Feed(Creature creature, string item)
+    {
+        if (!creature.Alive || !Breeding.Takes(creature.Kind, item)) return FeedResult.Refused;
+
+        // A meal moves a young one along — the field hurrying the herd, bone meal's own shape.
+        if (!creature.Adult)
+        {
+            creature.Grown = MathF.Min(1f, creature.Grown + Breeding.FeedGrowth);
+            return FeedResult.Grew;
+        }
+
+        if (creature.BreedRest > 0f || creature.LovedFor > 0f) return FeedResult.Refused;
+
+        creature.LovedFor = Breeding.CourtSeconds;
+        return FeedResult.Courting;
+    }
+
+    /// <summary>
+    /// Walks a courting animal toward the nearest courting adult of its kind, and pays the calf.
+    /// </summary>
+    /// <returns>True while courtship owns the animal's legs.</returns>
+    /// <remarks>
+    /// ⚠ <b>The calf goes into <see cref="_newborn"/>, never straight into the list</b> — this runs
+    /// inside the update's own walk over <see cref="_creatures"/>, and a list grown mid-walk is the
+    /// classic way a herd loses its whole update to one happy event.
+    /// </remarks>
+    private bool Court(Creature creature, float dt)
+    {
+        if (creature.LovedFor <= 0f) return false;
+
+        creature.LovedFor -= dt;
+        if (creature.LovedFor <= 0f) return false;   // the mood passed unanswered
+
+        Creature? mate = null;
+        var nearest = float.MaxValue;
+
+        foreach (var other in _creatures)
+        {
+            if (ReferenceEquals(other, creature) || !other.Alive) continue;
+            if (other.Kind != creature.Kind || other.LovedFor <= 0f || !other.Adult) continue;
+
+            var apart = Vector3.DistanceSquared(other.Position, creature.Position);
+            if (apart < nearest)
+            {
+                nearest = apart;
+                mate = other;
+            }
+        }
+
+        if (mate is null || nearest > Breeding.PairRange * Breeding.PairRange) return false;
+
+        var toward = mate.Position - creature.Position;
+        toward.Y = 0f;
+
+        if (toward.Length() > Breeding.MeetRange)
+        {
+            creature.WantsYaw = float.RadiansToDegrees(MathF.Atan2(toward.Z, toward.X));
+            creature.Moving = true;
+            creature.Thinks = 0.5f;   // held short, the hunt's own trick, so wandering cannot interrupt
+            return true;
+        }
+
+        // Met. One calf between them, both spent, both resting.
+        creature.LovedFor = 0f;
+        mate.LovedFor = 0f;
+        creature.BreedRest = Breeding.RestSeconds;
+        mate.BreedRest = Breeding.RestSeconds;
+
+        var between = (creature.Position + mate.Position) * 0.5f;
+
+        _newborn.Add(new Creature
+        {
+            Kind = creature.Kind,
+            Size = creature.Size,
+            Hostile = false,
+            MaxHealth = CreatureVitals.HealthFor(creature.Kind),
+            Health = CreatureVitals.HealthFor(creature.Kind),
+            Position = between,
+            Grown = 0f,
+            Yaw = (float)(_random.NextDouble() * 360.0),
+            WantsYaw = (float)(_random.NextDouble() * 360.0),
+            Thinks = 1f,
+            Speaks = 2f,
+            Sheds = CreatureVitals.ShedsEvery * (0.4f + (float)_random.NextDouble()),
+        });
+        _births.Add(new CreatureBirth(creature.Kind, between));
+
+        return true;
+    }
+
     /// <summary>Takes one out of the world without it having died — what a despawn is.</summary>
     public void Remove(Creature creature) => _creatures.Remove(creature);
 
@@ -585,7 +729,7 @@ public sealed class CreatureHerd
 
             saved.Add(new SavedCreature(
                 creature.Kind, creature.Position, creature.Yaw, creature.Health,
-                creature.Shorn, creature.Regrows, creature.Provoked, 1f));
+                creature.Shorn, creature.Regrows, creature.Provoked, creature.Grown));
         }
 
         return saved;
@@ -631,6 +775,7 @@ public sealed class CreatureHerd
                 Shorn = one.Shorn,
                 Regrows = one.Regrows,
                 Provoked = one.Provoked,
+                Grown = Math.Clamp(one.Grown, 0f, 1f),
                 Thinks = (float)(_random.NextDouble() * 4.0),
                 Speaks = SpeaksEvery * (float)_random.NextDouble(),
                 Sheds = CreatureVitals.ShedsEvery * (0.4f + (float)_random.NextDouble()),
@@ -773,10 +918,17 @@ public sealed class CreatureHerd
                 creature.Spoke = true;
             }
 
+            // A young one grows on its own clock; a meal only hurries it.
+            if (creature.Grown < 1f)
+                creature.Grown = MathF.Min(1f, creature.Grown + dt / Breeding.GrowSeconds);
+
+            creature.BreedRest = MathF.Max(0f, creature.BreedRest - dt);
+
             if (Fall(creature, dt, solid)) continue;
 
             Scorch(creature, dt, sunlit);
             var hunting = Hunt(creature, dt, player);
+            var courting = !hunting && Court(creature, dt);
 
             creature.Thinks -= dt;
 
@@ -787,8 +939,8 @@ public sealed class CreatureHerd
                 // ⚠ A frightened animal keeps running and keeps its heading, and so does one that
                 // has seen you. Re-deciding on the ordinary clock is what turned a bolting cow back
                 // toward whoever hit it every few seconds, which reads as an animal that wants
-                // another go rather than one fleeing.
-                if (creature.FleeFor <= 0f && !hunting)
+                // another go rather than one fleeing. A courting one likewise owns its own legs.
+                if (creature.FleeFor <= 0f && !hunting && !courting)
                 {
                     creature.Moving = _random.NextDouble() < 0.6;
                     creature.WantsYaw = (float)(_random.NextDouble() * 360.0);
@@ -829,6 +981,13 @@ public sealed class CreatureHerd
                 : Wrap(creature.Yaw + 90f + (float)_random.NextDouble() * 180f);
 
             creature.Thinks = panicking ? 0.4f : 1f + (float)_random.NextDouble() * 2f;
+        }
+
+        // The calves born mid-walk join the herd once the walk is over — see Court for why.
+        if (_newborn.Count > 0)
+        {
+            _creatures.AddRange(_newborn);
+            _newborn.Clear();
         }
     }
 
