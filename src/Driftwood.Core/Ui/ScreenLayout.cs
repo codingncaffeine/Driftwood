@@ -349,6 +349,13 @@ public sealed class ScreenLayout
                 Square16(SlotRole.Smelting, 0, 56, 17);
                 Square16(SlotRole.Fuel, 0, 56, 53);
                 Square16(SlotRole.Smelted, 0, 116, 35);
+
+                // ⛔ The button was MISSING here while Player and Bench both had one — so at a
+                // fire, the book only ever appeared if some other screen had left BookOut set,
+                // and there was nothing on screen to open it with. Reported by the user as the
+                // fires "not showing recipes" a session after the book itself was built. Same
+                // spot as the bench's, which is clear on this sheet too.
+                Button(ScreenButton.Book, BenchBookToggle.X, BenchBookToggle.Y, BenchBookToggle.W, BenchBookToggle.H);
                 break;
 
             // ⚠ Not a grid. A stonecutter takes one thing and offers several, so what sits between

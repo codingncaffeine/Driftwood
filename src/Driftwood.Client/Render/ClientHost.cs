@@ -3106,6 +3106,13 @@ public sealed class ClientHost : IDisposable
         _shown.Clear();
         _hudScreen.Selected = 0;
         _hudScreen.BookPage = 0;
+
+        // ⛔ A fire opens with its book OUT, always. The book IS the fire's menu — the whole
+        // fault it was built for was that nowhere in the game said a fire cooks meat, and
+        // opening folded-away is the same silence one undiscoverable toggle later. The button
+        // beside the squares folds it for whoever wants the plain three.
+        _hudScreen.BookOut = true;
+
         _furnaces.Open(x, y, z);
         TakeThePointer();
         RefreshScreen();
@@ -8028,6 +8035,10 @@ public sealed class ClientHost : IDisposable
     /// <summary>Campfire dinners drawn, read while the fire was still standing.</summary>
     private int _cookingSeen = -1;
 
+    /// <summary>Whether a fire opened with its book out, and whether it had a button to fold it.</summary>
+    private bool _fireBookOut;
+    private bool _fireBookButton;
+
     /// <summary>Frames drawn through the ordinary loop, for the frame limit to be measured against.</summary>
     private long _playedFrames;
 
@@ -8097,7 +8108,12 @@ public sealed class ClientHost : IDisposable
         _inventory.Add(new ItemStack(_items.ByName("raw_beef").Id, 3));
 
         OpenFurnace(at.Item1, at.Item2, at.Item3);
-        _hudScreen.BookOut = true;
+
+        // ⛔ NOT `_hudScreen.BookOut = true` any more. The opener puts the book out itself, and
+        // this check setting the field is exactly how a furnace with NO BOOK BUTTON stayed
+        // green for a session: it proved the book renders when out, and never that a player has
+        // any control that gets it out. The user reported the fires "not showing recipes" a
+        // second time before the layout was found to carry no toggle at all.
         RefreshScreen();
     }
 
@@ -8172,6 +8188,15 @@ public sealed class ClientHost : IDisposable
         // player into a box of stone and water and buries the fire doing it, so taken at the end this
         // read zero and fired — a check measuring a subject another check had already demolished.
         _cookingSeen = CookingDrawn;
+
+        // The two claims the user's second report exposed as missing: the fire opened SHOWING
+        // its book (the opener's own doing, not this script's), and the screen carries the
+        // button a player folds it with.
+        _fireBookOut = _hudScreen.BookOut;
+        _fireBookButton = false;
+        foreach (var zone in _layout.Zones)
+            if (zone.Kind == ZoneKind.Button && zone.Index == (int)ScreenButton.Book)
+                _fireBookButton = true;
 
         Console.WriteLine(
             $"ui-check    fire book  {page} rows laid out of {_hudScreen.Recipes.Count}, {foods} of them "
@@ -9443,6 +9468,12 @@ public sealed class ClientHost : IDisposable
         // thing, and the honest answer is to read it before rather than to loosen it.
         if (_cookingSeen <= 0)
             faults.Add("a lit campfire with meat on it drew nothing on the fire");
+
+        if (!_fireBookOut)
+            faults.Add("a fire opened with its book folded away, which is the silence the book was built to end");
+
+        if (!_fireBookButton)
+            faults.Add("the furnace screen has no book button — a player has no way to open the fire's book");
 
         // ── Air, driven through the client's own loop rather than through a fixture ──────────────
         //

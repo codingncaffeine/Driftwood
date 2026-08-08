@@ -1153,8 +1153,11 @@ public sealed class HudRenderer : IDisposable
         var pages = Math.Max(1, (screen.Recipes.Count + ScreenLayout.BookPage - 1) / ScreenLayout.BookPage);
         var page = Math.Clamp(screen.BookPage, 0, pages - 1);
 
+        // The header names where these recipes are worked. A fire's book used to say "in your
+        // hands", which is one more way a furnace failed to say it cooks.
         TextCentred(
-            screen.Grid is { Width: > 2 } ? "at a bench" : "in your hands",
+            screen.Kind == HudScreenKind.Furnace ? "on the fire"
+                : screen.Grid is { Width: > 2 } ? "at a bench" : "in your hands",
             layout.BookX + layout.Size(ScreenLayout.BookWidth * 0.5f), layout.Y(14f), 8f, InkDim);
 
         foreach (var zone in layout.Zones)
