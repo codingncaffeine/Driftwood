@@ -2,13 +2,18 @@ namespace Driftwood.Core.Audio;
 
 /// <summary>What a block sounds like when it is walked on, struck, broken or put down.</summary>
 /// <remarks>
-/// Coarser than the block list on purpose. Fifty-one blocks share about a dozen surfaces, and a
+/// Coarser than the block list on purpose. Seven hundred blocks share about a dozen surfaces, and a
 /// table keyed on the surface is one a person can read and check; keyed on the block it would be
-/// fifty rows saying "stone" and one of them would be wrong.
+/// seven hundred rows saying "stone" and one of them would be wrong.
 /// </remarks>
 public enum SoundMaterial
 {
     Stone,
+
+    /// <summary>The deep world's rock. 318 of the world's 384 cells are under the sea and most of
+    /// what is down there is deepstone; a place that big deserves a voice of its own.</summary>
+    Deepstone,
+
     Dirt,
     Grass,
     Sand,
@@ -43,73 +48,121 @@ public enum SoundEvent
 /// The one place a material is turned into file names.
 /// </summary>
 /// <remarks>
-/// <para>Every entry here is a real file in <c>assets/sounds</c>, and the audit refuses a build
-/// where one is not — a table pointing at a sound nobody shipped is silent in exactly the way a
-/// working game is silent, and there is no other way to notice.</para>
-/// <para>Several are stand-ins and say so. The pack has no dirt or sand footsteps and nothing at
-/// all for breaking soft ground, which is the most common action in the whole game; grass and
-/// gravel are the nearest things it does have. They are marked in the plan's sound tally so the
-/// shopping list stays honest rather than quietly closing once something plays.</para>
+/// <para>Every entry is a real file in <c>assets/sounds</c>, and the audit refuses a build where
+/// one is not — a table pointing at a sound nobody shipped is silent in exactly the way a working
+/// game is silent, and there is no other way to notice.</para>
+/// <para>Names are paths from the sounds folder because the pack repeats bare names on purpose:
+/// <c>dig/stone1</c> and <c>step/stone1</c> are different recordings of the same rock. The layout
+/// is the pack author's and is kept as shipped — these tables are the translation, exactly as
+/// <c>BlockTextureSet.Layers</c> is for art.</para>
+/// <para>The old stand-in problem is over: the pack has purpose-made sets for every surface in
+/// this enum, including the dirt, sand and stone strikes the plan's shopping list ranked first.
+/// Breaking and placing share a recording set where the pack ships one (its <c>dig/</c> folder
+/// serves both, which is the genre's own convention).</para>
 /// </remarks>
 public static class MaterialSounds
 {
-    private static readonly string[] GrassSteps =
-        ["digital_footstep_grass_1", "digital_footstep_grass_2", "digital_footstep_grass_3", "digital_footstep_grass_4"];
-
-    private static readonly string[] GravelSteps =
-        ["digital_footstep_gravel_1", "digital_footstep_gravel_2", "digital_footstep_gravel_3", "digital_footstep_gravel_4"];
-
-    private static readonly string[] WoodSteps =
-        ["digital_footstep_wood_1", "digital_footstep_wood_2", "digital_footstep_wood_3", "digital_footstep_wood_4"];
-
-    private static readonly string[] SnowSteps =
-        ["digital_footstep_snow_1", "digital_footstep_snow_2", "digital_footstep_snow_3", "digital_footstep_snow_4"];
-
-    private static readonly string[] StoneSteps =
-        ["foley_footstep_concrete_1", "foley_footstep_concrete_2", "foley_footstep_concrete_3", "foley_footstep_concrete_4"];
-
-    private static readonly string[] ClothSteps =
-        ["foley_footstep_carpet_1", "foley_footstep_carpet_2", "foley_footstep_carpet_3", "foley_footstep_carpet_4"];
-
-    private static readonly string[] Fists = ["punch", "punch_2", "punch_3"];
+    /// <summary>Numbered variants of one recording: <c>stem1, stem2, …</c>.</summary>
+    private static string[] Run(string stem, int count)
+    {
+        var names = new string[count];
+        for (var i = 0; i < count; i++) names[i] = $"{stem}{i + 1}";
+        return names;
+    }
 
     /// <summary>Every sound one material makes, in the four situations it makes any.</summary>
     private sealed record Set(string[] Step, string[] Hit, string[] Break, string[] Place);
 
     private static readonly Dictionary<SoundMaterial, Set> Table = new()
     {
-        // Stone covers every rock and every ore. Breaking ore is really breaking the stone it is in.
+        // Stone covers every rock and every ore above the deep. Breaking ore is really breaking
+        // the stone it is in.
         [SoundMaterial.Stone] = new(
-            StoneSteps,
-            ["metal_blunt_tap", "concrete_scrape"],
-            ["stone_push_short", "stone_push_medium"],
-            ["stone_push_short"]),
+            Run("step/stone", 6),
+            Run("block/stone/hit", 8),
+            Run("dig/stone", 4),
+            Run("dig/stone", 4)),
 
-        // Soft ground has no coverage at all in the pack. Grass steps and a short crunch are the
-        // nearest, and both are stand-ins.
-        [SoundMaterial.Dirt] = new(GrassSteps, Fists, ["crunch_quick"], ["crunch_quick"]),
-        [SoundMaterial.Grass] = new(GrassSteps, Fists, ["crunch_quick"], ["crunch_quick"]),
+        [SoundMaterial.Deepstone] = new(
+            Run("block/deepslate/step", 6),
+            Run("block/deepslate/hit", 4),
+            Run("block/deepslate/break", 4),
+            Run("block/deepslate/place", 6)),
 
-        // Sand is very distinctive and there is nothing like it here; gravel is the closest.
-        [SoundMaterial.Sand] = new(GravelSteps, Fists, ["crunch"], ["crunch_quick"]),
-        [SoundMaterial.Gravel] = new(GravelSteps, Fists, ["crunch"], ["crunch_quick"]),
-        [SoundMaterial.Snow] = new(SnowSteps, Fists, ["digital_footstep_snow_1"], ["digital_footstep_snow_3"]),
+        [SoundMaterial.Dirt] = new(
+            Run("block/rooted_dirt/step", 6),
+            Run("block/rooted_dirt/hit", 4),
+            Run("block/rooted_dirt/break", 4),
+            Run("block/rooted_dirt/break", 4)),
+
+        [SoundMaterial.Grass] = new(
+            Run("step/grass", 6),
+            Run("block/grass/hit", 4),
+            Run("block/grass/break", 4),
+            Run("dig/grass", 4)),
+
+        [SoundMaterial.Sand] = new(
+            Run("step/sand", 5),
+            Run("block/sand/hit", 4),
+            Run("block/sand/break", 4),
+            Run("dig/sand", 4)),
+
+        [SoundMaterial.Gravel] = new(
+            Run("step/gravel", 4),
+            Run("step/gravel", 4),
+            Run("block/gravel/break", 4),
+            Run("dig/gravel", 4)),
+
+        [SoundMaterial.Snow] = new(
+            Run("step/snow", 4),
+            Run("block/snow/hit", 4),
+            Run("block/snow/break", 4),
+            Run("dig/snow", 4)),
 
         [SoundMaterial.Wood] = new(
-            WoodSteps,
-            ["punch_2", "punch_3"],
-            ["wood_small_gather"],
-            ["wood_small_drop", "wood_small_hollow"]),
+            Run("step/wood", 6),
+            Run("block/wood/hit", 4),
+            Run("dig/wood", 4),
+            Run("dig/wood", 4)),
 
-        [SoundMaterial.Leaves] = new(GrassSteps, ["swipe"], ["paper_scrunch"], ["paper_move"]),
-        [SoundMaterial.Plant] = new(GrassSteps, ["swipe"], ["paper_tear_1", "paper_tear_2"], ["paper_move"]),
+        // Foliage rustles rather than crunches; the wet-grass set is the pack's leafier cousin of
+        // plain grass and keeps a hedge from sounding like a lawn.
+        [SoundMaterial.Leaves] = new(
+            Run("step/grass", 6),
+            Run("dig/wet_grass", 4),
+            Run("dig/wet_grass", 4),
+            Run("dig/wet_grass", 4)),
 
-        [SoundMaterial.Metal] = new(StoneSteps, ["metal_blunt_tap"], ["metal_clang"], ["metal_blunt_tap"]),
-        [SoundMaterial.Glass] = new(StoneSteps, ["metal_blunt_tap"], ["glass_ping_big", "glass_ping_small"], ["glass_ping_small"]),
-        [SoundMaterial.Cloth] = new(ClothSteps, ["slap"], ["clothing_1", "clothing_2"], ["clothing_thud"]),
+        [SoundMaterial.Plant] = new(
+            Run("step/grass", 6),
+            Run("dig/wet_grass", 4),
+            Run("dig/grass", 4),
+            Run("item/plant/crop", 6)),
+
+        [SoundMaterial.Metal] = new(
+            Run("block/iron/step", 6),
+            Run("block/iron/place", 4),
+            Run("block/iron/break", 8),
+            Run("block/iron/place", 4)),
+
+        [SoundMaterial.Glass] = new(
+            Run("step/glass", 4),
+            Run("block/glass/hit", 4),
+            Run("dig/glass", 4),
+            Run("step/glass", 4)),
+
+        [SoundMaterial.Cloth] = new(
+            Run("step/cloth", 4),
+            Run("dig/cloth", 4),
+            Run("dig/cloth", 4),
+            Run("dig/cloth", 4)),
 
         // Water is never broken or placed; it is waded through and fallen into.
-        [SoundMaterial.Water] = new(["water_splashing"], ["water_drop_medium"], ["water_splashing"], ["water_splashing"]),
+        [SoundMaterial.Water] = new(
+            Run("liquid/swim", 6),
+            ["liquid/splash", "liquid/splash2"],
+            ["liquid/splash", "liquid/splash2"],
+            ["liquid/splash", "liquid/splash2"]),
     };
 
     /// <summary>The names one material offers for one situation. Never empty.</summary>

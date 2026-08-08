@@ -18,11 +18,12 @@
     <EmbeddedResource Include="..\..\assets\window-icon-64.png" LogicalName="Driftwood.Client.window-icon-64.png" />
   </ItemGroup>
 
-  <!-- Shipped beside the exe rather than embedded. Nineteen megabytes of audio inside the assembly
-       would be carried whether or not a session plays a note, and a folder of WAV files is
-       something a player can look at, replace or add to. -->
+  <!-- Shipped beside the exe rather than embedded. Twenty megabytes of audio inside the assembly
+       would be carried whether or not a session plays a note, and a folder of sound files is
+       something a player can look at, replace or add to. The whole folder, not an extension:
+       the set is Ogg Vorbis with a few of our own WAV recordings and a credits file beside them. -->
   <ItemGroup>
-    <Content Include="..\..\assets\sounds\**\*.wav" LinkBase="assets\sounds" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\assets\sounds\**\*.*" LinkBase="assets\sounds" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

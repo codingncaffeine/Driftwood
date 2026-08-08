@@ -5291,23 +5291,40 @@ public static class WorldAudit
             return faults;
         }
 
+        // The transform under the whole pipeline, against the specification's own formula. An
+        // index or sign slip in the fast path decodes every clip into plausible-sounding wrongness
+        // and no per-clip gate below would say so.
+        var imdct = OggVorbis.ImdctSelfTest();
+        if (imdct is not null) faults.Add(imdct);
+
         var named = 0;
         var quietest = 1f;
-        foreach (var name in MaterialSounds.AllNames())
+
+        void Gate(string name, string owner, float longest)
         {
             named++;
             var clip = library.Load(name);
             if (clip is null)
             {
-                faults.Add($"'{name}' is named by the block table and is not in {Path.GetFileName(root)}");
-                continue;
+                faults.Add($"'{name}' is named by {owner} and is not in {Path.GetFileName(root)}");
+                return;
             }
 
-            var peak = clip.Peak;
+            // Gated after the fold to mono, which is what actually plays.
+            var peak = clip.ToMono().Peak;
             quietest = MathF.Min(quietest, peak);
             if (peak < 0.02f) faults.Add($"'{name}' decodes to near silence (peak {peak:F3})");
-            if (clip.Seconds > 8f) faults.Add($"'{name}' runs {clip.Seconds:F1}s, which is a loop not a one-shot");
+            if (clip.Seconds > longest)
+                faults.Add($"'{name}' runs {clip.Seconds:F1}s against the {longest:F0}s allowed for {owner}");
         }
+
+        foreach (var name in MaterialSounds.AllNames()) Gate(name, "the block table", 8f);
+        foreach (var name in CreatureSounds.All.Distinct()) Gate(name, "the creatures", 8f);
+        foreach (var name in ActionSounds.AllOneShots) Gate(name, "the action table", 8f);
+
+        // Ambience is supposed to run long; sixty seconds is the line between a recording of a
+        // place and somebody's whole album shipped by mistake.
+        foreach (var name in ActionSounds.Ambience.Distinct()) Gate(name, "the ambience", 60f);
 
         foreach (var material in MaterialSounds.Materials)
         foreach (var which in Enum.GetValues<SoundEvent>())

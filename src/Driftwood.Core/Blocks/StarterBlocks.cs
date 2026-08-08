@@ -768,7 +768,7 @@ public static class StarterBlocks
             registry.Register(new BlockType
             {
                 Name = MetalBlocks[m].Name, Hardness = 5f, Crafted = true,
-                Sounds = SoundMaterial.Stone,
+                Sounds = SoundMaterial.Metal,
                 HarvestClass = ToolClass.Pickaxe, HarvestTier = 2,
                 TopLayer = layer, SideLayer = layer, BottomLayer = layer,
             });
@@ -793,7 +793,7 @@ public static class StarterBlocks
             {
                 Name = AnvilName(stage, axis == 0),
                 Hardness = 5f, Crafted = true, Derived = stage > 0 || axis > 0,
-                Sounds = SoundMaterial.Stone,
+                Sounds = SoundMaterial.Metal,
                 HarvestClass = ToolClass.Pickaxe, HarvestTier = 2,
                 Use = BlockUse.Anvil,
                 Opaque = false,
@@ -807,7 +807,7 @@ public static class StarterBlocks
         // crop row without noticing they are on it.
         registry.Register(new BlockType
         {
-            Name = "farmland", Hardness = 0.6f, Crafted = true, Sounds = SoundMaterial.Gravel,
+            Name = "farmland", Hardness = 0.6f, Crafted = true, Sounds = SoundMaterial.Dirt,
             HarvestClass = ToolClass.Shovel,
             Opaque = false,
             Model = BlockModel.Layer(LayerFarmland, LayerFarmland, LayerDirt, 15f),
@@ -816,7 +816,7 @@ public static class StarterBlocks
         registry.Register(new BlockType
         {
             Name = "farmland_wet", Hardness = 0.6f, Crafted = true, Derived = true,
-            Sounds = SoundMaterial.Gravel, HarvestClass = ToolClass.Shovel,
+            Sounds = SoundMaterial.Dirt, HarvestClass = ToolClass.Shovel,
             Opaque = false,
             Model = BlockModel.Layer(LayerFarmlandWet, LayerFarmlandWet, LayerDirt, 15f),
         });
@@ -924,6 +924,7 @@ public static class StarterBlocks
         {
             Name = "emberstone", Hardness = 0.3f, HarvestClass = ToolClass.Pickaxe, HarvestTier = 1,
             LightEmission = LightValue.PackBlock(15, 10, 4),
+            Sounds = SoundMaterial.Deepstone,
             TopLayer = LayerEmberstone, SideLayer = LayerEmberstone, BottomLayer = LayerEmberstone,
         });
 
@@ -959,6 +960,7 @@ public static class StarterBlocks
         var deepstone = registry.Register(new BlockType
         {
             Name = "deepstone", Hardness = 3f, HarvestClass = ToolClass.Pickaxe, HarvestTier = 2,
+            Sounds = SoundMaterial.Deepstone,
             TopLayer = LayerDeepstone, SideLayer = LayerDeepstone, BottomLayer = LayerDeepstone,
         });
 
@@ -990,14 +992,17 @@ public static class StarterBlocks
             Name = "copper_ore", Hardness = OreHardness[2], HarvestClass = ToolClass.Pickaxe, HarvestTier = 2,
             TopLayer = LayerCopperOre, SideLayer = LayerCopperOre, BottomLayer = LayerCopperOre,
         });
+        // The deep ores ring like the rock they sit in — gold down, everything is deepstone.
         var gold = registry.Register(new BlockType
         {
             Name = "gold_ore", Hardness = OreHardness[3], HarvestClass = ToolClass.Pickaxe, HarvestTier = 3,
+            Sounds = SoundMaterial.Deepstone,
             TopLayer = LayerGoldOre, SideLayer = LayerGoldOre, BottomLayer = LayerGoldOre,
         });
         var stormglass = registry.Register(new BlockType
         {
             Name = "stormglass_ore", Hardness = OreHardness[4], HarvestClass = ToolClass.Pickaxe, HarvestTier = 4,
+            Sounds = SoundMaterial.Deepstone,
             TopLayer = LayerStormglassOre, SideLayer = LayerStormglassOre, BottomLayer = LayerStormglassOre,
         });
 
@@ -1009,6 +1014,7 @@ public static class StarterBlocks
         var diamond = registry.Register(new BlockType
         {
             Name = "diamond_ore", Hardness = OreHardness[5], HarvestClass = ToolClass.Pickaxe, HarvestTier = 5,
+            Sounds = SoundMaterial.Deepstone,
             TopLayer = LayerDiamondOre, SideLayer = LayerDiamondOre, BottomLayer = LayerDiamondOre,
         });
 
@@ -1016,6 +1022,7 @@ public static class StarterBlocks
         var azurite = registry.Register(new BlockType
         {
             Name = "azurite_ore", Hardness = OreHardness[3], HarvestClass = ToolClass.Pickaxe, HarvestTier = 3,
+            Sounds = SoundMaterial.Deepstone,
             TopLayer = LayerAzuriteOre, SideLayer = LayerAzuriteOre, BottomLayer = LayerAzuriteOre,
         });
 
@@ -1849,9 +1856,9 @@ public static class StarterBlocks
         new("smooth_stone", LayerSmoothStone, LayerSmoothStone, LayerSmoothStone,
             SoundMaterial.Stone, ToolClass.Pickaxe, 1),
         new("polished_deepstone", LayerDeepstonePolished, LayerDeepstonePolished, LayerDeepstonePolished,
-            SoundMaterial.Stone, ToolClass.Pickaxe, 1),
+            SoundMaterial.Deepstone, ToolClass.Pickaxe, 1),
         new("deepstone_bricks", LayerDeepstoneBricks, LayerDeepstoneBricks, LayerDeepstoneBricks,
-            SoundMaterial.Stone, ToolClass.Pickaxe, 1),
+            SoundMaterial.Deepstone, ToolClass.Pickaxe, 1),
         new("polished_coralstone", LayerCoralstonePolished, LayerCoralstonePolished, LayerCoralstonePolished,
             SoundMaterial.Stone, ToolClass.Pickaxe, 1),
         new("polished_driftstone", LayerDriftstonePolished, LayerDriftstonePolished, LayerDriftstonePolished,
@@ -1930,7 +1937,7 @@ public static class StarterBlocks
             4f, 3f, [(0f, 14f)], FenceCollideHigh),
         new("stone_brick_wall", LayerStoneBricks, SoundMaterial.Stone, ToolClass.Pickaxe, 1,
             4f, 3f, [(0f, 14f)], FenceCollideHigh),
-        new("deepstone_brick_wall", LayerDeepstoneBricks, SoundMaterial.Stone, ToolClass.Pickaxe, 1,
+        new("deepstone_brick_wall", LayerDeepstoneBricks, SoundMaterial.Deepstone, ToolClass.Pickaxe, 1,
             4f, 3f, [(0f, 14f)], FenceCollideHigh),
         new("sandstone_wall", LayerSandstone, SoundMaterial.Stone, ToolClass.Pickaxe, 0,
             4f, 3f, [(0f, 14f)], FenceCollideHigh),

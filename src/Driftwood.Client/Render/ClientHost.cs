@@ -3790,6 +3790,17 @@ public sealed class ClientHost : IDisposable
             return;
         }
 
+        // ⛔ The instruments wear the game's own art unless a pack is asked for by name. The gate
+        // went red on a correct build the day a pack was picked in the options screen: --ui-check
+        // reads colours off the real screen, and a pack repaints exactly the pixels it reads. The
+        // player's choice stays in their settings; a check is not the player.
+        if (_options.UiCheck || _options.ShotPath is not null)
+        {
+            _packPath = null;
+            Console.WriteLine("pack        the game's own art (a self-check ignores the settings; --pack still applies)");
+            return;
+        }
+
         var wanted = _settings.TexturePack;
         if (string.IsNullOrWhiteSpace(wanted))
         {
@@ -4668,7 +4679,7 @@ public sealed class ClientHost : IDisposable
             _audio?.Play(Pick(CreatureSounds.Blows), blow.Position, 0.62f, Wobble());
 
             var cry = CreatureSounds.AngryFor(blow.Kind);
-            if (cry.Length > 0) _audio?.Play(cry, blow.Position, 0.8f, 1.1f);
+            if (cry.Length > 0) _audio?.Play(Pick(cry), blow.Position, 0.8f, 1.1f);
         }
 
         foreach (var creature in _herd.All)
@@ -4682,18 +4693,21 @@ public sealed class ClientHost : IDisposable
                 {
                     _drops.Drop(laid, creature.Position + new Vector3(0f, 0.2f, 0f), 0.15f);
                 }
+
+                var lay = CreatureSounds.ShedFor(creature.Kind);
+                if (lay.Length > 0) _audio?.Play(Pick(lay), creature.Position, 0.5f, Wobble());
             }
 
             if (!creature.Spoke) continue;
 
-            var clip = CreatureSounds.IdleFor(creature.Kind);
-            if (clip.Length == 0) continue;
+            var voices = CreatureSounds.VoicesFor(creature.Kind);
+            if (voices.Length == 0) continue;
 
             // ⚠ From the animal's own head rather than its feet, and pitched a little differently
             // every time. Six animals of one kind playing one recording in unison is the tell that
             // it is one recording; a few percent of pitch either way is what makes them individuals.
             _audio?.Play(
-                clip, creature.Position + new Vector3(0f, 0.8f, 0f), 0.7f,
+                Pick(voices), creature.Position + new Vector3(0f, 0.8f, 0f), 0.7f,
                 0.92f + (float)Random.Shared.NextDouble() * 0.16f);
         }
 
@@ -4701,10 +4715,19 @@ public sealed class ClientHost : IDisposable
         {
             _audio?.Play(Pick(CreatureSounds.Deaths), death.Position, 0.68f, Wobble());
 
-            // ⚠ Its own voice, one last time and pitched down. The impact says a blow landed; what
-            // says which animal it was is the recording it has been lowing with all afternoon.
-            var voice = CreatureSounds.IdleFor(death.Kind);
-            if (voice.Length > 0) _audio?.Play(voice, death.Position, 0.9f, 0.72f);
+            // ⚠ Its own voice, one last time. A kind with a real death recording uses it; the rest
+            // low the ordinary voice pitched down. The impact says a blow landed; what says which
+            // animal it was is the recording it has been lowing with all afternoon.
+            var lastCry = CreatureSounds.DeathCryFor(death.Kind);
+            if (lastCry.Length > 0)
+            {
+                _audio?.Play(Pick(lastCry), death.Position, 0.9f, Wobble());
+            }
+            else
+            {
+                var voice = CreatureSounds.VoicesFor(death.Kind);
+                if (voice.Length > 0) _audio?.Play(Pick(voice), death.Position, 0.9f, 0.72f);
+            }
 
             // ⛳ And a puff where it was, sized off the animal's own model rather than a constant —
             // a chicken and a cow should not leave the same cloud. Half a body up, because a corpse
@@ -4755,13 +4778,13 @@ public sealed class ClientHost : IDisposable
         quarry.Shorn = true;
         quarry.Regrows = CreatureVitals.RegrowSeconds;
 
-        _audio?.Play(CreatureSounds.Shear, quarry.Middle, 0.55f, Wobble());
+        _audio?.Play(Pick(CreatureSounds.Shears), quarry.Middle, 0.55f, Wobble());
 
-        var voice = CreatureSounds.IdleFor(quarry.Kind);
-        if (voice.Length > 0) _audio?.Play(voice, quarry.Middle, 0.6f, 1.14f);
+        var voice = CreatureSounds.VoicesFor(quarry.Kind);
+        if (voice.Length > 0) _audio?.Play(Pick(voice), quarry.Middle, 0.6f, 1.14f);
 
         if (held is { IsTool: true } && _inventory.WearHeld())
-            PlaySound(SoundMaterial.Wood, SoundEvent.Break, _viewPosition, 0.7f);
+            _audio?.Play(Pick(ActionSounds.ToolBreaks), _viewPosition, 0.7f, Wobble());
 
         return true;
     }
@@ -4785,6 +4808,11 @@ public sealed class ClientHost : IDisposable
 
         _inventory.SpendHeld();
         _audio?.Play(Pick(CreatureSounds.Meals), _viewPosition, 0.45f, Wobble());
+
+        // The end of a good meal, only when it tops the bar out — a burp per bite is a comedy.
+        if (_vitals.Food >= PlayerVitals.MaxFood)
+            _audio?.Play(Pick(ActionSounds.Burp), _viewPosition, 0.4f, Wobble());
+
         return true;
     }
 
@@ -4813,13 +4841,13 @@ public sealed class ClientHost : IDisposable
         // cow it was landing on.
         _audio?.Play(Pick(CreatureSounds.Blows), quarry.Middle, 0.62f, Wobble());
 
-        // Its voice, raised. ⚠ The angry clip where a creature has one and its ordinary one where it
-        // does not, which is most of them — a table with a hole in it is quieter than a wrong entry.
-        var cry = CreatureSounds.AngryFor(quarry.Kind);
-        if (cry.Length > 0 && quarry.Alive) _audio?.Play(cry, quarry.Middle, 0.85f, 1.18f);
+        // Its voice, raised. ⚠ The hurt cry where a creature has one and its ordinary voice where
+        // it does not — a table with a hole in it is quieter than a wrong entry.
+        var cry = CreatureSounds.HurtFor(quarry.Kind);
+        if (cry.Length > 0 && quarry.Alive) _audio?.Play(Pick(cry), quarry.Middle, 0.85f, Wobble());
 
         if (_inventory.HeldType is { IsTool: true } && _inventory.WearHeld())
-            PlaySound(SoundMaterial.Wood, SoundEvent.Break, _viewPosition, 0.7f);
+            _audio?.Play(Pick(ActionSounds.ToolBreaks), _viewPosition, 0.7f, Wobble());
     }
 
     /// <summary>One of a handful of recordings of the same thing, so a run of them is not a loop.</summary>
@@ -5328,7 +5356,7 @@ public sealed class ClientHost : IDisposable
             // A tool that did the work wears from it. Only the tool: a bare hand is free, and so is
             // a plank held like a club, which is why this asks the item rather than the swing.
             if (_inventory.HeldType is { IsTool: true } && _inventory.WearHeld())
-                PlaySound(SoundMaterial.Wood, SoundEvent.Break, _viewPosition, 0.7f);
+                _audio?.Play(Pick(ActionSounds.ToolBreaks), _viewPosition, 0.7f, Wobble());
         }
 
         BreakTarget();
@@ -8494,7 +8522,13 @@ public sealed class ClientHost : IDisposable
         }
 
         var chest = Read(ScreenLayout.Figure.X + 25f, ScreenLayout.Figure.Y + 32f);
-        var backdrop = Read(ScreenLayout.Figure.X + 3f, ScreenLayout.Figure.Y + 60f);
+
+        // ⛔ The bare corner, not the foot of the window. The figure HOLDS whatever the player
+        // holds, drawn by its hand near the lower-left — so a probe down there read the held
+        // item's icon and called the inset light on a correct screen the moment the ui-check's
+        // player picked up a block. The top-left corner is bare by the window's own geometry:
+        // the cut-out stands centred with a nine-unit margin and nothing else is drawn that high.
+        var backdrop = Read(ScreenLayout.Figure.X + 3f, ScreenLayout.Figure.Y + 4f);
 
         _uiSamples["figure"] = chest;
         _uiSamples["figure backdrop"] = backdrop;

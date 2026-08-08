@@ -136,52 +136,90 @@ public readonly record struct CreatureDeath(string Kind, Vector3 Position, bool 
 /// </remarks>
 public static class CreatureSounds
 {
-    private static readonly Dictionary<string, string> Idle = new(StringComparer.Ordinal)
+    /// <summary>Numbered variants of one recording: <c>stem1, stem2, …</c>.</summary>
+    private static string[] Run(string stem, int count)
     {
-        ["cow"] = "cow",
-        ["pig"] = "pig",
-        ["sheep"] = "sheep",
-        ["chicken"] = "chicken",
-        ["frog"] = "frog",
+        var names = new string[count];
+        for (var i = 0; i < count; i++) names[i] = $"{stem}{i + 1}";
+        return names;
+    }
 
-        // The hostiles. ⚠ A spider's is its walk rather than its bite: what a player needs to hear
-        // in the dark is that one is nearby, and the bite arrives with the damage anyway.
-        ["bat"] = "bat",
-        ["spider"] = "spider",
-        ["zombie"] = "zombie",
+    private static readonly string[] None = [];
+
+    /// <summary>
+    /// Each kind's ordinary voice — several recordings where the pack has them, so a field of one
+    /// animal is not one recording on a loop.
+    /// </summary>
+    /// <remarks>
+    /// The farm animals speak with the pack's sets now; the frog and the hostiles keep our own
+    /// recordings, because the pack has no frog, no spider, no zombie and no bat. ⚠ A spider's is
+    /// its walk rather than its bite: what a player needs to hear in the dark is that one is
+    /// nearby, and the bite arrives with the damage anyway.
+    /// </remarks>
+    private static readonly Dictionary<string, string[]> Voices = new(StringComparer.Ordinal)
+    {
+        ["cow"] = Run("mob/cow/say", 4),
+        ["pig"] = Run("mob/pig/say", 3),
+        ["sheep"] = Run("mob/sheep/say", 3),
+        ["chicken"] = Run("mob/chicken/say", 3),
+        ["frog"] = ["animals/frog"],
+
+        // A wolf at ease pants; everything sharper it saves for being crossed.
+        ["wolf"] = ["mob/wolf/classic/panting"],
+
+        ["bat"] = ["enemies/bat"],
+        ["spider"] = ["enemies/spider"],
+        ["zombie"] = ["enemies/zombie"],
 
         // ⛳ Ours by name and theirs by skeleton, so the sound follows the same rule as the art:
         // the drowned and the husk are zombies as far as a recording is concerned.
-        ["drowned"] = "zombie",
-        ["husk"] = "zombie",
+        ["drowned"] = ["enemies/zombie"],
+        ["husk"] = ["enemies/zombie"],
     };
 
-    /// <summary>What one makes when it means it. Empty where there is only the one recording.</summary>
-    private static readonly Dictionary<string, string> Angry = new(StringComparer.Ordinal)
+    /// <summary>What one cries when a blow lands on it.</summary>
+    private static readonly Dictionary<string, string[]> Hurt = new(StringComparer.Ordinal)
     {
-        ["spider"] = "spider_attack",
+        ["cow"] = Run("mob/cow/hurt", 3),
+        ["chicken"] = Run("mob/chicken/hurt", 2),
+        ["wolf"] = Run("mob/wolf/classic/hurt", 3),
     };
 
-    /// <summary>
-    /// What a blow sounds like landing, and what a death sounds like.
-    /// </summary>
+    /// <summary>What one sounds like going for somebody.</summary>
+    private static readonly Dictionary<string, string[]> Angry = new(StringComparer.Ordinal)
+    {
+        ["spider"] = ["enemies/spider_attack"],
+        ["wolf"] = Run("mob/wolf/classic/growl", 3),
+    };
+
+    /// <summary>A real death recording, for the kinds that have one.</summary>
+    private static readonly Dictionary<string, string[]> DeathCries = new(StringComparer.Ordinal)
+    {
+        ["pig"] = ["mob/pig/death"],
+        ["wolf"] = ["mob/wolf/classic/death"],
+    };
+
+    /// <summary>What a laying hen leaves behind, sound-wise.</summary>
+    private static readonly Dictionary<string, string[]> Shed = new(StringComparer.Ordinal)
+    {
+        ["chicken"] = ["mob/chicken/plop"],
+    };
+
+    /// <summary>What a blow sounds like landing — the impact itself, one set for every species.</summary>
     /// <remarks>
-    /// ⛳ <b>Not per species, and that is a decision rather than a shortcut.</b> The user's recordings
-    /// hold one voice per animal and a whole folder of impacts that nothing had ever played — a
-    /// punch, a slap, a swipe, a crunch. A blow is the sound of the blow; what tells a cow from a
-    /// chicken is the voice that cries out with it, which is the clip above played at a pitch that
-    /// says it means it. Two recordings and a species table would need eight more files nobody has.
+    /// ⛳ <b>Not per species, and that is a decision rather than a shortcut.</b> A blow is the sound
+    /// of the blow; what tells a cow from a chicken is the voice that cries out with it.
     /// </remarks>
-    public static readonly string[] Blows = ["punch", "punch_2", "punch_3", "slap"];
+    public static readonly string[] Blows = Run("damage/hit", 3);
 
     /// <summary>What the last blow sounds like.</summary>
-    public static readonly string[] Deaths = ["crunch", "crunch_quick", "crunch_splat"];
+    public static readonly string[] Deaths = Run("damage/gore/bleed", 3);
 
-    /// <summary>What taking a fleece off sounds like — the one shear-like noise in the set.</summary>
-    public const string Shear = "swipe";
+    /// <summary>What taking a fleece off sounds like — a soft tearing, off the vine set.</summary>
+    public static readonly string[] Shears = Run("block/vine/tear", 5);
 
     /// <summary>
-    /// And what eating what one left sounds like.
+    /// And what eating sounds like.
     /// </summary>
     /// <remarks>
     /// ⚠ <b>Here rather than in a table of its own, because <see cref="All"/> is what the audio check
@@ -189,18 +227,37 @@ public static class CreatureSounds
     /// at a missing sound is silent in exactly the way a working game is silent. This class stopped
     /// being only voices the moment it gained the impacts: it is the sounds around a creature.
     /// </remarks>
-    public static readonly string[] Meals = ["squelching_1", "squelching_2", "crunch_quick"];
+    public static readonly string[] Meals = Run("entity/player/eating/chew", 7);
 
-    /// <summary>The clip a creature makes when it has nothing else to say, or empty for none.</summary>
-    public static string IdleFor(string kind) => Idle.GetValueOrDefault(kind, "");
+    /// <summary>The clips a creature idles with, or empty for a silent kind.</summary>
+    public static string[] VoicesFor(string kind) => Voices.GetValueOrDefault(kind, None);
 
-    /// <summary>The clip it makes when it goes for somebody, or its idle one if it has only one.</summary>
-    public static string AngryFor(string kind) =>
-        Angry.TryGetValue(kind, out var clip) ? clip : IdleFor(kind);
+    /// <summary>Its cry when struck, falling back to its ordinary voice.</summary>
+    public static string[] HurtFor(string kind) =>
+        Hurt.TryGetValue(kind, out var clips) ? clips : VoicesFor(kind);
+
+    /// <summary>Its sound going for somebody, falling back to its ordinary voice.</summary>
+    public static string[] AngryFor(string kind) =>
+        Angry.TryGetValue(kind, out var clips) ? clips : VoicesFor(kind);
+
+    /// <summary>A real death recording, or empty — the caller falls back to the voice, lowered.</summary>
+    public static string[] DeathCryFor(string kind) => DeathCries.GetValueOrDefault(kind, None);
+
+    /// <summary>The sound of leaving something behind, or empty for most kinds.</summary>
+    public static string[] ShedFor(string kind) => Shed.GetValueOrDefault(kind, None);
 
     /// <summary>Every clip named here, for the check that they all resolve.</summary>
     public static IEnumerable<string> All =>
-        Idle.Values.Concat(Angry.Values).Concat(Blows).Concat(Deaths).Concat(Meals).Append(Shear);
+        Voices.Values
+            .Concat(Hurt.Values)
+            .Concat(Angry.Values)
+            .Concat(DeathCries.Values)
+            .Concat(Shed.Values)
+            .SelectMany(clips => clips)
+            .Concat(Blows)
+            .Concat(Deaths)
+            .Concat(Shears)
+            .Concat(Meals);
 }
 
 /// <summary>

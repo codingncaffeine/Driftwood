@@ -452,6 +452,57 @@ public static class Program
             if (clip.Seconds > 8f) faults.Add($"{name} is {clip.Seconds:F1}s, which is a loop not a one-shot");
         }
 
+        // ⛳ The action table, on the same terms — doors, fires, falls, buckets and the rest of the
+        // verbs. One-shots are gated at eight seconds; the cave and lava ambience is supposed to
+        // run long and is gated at sixty.
+        Console.WriteLine();
+        Console.WriteLine("clips the actions name");
+        foreach (var (name, allowed) in ActionSounds.AllOneShots.Select(n => (n, 8f))
+                     .Concat(ActionSounds.Ambience.Distinct().Select(n => (n, 60f)))
+                     .OrderBy(pair => pair.Item1, StringComparer.Ordinal))
+        {
+            var clip = library.Load(name);
+            if (clip is null)
+            {
+                Console.WriteLine($"  {name,-44} MISSING");
+                faults.Add($"{name} is missing or would not decode");
+                continue;
+            }
+
+            var played = clip.ToMono();
+            shortest = Math.Min(shortest, clip.Seconds);
+
+            Console.WriteLine(
+                $"  {name,-44} {clip.Seconds,6:F2}s  {clip.Channels}ch {clip.SampleRate}Hz  peak {played.Peak:F2}");
+
+            if (played.Peak < 0.02f)
+                faults.Add($"{name} plays as near silence (peak {played.Peak:F3} after the fold to mono)");
+            if (clip.Seconds > allowed)
+                faults.Add($"{name} is {clip.Seconds:F1}s against the {allowed:F0}s its table allows");
+        }
+
+        // ⛳ And then the whole shelf, summarised: every file on disk decodes, referenced by a
+        // table or not. This is the one place all six-hundred-odd recordings are proven on this
+        // machine's own build of the decoder.
+        Console.WriteLine();
+        var swept = 0;
+        var sweepFaults = 0;
+        var totalSeconds = 0.0;
+        foreach (var key in library.AllKeys)
+        {
+            var clip = library.Load(key);
+            swept++;
+            if (clip is null) sweepFaults++;
+            else totalSeconds += clip.Seconds;
+        }
+        Console.WriteLine($"shelf       {swept} files decode to {totalSeconds / 60:F1} minutes, {sweepFaults} refusing");
+        if (sweepFaults > 0) faults.Add($"{sweepFaults} file(s) on the shelf would not decode");
+
+        // The transform itself, against the specification's own formula.
+        var imdct = Driftwood.Core.Audio.OggVorbis.ImdctSelfTest();
+        Console.WriteLine($"imdct       {(imdct is null ? "fast path matches the spec formula at every block size" : imdct)}");
+        if (imdct is not null) faults.Add(imdct);
+
         Console.WriteLine();
         Console.WriteLine("materials");
         foreach (var material in MaterialSounds.Materials.Order())
