@@ -567,6 +567,12 @@ public sealed class ClientHost : IDisposable
     /// <summary>Distance walked since the last scuff of dust.</summary>
     private float _stepDistance;
 
+    /// <summary>Whether the head was under water a frame ago, for the crossing sounds.</summary>
+    private bool _wasSubmerged;
+
+    /// <summary>Bubbles the breath bar showed a frame ago, so a pop plays as each one goes.</summary>
+    private int _lastBubbleCount = 6;
+
     /// <summary>Seconds until the next look for a canopy to shed a leaf from.</summary>
     private float _untilLeaf;
 
@@ -2397,6 +2403,11 @@ public sealed class ClientHost : IDisposable
         var many = _input.IsKeyPressed(Key.ShiftLeft) || _input.IsKeyPressed(Key.ShiftRight);
         var at = _layout.At(_hudScreen.Pointer.X, _hudScreen.Pointer.Y);
 
+        // A click that lands on something says so, quietly and under whatever the something
+        // itself has to say. Bare panel stays silent, so mis-clicks read as misses.
+        if (at is not null)
+            _audio?.Play(Pick(ActionSounds.Click), _viewPosition, 0.3f, 1f);
+
         // The layout is a frame behind, so on the one frame after a screen changes it still
         // describes the one that was there. Squares belonging to a panel nobody is looking at are
         // ignored rather than acted on: a single frame of nothing happening, instead of a stack
@@ -3155,6 +3166,20 @@ public sealed class ClientHost : IDisposable
         StopHands();
         TakeThePointer();
         RefreshScreen();
+
+        _audio?.Play(
+            Pick(LidOf(x, y, z, opening: true)),
+            new Vector3(x + 0.5f, y + 0.5f, z + 0.5f), 0.6f, Wobble());
+    }
+
+    /// <summary>A chest's lid or a barrel's, told apart by the block actually standing there.</summary>
+    private string[] LidOf(int x, int y, int z, bool opening)
+    {
+        var barrel = _registry[_streamer.World.GetBlock(x, y, z)]
+            .Name.Contains("barrel", StringComparison.Ordinal);
+        return opening
+            ? barrel ? ActionSounds.BarrelOpen : ActionSounds.ChestOpen
+            : barrel ? ActionSounds.BarrelClose : ActionSounds.ChestClose;
     }
 
     /// <summary>True when the game screen is open on one particular tab.</summary>
@@ -3190,6 +3215,14 @@ public sealed class ClientHost : IDisposable
         }
 
         if (_hudScreen.Kind == HudScreenKind.Game) _tabRow[_hudScreen.Tab] = _hudScreen.Selected;
+
+        // The lid coming down, before the screen forgets which container it was open on.
+        if (_hudScreen.Kind == HudScreenKind.Chest && _station is var (cx, cy, cz))
+        {
+            _audio?.Play(
+                Pick(LidOf(cx, cy, cz, opening: false)),
+                new Vector3(cx + 0.5f, cy + 0.5f, cz + 0.5f), 0.6f, Wobble());
+        }
 
         // Nothing is left nowhere. A stack on the cursor is in neither the pockets nor the grid nor
         // the world, so a screen that shut while one was held would simply delete it — and what is
@@ -4604,7 +4637,10 @@ public sealed class ClientHost : IDisposable
         for (var i = _toasts.Count - 1; i >= 0; i--)
         {
             _toasts[i].Age += dt;
-            if (_toasts[i].Gone) _toasts.RemoveAt(i);
+            if (!_toasts[i].Gone) continue;
+
+            _toasts.RemoveAt(i);
+            _audio?.Play(Pick(ActionSounds.ToastOut), _viewPosition, 0.3f, Wobble());
         }
 
         if (_bench is not null || !_settings.RecipeNotices) return;
@@ -4624,7 +4660,7 @@ public sealed class ClientHost : IDisposable
         // Oldest first out. Three is what fits down the corner without meeting the hearts.
         while (_toasts.Count > MaxToasts) _toasts.RemoveAt(0);
 
-        PlaySound(SoundMaterial.Glass, SoundEvent.Place, _viewPosition, 0.35f);
+        _audio?.Play(Pick(ActionSounds.ToastIn), _viewPosition, 0.4f, Wobble());
     }
 
     /// <summary>The last block a "you need a better pickaxe" notice was raised about.</summary>
@@ -4660,6 +4696,132 @@ public sealed class ClientHost : IDisposable
             needs.Label, needs.IconLayer, ToastSeconds));
 
         while (_toasts.Count > MaxToasts) _toasts.RemoveAt(0);
+
+        _audio?.Play(Pick(ActionSounds.ToastIn), _viewPosition, 0.4f, Wobble());
+    }
+
+    // ── The world's own noises: fires crackling, lava muttering, caves being caves ─────────────
+
+    /// <summary>Seconds until the next look around for something audible.</summary>
+    private float _untilAmbient = 3f;
+
+    /// <summary>Seconds until the underground is allowed another of its noises.</summary>
+    private float _untilCaveSound = 40f;
+
+    /// <summary>The ambience's own stream, so its pattern owes nothing to anyone else's rolls.</summary>
+    private readonly Random _ambientRandom = new(0x616D6221);
+
+    /// <summary>What a block id crackles like, or null for silence. Built once from the names.</summary>
+    private Dictionary<ushort, string[]>? _crackles;
+
+    /// <summary>
+    /// Plays the noises the world makes on its own: every few seconds the nearest lit fire
+    /// crackles in its own voice, lava mutters and pops, and — rarely, and only buried in the
+    /// dark — the underground says something.
+    /// </summary>
+    /// <remarks>
+    /// <para>One-shots on a timer rather than looping emitters, which is the genre's own approach
+    /// and fits an engine whose voices are a fixed pool: a loop per furnace would spend the pool
+    /// on scenery. The scan is a small box around the player every few seconds — thousands of
+    /// array reads, which is nothing, and it needs no registry of placed fires that a chunk
+    /// unload would have to be taught to clean.</para>
+    /// <para>⚠ The cave murmurs key on <em>stored sky light</em>, which is what a cell would get
+    /// at noon — so a dark house at night stays quiet and a cave at noon does not, the same
+    /// distinction the spawner draws and for the same reason.</para>
+    /// </remarks>
+    private void StepAmbience(float dt)
+    {
+        if (_audio is null || !_walking || !_spawned || _bench is not null) return;
+
+        _untilAmbient -= dt;
+        _untilCaveSound -= dt;
+
+        if (_untilAmbient <= 0f)
+        {
+            _untilAmbient = 2.5f + (float)_ambientRandom.NextDouble() * 2.5f;
+            _crackles ??= BuildCrackleTable();
+
+            var feet = _player.Position;
+            var px = (int)MathF.Floor(feet.X);
+            var py = (int)MathF.Floor(feet.Y);
+            var pz = (int)MathF.Floor(feet.Z);
+
+            string[]? nearestFire = null;
+            var nearestFireAt = Vector3.Zero;
+            var nearestFireSq = float.MaxValue;
+            var lavaCells = 0;
+            var lavaAt = Vector3.Zero;
+
+            const int Reach = 10;
+            const int ReachY = 6;
+            for (var y = py - ReachY; y <= py + ReachY; y++)
+            for (var z = pz - Reach; z <= pz + Reach; z++)
+            for (var x = px - Reach; x <= px + Reach; x++)
+            {
+                var id = _streamer.World.GetBlock(x, y, z);
+                if (id.IsAir) continue;
+
+                if (_crackles.TryGetValue(id.Value, out var voice))
+                {
+                    var at = new Vector3(x + 0.5f, y + 0.5f, z + 0.5f);
+                    var distSq = Vector3.DistanceSquared(at, feet);
+                    if (distSq < nearestFireSq)
+                    {
+                        nearestFireSq = distSq;
+                        nearestFire = voice;
+                        nearestFireAt = at;
+                    }
+                }
+                else if (id == _ids.Lava)
+                {
+                    // Reservoir-sampled so the pop wanders over a pool instead of always coming
+                    // from its lowest corner.
+                    lavaCells++;
+                    if (_ambientRandom.Next(lavaCells) == 0)
+                        lavaAt = new Vector3(x + 0.5f, y + 0.5f, z + 0.5f);
+                }
+            }
+
+            if (nearestFire is not null)
+                _audio.Play(Pick(nearestFire), nearestFireAt, 0.55f, Wobble());
+
+            if (lavaCells > 0)
+            {
+                var rumble = _ambientRandom.Next(4) == 0;
+                _audio.Play(
+                    Pick(rumble ? ActionSounds.LavaAmbience : ActionSounds.LavaPop),
+                    lavaAt, rumble ? 0.5f : 0.65f, Wobble());
+            }
+        }
+
+        if (_untilCaveSound <= 0f)
+        {
+            _untilCaveSound = 35f + (float)_ambientRandom.NextDouble() * 55f;
+
+            var eye = _camera.Position;
+            var buried = LightValue.Sky(_streamer.World.GetLight(
+                (int)MathF.Floor(eye.X), (int)MathF.Floor(eye.Y), (int)MathF.Floor(eye.Z))) == 0;
+
+            if (buried)
+                _audio.Play(Pick(ActionSounds.CaveAmbience), _viewPosition, 0.5f, 1f);
+        }
+    }
+
+    /// <summary>Every lit fire in the registry, matched to its own recording set by name.</summary>
+    private Dictionary<ushort, string[]> BuildCrackleTable()
+    {
+        var table = new Dictionary<ushort, string[]>();
+        for (ushort id = 1; id < _registry.Count; id++)
+        {
+            var name = _registry[id].Name;
+            if (!name.EndsWith("_lit", StringComparison.Ordinal)) continue;
+
+            table[id] = name.Contains("blast", StringComparison.Ordinal) ? ActionSounds.BlastFurnaceCrackle
+                : name.Contains("smoker", StringComparison.Ordinal) ? ActionSounds.SmokerCrackle
+                : name.Contains("campfire", StringComparison.Ordinal) ? ActionSounds.CampfireCrackle
+                : ActionSounds.FurnaceCrackle;
+        }
+        return table;
     }
 
     /// <summary>Tops the herd up, walks it on, lets it be heard, and buries whatever died.</summary>
@@ -5168,6 +5330,7 @@ public sealed class ClientHost : IDisposable
         StepFurnaces((float)dt);
         StepCreatures((float)dt);
         StepToasts((float)dt);
+        StepAmbience((float)dt);
         StepAutosave(dt);
         _particles.Update(_streamer.World, (float)dt);
         StepFires((float)dt);
@@ -5199,7 +5362,7 @@ public sealed class ClientHost : IDisposable
 
         var picked = _drops.Update(_streamer.World, (float)dt, collector, collector is null ? null : _inventory);
         if (picked > 0 && collector is { } where)
-            PlaySound(MaterialOf(_inventory.Held), SoundEvent.Place, where, 0.5f);
+            _audio?.Play(Pick(ActionSounds.Pickup), where, 0.45f, Wobble());
         PlaceCamera();
         PumpStreaming();
 
@@ -5350,8 +5513,13 @@ public sealed class ClientHost : IDisposable
             // one it can only ever break even and a bad roll ends the farm; at a guaranteed two it
             // fills a chest by the third season.
             if (_growth.IsRipe(target.Id))
+            {
                 _drops.Drop(
                     new ItemStack(_items.ByName("seeds").Id, 1 + _growthRandom.Next(3)), centre);
+
+                // A ripe crop coming up sounds like a harvest, on top of the plant's own rustle.
+                _audio?.Play(Pick(ActionSounds.Harvest), centre, 0.6f, Wobble());
+            }
 
             // A tool that did the work wears from it. Only the tool: a bare hand is free, and so is
             // a plank held like a club, which is why this asks the item rather than the swing.
@@ -5388,6 +5556,32 @@ public sealed class ClientHost : IDisposable
             (int)MathF.Floor(_player.Position.X),
             (int)MathF.Floor(_player.Position.Y - 0.1f),
             (int)MathF.Floor(_player.Position.Z));
+
+        // A ladder has its own rungs, on the walking cadence but measured up the wall. Asked
+        // before the ground test because a body on a ladder has nothing under its feet.
+        if (_player.OnLadder && !_player.OnGround)
+        {
+            _stepDistance += MathF.Abs(_player.Velocity.Y) * dt;
+            if (_stepDistance >= 1.4f)
+            {
+                _stepDistance = 0f;
+                _audio?.Play(Pick(ActionSounds.LadderStep), _player.Position, 0.5f, Wobble());
+            }
+            return;
+        }
+
+        // Swimming strokes likewise: covered distance in all three axes, because a dive straight
+        // down is as much swimming as a crossing.
+        if (_player.InWater && !_player.OnGround)
+        {
+            _stepDistance += _player.Velocity.Length() * dt;
+            if (_stepDistance >= 2.4f)
+            {
+                _stepDistance = 0f;
+                _audio?.Play(Pick(ActionSounds.SwimStroke), _player.Position, 0.45f, Wobble());
+            }
+            return;
+        }
 
         if (under.IsAir) { _stepDistance = 0f; return; }
         var type = _registry[under];
@@ -5540,18 +5734,55 @@ public sealed class ClientHost : IDisposable
         if (Armour.WearShield(_equipment, _items, shieldHit))
             PlaySound(SoundMaterial.Wood, SoundEvent.Break, _viewPosition, 0.7f);
 
-        // A hurt has to be felt. There is no player voice in the sound pack, so the ground the
-        // blow was taken on stands in for one — which is at least the right material.
+        // A hurt is voiced by what caused it now: a gasp going under, a cry in the fire, a thud
+        // sized and surfaced by the landing. A creature's blow is already voiced where it lands,
+        // and a hunger pang by the bar, so neither needs a second noise here.
         if (what.Hurt > 0)
         {
-            var under = _streamer.World.GetBlock(
-                (int)MathF.Floor(_player.Position.X),
-                (int)MathF.Floor(_player.Position.Y - 0.1f),
-                (int)MathF.Floor(_player.Position.Z));
+            switch (what.Cause)
+            {
+                case VitalsCause.Drown:
+                    _audio?.Play(Pick(ActionSounds.DrownGasp), _viewPosition, 0.85f, Wobble());
+                    break;
 
-            if (!under.IsAir)
-                PlaySound(_registry[under], SoundEvent.Break, _player.Position, 0.8f);
+                case VitalsCause.Burn:
+                    _audio?.Play(Pick(ActionSounds.BurnHurt), _viewPosition, 0.85f, Wobble());
+                    break;
+
+                case VitalsCause.Fall:
+                {
+                    var under = _streamer.World.GetBlock(
+                        (int)MathF.Floor(_player.Position.X),
+                        (int)MathF.Floor(_player.Position.Y - 0.1f),
+                        (int)MathF.Floor(_player.Position.Z));
+
+                    // The pack records hard landings per surface; a short fall is one thud
+                    // whatever it hit.
+                    var landing = what.Hurt >= 3 && !under.IsAir
+                        ? ActionSounds.FallBigFor(_registry[under].Sounds)
+                        : what.Hurt >= 3 ? ActionSounds.FallBig : ActionSounds.FallSmall;
+
+                    _audio?.Play(Pick(landing), _player.Position, 0.9f, Wobble());
+                    break;
+                }
+            }
         }
+
+        // The head crossing the surface, both ways, and each breath bubble giving up as the air
+        // runs down. The bubble count is the bar's own arithmetic, so the pop keeps time with
+        // what the player watches.
+        if (_vitals.Submerged != _wasSubmerged)
+        {
+            _audio?.Play(
+                Pick(_vitals.Submerged ? ActionSounds.Submerge : ActionSounds.Surface),
+                _viewPosition, 0.6f, Wobble());
+            _wasSubmerged = _vitals.Submerged;
+        }
+
+        var bubbles = (int)MathF.Ceiling(6f * _vitals.Breath / PlayerVitals.MaxBreath);
+        if (_vitals.Submerged && bubbles < _lastBubbleCount)
+            _audio?.Play(Pick(ActionSounds.BubblePop), _viewPosition, 0.5f, Wobble());
+        _lastBubbleCount = bubbles;
 
         if (!what.Died) return;
 
@@ -5837,9 +6068,9 @@ public sealed class ClientHost : IDisposable
             _inventory.SpendHeld();
             _inventory.Add(new ItemStack(_items.ByName(becomes).Id, 1));
 
-            PlaySound(
-                _registry[_ids.Water], SoundEvent.Break,
-                new Vector3(from.X + 0.5f, from.Y + 0.5f, from.Z + 0.5f), 0.8f);
+            _audio?.Play(
+                Pick(kind == FluidKind.Lava ? ActionSounds.BucketFillLava : ActionSounds.BucketFillWater),
+                new Vector3(from.X + 0.5f, from.Y + 0.5f, from.Z + 0.5f), 0.8f, Wobble());
             return true;
         }
 
@@ -5858,9 +6089,9 @@ public sealed class ClientHost : IDisposable
         _inventory.SpendHeld();
         _inventory.Add(new ItemStack(_items.ByName("bucket").Id, 1));
 
-        PlaySound(
-            _registry[source], SoundEvent.Place,
-            new Vector3(px + 0.5f, py + 0.5f, pz + 0.5f), 0.8f);
+        _audio?.Play(
+            Pick(pouring == FluidKind.Lava ? ActionSounds.BucketEmptyLava : ActionSounds.BucketEmptyWater),
+            new Vector3(px + 0.5f, py + 0.5f, pz + 0.5f), 0.8f, Wobble());
         return true;
     }
 
@@ -5904,11 +6135,11 @@ public sealed class ClientHost : IDisposable
         // path makes, same snap when it goes — without it the one tool in the game with a single
         // purpose would be the one tool that lasts forever.
         if (_inventory.WearHeld())
-            PlaySound(SoundMaterial.Wood, SoundEvent.Break, _viewPosition, 0.7f);
+            _audio?.Play(Pick(ActionSounds.ToolBreaks), _viewPosition, 0.7f, Wobble());
 
-        PlaySound(
-            _registry[here], SoundEvent.Break,
-            new Vector3(hit.X + 0.5f, hit.Y + 1f, hit.Z + 0.5f), 0.7f);
+        _audio?.Play(
+            Pick(ActionSounds.Till),
+            new Vector3(hit.X + 0.5f, hit.Y + 1f, hit.Z + 0.5f), 0.7f, Wobble());
 
         return true;
     }
@@ -5933,9 +6164,13 @@ public sealed class ClientHost : IDisposable
         var above = _streamer.World.GetBlock(hit.X, hit.Y + 1, hit.Z);
         if (!_registry[above].Replaceable) return false;
 
-        _streamer.EditBlock(hit.X, hit.Y + 1, hit.Z, _registry.ByName(seedling).Id);
+        var planted = _registry.ByName(seedling).Id;
+        _streamer.EditBlock(hit.X, hit.Y + 1, hit.Z, planted);
 
         _inventory.SpendHeld();
+        PlaySound(
+            _registry[planted], SoundEvent.Place,
+            new Vector3(hit.X + 0.5f, hit.Y + 1.5f, hit.Z + 0.5f), 0.6f);
         return true;
     }
 
@@ -5956,6 +6191,9 @@ public sealed class ClientHost : IDisposable
         _inventory.SpendHeld();
 
         _particles.Puff(_registry[crop], new Vector3(hit.X + 0.5f, hit.Y + 0.5f, hit.Z + 0.5f), 8);
+        PlaySound(
+            _registry[crop], SoundEvent.Place,
+            new Vector3(hit.X + 0.5f, hit.Y + 0.5f, hit.Z + 0.5f), 0.6f);
         return true;
     }
 
@@ -6002,7 +6240,8 @@ public sealed class ClientHost : IDisposable
         foreach (var spilled in _furnaces.Remove(hit.X, hit.Y, hit.Z)) _drops.Drop(spilled, here);
 
         _streamer.EditBlock(hit.X, hit.Y, hit.Z, out_);
-        PlaySound(_registry[out_], SoundEvent.Place, here, 0.7f);
+        _audio?.Play(Pick(ActionSounds.FireOut), here, 0.8f, Wobble());
+        PlaySound(_registry[out_], SoundEvent.Place, here, 0.5f);
         return true;
     }
 
@@ -6053,7 +6292,7 @@ public sealed class ClientHost : IDisposable
         // stages and the last one takes it away entirely.
         WearAnvil(x, y, z);
 
-        PlaySound(SoundMaterial.Stone, SoundEvent.Break, here, 0.9f);
+        _audio?.Play(Pick(ActionSounds.AnvilUse), here, 0.9f, Wobble());
         Notice($"mended for {spent} {_items[material].Label}", type);
     }
 
@@ -6165,9 +6404,25 @@ public sealed class ClientHost : IDisposable
                         _streamer.EditBlock(hit.X + px, hit.Y + py, hit.Z + pz, otherHalf);
                 }
 
-                PlaySound(
-                    _registry[other], SoundEvent.Place,
-                    new Vector3(hit.X + 0.5f, hit.Y + 0.5f, hit.Z + 0.5f), 0.7f);
+                // A door swings rather than being put down, and opening and closing are
+                // different recordings. Which way it went is what the toggle landed on; the
+                // name test covers doors and trapdoors both, and anything else that toggles
+                // keeps its material's own voice.
+                var swung = _registry[other].Name;
+                if (swung.Contains("door", StringComparison.Ordinal))
+                {
+                    _audio?.Play(
+                        Pick(swung.EndsWith("_open", StringComparison.Ordinal)
+                            ? ActionSounds.DoorOpen
+                            : ActionSounds.DoorClose),
+                        new Vector3(hit.X + 0.5f, hit.Y + 0.5f, hit.Z + 0.5f), 0.8f, Wobble());
+                }
+                else
+                {
+                    PlaySound(
+                        _registry[other], SoundEvent.Place,
+                        new Vector3(hit.X + 0.5f, hit.Y + 0.5f, hit.Z + 0.5f), 0.7f);
+                }
                 return;
         }
 

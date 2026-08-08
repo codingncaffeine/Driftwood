@@ -16,7 +16,20 @@ namespace Driftwood.Core.Entities;
 /// it aside, and wear paid out of what got through would make the best armour also the
 /// longest-lasting by a wide margin — which is backwards. What wears a plate is being hit.
 /// </param>
-public readonly record struct VitalsEvent(int Hurt, bool Died, bool Drowned, int Armoured = 0);
+/// <summary>What hurt the player, for whoever turns a wound into a noise.</summary>
+public enum VitalsCause
+{
+    /// <summary>A blow from outside — a creature, mostly. The default for external damage.</summary>
+    Struck,
+
+    Fall,
+    Burn,
+    Drown,
+    Starve,
+}
+
+public readonly record struct VitalsEvent(
+    int Hurt, bool Died, bool Drowned, int Armoured = 0, VitalsCause Cause = VitalsCause.Struck);
 
 /// <summary>
 /// Health, the fall that takes it, the water that takes it, and the rest that gives it back.
@@ -181,6 +194,10 @@ public sealed class PlayerVitals
     private float _sinceHurt;
     private float _regenerating;
     private float _drowningFor;
+
+    /// <summary>What last took health, carried into the frame's event. Several causes landing in
+    /// one frame keep the latest, which is plenty for a grunt.</summary>
+    private VitalsCause _cause;
     private bool _wasOnGround = true;
     private float _fallInAir;
     /// <summary>
@@ -441,9 +458,11 @@ public sealed class PlayerVitals
     /// counterplay into one solved by wearing more of something, and diving in a full set would be
     /// safer than diving in a shirt.
     /// </param>
-    public void Hurt(int halfHearts, bool armoured = true)
+    public void Hurt(int halfHearts, bool armoured = true, VitalsCause cause = VitalsCause.Struck)
     {
         if (halfHearts <= 0 || !Alive) return;
+
+        _cause = cause;
 
         if (armoured)
         {
@@ -510,7 +529,7 @@ public sealed class PlayerVitals
         if (!onGround) _fallInAir = MathF.Max(_fallInAir, body.FallDistance);
 
         if (onGround && !_wasOnGround && _fallInAir > SafeFall)
-            Hurt((int)MathF.Round((_fallInAir - SafeFall) * FallDamagePerBlock));
+            Hurt((int)MathF.Round((_fallInAir - SafeFall) * FallDamagePerBlock), cause: VitalsCause.Fall);
 
         if (onGround) _fallInAir = 0f;
         _wasOnGround = onGround;
@@ -540,7 +559,7 @@ public sealed class PlayerVitals
             while (_lavaFor >= 1f / LavaRate)
             {
                 _lavaFor -= 1f / LavaRate;
-                Hurt(LavaDamage);
+                Hurt(LavaDamage, cause: VitalsCause.Burn);
             }
         }
         else
@@ -553,7 +572,7 @@ public sealed class PlayerVitals
                 while (_burnTick >= 1f / BurnRate)
                 {
                     _burnTick -= 1f / BurnRate;
-                    Hurt(1);
+                    Hurt(1, cause: VitalsCause.Burn);
                 }
             }
             else
@@ -576,7 +595,7 @@ public sealed class PlayerVitals
                     // water survivable by wearing more of something turns the single hazard with no
                     // counterplay into one solved by shopping, and would make diving in a full set
                     // safer than diving in a shirt.
-                    Hurt(1, armoured: false);
+                    Hurt(1, armoured: false, cause: VitalsCause.Drown);
                 }
             }
         }
@@ -597,7 +616,7 @@ public sealed class PlayerVitals
         if (hurt > 0)
         {
             Spend(hurt * EffortPerWound);
-            return new VitalsEvent(hurt, !Alive, Submerged && Breath == 0);
+            return new VitalsEvent(hurt, !Alive, Submerged && Breath == 0, Cause: _cause);
         }
 
         // ── Being fed, or not ───────────────────────────────────────────────────────────────────
@@ -623,7 +642,10 @@ public sealed class PlayerVitals
                 }
             }
 
-            return new VitalsEvent(0, false, Submerged && Breath == 0);
+            // Starvation's toll reports like any other wound now, so whoever turns hurts into
+            // noises hears the pangs too. It cannot kill — the floor above stops it — so Died
+            // stays false by construction.
+            return new VitalsEvent(before - Health, false, Submerged && Breath == 0, Cause: VitalsCause.Starve);
         }
 
         _starvingFor = 0f;
