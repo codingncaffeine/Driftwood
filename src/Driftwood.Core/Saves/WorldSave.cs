@@ -49,6 +49,13 @@ public sealed record WorldState(
     public float Pitch { get; set; }
     public double Played { get; set; }
     public float DayTime { get; set; }
+
+    /// <summary>The animals standing in the world, both ways through a save.</summary>
+    /// <remarks>
+    /// ⛳ A list rather than the herd itself, because the herd does not exist until the world has
+    /// been stood up — loading stashes these and the herd takes them the moment it is built.
+    /// </remarks>
+    public List<Entities.CreatureHerd.SavedCreature> Creatures { get; } = [];
 }
 
 /// <summary>
@@ -296,6 +303,11 @@ public static class WorldSave
                     unlocked.Write(state.Unlocks.Names.Count);
                     foreach (var recipe in state.Unlocks.Names) unlocked.Write(recipe);
                 }));
+
+                // ⛳ A section an older build has never heard of, and that is the compatibility
+                // story: the reader skips unknown tags, so a save with animals in it opens
+                // everywhere — an old build re-rolls its herds, which is what it always did.
+                SaveSection.Write(into, "CRTR", Bytes(beasts => WriteCreatures(beasts, state.Creatures)));
             }
 
             File.Move(temporary, path, overwrite: true);
@@ -449,6 +461,7 @@ public static class WorldSave
                     case "CHST": chests = payload; break;
                     case "PLYR": player = payload; break;
                     case "UNLK": unlocks = payload; break;
+                    case "CRTR": into.Creatures.AddRange(ReadCreatures(Reader(payload))); break;
 
                     // Written by a newer build than this one. Skipped, and deliberately not an
                     // error: the length said how far, which is the whole reason sections carry one.
@@ -482,6 +495,53 @@ public static class WorldSave
         {
             return fault.Message;
         }
+    }
+
+    /// <summary>The CRTR payload: a count, then each animal's identity.</summary>
+    /// <remarks>
+    /// ⚠ <b>Kinds by NAME, not by any table's index</b> — the palette rule, for the palette's
+    /// reason: rows are added to <c>CreatureSet.All</c> and an index written today points at a
+    /// different animal tomorrow. Internal so the audit can round-trip a herd without a file.
+    /// </remarks>
+    internal static void WriteCreatures(
+        BinaryWriter into, IReadOnlyList<Entities.CreatureHerd.SavedCreature> creatures)
+    {
+        into.Write(creatures.Count);
+
+        foreach (var one in creatures)
+        {
+            into.Write(one.Kind);
+            into.Write(one.Position.X);
+            into.Write(one.Position.Y);
+            into.Write(one.Position.Z);
+            into.Write(one.Yaw);
+            into.Write(one.Health);
+            into.Write(one.Shorn);
+            into.Write(one.Regrows);
+            into.Write(one.Provoked);
+            into.Write(one.Grown);
+        }
+    }
+
+    internal static List<Entities.CreatureHerd.SavedCreature> ReadCreatures(BinaryReader from)
+    {
+        var count = from.ReadInt32();
+        var creatures = new List<Entities.CreatureHerd.SavedCreature>(Math.Clamp(count, 0, 4096));
+
+        for (var i = 0; i < count; i++)
+        {
+            creatures.Add(new Entities.CreatureHerd.SavedCreature(
+                from.ReadString(),
+                new Vector3(from.ReadSingle(), from.ReadSingle(), from.ReadSingle()),
+                from.ReadSingle(),
+                from.ReadInt32(),
+                from.ReadBoolean(),
+                from.ReadSingle(),
+                from.ReadBoolean(),
+                from.ReadSingle()));
+        }
+
+        return creatures;
     }
 
     private static bool Opens(BinaryReader from) => Opens(from, out _);

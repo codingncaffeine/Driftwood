@@ -393,6 +393,9 @@ public sealed class ClientHost : IDisposable
     /// <summary>Seconds until the herd is looked at again. See <see cref="TopUpCreatures"/>.</summary>
     private float _creatureTopUp;
 
+    /// <summary>Animals a loaded save carried, waiting for the herd to exist and take them.</summary>
+    private readonly List<CreatureHerd.SavedCreature> _savedCreatures = [];
+
     private BlockCracks _cracks = null!;
     private readonly PlayerAnimator _animator = new();
     private readonly PlayerMining _mining = new();
@@ -1186,6 +1189,18 @@ public sealed class ClientHost : IDisposable
         {
             _herd = new CreatureHerd(_seed.Derive("creatures"));
             _spawnRoll = new Random(_seed.Derive("spawn.hostiles"));
+
+            // ⛳ The save's animals come back the moment the herd exists, before any top-up can
+            // count the world as empty and fill it. A kind this build cannot stand up is skipped
+            // with a count, the palette's own posture.
+            if (_savedCreatures.Count > 0)
+            {
+                var kept = _herd.Restore(_savedCreatures, KindFor, out var unknown);
+                Console.WriteLine(
+                    $"creatures   {kept} restored from the save"
+                    + (unknown > 0 ? $", {unknown} of kinds this build does not have" : ""));
+                _savedCreatures.Clear();
+            }
         }
 
         // ⛳ The hostiles keep their own clock, because theirs is the one that has to be irregular.
@@ -1357,6 +1372,15 @@ public sealed class ClientHost : IDisposable
         }
 
         return kinds;
+    }
+
+    /// <summary>One saved kind stood back up, or null for one this build has no mesh for.</summary>
+    private SpawnKind? KindFor(string kind)
+    {
+        if (_creatureRenderer is null || !_creatureRenderer.TryMeasure(kind, out var size))
+            return null;
+
+        return new SpawnKind(kind, size, FamilyOf(kind) == CreatureFamily.Hostile);
     }
 
     private void BuildWorld()
@@ -1648,6 +1672,11 @@ public sealed class ClientHost : IDisposable
         _camera.Position = _player.EyePosition;
         _clock.SetTime(state.DayTime);
 
+        // The herd does not exist yet — it is built on the first top-up after spawn — so the
+        // save's animals wait here for it.
+        _savedCreatures.Clear();
+        _savedCreatures.AddRange(state.Creatures);
+
         // ⚠ Brought up to date rather than left to work itself out. Poll announces everything the
         // pockets can pay for that has not been announced, so a world loaded with a full inventory
         // fires a notice for every one of them in the first frame unless it is primed first.
@@ -1673,19 +1702,25 @@ public sealed class ClientHost : IDisposable
     /// A record of references rather than a copy, so it costs nothing to take and is only ever read
     /// on the thread that owns all of it.
     /// </remarks>
-    private WorldState CaptureState() => new(
-        _seed.ToString(), _items, _streamer.World, _furnaces, _chests,
-        _inventory, _equipment, _vitals, _unlocks)
+    private WorldState CaptureState()
     {
-        // Where the body is, not where the camera is. The camera is over the shoulder in two of the
-        // three views, and loading into it would put the player a few blocks behind themselves —
-        // and, over enough saves, through the wall behind them.
-        Position = _player.Position,
-        Yaw = _camera.Yaw,
-        Pitch = _camera.Pitch,
-        Played = _playedBefore + _elapsed,
-        DayTime = _clock.TimeOfDay,
-    };
+        var state = new WorldState(
+            _seed.ToString(), _items, _streamer.World, _furnaces, _chests,
+            _inventory, _equipment, _vitals, _unlocks)
+        {
+            // Where the body is, not where the camera is. The camera is over the shoulder in two of
+            // the three views, and loading into it would put the player a few blocks behind
+            // themselves — and, over enough saves, through the wall behind them.
+            Position = _player.Position,
+            Yaw = _camera.Yaw,
+            Pitch = _camera.Pitch,
+            Played = _playedBefore + _elapsed,
+            DayTime = _clock.TimeOfDay,
+        };
+
+        if (_herd is not null) state.Creatures.AddRange(_herd.Capture());
+        return state;
+    }
 
     /// <summary>
     /// Writes the world down.
@@ -4839,7 +4874,12 @@ public sealed class ClientHost : IDisposable
 
         // ⚠ The body's feet, not the eye. A hostile aims at where somebody is standing, and giving
         // it the camera would make it chase a point two blocks in the air in third person.
-        _herd.Update(dt, SolidForCreature, _walking ? _player.Position : null, Sunlit);
+        // ⛔ The herd is told which cells actually exist. A restored animal can stand a long way
+        // from wherever the player loads in, and unloaded space reads as air — stepped there it
+        // falls through the floor its chunk will contain. Frozen instead, until the world arrives.
+        _herd.Update(
+            dt, SolidForCreature, _walking ? _player.Position : null, Sunlit,
+            known: (x, y, z) => _streamer.World.TryGetChunk(ChunkPos.FromWorld(x, y, z), out _));
 
         foreach (var blow in _herd.TakeAttacks())
         {

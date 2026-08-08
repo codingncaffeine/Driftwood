@@ -562,6 +562,86 @@ public sealed class CreatureHerd
     /// <summary>Takes one out of the world without it having died — what a despawn is.</summary>
     public void Remove(Creature creature) => _creatures.Remove(creature);
 
+    /// <summary>One creature as the save carries it — the identity, never the mood.</summary>
+    /// <remarks>
+    /// ⛳ <b>What persists is what a player would miss.</b> Where it stands, what it is, how hurt
+    /// it is, whether its fleece is off, whether it has been crossed, and how grown it is. The
+    /// transient mind — where it was walking, when it would next speak, how frightened it was —
+    /// re-rolls on load exactly as it rolled at spawn, because an animal that wakes up mid-thought
+    /// is indistinguishable from one that just had a new one.
+    /// </remarks>
+    public readonly record struct SavedCreature(
+        string Kind, Vector3 Position, float Yaw, int Health, bool Shorn, float Regrows,
+        bool Provoked, float Grown);
+
+    /// <summary>Everything alive, as the save wants it.</summary>
+    public List<SavedCreature> Capture()
+    {
+        var saved = new List<SavedCreature>(_creatures.Count);
+
+        foreach (var creature in _creatures)
+        {
+            if (!creature.Alive) continue;
+
+            saved.Add(new SavedCreature(
+                creature.Kind, creature.Position, creature.Yaw, creature.Health,
+                creature.Shorn, creature.Regrows, creature.Provoked, 1f));
+        }
+
+        return saved;
+    }
+
+    /// <summary>
+    /// Puts back what a save carried, and says how many of them this build no longer knows.
+    /// </summary>
+    /// <param name="resolve">
+    /// Size and temperament for a kind, or null for one this build cannot stand up — the caller
+    /// owns the meshes, and a size table written here would be a second copy of the skeleton.
+    /// </param>
+    /// <remarks>
+    /// ⚠ Unknown kinds are skipped and counted, never fatal — the same posture the block palette
+    /// takes with a save from a newer build. Health is clamped into the kind's present range so a
+    /// retuned MaxHealth cannot load an animal healthier than its own bar.
+    /// </remarks>
+    public int Restore(IReadOnlyList<SavedCreature> saved, Func<string, SpawnKind?> resolve, out int unknown)
+    {
+        unknown = 0;
+        var placed = 0;
+
+        foreach (var one in saved)
+        {
+            if (resolve(one.Kind) is not { } kind)
+            {
+                unknown++;
+                continue;
+            }
+
+            var most = CreatureVitals.HealthFor(one.Kind);
+
+            _creatures.Add(new Creature
+            {
+                Kind = one.Kind,
+                Size = kind.Size,
+                Hostile = kind.Hostile,
+                MaxHealth = most,
+                Health = Math.Clamp(one.Health, 1, most),
+                Position = one.Position,
+                Yaw = one.Yaw,
+                WantsYaw = one.Yaw,
+                Shorn = one.Shorn,
+                Regrows = one.Regrows,
+                Provoked = one.Provoked,
+                Thinks = (float)(_random.NextDouble() * 4.0),
+                Speaks = SpeaksEvery * (float)_random.NextDouble(),
+                Sheds = CreatureVitals.ShedsEvery * (0.4f + (float)_random.NextDouble()),
+            });
+
+            placed++;
+        }
+
+        return placed;
+    }
+
     /// <summary>
     /// The nearest creature a ray from <paramref name="origin"/> runs into, or null.
     /// </summary>
@@ -628,9 +708,16 @@ public sealed class CreatureHerd
     /// Whether a cell is standing in full daylight. Null means nothing burns — which is what the
     /// headless checks pass, and what a world at night amounts to.
     /// </param>
+    /// <param name="known">
+    /// Whether a cell's chunk actually exists yet, or null when everything does. ⛔ A restored
+    /// creature can stand a long way from wherever the player loads in, and unloaded space reads
+    /// as air — stepped there, it falls through the floor its chunk will contain. Un-known
+    /// creatures are frozen whole: no clocks, no gravity, no thought, until the world arrives.
+    /// </param>
     public void Update(
         float dt, Func<int, int, int, bool> solid,
-        Vector3? player = null, Func<int, int, int, bool>? sunlit = null)
+        Vector3? player = null, Func<int, int, int, bool>? sunlit = null,
+        Func<int, int, int, bool>? known = null)
     {
         // ⛔ The dead are swept HERE and never inside Hurt, because a fall calls Hurt from inside the
         // walk below — and taking a creature out of the list being walked is how a herd that loses
@@ -647,6 +734,12 @@ public sealed class CreatureHerd
         foreach (var creature in _creatures)
         {
             if (!creature.Alive) continue;
+
+            if (known is not null && !known(
+                    (int)MathF.Floor(creature.Position.X),
+                    (int)MathF.Floor(creature.Position.Y),
+                    (int)MathF.Floor(creature.Position.Z)))
+                continue;
 
             creature.Spoke = false;
             creature.Shed = false;

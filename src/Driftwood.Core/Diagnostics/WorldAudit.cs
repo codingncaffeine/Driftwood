@@ -992,6 +992,10 @@ public static class WorldAudit
         Check("a web holds what walks in and catches what falls in", snareFaults.Count == 0,
             snareFaults.Count == 0 ? snareDetail : $"{snareFaults.Count} faults: {snareFaults[0]}");
 
+        var herdSaveFaults = HerdSaveSelfTest(out var herdSaveDetail);
+        Check("a herd survives the trip through a save", herdSaveFaults.Count == 0,
+            herdSaveFaults.Count == 0 ? herdSaveDetail : $"{herdSaveFaults.Count} faults: {herdSaveFaults[0]}");
+
         // The model is drawn from a table of measurements and a UV net worked out on paper. None of
         // it throws when it is wrong: a reversed winding is an invisible limb, a transposed patch is
         // an elbow wearing a kneecap, and both draw perfectly happily.
@@ -4147,6 +4151,98 @@ public static class WorldAudit
         detail = $"pressing in climbs {climbed:F2} blocks in the second a walk covers {walked:F2}, "
                + $"letting go slides {slid:F2}, crouching holds, and pressing across a shaft it "
                + $"cannot leave falls to {across.Position.Y:F2}";
+
+        return faults;
+    }
+
+    /// <summary>
+    /// Walks a herd through the save bytes and back, and checks what survives — and what must not.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ <b>Through the real writer and reader</b> (<see cref="WorldSave.WriteCreatures"/>),
+    /// not a copy of their field list — a check with its own serializer proves two serializers
+    /// agree with each other and nothing about the one the game uses.</para>
+    /// <para>The identity comes back: kind, position, yaw, health, fleece, temper. The mood does
+    /// not, and a kind the build does not know is counted and skipped, never fatal — a save from a
+    /// newer build has to open. ⚠ A dead one must not make the trip at all: restoring a corpse
+    /// stands it back up.</para>
+    /// </remarks>
+    private static List<string> HerdSaveSelfTest(out string detail)
+    {
+        var faults = new List<string>();
+
+        var herd = new CreatureHerd(7);
+        var solid = (int x, int y, int z) => y < 64;
+
+        herd.Spawn(solid, [new SpawnKind("cow", new Vector3(0.9f, 1.4f, 0.9f))], new Vector3(0f, 64f, 0f), 3);
+        herd.Spawn(solid, [new SpawnKind("wolf", new Vector3(0.6f, 0.85f, 0.6f))], new Vector3(8f, 64f, 8f), 1);
+
+        if (herd.Count != 4)
+        {
+            faults.Add($"the fixture placed {herd.Count} of 4, so there is nothing to measure");
+            detail = "fixture failed";
+            return faults;
+        }
+
+        // Dress the herd in the state that has to survive: a shorn one, a crossed one, a hurt one.
+        herd.All[0].Shorn = true;
+        herd.All[0].Regrows = 33f;
+        herd.All[1].Health = 3;
+        herd.All[3].Provoked = true;
+
+        // And a dead one, which must not make the trip.
+        herd.Hurt(herd.All[2], 999, Vector3.Zero);
+
+        var bytes = new MemoryStream();
+        using (var into = new BinaryWriter(bytes, System.Text.Encoding.UTF8, leaveOpen: true))
+            WorldSave.WriteCreatures(into, herd.Capture());
+
+        bytes.Position = 0;
+        var read = WorldSave.ReadCreatures(new BinaryReader(bytes));
+
+        if (read.Count != 3)
+            faults.Add($"{read.Count} creatures made the trip, wanted 3 — the dead must stay dead");
+
+        var back = new CreatureHerd(7);
+        var restored = back.Restore(
+            read,
+            kind => kind == "cow" || kind == "wolf"
+                ? new SpawnKind(kind, Vector3.One, false)
+                : null,
+            out var unknown);
+
+        if (restored != 3 || unknown != 0)
+            faults.Add($"restore stood up {restored} with {unknown} unknown, wanted 3 and 0");
+
+        foreach (var (kind, want) in (ReadOnlySpan<(string, int)>)[("cow", 2), ("wolf", 1)])
+        {
+            var count = 0;
+            foreach (var one in back.All) if (one.Kind == kind) count++;
+            if (count != want) faults.Add($"{count} {kind} came back, wanted {want}");
+        }
+
+        var shorn = back.All.FirstOrDefault(c => c.Shorn);
+        if (shorn is null) faults.Add("the shorn one came back with its fleece");
+        else if (MathF.Abs(shorn.Regrows - 33f) > 0.01f)
+            faults.Add($"the shorn one regrows in {shorn.Regrows:F0}s, wanted 33");
+
+        if (!back.All.Any(c => c.Health == 3)) faults.Add("the hurt one came back mended");
+        if (!back.All.Any(c => c.Provoked)) faults.Add("the crossed one came back calm");
+
+        foreach (var one in back.All)
+            if (one.Position.Y is < 60f or > 70f)
+                faults.Add($"a {one.Kind} came back at y {one.Position.Y:F1}, nowhere near where it stood");
+
+        // A kind from a newer build: skipped, counted, and everything else still stands up.
+        var strange = new CreatureHerd(7);
+        var mixed = new List<CreatureHerd.SavedCreature>(read) { new("gryphon", Vector3.Zero, 0f, 5, false, 0f, false, 1f) };
+        strange.Restore(mixed, kind => kind is "cow" or "wolf" ? new SpawnKind(kind, Vector3.One, false) : null, out var odd);
+
+        if (odd != 1 || strange.Count != 3)
+            faults.Add($"a save with a gryphon in it restored {strange.Count} and skipped {odd}, wanted 3 and 1");
+
+        detail = "3 of 4 make the trip — the dead one does not — keeping fleece, wounds, temper and "
+               + "place; a kind from a newer build is skipped with a count";
 
         return faults;
     }
