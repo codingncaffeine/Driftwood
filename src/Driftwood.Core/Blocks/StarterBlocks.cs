@@ -544,7 +544,14 @@ public static class StarterBlocks
     public const ushort LayerMushroomRed = LayerMushroomBrown + 1;
     public const ushort LayerRoastedMushroom = LayerMushroomBrown + 2;
 
-    public const int LayerCount = LayerMushroomBrown + 3;
+    /// <summary>The pumpkin's three faces, the lantern one carves into, and the spiders' webs.</summary>
+    public const ushort LayerPumpkinSide = LayerRoastedMushroom + 1;
+    public const ushort LayerPumpkinTop = LayerPumpkinSide + 1;
+    public const ushort LayerPumpkinFace = LayerPumpkinSide + 2;
+    public const ushort LayerJackOLantern = LayerPumpkinSide + 3;
+    public const ushort LayerCobweb = LayerPumpkinSide + 4;
+
+    public const int LayerCount = LayerPumpkinSide + 5;
 
     /// <summary>One anvil's name, by how worn it is and which way it lies.</summary>
     /// <remarks>
@@ -724,7 +731,11 @@ public static class StarterBlocks
 
         /// <summary>The cave mushrooms, for the cave-floor decorator and the census.</summary>
         BlockId MushroomBrown,
-        BlockId MushroomRed)
+        BlockId MushroomRed,
+
+        /// <summary>The pumpkin as found wild, and the webs the cave decorator spins.</summary>
+        BlockId Pumpkin,
+        BlockId Cobweb)
     {
         /// <summary>Every rock an ore can form in. Ore replaces rock, whichever rock it is.</summary>
         public BlockId[] Rock => [Stone, Deepstone, Coralstone, Driftstone, Saltstone];
@@ -952,6 +963,50 @@ public static class StarterBlocks
             Solid = false, Opaque = false, Sounds = SoundMaterial.Plant,
             SupportFace = Faces.NegY,
             Model = BlockModel.Cross(LayerMushroomRed, tinted: false),
+        });
+
+        // ⛳ The pumpkin, found whole in the meadows' wild patches and worth carrying home for what
+        // a pair of shears turns it into. Wood to the ear and to the axe.
+        var pumpkin = registry.Register(new BlockType
+        {
+            Name = "pumpkin", Hardness = 1.0f, Sounds = SoundMaterial.Wood,
+            HarvestClass = ToolClass.Axe,
+            TopLayer = LayerPumpkinTop, SideLayer = LayerPumpkinSide, BottomLayer = LayerPumpkinTop,
+        });
+
+        // Carved, it keeps its body and gains a face on one side — and with a torch shut inside it
+        // is the meadow's own lantern. Four facings each: every orientation is its own id.
+        for (var i = 0; i < Placeable.Facings.Length; i++)
+        {
+            registry.Register(new BlockType
+            {
+                Name = $"carved_pumpkin_{FacingNames[i]}", Hardness = 1.0f, Crafted = true,
+                Sounds = SoundMaterial.Wood, HarvestClass = ToolClass.Axe,
+                Model = BlockModel.CubeFacing(
+                    LayerPumpkinTop, LayerPumpkinSide, LayerPumpkinTop, LayerPumpkinFace,
+                    Placeable.Facings[i]),
+            });
+
+            registry.Register(new BlockType
+            {
+                Name = $"jack_o_lantern_{FacingNames[i]}", Hardness = 1.0f, Crafted = true,
+                Sounds = SoundMaterial.Wood, HarvestClass = ToolClass.Axe,
+                LightEmission = LightValue.PackBlock(15, 11, 5),
+                Model = BlockModel.CubeFacing(
+                    LayerPumpkinTop, LayerPumpkinSide, LayerPumpkinTop, LayerJackOLantern,
+                    Placeable.Facings[i]),
+            });
+        }
+
+        // ⛳ The cobweb, spun through pockets of the caves where something has clearly lived. It
+        // SNARES — walking slows to a crawl, a jump barely rises, a fall is caught dead — and what
+        // it leaves is string, the daylight route to the spider's own drop. A sword takes it
+        // quickly, which is the one job a blade has against scenery.
+        var cobweb = registry.Register(new BlockType
+        {
+            Name = "cobweb", Hardness = 1.2f, Solid = false, Opaque = false, Snares = true,
+            Sounds = SoundMaterial.Cobweb, HarvestClass = ToolClass.Sword,
+            Model = BlockModel.Cross(LayerCobweb, tinted: false),
         });
 
         var gravel = registry.Register(new BlockType
@@ -1470,7 +1525,7 @@ public static class StarterBlocks
             diamond, azurite, clay, sandstone, snow, snowLayer, meadowgrass, seaflax, marshlily,
             emberbloom, sunwort,
             rubble, glass, bricks, bench, furnace, furnaceLit, lava, wildCrops, berryBushRipe,
-            mushroomBrown, mushroomRed);
+            mushroomBrown, mushroomRed, pumpkin, cobweb);
     }
 
     /// <summary>
@@ -1728,6 +1783,15 @@ public static class StarterBlocks
     {
         var ids = new BlockId[Placeable.Facings.Length];
         for (var i = 0; i < ids.Length; i++) ids[i] = registry.ByName($"chest_{FacingNames[i]}").Id;
+        return ids;
+    }
+
+    /// <summary>The four carved pumpkins, or the four lanterns, in <see cref="Placeable.Facings"/> order.</summary>
+    public static BlockId[] CarvedPumpkins(BlockRegistry registry, bool lit)
+    {
+        var stem = lit ? "jack_o_lantern" : "carved_pumpkin";
+        var ids = new BlockId[Placeable.Facings.Length];
+        for (var i = 0; i < ids.Length; i++) ids[i] = registry.ByName($"{stem}_{FacingNames[i]}").Id;
         return ids;
     }
 

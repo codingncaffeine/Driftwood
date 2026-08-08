@@ -430,6 +430,15 @@ public static class BlockTextureSet
         // No pack path: the genre roasts no mushroom — its cooked fungus is a stew in a bowl,
         // which is a different item — so this icon is ours under every pack.
         new("roasted_mushroom", "", true),
+
+        // The pumpkin's three faces and the lantern one carves into. The face pair lands on the
+        // modern names; the older layout called the carved one plain pumpkin_face.
+        new("pumpkin_side",   "textures/block/pumpkin_side.png",   false),
+        new("pumpkin_top",    "textures/block/pumpkin_top.png",    false),
+        new("pumpkin_face",   "textures/block/carved_pumpkin.png", false, "textures/block/pumpkin_face.png"),
+        new("jack_o_lantern", "textures/block/jack_o_lantern.png", false),
+
+        new("cobweb", "textures/block/cobweb.png", true, "textures/block/web.png"),
     ];
 
     /// <summary>
@@ -1342,6 +1351,14 @@ public static class BlockTextureSet
                 TileGen.Mushroom(1331, 198, 52, 46, 224, 214, 192, spotted: true, ground: true),
             StarterBlocks.LayerRoastedMushroom =>
                 TileGen.Mushroom(1332, 116, 78, 46, 186, 142, 88, spotted: false, ground: false),
+
+            // ⚠ One seed across all four, so the carved face is the same flank cut open and the
+            // lantern is the same cut glowing — one pumpkin all the way through its story.
+            StarterBlocks.LayerPumpkinSide => TileGen.PumpkinSide(1340),
+            StarterBlocks.LayerPumpkinTop => TileGen.PumpkinTop(1340),
+            StarterBlocks.LayerPumpkinFace => TileGen.PumpkinFace(1340, lit: false),
+            StarterBlocks.LayerJackOLantern => TileGen.PumpkinFace(1340, lit: true),
+            StarterBlocks.LayerCobweb => TileGen.Cobweb(1345),
 
             _ => Wheat(layer) ?? Crop(layer) ?? CropIcon(layer) ?? StainedGlass(layer)
                  ?? MetalBlock(layer) ?? Wool(layer) ?? Meat(layer) ?? Dye(layer)

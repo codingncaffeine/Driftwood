@@ -6239,6 +6239,44 @@ public sealed class ClientHost : IDisposable
         return true;
     }
 
+    /// <summary>Cuts a face into a pumpkin where it stands, turned toward whoever cut it.</summary>
+    /// <remarks>
+    /// ⛳ An act on the world, not a recipe — the shears do it where the pumpkin is, the way a hoe
+    /// tills where the ground is. Which way the face looks is which way the carver was looking,
+    /// reversed, because a face is cut into the side being faced.
+    /// </remarks>
+    private bool CarvePumpkin(RayHit hit)
+    {
+        if (_inventory.HeldType is not { Name: "shears" }) return false;
+        if (_registry[_streamer.World.GetBlock(hit.X, hit.Y, hit.Z)].Name != "pumpkin") return false;
+
+        // The facing whose outward normal points most nearly back at the carver.
+        var carved = StarterBlocks.CarvedPumpkins(_registry, lit: false);
+        var best = 0;
+        var bestDot = float.MaxValue;
+
+        for (var i = 0; i < Placeable.Facings.Length; i++)
+        {
+            var (nx, _, nz) = Faces.Normals[Placeable.Facings[i]];
+            var dot = _camera.Forward.X * nx + _camera.Forward.Z * nz;
+            if (dot < bestDot)
+            {
+                bestDot = dot;
+                best = i;
+            }
+        }
+
+        _streamer.EditBlock(hit.X, hit.Y, hit.Z, carved[best]);
+
+        var here = new Vector3(hit.X + 0.5f, hit.Y + 0.5f, hit.Z + 0.5f);
+        _audio?.Play(Pick(ActionSounds.PumpkinCarve), here, 0.8f, Wobble());
+
+        if (_inventory.HeldType is { IsTool: true } && _inventory.WearHeld())
+            _audio?.Play(Pick(ActionSounds.ToolBreaks), _viewPosition, 0.7f, Wobble());
+
+        return true;
+    }
+
     /// <summary>Picks the fruit off a ripe bush — the rules are <see cref="Foraging"/>'s, in Core.</summary>
     /// <remarks>
     /// ⚠ What the pockets cannot hold lands on the ground, never in the void — the inventory rule
@@ -6488,7 +6526,8 @@ public sealed class ClientHost : IDisposable
         // and bone meal hurries what is growing there. All asked before the block's own Use,
         // because the ground has no Use of its own and would otherwise fall through to being
         // built on.
-        if (UseHoe(hit) || SmotherFire(hit) || PlantSeed(hit) || PlantBush(hit) || UseBonemeal(hit))
+        if (UseHoe(hit) || SmotherFire(hit) || PlantSeed(hit) || PlantBush(hit)
+            || CarvePumpkin(hit) || UseBonemeal(hit))
             return true;
 
         // Using comes before building. A block that does something answers the right button itself,

@@ -988,6 +988,10 @@ public static class WorldAudit
         Check("a ladder is climbed, not walked past", climbFaults.Count == 0,
             climbFaults.Count == 0 ? climbDetail : $"{climbFaults.Count} faults: {climbFaults[0]}");
 
+        var snareFaults = SnareSelfTest(registry, out var snareDetail);
+        Check("a web holds what walks in and catches what falls in", snareFaults.Count == 0,
+            snareFaults.Count == 0 ? snareDetail : $"{snareFaults.Count} faults: {snareFaults[0]}");
+
         // The model is drawn from a table of measurements and a UV net worked out on paper. None of
         // it throws when it is wrong: a reversed winding is an invisible limb, a transposed patch is
         // an elbow wearing a kneecap, and both draw perfectly happily.
@@ -2215,6 +2219,12 @@ public static class WorldAudit
 
                 changed |= Gain(items.ByName(crop).Id);
             }
+
+            // ⛳ CARVE. The seventh source: shears on a standing pumpkin is an act on the world,
+            // not a recipe, so the walk has to know it the way it knows the hoe. The pumpkin
+            // itself arrives as a dig out of the wild patches, exactly like a first carrot.
+            if (Held(items.ByName("pumpkin").Id) && Held(items.ByName("shears").Id))
+                changed |= Gain(items.ByName("carved_pumpkin").Id);
 
             // Craft. ⚠ A recipe worked at a station cannot be made until the station itself has been
             // reached — which is the whole reason the gate exists, and without this line the walk
@@ -4137,6 +4147,96 @@ public static class WorldAudit
         detail = $"pressing in climbs {climbed:F2} blocks in the second a walk covers {walked:F2}, "
                + $"letting go slides {slid:F2}, crouching holds, and pressing across a shaft it "
                + $"cannot leave falls to {across.Position.Y:F2}";
+
+        return faults;
+    }
+
+    /// <summary>
+    /// Fills a corridor with webs and checks what they do to a body — and what they must not.
+    /// </summary>
+    /// <remarks>
+    /// <para>Three claims, each measured on a stepped body rather than compared between constants.
+    /// A webbed corridor is crossed at a crawl, under a third of the open pace. A drop into a web
+    /// column is CAUGHT: the body keeps descending — a web is not a floor — but reaches the ground
+    /// carrying no fall distance to be hurt by. ⚠ And the open run is the control: the same
+    /// corridor with no webs is crossed at full pace by the same code, so a drag that somehow
+    /// applies everywhere goes red here instead of reading as a slow build.</para>
+    /// </remarks>
+    private static List<string> SnareSelfTest(BlockRegistry registry, out string detail)
+    {
+        var faults = new List<string>();
+        const float Step = 1f / 60f;
+        const int Steps = 120;
+
+        var stone = registry.ByName("stone").Id;
+        var web = registry.ByName("cobweb").Id;
+
+        // A roofed corridor along +x, one cell wide, so the only way is through.
+        VoxelWorld Corridor(bool webbed)
+        {
+            var world = new VoxelWorld(registry);
+            for (var x = -2; x <= 30; x++)
+            {
+                world.SetBlock(x, 59, 0, stone);
+                world.SetBlock(x, 60, -1, stone);
+                world.SetBlock(x, 60, 1, stone);
+                world.SetBlock(x, 61, -1, stone);
+                world.SetBlock(x, 61, 1, stone);
+                world.SetBlock(x, 62, 0, stone);
+
+                if (webbed && x >= 2)
+                {
+                    world.SetBlock(x, 60, 0, web);
+                    world.SetBlock(x, 61, 0, web);
+                }
+            }
+
+            return world;
+        }
+
+        var open = new PlayerBody(registry);
+        open.Teleport(new Vector3(0.5f, 60f, 0.5f));
+        var freeWorld = Corridor(webbed: false);
+        for (var i = 0; i < Steps; i++)
+            open.Step(freeWorld, Step, new Vector3(1f, 0f, 0f), false, false, false);
+        var freely = open.Position.X - 0.5f;
+
+        var snared = new PlayerBody(registry);
+        snared.Teleport(new Vector3(0.5f, 60f, 0.5f));
+        var webWorld = Corridor(webbed: true);
+        for (var i = 0; i < Steps; i++)
+            snared.Step(webWorld, Step, new Vector3(1f, 0f, 0f), false, false, false);
+        var crawled = snared.Position.X - 0.5f;
+
+        if (freely <= 2f)
+            faults.Add($"two seconds in the open corridor covered {freely:F2} blocks, "
+                     + "so there is nothing to compare");
+        if (!snared.Snared)
+            faults.Add("a body two seconds into a web does not know it is snared");
+        if (crawled >= freely / 3f)
+            faults.Add($"webs were crossed at {crawled:F2} blocks against {freely:F2} in the open "
+                     + "— a web that does not hold");
+
+        // The drop: twelve blocks into a web column. Down, but caught.
+        var shaft = new VoxelWorld(registry);
+        for (var z = -1; z <= 1; z++)
+        for (var x = -1; x <= 1; x++)
+            shaft.SetBlock(x, 49, z, stone);
+        for (var y = 50; y < 56; y++) shaft.SetBlock(0, y, 0, web);
+
+        var faller = new PlayerBody(registry);
+        faller.Teleport(new Vector3(0.5f, 66f, 0.5f));
+        for (var i = 0; i < Steps * 3; i++)
+            faller.Step(shaft, Step, Vector3.Zero, false, false, false);
+
+        if (faller.Position.Y > 50.5f)
+            faults.Add($"six seconds after a twelve-block drop into webs the body hangs at "
+                     + $"y {faller.Position.Y:F1}, which is a web that is a floor");
+        if (faller.FallDistance > 0.5f)
+            faults.Add($"a body dropped through webs still carries {faller.FallDistance:F1} blocks of fall");
+
+        detail = $"a webbed corridor is crossed at {crawled:F2} blocks to the open run's {freely:F2}, "
+               + "and a twelve-block drop into webs settles to the floor carrying no fall";
 
         return faults;
     }
@@ -6225,12 +6325,14 @@ public static class WorldAudit
         (StarterBlocks.LayerBerryBush, "berry_bush"),
         (StarterBlocks.LayerBerries, "berries"),
         (StarterBlocks.LayerMushroomBrown, "mushroom_brown"),
+        (StarterBlocks.LayerRoastedMushroom, "roasted_mushroom"),
+        (StarterBlocks.LayerPumpkinSide, "pumpkin_side"),
 
         // The moving pin: the LAST layer, by name. It has now caught three appends in the act —
         // fifteen crop rows landing after "the last layer is bonemeal", the composter's four
         // landing after black glass, and the berry bush's three after compost-ready — which is
         // exactly what it is for. Keep it pointed at whatever is genuinely last.
-        ((ushort)(StarterBlocks.LayerCount - 1), "roasted_mushroom"),
+        ((ushort)(StarterBlocks.LayerCount - 1), "cobweb"),
     ];
 
     /// <summary>

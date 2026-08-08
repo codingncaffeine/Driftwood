@@ -64,6 +64,9 @@ public static class ActionSounds
     /// <summary>Berries coming off the bush, which stays standing.</summary>
     public static readonly string[] BerryPick = Run("item/sweet_berries/pick_from_bush", 2);
 
+    /// <summary>Shears cutting a face into a pumpkin.</summary>
+    public static readonly string[] PumpkinCarve = Run("block/pumpkin/carve", 2);
+
     public static readonly string[] BucketFillWater = Run("item/bucket/fill", 3);
     public static readonly string[] BucketEmptyWater = Run("item/bucket/empty", 3);
     public static readonly string[] BucketFillLava = Run("item/bucket/fill_lava", 3);

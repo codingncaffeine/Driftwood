@@ -108,6 +108,22 @@ public sealed class PlayerBody
     /// <summary>True while the feet are in lava, which is water with the numbers made cruel.</summary>
     public bool InLava { get; private set; }
 
+    /// <summary>True while any part of the body is in something that snares — a cobweb.</summary>
+    public bool Snared { get; private set; }
+
+    /// <summary>How much of walking speed a web leaves. A crawl, and meant to feel like one.</summary>
+    private const float SnareDrag = 0.18f;
+
+    /// <summary>The fastest a snared body falls, and the most a snared jump can rise.</summary>
+    /// <remarks>
+    /// ⛳ A fall into a web is CAUGHT — the terminal speed is a stroll and the fall distance is
+    /// cleared, so landing in one from any height is the soft landing, the genre's own kindness.
+    /// The rise cap is under the fall cap so a web is quicker to sink through than to climb.
+    /// </remarks>
+    private const float SnareFall = 1.4f;
+
+    private const float SnareRise = 1.1f;
+
     /// <summary>How much of walking speed a fluid leaves. Lava is a wall you can wade into.</summary>
     private const float WaterDrag = 0.55f;
 
@@ -149,12 +165,18 @@ public sealed class PlayerBody
     /// <summary>Which fluid each block is, for the buoyancy test. Indexed by raw block id.</summary>
     private readonly Blocks.FluidKind[] _fluid;
 
+    /// <summary>Which blocks snare a body passing through, by raw id — the webs.</summary>
+    private readonly bool[] _snares;
+
     public PlayerBody(BlockRegistry registry)
     {
         _boxes = registry.BuildCollisionTable(out _cellsBelow);
 
         _fluid = new Blocks.FluidKind[registry.Count];
         for (var id = 1; id < registry.Count; id++) _fluid[id] = registry[(ushort)id].Fluid;
+
+        _snares = new bool[registry.Count];
+        for (var id = 1; id < registry.Count; id++) _snares[id] = registry[(ushort)id].Snares;
 
         _climbTo = new int[registry.Count];
         Array.Fill(_climbTo, -1);
@@ -190,6 +212,7 @@ public sealed class PlayerBody
         // whether a jump is a jump or a stroke.
         InWater = Steeped(world, Blocks.FluidKind.Water);
         InLava = Steeped(world, Blocks.FluidKind.Lava);
+        Snared = Webbed(world);
 
         var wishLength = new Vector2(wish.X, wish.Z).Length();
         if (wishLength > 1f) wish /= wishLength;
@@ -197,6 +220,9 @@ public sealed class PlayerBody
         var target = sneak ? SneakSpeed : sprint ? SprintSpeed : WalkSpeed;
         if (InLava) target *= LavaDrag;
         else if (InWater) target *= WaterDrag;
+
+        // On top of any fluid's own drag, because a web under water is both things at once.
+        if (Snared) target *= SnareDrag;
 
         var accel = OnGround ? GroundAcceleration : AirAcceleration;
         if (InWater || InLava) accel = SwimAcceleration;
@@ -265,6 +291,15 @@ public sealed class PlayerBody
             Velocity.Y = MathF.Max(Velocity.Y - Gravity * dt, -TerminalSpeed);
         }
 
+        // ⛳ A web holds whatever moves through it. Clamped on the RESULT rather than woven into
+        // the wish, so a body that fell in cannot keep the speed it arrived with — and the fall
+        // distance is cleared, because a fall into a web is caught, not cushioned.
+        if (Snared)
+        {
+            Velocity.Y = Math.Clamp(Velocity.Y, -SnareFall, SnareRise);
+            FallDistance = 0f;
+        }
+
         // A ladder replaces gravity rather than fighting it, which is why this comes after the fall
         // and not before: pressing into one holds you against it and a fall becomes a slide.
         Climb(world, wish, sneak);
@@ -281,6 +316,30 @@ public sealed class PlayerBody
     /// is too high; a test on the whole box means a body with one toe in the water starts floating,
     /// which is too low. The lower half is where a person's buoyancy actually comes from.
     /// </remarks>
+    /// <summary>True when any cell the body's box overlaps snares it.</summary>
+    /// <remarks>
+    /// ⚠ The WHOLE box, unlike <see cref="Steeped"/>'s lower half: buoyancy comes from the waist
+    /// down, but a web across the face holds a person exactly as well as one round the ankles.
+    /// </remarks>
+    private bool Webbed(VoxelWorld world)
+    {
+        var half = Width * 0.5f;
+
+        var minX = (int)MathF.Floor(Position.X - half);
+        var maxX = (int)MathF.Floor(Position.X + half);
+        var minZ = (int)MathF.Floor(Position.Z - half);
+        var maxZ = (int)MathF.Floor(Position.Z + half);
+        var minY = (int)MathF.Floor(Position.Y);
+        var maxY = (int)MathF.Floor(Position.Y + CurrentHeight);
+
+        for (var y = minY; y <= maxY; y++)
+        for (var z = minZ; z <= maxZ; z++)
+        for (var x = minX; x <= maxX; x++)
+            if (_snares[world.GetBlock(x, y, z).Value]) return true;
+
+        return false;
+    }
+
     private bool Steeped(VoxelWorld world, Blocks.FluidKind kind)
     {
         var half = Width * 0.5f;

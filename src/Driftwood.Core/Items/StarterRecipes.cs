@@ -492,6 +492,10 @@ public static class StarterRecipes
         Smelt("mushroom_brown", "roasted_mushroom", work: SmeltWork.Food);
         Smelt("mushroom_red", "roasted_mushroom", work: SmeltWork.Food);
 
+        // ⛳ A torch shut inside a carved pumpkin. The carve itself is the shears' act on the
+        // standing block, not a recipe — so this is the one bench step in the pumpkin's whole run.
+        LooseAt("jack o'lantern", "jack_o_lantern", 1, CraftStation.Bench, "carved_pumpkin", "torch");
+
         return book;
     }
 

@@ -809,6 +809,17 @@ public sealed class TerrainGenerator
                 if (floor != _ids.Stone && floor != _ids.Deepstone) continue;
 
                 var wy = oy + y;
+
+                // Webs before mushrooms: a webbed pocket is somebody's lair, not a garden. Its
+                // field is tighter and rarer than the mushrooms', and denser inside — walking
+                // into one should read as a place, not a sprinkle.
+                if (Noise.Fbm3(wx / 22f, wy / 22f, wz / 22f, _seedFlora + 29, 2) > 0.34f)
+                {
+                    if (Noise.Value3(wx, wy, wz, _seedFlora + 31) < 0.03f)
+                        chunk.Set(x, y, z, _ids.Cobweb);
+                    continue;
+                }
+
                 if (Noise.Fbm3(wx / 28f, wy / 28f, wz / 28f, _seedFlora, 2) < 0.24f) continue;
                 if (Noise.Value3(wx, wy, wz, _seedFlora + 7) > 0.012f) continue;
 
@@ -869,14 +880,20 @@ public sealed class TerrainGenerator
             // a patch is carrots or potatoes and never a salad.
             if (roll < 0.006f)
             {
-                // ⛳ A slice off the bottom of the same roll for the BERRY BUSH, so a bush is
-                // exactly as much a member of its meadow as a crop patch is — and every crop cell
-                // above the slice keeps the very kind it had before the bush existed, which is what
-                // the derived-seed discipline means for a world that is already being played in.
-                // Ripe, for the wild crops' reason: finding one is the whole entry to keeping one.
+                // ⛳ A slice off the bottom of the same roll for the WILD FINDS — the berry bush
+                // and the pumpkin — so they are exactly as much members of their meadow as a crop
+                // patch is, and every crop cell above the slice keeps the very kind it had before
+                // either existed: the derived-seed discipline for a world already being played in.
+                // Which find is a slow field against zero, which gives exactly the two wanted.
+                // The bush is ripe, for the wild crops' reason: finding one is the entry to keeping
+                // one; a pumpkin is whole because carving it is the player's own act.
                 if (roll < 0.0018f)
                 {
-                    PlaceIntoAir(chunk, ox, oy, oz, wx, surface + 1, wz, _ids.BerryBushRipe);
+                    var find = Noise.Fbm2(wx / 96f, wz / 96f, _seedMeadow + 41, 2) < 0f
+                        ? _ids.BerryBushRipe
+                        : _ids.Pumpkin;
+
+                    PlaceIntoAir(chunk, ox, oy, oz, wx, surface + 1, wz, find);
                     continue;
                 }
 

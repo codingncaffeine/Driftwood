@@ -771,6 +771,156 @@ public static class TileGen
         return t;
     }
 
+    /// <summary>A pumpkin's flank: fat vertical ribs under a darker rind at the crown.</summary>
+    /// <remarks>
+    /// ⛳ The ribs are four texels wide with a darker seam between them — the one thing every
+    /// pack's pumpkin agrees on, and what separates it from any plain orange block at a distance.
+    /// </remarks>
+    public static byte[] PumpkinSide(int seed)
+    {
+        var t = new byte[BytesPerTile];
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var seam = x % 4 == 3;
+            var crown = y == 0;
+
+            var d = (int)((Noise(x, y, seed) * 2f - 1f) * 12f);
+            var (r, g, b) = seam ? (176, 88, 22) : (214, 116, 34);
+            if (crown) (r, g, b) = (r - 36, g - 28, b - 8);
+
+            // A little roundness: the flank dims toward its edges the way a drum does.
+            var shade = Math.Abs(x - 8) * 2;
+            Put(t, x, y, Clamp(r + d - shade), Clamp(g + d - shade), Clamp(b + d - shade), 255);
+        }
+
+        return t;
+    }
+
+    /// <summary>And its crown: the same ribs run to a woody stem in the middle.</summary>
+    public static byte[] PumpkinTop(int seed)
+    {
+        var t = new byte[BytesPerTile];
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            // Ribs radiate: the seam follows whichever axis is farther from the middle, so the
+            // top reads as segments meeting at the stem rather than as a second flank.
+            var dx = Math.Abs(x - 8);
+            var dz = Math.Abs(y - 8);
+            var seam = (dx >= dz ? x : y) % 4 == 3;
+
+            var d = (int)((Noise(x, y, seed) * 2f - 1f) * 12f);
+            var (r, g, b) = seam ? (170, 86, 22) : (206, 112, 32);
+            var shade = Math.Max(dx, dz);
+
+            Put(t, x, y, Clamp(r + d - shade), Clamp(g + d - shade), Clamp(b + d - shade), 255);
+        }
+
+        // The stem, a woody knot of green-brown squarely in the middle.
+        for (var y = 6; y <= 9; y++)
+        for (var x = 6; x <= 9; x++)
+        {
+            var d = (int)((Noise(x, y, seed + 7) * 2f - 1f) * 14f);
+            Put(t, x, y, Clamp(96 + d), Clamp(78 + d), Clamp(38 + d), 255);
+        }
+
+        return t;
+    }
+
+    /// <summary>
+    /// The carved face: the flank with triangle eyes and a jagged grin cut into it.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>Lit is the same face glowing</b> — the cut is identical, only what shows through it
+    /// changes — so a jack o'lantern reads as the carved pumpkin somebody put a torch in, which
+    /// is exactly what it is.
+    /// </remarks>
+    public static byte[] PumpkinFace(int seed, bool lit)
+    {
+        var t = PumpkinSide(seed);
+
+        var (r, g, b) = lit ? (252, 214, 84) : (30, 18, 10);
+
+        void Cut(int x, int y)
+        {
+            var d = lit ? (int)((Noise(x, y, seed + 11) * 2f - 1f) * 10f) : 0;
+            Put(t, x, y, Clamp(r + d), Clamp(g + d), Clamp(b + d), 255);
+        }
+
+        // Two triangle eyes...
+        foreach (var ex in (ReadOnlySpan<int>)[3, 10])
+        {
+            Cut(ex, 5); Cut(ex + 1, 5); Cut(ex + 2, 5);
+            Cut(ex + 1, 4);
+        }
+
+        // ...and a grin with two teeth in it.
+        for (var x = 3; x <= 12; x++)
+        {
+            if (x is 5 or 10) continue;
+            Cut(x, 10);
+            if (x is > 4 and < 11) Cut(x, 11);
+        }
+
+        return t;
+    }
+
+    /// <summary>A cobweb: spokes from a middle, two sagging rings, on open air.</summary>
+    /// <remarks>
+    /// ⚠ Spokes and rings all cross, so for the island count the web is one drawing — which for
+    /// once is also the truth of the thing drawn.
+    /// </remarks>
+    public static byte[] Cobweb(int seed)
+    {
+        var t = new byte[BytesPerTile];
+
+        void Silk(int x, int y, int fade)
+        {
+            if ((uint)x >= Size || (uint)y >= Size) return;
+            var d = (int)((Noise(x, y, seed) * 2f - 1f) * 10f) - fade;
+            Put(t, x, y, Clamp(226 + d), Clamp(228 + d), Clamp(232 + d), 255);
+        }
+
+        // Eight spokes: the two axes and the two diagonals. ⛔ Every diagonal FILLS ACROSS its
+        // step — the feather's rule — because a run of corner-touching pixels is one strand to
+        // the eye and dozens of islands to the audit, and the audit counts.
+        for (var i = 0; i < Size; i++)
+        {
+            Silk(i, 7, 8);
+            Silk(7, i, 8);
+
+            Silk(i, i, 0);
+            Silk(i, Size - 1 - i, 0);
+            if (i < Size - 1)
+            {
+                Silk(i + 1, i, 6);
+                Silk(i + 1, Size - 1 - i, 6);
+            }
+        }
+
+        // Two rings, drawn as diamonds because silk sags straight between spokes — each edge
+        // filled across its steps for the spokes' own reason.
+        foreach (var ring in (ReadOnlySpan<int>)[3, 6])
+        for (var i = 0; i <= ring; i++)
+        {
+            Silk(7 - ring + i, 7 - i, 4);
+            Silk(7 + ring - i, 7 - i, 4);
+            Silk(7 - ring + i, 7 + i, 4);
+            Silk(7 + ring - i, 7 + i, 4);
+
+            if (i >= ring) continue;
+            Silk(7 - ring + i + 1, 7 - i, 7);
+            Silk(7 + ring - i - 1, 7 - i, 7);
+            Silk(7 - ring + i + 1, 7 + i, 7);
+            Silk(7 + ring - i - 1, 7 + i, 7);
+        }
+
+        return t;
+    }
+
     /// <summary>A picked handful: three round berries in a clump, a leaf at the shoulder.</summary>
     /// <remarks>
     /// ⚠ Drawn as one connected clump on purpose — the berries overlap and the leaf touches the top

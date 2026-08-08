@@ -234,6 +234,14 @@ public sealed class BlockType
     /// <summary>True when a player standing in this cell can go up and down it.</summary>
     public bool Climbable { get; init; }
 
+    /// <summary>True when a body moving through this block is dragged to a crawl.</summary>
+    /// <remarks>
+    /// ⛳ The cobweb's whole mechanic, named on the block for the <see cref="Use"/> rule's reason:
+    /// the body asks what it is standing in, never what the thing is called. What snaring does —
+    /// the crawl, the smothered jump, the caught fall — is <c>PlayerBody</c>'s to say.
+    /// </remarks>
+    public bool Snares { get; init; }
+
     /// <summary>
     /// How big a live fire this block shows, and how far up its own cell it sits. Zero for none.
     /// </summary>

@@ -26,6 +26,9 @@ public enum SoundMaterial
     /// <summary>The berry bush, whose coming apart is its own recording in the pack.</summary>
     BerryBush,
 
+    /// <summary>The cobweb, which is stepped through rather than on, and tears rather than breaks.</summary>
+    Cobweb,
+
     Metal,
     Glass,
     Cloth,
@@ -151,6 +154,14 @@ public static class MaterialSounds
             Run("dig/wet_grass", 4),
             Run("block/sweet_berry_bush/break", 4),
             Run("block/sweet_berry_bush/break", 4)),
+
+        // The web has the pack's own full set: stepped THROUGH, and torn rather than broken.
+        // Nothing places one, so Place reuses the step — a table row cannot be empty.
+        [SoundMaterial.Cobweb] = new(
+            Run("block/cobweb/step", 6),
+            Run("block/cobweb/break", 8),
+            Run("block/cobweb/break", 8),
+            Run("block/cobweb/step", 6)),
 
         [SoundMaterial.Metal] = new(
             Run("block/iron/step", 6),

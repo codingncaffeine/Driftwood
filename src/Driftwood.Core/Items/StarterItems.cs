@@ -489,6 +489,30 @@ public static class StarterItems
             IconLayer = StarterBlocks.LayerRoastedMushroom, Feeds = 4,
         });
 
+        // ⛳ The pumpkin and what a pair of shears makes of it. The whole one is a wild find and a
+        // building block; carved, it wears a face the way it was turned when cut; and with a torch
+        // shut inside it is the meadow's own lantern. The carve itself is an act on the world, not
+        // a recipe — the shears do it where the pumpkin stands.
+        Block(items, blocks, "pumpkin", "pumpkin", StarterBlocks.LayerPumpkinSide);
+
+        foreach (var (name, label, icon, lit) in ((string, string, ushort, bool)[])
+                 [
+                     ("carved_pumpkin", "carved pumpkin", StarterBlocks.LayerPumpkinFace, false),
+                     ("jack_o_lantern", "jack o'lantern", StarterBlocks.LayerJackOLantern, true),
+                 ])
+        {
+            items.Register(new ItemType
+            {
+                Name = name, Label = label, IconLayer = icon, DrawsAsBlock = true,
+                Places = new Placeable
+                {
+                    Label = label,
+                    Kind = PlacementKind.Facing,
+                    Variants = StarterBlocks.CarvedPumpkins(blocks, lit),
+                },
+            });
+        }
+
         // ⚠ Six, which is bread and a cooked steak — so a fire turns the meanest of the three into
         // the best meal a field can produce. That is the whole reason to grow potatoes rather than
         // carrots, and it is the only thing separating the three crops mechanically.
@@ -823,6 +847,10 @@ public static class StarterItems
         // a pick's two-to-three, which is Foraging's pin: keeping the bush has to be the better deal.
         new BlockDrops.Rule(StarterBlocks.BerryBushRipeName, "berries", 2),
         new BlockDrops.Rule(StarterBlocks.BerryBushName, "berries"),
+
+        // ⛳ A web tears into the string it was spun from — the daylight route to the spider's own
+        // drop, and the reason a webbed pocket is worth walking into on purpose.
+        new BlockDrops.Rule("cobweb", "string"),
         new BlockDrops.Rule("snow_layer", null),
         new BlockDrops.Rule("water", null),
         new BlockDrops.Rule("bedrock", null),
