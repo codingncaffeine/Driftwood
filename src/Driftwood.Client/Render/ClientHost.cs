@@ -4992,12 +4992,13 @@ public sealed class ClientHost : IDisposable
         {
             // ⛔ A refusal that says why, which this did not — and a fresh spawn starts with the
             // bar FULL, so anybody trying their first cooked steak straight out of the furnace
-            // was told nothing at all and reported eating as not existing. The cooldown is what
+            // was told nothing at all and reported eating as not existing. Zero means full AND
+            // unhurt now — the overflow mends — so the words say both. The cooldown is what
             // keeps a held button from stacking three copies of the same sentence.
             if (Environment.TickCount64 - _fullNoticeAt > 2000)
             {
                 _fullNoticeAt = Environment.TickCount64;
-                Notice("not hungry yet", food);
+                Notice("full up and unhurt", food);
             }
 
             return false;
@@ -6663,8 +6664,13 @@ public sealed class ClientHost : IDisposable
         }
 
         var yaw = float.DegreesToRadians(_camera.Yaw);
-        var forward = new Vector3(MathF.Cos(yaw), 0f, MathF.Sin(yaw));
-        var right = new Vector3(-forward.Z, 0f, forward.X);
+        var flat = new Vector3(MathF.Cos(yaw), 0f, MathF.Sin(yaw));
+        var right = new Vector3(-flat.Z, 0f, flat.X);
+
+        // ⛳ In a fluid, forward follows the whole of where you look — pitch included — so
+        // looking down and pressing forward dives. On land it stays flat: walking downhill is
+        // not walking into the ground. Strafing stays flat everywhere; nobody side-strokes.
+        var forward = _player.InWater || _player.InLava ? _camera.Forward : flat;
 
         // A screen has the keyboard, so the body stands still — but it is still stepped, because
         // stopping the simulation would leave a player who opened a bench in mid-air hanging there.
@@ -7514,32 +7520,41 @@ public sealed class ClientHost : IDisposable
             $"ui-check    breath px  {_breathPixels} pixels changed when the air went, against "
             + $"{_breathNoise} between two frames that did not; they were at {box}");
         Console.Out.Flush();
+    }
 
-        // Counted exactly, never averaged, and the bounding box comes off the same walk.
-        int Differ(byte[] a, byte[] b, out (int, int, int, int) bounds)
+    /// <summary>Pixels two captured frames disagree on. Counted exactly, never averaged, and the
+    /// bounding box comes off the same walk. Shared by the dry-land breath check and the dive;
+    /// <paramref name="within"/> confines the count to one rectangle in buffer coordinates —
+    /// without it, the dive's diff counted the hotbar the fire check had refilled and proved
+    /// nothing about bubbles at all.</summary>
+    private int Differ(
+        byte[] a, byte[] b, out (int, int, int, int) bounds,
+        (int X0, int Y0, int X1, int Y1)? within = null)
+    {
+        var width = _frameWidth;
+        var count = 0;
+        int x0 = int.MaxValue, y0 = int.MaxValue, x1 = -1, y1 = -1;
+
+        for (var p = 0; p < a.Length; p += 4)
         {
-            var width = _frameWidth;
-            var count = 0;
-            int x0 = int.MaxValue, y0 = int.MaxValue, x1 = -1, y1 = -1;
+            if (a[p] == b[p] && a[p + 1] == b[p + 1] && a[p + 2] == b[p + 2]) continue;
 
-            for (var p = 0; p < a.Length; p += 4)
-            {
-                if (a[p] == b[p] && a[p + 1] == b[p + 1] && a[p + 2] == b[p + 2]) continue;
+            var pixel = p / 4;
+            var x = pixel % width;
+            var y = pixel / width;
 
-                count++;
-                var pixel = p / 4;
-                var x = pixel % width;
-                var y = pixel / width;
+            if (within is { } box
+                && (x < box.X0 || x > box.X1 || y < box.Y0 || y > box.Y1)) continue;
 
-                if (x < x0) x0 = x;
-                if (y < y0) y0 = y;
-                if (x > x1) x1 = x;
-                if (y > y1) y1 = y;
-            }
-
-            bounds = count == 0 ? (-1, -1, -1, -1) : (x0, y0, x1, y1);
-            return count;
+            count++;
+            if (x < x0) x0 = x;
+            if (y < y0) y0 = y;
+            if (x > x1) x1 = x;
+            if (y > y1) y1 = y;
         }
+
+        bounds = count == 0 ? (-1, -1, -1, -1) : (x0, y0, x1, y1);
+        return count;
     }
 
     /// <summary>The width the captured frames were read at, for turning an offset into a position.</summary>
@@ -7718,7 +7733,7 @@ public sealed class ClientHost : IDisposable
         // claim about SECONDS, which at five thousand frames a second measures nothing at all.
         if (_airStage > 0)
         {
-            StepAirProbe();
+            StepAirProbe(size);
             if (_airStage == 5) { JudgeUi(); _window.Close(); }
         }
 
@@ -7997,7 +8012,7 @@ public sealed class ClientHost : IDisposable
     /// sixteen — a frame-counted window would measure the frame rate and call a stalled bar healthy.
     /// </para>
     /// </remarks>
-    private void StepAirProbe()
+    private void StepAirProbe(Vector2D<int> size)
     {
         switch (_airStage)
         {
@@ -8023,6 +8038,23 @@ public sealed class ClientHost : IDisposable
                 // its own pool and calls PlayerVitals.Update by hand — which is the shape of check
                 // this project has been caught by twice.
                 Sink();
+                _airDeadline = _elapsed + 0.25;
+                _airStage = 30;
+                break;
+
+            // ⛔⛔ THE PIXELS, MID-DIVE — the union the user's third report exposed. One check dives
+            // through the real loop and never looks at the screen; another reads the screen with a
+            // lungful forced by hand and never dives. Both green, and a player still saw nothing.
+            // This is the pair together: submerge at FULL air, and the bar must appear on screen.
+            case 30 when _elapsed >= _airDeadline:
+                _frameDivedFull = HudOnlyFrame(size);
+
+                // ⛔ Confined to the strip the renderer says the bubbles occupy — the whole-frame
+                // diff counted the hotbar the fire check had refilled and read forty-nine
+                // thousand pixels of nothing to do with air. A margin of four covers the tremble.
+                if (_frameFullAir is { } dry && dry.Length == _frameDivedFull.Length)
+                    _bubbleAppearPixels = Differ(dry, _frameDivedFull, out _, BubbleRowBuffer(size));
+
                 _airDivedFrom = _vitals.Breath;
                 _airDeadline = _elapsed + 3.0;
                 _airStage = 3;
@@ -8032,9 +8064,18 @@ public sealed class ClientHost : IDisposable
                 _airDivedTo = _vitals.Breath;
                 _airSubmerged = _vitals.Submerged;
 
+                // And the same screen three seconds later: fewer bubbles, read as pixels.
+                if (_frameDivedFull is { } divedFull)
+                {
+                    var drained = HudOnlyFrame(size);
+                    if (divedFull.Length == drained.Length)
+                        _bubbleDrainPixels = Differ(divedFull, drained, out _, BubbleRowBuffer(size));
+                }
+
                 Console.WriteLine(
                     $"ui-check    air under  {_airDivedFrom} to {_airDivedTo} of "
-                    + $"{PlayerVitals.MaxBreath} after 3s under water, submerged {_airSubmerged}");
+                    + $"{PlayerVitals.MaxBreath} after 3s under water, submerged {_airSubmerged}; "
+                    + $"bubbles appeared over {_bubbleAppearPixels} px, drained over {_bubbleDrainPixels} px");
                 Console.Out.Flush();
 
                 // ⛳⛳ AND THE STATE THE USER WAS ACTUALLY IN: a body that is not being simulated,
@@ -8063,6 +8104,25 @@ public sealed class ClientHost : IDisposable
     private int _airDivedTo = -1;
     private int _airUnsimulated = -1;
     private bool _airSubmerged;
+
+    /// <summary>The screen as the head went under at full air, and how much of it changed.</summary>
+    private byte[]? _frameDivedFull;
+    private int _bubbleAppearPixels = -1;
+    private int _bubbleDrainPixels = -1;
+
+    /// <summary>The bubble strip in buffer coordinates: renderer's own layout units scaled to the
+    /// window, y flipped to the framebuffer's bottom-up rows, four pixels of tremble margin.</summary>
+    private (int X0, int Y0, int X1, int Y1) BubbleRowBuffer(Vector2D<int> size)
+    {
+        var scale = HudRenderer.ScaleFor(size.Y);
+        var row = _hud.LastBubbleRow;
+
+        return (
+            (int)(row.X0 * scale) - 4,
+            size.Y - 1 - (int)(row.Y1 * scale) - 4,
+            (int)(row.X1 * scale) + 4,
+            size.Y - 1 - (int)(row.Y0 * scale) + 4);
+    }
 
     /// <summary>Campfire dinners drawn, read while the fire was still standing.</summary>
     private int _cookingSeen = -1;
@@ -9506,6 +9566,15 @@ public sealed class ClientHost : IDisposable
 
         if (!_fireBookButton)
             faults.Add("the furnace screen has no book button — a player has no way to open the fire's book");
+
+        // The dive, as pixels. Six bubbles measured ~700 changed pixels when this instrument was
+        // built and one bubble ~115, so the gates sit far under both — what they refuse is the
+        // bar not arriving at all, which three user reports say is what actually happens.
+        if (_bubbleAppearPixels is >= 0 and < 200)
+            faults.Add($"submerging at full air changed {_bubbleAppearPixels} pixels where the bubbles go — the bar did not appear");
+
+        if (_bubbleDrainPixels is >= 0 and < 60)
+            faults.Add($"three seconds under water changed {_bubbleDrainPixels} pixels of the bar — the bubbles did not diminish");
 
         // ── Air, driven through the client's own loop rather than through a fixture ──────────────
         //

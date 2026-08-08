@@ -5042,6 +5042,40 @@ public static class WorldAudit
         }
 
         if (refilled < 0) faults.Add("breath never came back out of the water");
+
+        // ⛔⛔ A DIVE IS LOOKING DOWN AND PRESSING FORWARD NOW. The wish used to carry no pitch,
+        // so the only ways under were a key nothing advertised and a patient idle sink — which
+        // is why three separate reports said the bubbles never appear: nobody could put their
+        // own head under on purpose. The flat wish beside it is the control: same water, same
+        // seconds, and the dive must beat it by the stroke's own margin or the pitch is going
+        // nowhere.
+        // Its own water, deep enough that the diver cannot touch bottom inside the window — in
+        // the six-block pool it did, at exactly the margin, and the check refused a correct build.
+        var trench = new VoxelWorld(registry);
+        for (var z = -3; z <= 3; z++)
+        for (var x = -3; x <= 3; x++)
+        {
+            for (var y = 0; y <= 4; y++) trench.SetBlock(x, y, z, ids.Stone);
+            for (var y = 5; y <= 28; y++) trench.SetBlock(x, y, z, ids.Water);
+        }
+
+        var pitched = new PlayerBody(registry);
+        pitched.Teleport(new Vector3(0.5f, 27f, 0.5f));
+        var level = new PlayerBody(registry);
+        level.Teleport(new Vector3(0.5f, 27f, 0.5f));
+
+        for (var i = 0; i < 120; i++)
+        {
+            pitched.Step(trench, 1f / 60f, new Vector3(0.17f, -0.98f, 0f), false, false, false);
+            level.Step(trench, 1f / 60f, new Vector3(1f, 0f, 0f), false, false, false);
+        }
+
+        var dived = 27f - pitched.Position.Y;
+        var drifted = 27f - level.Position.Y;
+
+        if (dived < 4f || dived < drifted + 1.2f)
+            faults.Add($"two seconds of swimming down covered {dived:F1} blocks against {drifted:F1} "
+                     + "drifting flat — the stroke is not following the eyes");
         else if (refilled >= toEmpty) faults.Add($"breath took {refilled / 60f:F1}s to return, longer than it lasted");
 
         // Rest heals, and not before it should.

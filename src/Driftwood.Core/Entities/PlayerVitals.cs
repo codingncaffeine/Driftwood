@@ -689,21 +689,28 @@ public sealed class PlayerVitals
     /// Eats something worth this many half-drumsticks, and answers how many it actually took.
     /// </summary>
     /// <remarks>
-    /// ⛳ <b>Answers zero when the bar is already full, and the caller is what refuses the meal.</b>
-    /// Eating a whole roast at nineteen of twenty and getting one unit of it is how a player loses
-    /// food without noticing; refusing outright means it is still in their pocket for later.
-    /// ⚠ It also clears the part-spent effort, so a meal is a clean start rather than something that
-    /// is a little short because of the last few steps before it.
+    /// ⛳⛳ <b>The overflow MENDS, on the user's own instruction (2026-08-08): "even when full it
+    /// should still restore health."</b> The first hunger design made being fed the only way to
+    /// mend, which left a full-but-hurt player holding a pocket of roasts that did nothing. Now a
+    /// meal goes where it does good — the food bar first, and whatever does not fit becomes
+    /// hearts, one for one — so it is never wasted while either bar has room. Zero still means
+    /// "nothing to gain", and the caller refuses the meal on it; that is now only true when the
+    /// player is both full and unhurt.
+    /// ⚠ It also clears the part-spent effort, so a meal is a clean start rather than something
+    /// that is a little short because of the last few steps before it.
     /// </remarks>
     public int Eat(int halfDrumsticks)
     {
-        if (halfDrumsticks <= 0 || Food >= MaxFood) return 0;
+        if (halfDrumsticks <= 0) return 0;
 
-        var before = Food;
-        Food = Math.Min(MaxFood, Food + halfDrumsticks);
-        _effort = 0f;
+        var toFood = Math.Min(halfDrumsticks, MaxFood - Food);
+        Food += toFood;
 
-        return Food - before;
+        var toHearts = Math.Min(halfDrumsticks - toFood, MaxHealth - Health);
+        Health += toHearts;
+
+        if (toFood + toHearts > 0) _effort = 0f;
+        return toFood + toHearts;
     }
 
     /// <summary>
@@ -739,20 +746,30 @@ public sealed class PlayerVitals
             faults.Add($"a drumstick of effort paid in sixty pieces took {MaxFood - trickle.Food}, "
                      + "so the remainder between frames is being dropped or double-counted");
 
-        // ── Eating fills, and is refused rather than wasted at a full bar ───────────────────────
+        // ── Eating fills, the overflow mends, and only full-and-well refuses ────────────────────
         var eater = new PlayerVitals(registry);
-        if (eater.Eat(6) != 0) faults.Add("a full player ate something and it went nowhere");
+        if (eater.Eat(6) != 0) faults.Add("a full and unhurt player ate something and it went somewhere");
 
         eater.Spend(EffortPerFood * 10f);
         if (eater.Eat(6) != 6) faults.Add("a half-empty player could not eat a whole meal");
 
-        // ⚠ A meal bigger than the room left has to report only what it actually put in, or the
-        // caller spends a roast and is told it landed whole.
+        // ⚠ A meal bigger than the room left spills into the hearts and reports the whole of what
+        // it did — or the caller spends a roast and is told it landed whole.
         var room = MaxFood - eater.Food;
+        eater.Hurt(4, armoured: false);
         var took = eater.Eat(999);
 
-        if (took != room) faults.Add($"a huge meal reported {took} into {room} of room");
+        if (took != room + 4)
+            faults.Add($"a huge meal on a hurt player reported {took} against {room} of room and 4 missing half-hearts");
         if (eater.Food != MaxFood) faults.Add($"eating past full left {eater.Food} of {MaxFood}");
+        if (eater.Health != MaxHealth) faults.Add($"the overflow left the hearts at {eater.Health} of {MaxHealth}");
+
+        // ⛔ THE USER'S OWN CASE, stated 2026-08-08: a full bar must not stop a meal from mending.
+        var banquet = new PlayerVitals(registry);
+        banquet.Hurt(6, armoured: false);
+        if (banquet.Eat(4) != 4) faults.Add("a full-but-hurt player could not eat at all");
+        if (banquet.Health != MaxHealth - 2)
+            faults.Add($"four half-drumsticks on six missing half-hearts mended to {banquet.Health}");
 
         // ── Being fed is what mends, and being hungry is what does not ──────────────────────────
         var fed = new PlayerVitals(registry);

@@ -2486,9 +2486,19 @@ public sealed class HudRenderer : IDisposable
     /// <summary>Where the first bubble was put, in layout units.</summary>
     public Vector2 LastBubbleAt { get; private set; }
 
+    /// <summary>The whole strip the bubbles ever occupy, in layout units — published whether or
+    /// not any drew, so a check can confine a frame diff to exactly the bar's own ground.</summary>
+    public (float X0, float Y0, float X1, float Y1) LastBubbleRow { get; private set; }
+
     private void Bubbles(PlayerVitals vitals, float drift, float w, float h)
     {
         LastBubbles = 0;
+
+        LastBubbleRow = (
+            BarsRight(w) - VitalBars.Icons(VitalBar.Breath) * BarIcon,
+            h - VitalBars.FromBottom(VitalBar.Breath),
+            BarsRight(w),
+            h - VitalBars.FromBottom(VitalBar.Breath) + BarIcon);
 
         if (!vitals.Submerged && vitals.Breath >= PlayerVitals.MaxBreath) return;
 

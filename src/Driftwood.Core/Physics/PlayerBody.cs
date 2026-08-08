@@ -173,8 +173,9 @@ public sealed class PlayerBody
     public Vector3 EyePosition => Position + new Vector3(0f, CurrentEyeHeight, 0f);
 
     /// <summary>
-    /// Advances one frame. <paramref name="wish"/> is the desired horizontal direction in world
-    /// space; its length is treated as the throttle and clamped to one.
+    /// Advances one frame. <paramref name="wish"/> is the desired direction in world space; its
+    /// horizontal length is treated as the throttle and clamped to one. On land the vertical
+    /// component is ignored; in a fluid it is the swim — see the stroke rule below.
     /// </summary>
     public void Step(VoxelWorld world, float dt, Vector3 wish, bool jump, bool sneak, bool sprint)
     {
@@ -235,8 +236,21 @@ public sealed class PlayerBody
             // falling into a lake is survivable. Buoyancy is written as a target velocity rather than
             // as an upward force because a force has to be balanced against gravity to hold still and
             // a target does not — the failure mode of the other way is a body that bobs.
+            //
+            // ⛔⛔ AND THE STROKE FOLLOWS THE EYES. The wish arrives carrying the camera's own pitch
+            // in a fluid, so holding forward while looking down IS the dive — the gesture every
+            // player reaches for first. With the wish flattened, the only ways under were a key
+            // nothing advertised and a patient idle sink, which is why the breath bar had never
+            // once been seen over three separate reports: nobody could get their head under on
+            // purpose. Jump still beats everything upward and sneak downward, so the old controls
+            // keep working on top of the natural one.
             var sink = InLava ? LavaSink : WaterSink;
-            var rise = jump ? (InLava ? LavaStroke : WaterStroke) : sneak ? -sink * 3f : -sink;
+            var stroke = InLava ? LavaStroke : WaterStroke;
+
+            var rise = jump ? stroke
+                : sneak ? -sink * 3f
+                : MathF.Abs(wish.Y) > 0.05f ? Math.Clamp(wish.Y, -1f, 1f) * stroke
+                : -sink;
 
             Velocity.Y += (rise - Velocity.Y) * MathF.Min(1f, SwimAcceleration * dt);
 
