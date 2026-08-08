@@ -410,6 +410,15 @@ public static class BlockTextureSet
         new("composter_bottom", "textures/block/composter_bottom.png",  false),
         new("compost",          "textures/block/composter_compost.png", false),
         new("compost_ready",    "textures/block/composter_ready.png",   false),
+
+        // ⛳ The berry bush's two states land on the pack's own four-stage run: ours are the two
+        // that look like anything — stage1 is a young bush, stage3 carries fruit. The alternate is
+        // the underscored spelling the older staged plants use where a pack ships it.
+        new("berry_bush",      "textures/block/sweet_berry_bush_stage1.png", true,
+            "textures/block/sweet_berry_bush_stage_1.png"),
+        new("berry_bush_ripe", "textures/block/sweet_berry_bush_stage3.png", true,
+            "textures/block/sweet_berry_bush_stage_3.png"),
+        new("berries",         "textures/item/sweet_berries.png",            true),
     ];
 
     /// <summary>
@@ -1309,6 +1318,12 @@ public static class BlockTextureSet
             StarterBlocks.LayerCompost => TileGen.Speckle(1312, 82, 64, 40, 22, 0.55f),
             StarterBlocks.LayerCompostReady =>
                 TileGen.Ore(1313, TileGen.Speckle(1312, 82, 64, 40, 22, 0.55f), 216, 214, 206, 7),
+
+            // ⚠ One seed for both states of the bush, so the ripe tile is the young tile with
+            // fruit on it — one plant in two moments, never two plants.
+            StarterBlocks.LayerBerryBush => TileGen.BerryBush(1320, ripe: false),
+            StarterBlocks.LayerBerryBushRipe => TileGen.BerryBush(1320, ripe: true),
+            StarterBlocks.LayerBerries => TileGen.IconBerries(1322),
 
             _ => Wheat(layer) ?? Crop(layer) ?? CropIcon(layer) ?? StainedGlass(layer)
                  ?? MetalBlock(layer) ?? Wool(layer) ?? Meat(layer) ?? Dye(layer)

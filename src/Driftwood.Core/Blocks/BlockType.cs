@@ -59,6 +59,16 @@ public enum BlockUse
     /// out. The fill level is the block id, so the whole interaction is a click and a glance.
     /// </remarks>
     Composter,
+
+    /// <summary>
+    /// Picks the fruit off this block, leaving the plant standing to bear again.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ Only the RIPE bush answers this, exactly as only the lit campfire cooks — the young one
+    /// is a block like any other, so nothing about an empty bush swallows a click meant to build.
+    /// The rules are <see cref="Foraging"/>'s, in Core.
+    /// </remarks>
+    Berries,
 }
 
 /// <summary>Which fluid a block is, when it is one.</summary>

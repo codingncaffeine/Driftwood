@@ -634,6 +634,128 @@ public static class TileGen
         return t;
     }
 
+    /// <summary>
+    /// A berry bush: a knee-high tangle of shoots off one low mound, fruiting when it is ripe.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ <b>The ripe signal is colour in a different place, the root crops' own rule:</b> the
+    /// leaves stay the same green in both states and the berries are what appears, so the two tiles
+    /// read as one plant in two moments rather than as two plants.</para>
+    /// <para>⚠ <b>One island by construction.</b> Every shoot rises from a connected base mound and
+    /// fills across its lean (the feather's rule), and a berry only ever RECOLOURS a cell that is
+    /// already ink — a berry floating beside the plant would be a second island, and the audit
+    /// counts.</para>
+    /// </remarks>
+    public static byte[] BerryBush(int seed, bool ripe)
+    {
+        var t = new byte[BytesPerTile];
+
+        // The mound the whole plant rises from: two low rows, dark, slightly ragged on top.
+        for (var y = Size - 2; y < Size; y++)
+        for (var x = 2; x <= 13; x++)
+        {
+            if (y == Size - 2 && Noise(x, y, seed + 3) > 0.8f) continue;
+
+            var d = (int)((Noise(x, y, seed) * 2f - 1f) * 14f);
+            Put(t, x, y, Clamp(38 + d), Clamp(74 + d), Clamp(34 + d), 255);
+        }
+
+        // Five shoots off the mound, leaning outward as they climb, each filled across its lean.
+        for (var shoot = 0; shoot < 5; shoot++)
+        {
+            var x = 3 + shoot * 2 + (shoot > 1 ? shoot - 1 : 0);
+            var tall = 8 + (int)(Noise(shoot, 1, seed + 7) * 5f);
+            var prev = x;
+
+            for (var up = 2; up < tall; up++)
+            {
+                var y = Size - 1 - up;
+                if (y < 2) break;
+
+                var lean = up > 3 && Noise(shoot, up, seed + 11) > 0.55f
+                    ? (shoot < 2 ? -1 : shoot > 2 ? 1 : 0)
+                    : 0;
+                var lx = Math.Clamp(x + lean, 1, Size - 2);
+
+                var from = Math.Min(prev, lx);
+                var to = Math.Max(prev, lx);
+
+                for (var bx = from; bx <= to; bx++)
+                {
+                    var d = (int)((Noise(bx, y, seed + 17) * 2f - 1f) * 16f);
+                    Put(t, bx, y, Clamp(52 + d), Clamp(98 + d), Clamp(44 + d), 255);
+                }
+
+                // A leaf beside the shoot most rows, so it is a bush rather than a broom.
+                if (Noise(shoot, up, seed + 23) > 0.4f)
+                {
+                    var side = Noise(shoot, up, seed + 29) > 0.5f ? 1 : -1;
+                    var ax = Math.Clamp(lx + side, 1, Size - 2);
+                    var d = (int)((Noise(ax, y, seed + 31) * 2f - 1f) * 14f);
+                    Put(t, ax, y, Clamp(66 + d), Clamp(116 + d), Clamp(54 + d), 255);
+                }
+
+                prev = lx;
+            }
+        }
+
+        if (!ripe) return t;
+
+        // The fruit, hung through the middle of the tangle. Each berry recolours a painted cell,
+        // with a bright shoulder above it where that cell is painted too.
+        for (var berry = 0; berry < 12; berry++)
+        {
+            var bx = 2 + (int)(Noise(berry, 5, seed + 37) * 11.9f);
+            var by = 4 + (int)(Noise(berry, 9, seed + 41) * 9.9f);
+            if ((uint)bx >= Size || (uint)by >= Size) continue;
+
+            if (t[(by * Size + bx) * 4 + 3] == 0) continue;
+
+            Put(t, bx, by, 182, 36, 50, 255);
+
+            if (by > 0 && t[((by - 1) * Size + bx) * 4 + 3] != 0)
+                Put(t, bx, by - 1, 216, 66, 74, 255);
+        }
+
+        return t;
+    }
+
+    /// <summary>A picked handful: three round berries in a clump, a leaf at the shoulder.</summary>
+    /// <remarks>
+    /// ⚠ Drawn as one connected clump on purpose — the berries overlap and the leaf touches the top
+    /// one — because a handful of separate dots is exactly the spray the island count refuses. Ink
+    /// stays off the border, like every icon here.
+    /// </remarks>
+    public static byte[] IconBerries(int seed)
+    {
+        var t = new byte[BytesPerTile];
+
+        // Three berries packed into a triangle, lit from the top left like everything else.
+        foreach (var (cx, cy) in (ReadOnlySpan<(int X, int Y)>)[(6, 9), (10, 9), (8, 6)])
+        for (var dy = -2; dy <= 2; dy++)
+        for (var dx = -2; dx <= 2; dx++)
+        {
+            if (dx * dx + dy * dy > 4) continue;
+
+            var x = cx + dx;
+            var y = cy + dy;
+            if ((uint)x >= Size || (uint)y >= Size) continue;
+
+            var d = (int)((Noise(x, y, seed) * 2f - 1f) * 12f);
+            var lift = (2 - dx - dy) * 6;
+            Put(t, x, y, Clamp(170 + lift + d), Clamp(36 + lift / 3 + d), Clamp(52 + lift / 3 + d), 255);
+        }
+
+        // The leaf, touching the top berry so the drawing is one thing.
+        for (var i = 0; i < 3; i++)
+        {
+            var d = (int)((Noise(i, 2, seed + 11) * 2f - 1f) * 12f);
+            Put(t, 8 + i, 3 + (i == 2 ? 1 : 0), Clamp(70 + d), Clamp(118 + d), Clamp(56 + d), 255);
+        }
+
+        return t;
+    }
+
     public static byte[] Wheat(int seed, int height, byte r, byte g, byte b, bool eared)
     {
         var t = new byte[BytesPerTile];

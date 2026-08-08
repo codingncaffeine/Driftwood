@@ -6068,16 +6068,14 @@ public sealed class ClientHost : IDisposable
     {
         if (_creatureTarget is { } quarry && HarvestCreature(quarry)) return;
 
-        // Whether anything under the crosshair answers the button itself. Asked of the block rather
-        // than worked out from its name — the same field PlaceOnTarget switches on below.
-        var wanted = _target is { } aimed
-                     && _registry[_streamer.World.GetBlock(aimed.X, aimed.Y, aimed.Z)].Use != BlockUse.None;
+        // ⛔ EATING IS LAST IN FACT NOW, not only in the comment above. It used to run second,
+        // gated on "is the aimed block interactive" — the wrong question, because planting and
+        // sowing are not the block's own Use: a hungry player right-clicking farmland with a
+        // carrot ATE the seed they meant to plant. PlaceOnTarget answers whether the world took
+        // the click, and only a click the world had no use for becomes a meal.
+        if (PlaceOnTarget()) return;
 
-        // Either hand's food, before anything is placed — EatHeld itself answers false when
-        // neither hand holds a meal, and the click carries on to placing.
-        if (!wanted && EatHeld()) return;
-
-        PlaceOnTarget();
+        EatHeld();
     }
 
     /// <summary>
@@ -6212,6 +6210,53 @@ public sealed class ClientHost : IDisposable
             _registry[planted], SoundEvent.Place,
             new Vector3(hit.X + 0.5f, hit.Y + 1.5f, hit.Z + 0.5f), 0.6f);
         return true;
+    }
+
+    /// <summary>Puts a berry bush down on plain grass or dirt, the way seeds go into tilled ground.</summary>
+    /// <remarks>
+    /// ⛳ A gate of its own rather than a Places on the berry, because what a berry becomes depends
+    /// on the GROUND — over soil it is a bush, anywhere else it is a meal. The rule of what plants
+    /// on what is StarterBlocks.SownOnSoil's, for the sowing rule's reason.
+    /// </remarks>
+    private bool PlantBush(RayHit hit)
+    {
+        if (_inventory.HeldType is not { } held) return false;
+        if (StarterBlocks.SownOnSoil(held.Name) is not { } sprout) return false;
+
+        var ground = _streamer.World.GetBlock(hit.X, hit.Y, hit.Z);
+        if (ground != _ids.Grass && ground != _ids.Dirt) return false;
+
+        var above = _streamer.World.GetBlock(hit.X, hit.Y + 1, hit.Z);
+        if (!_registry[above].Replaceable) return false;
+
+        var planted = _registry.ByName(sprout).Id;
+        _streamer.EditBlock(hit.X, hit.Y + 1, hit.Z, planted);
+
+        _inventory.SpendHeld();
+        PlaySound(
+            _registry[planted], SoundEvent.Place,
+            new Vector3(hit.X + 0.5f, hit.Y + 1.5f, hit.Z + 0.5f), 0.6f);
+        return true;
+    }
+
+    /// <summary>Picks the fruit off a ripe bush — the rules are <see cref="Foraging"/>'s, in Core.</summary>
+    /// <remarks>
+    /// ⚠ What the pockets cannot hold lands on the ground, never in the void — the inventory rule
+    /// every other payout follows.
+    /// </remarks>
+    private void PickBerries(int x, int y, int z)
+    {
+        var block = _streamer.World.GetBlock(x, y, z);
+        if (!Foraging.TryPick(_registry, block, _growthRandom.NextDouble(), out var becomes, out var count))
+            return;
+
+        _streamer.EditBlock(x, y, z, becomes);
+
+        var here = new Vector3(x + 0.5f, y + 0.5f, z + 0.5f);
+        var kept = _inventory.Add(new ItemStack(_items.ByName("berries").Id, count));
+        if (!kept.IsEmpty) _drops.Drop(kept, here);
+
+        _audio?.Play(Pick(ActionSounds.BerryPick), here, 0.8f, Wobble());
     }
 
     /// <summary>Hurries a growing crop along.</summary>
@@ -6430,19 +6475,21 @@ public sealed class ClientHost : IDisposable
         }
     }
 
-    private void PlaceOnTarget()
+    private bool PlaceOnTarget()
     {
         // A bucket is used on the world rather than placed into it, and it reaches things the
         // crosshair cannot — so it is asked before anything that needs a target at all.
-        if (UseBucket()) return;
+        if (UseBucket()) return true;
 
-        if (_target is not { } hit) return;
+        if (_target is not { } hit) return false;
 
-        // ⛳ The three things done TO the world with something in hand rather than built onto it: a
-        // hoe turns ground over, a seed goes into the ground it turned, and bone meal hurries what
-        // is growing there. All three are asked before the block's own Use, because the ground has
-        // no Use of its own and would otherwise fall through to being built on.
-        if (UseHoe(hit) || SmotherFire(hit) || PlantSeed(hit) || UseBonemeal(hit)) return;
+        // ⛳ The things done TO the world with something in hand rather than built onto it: a hoe
+        // turns ground over, a seed goes into the ground it turned, a berry goes into plain grass,
+        // and bone meal hurries what is growing there. All asked before the block's own Use,
+        // because the ground has no Use of its own and would otherwise fall through to being
+        // built on.
+        if (UseHoe(hit) || SmotherFire(hit) || PlantSeed(hit) || PlantBush(hit) || UseBonemeal(hit))
+            return true;
 
         // Using comes before building. A block that does something answers the right button itself,
         // so a bench cannot be buried under the plank a player meant to open it with — and what it
@@ -6452,27 +6499,31 @@ public sealed class ClientHost : IDisposable
         {
             case BlockUse.Bench:
                 OpenBench(hit.X, hit.Y, hit.Z);
-                return;
+                return true;
 
             case BlockUse.Furnace:
                 OpenFurnace(hit.X, hit.Y, hit.Z);
-                return;
+                return true;
 
             case BlockUse.Chest:
                 OpenChest(hit.X, hit.Y, hit.Z);
-                return;
+                return true;
 
             case BlockUse.Stonecutter:
                 OpenStonecutter(hit.X, hit.Y, hit.Z);
-                return;
+                return true;
 
             case BlockUse.Anvil:
                 UseAnvil(hit.X, hit.Y, hit.Z);
-                return;
+                return true;
 
             case BlockUse.Composter:
                 UseComposter(hit.X, hit.Y, hit.Z);
-                return;
+                return true;
+
+            case BlockUse.Berries:
+                PickBerries(hit.X, hit.Y, hit.Z);
+                return true;
 
             // ⛳⛳ THE CAMPFIRE OPENS THE FIRE SCREEN NOW, on the user's instruction — "we'll need the
             // same thing for the campfire". It deliberately had none, on the anvil's argument that
@@ -6482,7 +6533,7 @@ public sealed class ClientHost : IDisposable
             // ⚠ A shovel still puts it out, and SmotherFire is asked before this.
             case BlockUse.Campfire:
                 OpenFurnace(hit.X, hit.Y, hit.Z);
-                return;
+                return true;
 
             case BlockUse.Toggle when _toggle.TryGetValue(struck.Id.Value, out var other):
                 _streamer.EditBlock(hit.X, hit.Y, hit.Z, other);
@@ -6519,7 +6570,7 @@ public sealed class ClientHost : IDisposable
                         _registry[other], SoundEvent.Place,
                         new Vector3(hit.X + 0.5f, hit.Y + 0.5f, hit.Z + 0.5f), 0.7f);
                 }
-                return;
+                return true;
         }
 
         // A slab laid on a matching slab fills the cell rather than starting a second one above it.
@@ -6535,11 +6586,11 @@ public sealed class ClientHost : IDisposable
             PlaySound(
                 _registry[whole], SoundEvent.Place,
                 new Vector3(hit.X + 0.5f, hit.Y + 0.5f, hit.Z + 0.5f), 0.85f);
-            return;
+            return true;
         }
 
         var (x, y, z) = hit.Adjacent;
-        if (!_streamer.World.GetBlock(x, y, z).IsAir) return;
+        if (!_streamer.World.GetBlock(x, y, z).IsAir) return false;
 
         // ⛳ THE MAIN HAND FIRST, THEN THE OTHER ONE — which is what makes a torch in the offhand and
         // a pickaxe in the main hand the loop everybody wants. Asked in that order and never both:
@@ -6551,8 +6602,13 @@ public sealed class ClientHost : IDisposable
 
         if (_inventory.HeldType is not { Places: { } held })
         {
+            // ⚠ A meal in the POINTING hand keeps the click. The offhand fallback exists for the
+            // pickaxe-and-torch loop, and reaching past a held steak to place a torch would turn
+            // "eat" into "build" by way of the other hand — the click falls through to EatHeld.
+            if (_inventory.HeldType is { IsFood: true }) return false;
+
             var spare = _equipment[EquipSlot.Offhand];
-            if (spare.IsEmpty || _items[spare.Item].Places is not { } offhandPlaces) return;
+            if (spare.IsEmpty || _items[spare.Item].Places is not { } offhandPlaces) return false;
 
             held = offhandPlaces;
             fromOffhand = true;
@@ -6565,7 +6621,7 @@ public sealed class ClientHost : IDisposable
         var landing = _camera.Position + _camera.Forward * hit.Distance;
         var height = Math.Clamp(landing.Y - y, 0f, 1f);
 
-        if (!held.TryResolve(hit.Face, height, _camera.Forward, out var block)) return;
+        if (!held.TryResolve(hit.Face, height, _camera.Forward, out var block)) return false;
 
         // What holds it up is the block's own answer, not the item's. A torch put against a wall
         // resolved to a different block from one put on the floor, and that block already says
@@ -6583,7 +6639,7 @@ public sealed class ClientHost : IDisposable
                 ? against.Solid && against.Model.IsFullCube
                 : against.Solid;
 
-            if (!enough) return;
+            if (!enough) return false;
         }
 
         // A door is two cells and one thing, so the cell above has to be free before either is
@@ -6592,8 +6648,8 @@ public sealed class ClientHost : IDisposable
         var tall = held.IsTall && _tallUpper.TryGetValue(block.Value, out var upper);
         if (held.IsTall)
         {
-            if (!tall) return;
-            if (!_streamer.World.GetBlock(x, y + 1, z).IsAir) return;
+            if (!tall) return false;
+            if (!_streamer.World.GetBlock(x, y + 1, z).IsAir) return false;
         }
 
         if (_walking)
@@ -6603,7 +6659,7 @@ public sealed class ClientHost : IDisposable
             probe.SetBlock(x, y, z, block);
             var blocked = _player.Collides(probe, _player.Position);
             probe.SetBlock(x, y, z, before);
-            if (blocked) return;
+            if (blocked) return false;
         }
 
         _streamer.EditBlock(x, y, z, block);
@@ -6613,6 +6669,7 @@ public sealed class ClientHost : IDisposable
         else _inventory.SpendHeld();
 
         PlaySound(_registry[block], SoundEvent.Place, new Vector3(x + 0.5f, y + 0.5f, z + 0.5f), 0.85f);
+        return true;
     }
 
     /// <summary>Takes one off what is in the other hand, emptying the slot when it runs out.</summary>

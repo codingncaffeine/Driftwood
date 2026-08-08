@@ -22,6 +22,10 @@ public enum SoundMaterial
     Wood,
     Leaves,
     Plant,
+
+    /// <summary>The berry bush, whose coming apart is its own recording in the pack.</summary>
+    BerryBush,
+
     Metal,
     Glass,
     Cloth,
@@ -138,6 +142,15 @@ public static class MaterialSounds
             Run("dig/wet_grass", 4),
             Run("dig/grass", 4),
             Run("item/plant/crop", 6)),
+
+        // A bush rustles like any plant until it comes apart, which the pack recorded on its own.
+        // Placing one reuses the same recording — the pack ships no separate planting for it, and
+        // a rustle-and-snap is what pushing a seedling into ground sounds like anyway.
+        [SoundMaterial.BerryBush] = new(
+            Run("step/grass", 6),
+            Run("dig/wet_grass", 4),
+            Run("block/sweet_berry_bush/break", 4),
+            Run("block/sweet_berry_bush/break", 4)),
 
         [SoundMaterial.Metal] = new(
             Run("block/iron/step", 6),

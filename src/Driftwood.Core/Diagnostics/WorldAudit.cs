@@ -560,6 +560,13 @@ public static class WorldAudit
                 ? $"{Composting.Accepted.Count()} compostables, {StarterBlocks.ComposterStages} helpings certain-full, {Composting.Yield} bone meal a bin"
                 : $"{compostFaults.Count} faults: {compostFaults[0]}");
 
+        var pickFaults = Foraging.SelfTest(registry, items, drops);
+        Check("a ripe bush pays a pick, resets, and out-earns a fist", pickFaults.Count == 0,
+            pickFaults.Count == 0
+                ? $"{Foraging.PickLeast}-{Foraging.PickMost} berries a pick against "
+                  + $"{drops.Of(registry.ByName(StarterBlocks.BerryBushRipeName).Id).Count} for breaking the plant"
+                : $"{pickFaults.Count} faults: {pickFaults[0]}");
+
         var dialectFaults = PackDialectSelfTest(out var dialectDetail);
         Check("a pack of either kind is read as itself", dialectFaults.Count == 0,
             dialectFaults.Count == 0 ? dialectDetail : $"{dialectFaults.Count} faults: {dialectFaults[0]}");
@@ -1099,8 +1106,9 @@ public static class WorldAudit
         Check("a field grows where it should and nowhere else", growthFaults.Count == 0,
             growthFaults.Count == 0
                 ? $"{StarterBlocks.WheatStages} stages on wet ground in the light, stopping when ripe; "
-                  + $"dry ground, darkness and a ripe ear all refuse, and water reaches "
-                  + $"{Growth.WaterReach} cells and no further"
+                  + $"dry ground, darkness and a ripe ear all refuse, water reaches "
+                  + $"{Growth.WaterReach} cells and no further, and a berry bush regrows on plain "
+                  + "grass while refusing the crops' tilled ground"
                 : $"{growthFaults.Count} faults: {growthFaults[0]}");
 
         // ⛳ And mending it, which is the first path in the game that gives durability BACK. Every
@@ -6194,11 +6202,17 @@ public static class WorldAudit
         (StarterBlocks.LayerFirstStainedGlass, "stained_glass_white"),
         ((ushort)(StarterBlocks.LayerFirstStainedGlass + 15), "stained_glass_black"),
 
-        // The moving pin: the LAST layer, by name. It has now caught two appends in the act —
-        // fifteen crop rows landing after "the last layer is bonemeal", and the composter's four
-        // landing after black glass — which is exactly what it is for. Keep it pointed at
-        // whatever is genuinely last.
-        ((ushort)(StarterBlocks.LayerCount - 1), "compost_ready"),
+        // ⛳ Compost-ready by its OWN constant now the bush went on after it — the moving pin
+        // handing its ground to a fixed one on the way past, exactly as bonemeal and black glass
+        // did before it.
+        (StarterBlocks.LayerCompostReady, "compost_ready"),
+        (StarterBlocks.LayerBerryBush, "berry_bush"),
+
+        // The moving pin: the LAST layer, by name. It has now caught three appends in the act —
+        // fifteen crop rows landing after "the last layer is bonemeal", the composter's four
+        // landing after black glass, and the berry bush's three after compost-ready — which is
+        // exactly what it is for. Keep it pointed at whatever is genuinely last.
+        ((ushort)(StarterBlocks.LayerCount - 1), "berries"),
     ];
 
     /// <summary>

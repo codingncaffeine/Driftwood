@@ -449,6 +449,16 @@ public static class StarterItems
             });
         }
 
+        // ⛳ What the bush pays. The least of the foods on purpose: berries come off a plant that
+        // asked for no hoe, no water and no tilled ground, and the cheapest food should be the one
+        // with the least agriculture in it. Planting one back is SownOnSoil's rule, not a Places —
+        // what a berry becomes depends on the ground it is put to.
+        items.Register(new ItemType
+        {
+            Name = "berries", Label = "berries",
+            IconLayer = StarterBlocks.LayerBerries, Feeds = 2,
+        });
+
         // ⚠ Six, which is bread and a cooked steak — so a fire turns the meanest of the three into
         // the best meal a field can produce. That is the whole reason to grow potatoes rather than
         // carrots, and it is the only thing separating the three crops mechanically.
@@ -776,6 +786,13 @@ public static class StarterItems
         // harvest because its seed is a separate item; making a carrot vanish would be a trap rather
         // than a lesson, since the thing you planted and the thing you want are one item.
         .. CropDropRules(),
+
+        // ⛳ The bush pays berries both ways round: breaking the wild ripe one is the FIRST berry —
+        // the reachability walk's dig source — and the young one refunds the berry that planted it,
+        // so no round trip through the ground ever loses the thing itself. Two for the ripe against
+        // a pick's two-to-three, which is Foraging's pin: keeping the bush has to be the better deal.
+        new BlockDrops.Rule(StarterBlocks.BerryBushRipeName, "berries", 2),
+        new BlockDrops.Rule(StarterBlocks.BerryBushName, "berries"),
         new BlockDrops.Rule("snow_layer", null),
         new BlockDrops.Rule("water", null),
         new BlockDrops.Rule("bedrock", null),

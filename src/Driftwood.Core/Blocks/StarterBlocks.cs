@@ -530,7 +530,16 @@ public static class StarterBlocks
     public const ushort LayerCompost = LayerComposterSide + 2;
     public const ushort LayerCompostReady = LayerComposterSide + 3;
 
-    public const int LayerCount = LayerComposterSide + 4;
+    /// <summary>The berry bush's two states, then what a pick takes off it.</summary>
+    /// <remarks>
+    /// ⚠ Appended, like everything since the fluids, because
+    /// <see cref="Textures.BlockTextureSet"/>'s array order IS this numbering.
+    /// </remarks>
+    public const ushort LayerBerryBush = LayerComposterSide + 4;
+    public const ushort LayerBerryBushRipe = LayerBerryBush + 1;
+    public const ushort LayerBerries = LayerBerryBush + 2;
+
+    public const int LayerCount = LayerBerryBush + 3;
 
     /// <summary>One anvil's name, by how worn it is and which way it lies.</summary>
     /// <remarks>
@@ -576,9 +585,27 @@ public static class StarterBlocks
     /// <summary>One stage of one root crop, as a block name.</summary>
     public static string CropName(int crop, int stage) => $"{Crops[crop].Name}_{stage}";
 
+    /// <summary>The berry bush's two states: growing, and carrying fruit worth a pick.</summary>
+    /// <remarks>
+    /// ⛳ <b>The first crop that is not a crop.</b> It stands on plain grass or dirt — no hoe, no
+    /// water — and a pick resets the ripe one to this rather than taking the plant, so a kept bush
+    /// is a supply where a field is a harvest. Two stages, because that is all the mechanic has to
+    /// say: growing, and ready.
+    /// </remarks>
+    public const string BerryBushName = "berry_bush";
+    public const string BerryBushRipeName = "berry_bush_ripe";
+
     /// <summary>The tile a stage of tops is drawn from.</summary>
     public static ushort CropStageLayer(int crop, int stage) =>
         (ushort)(LayerFirstCrop + crop * CropStages + stage);
+
+    /// <summary>One ladder of growth: the rungs in order, and what the bottom rung stands on.</summary>
+    /// <param name="Rungs">The block names, ripe last.</param>
+    /// <param name="OnFarmland">
+    /// True for a tilled crop, which grows only over watered farmland. False for a plant that
+    /// stands on plain grass or dirt and asks only for light — the berry bush's rule.
+    /// </param>
+    public readonly record struct GrowthLadder(string[] Rungs, bool OnFarmland);
 
     /// <summary>
     /// Every crop in the game as a ladder of block names, ripe last.
@@ -588,22 +615,25 @@ public static class StarterBlocks
     /// a second crop should be "a row in StarterBlocks and nothing there" — it was not true while the
     /// ladder was built from <see cref="WheatName"/> by hand. It is true now: the growth rule, the
     /// drops, the sowing rule and the reachability walk all read this one list.
+    /// ⛳ The bush is the row that made the ground a field on the ladder rather than a rule in
+    /// <see cref="Growth"/> — a plant that regrows on plain grass could not say so anywhere else.
     /// </remarks>
-    public static string[][] CropLadders()
+    public static GrowthLadder[] CropLadders()
     {
-        var ladders = new string[1 + CropCount][];
+        var ladders = new GrowthLadder[2 + CropCount];
 
         var wheat = new string[WheatStages];
         for (var s = 0; s < WheatStages; s++) wheat[s] = WheatName(s);
-        ladders[0] = wheat;
+        ladders[0] = new GrowthLadder(wheat, OnFarmland: true);
 
         for (var c = 0; c < CropCount; c++)
         {
             var rungs = new string[CropStages];
             for (var s = 0; s < CropStages; s++) rungs[s] = CropName(c, s);
-            ladders[c + 1] = rungs;
+            ladders[c + 1] = new GrowthLadder(rungs, OnFarmland: true);
         }
 
+        ladders[^1] = new GrowthLadder([BerryBushName, BerryBushRipeName], OnFarmland: false);
         return ladders;
     }
 
@@ -623,6 +653,15 @@ public static class StarterBlocks
 
         return null;
     }
+
+    /// <summary>What an item plants on plain grass or dirt, or null when it plants nothing there.</summary>
+    /// <remarks>
+    /// ⛳ The bush's own door beside <see cref="SownBy"/>'s tilled one, and a table for the same
+    /// reason: what the game grows is never written into the input handler. The two never overlap —
+    /// a berry refuses farmland and a seed refuses a lawn — which is what keeps a click's meaning
+    /// readable from the ground alone.
+    /// </remarks>
+    public static string? SownOnSoil(string item) => item == "berries" ? BerryBushName : null;
 
     public sealed record Ids(
         BlockId Stone,
@@ -673,7 +712,10 @@ public static class StarterBlocks
         /// the generator picks between them and the census weighs them together. A fourth crop is a
         /// row in <see cref="Crops"/> and changes nothing that reads this.
         /// </remarks>
-        BlockId[] WildCrops)
+        BlockId[] WildCrops,
+
+        /// <summary>The ripe berry bush, which is how one is found growing wild.</summary>
+        BlockId BerryBushRipe)
     {
         /// <summary>Every rock an ore can form in. Ore replaces rock, whichever rock it is.</summary>
         public BlockId[] Rock => [Stone, Deepstone, Coralstone, Driftstone, Saltstone];
@@ -863,6 +905,26 @@ public static class StarterBlocks
             // growing that crop. An unripe one would be a plant a player has to leave and come back to.
             if (stage == CropStages - 1) wildCrops[crop] = id;
         }
+
+        // ⛳ The berry bush, the first plant on the ladder that wants no farmland. The young one is
+        // only ever planted or left by a pick, so it is Derived; the RIPE one is what the wild
+        // patches place, and it is deliberately NOT Crafted — the census demands it in the ground,
+        // which is the standing proof the ride-along actually rides.
+        registry.Register(new BlockType
+        {
+            Name = BerryBushName, Hardness = 0.05f, Crafted = true, Derived = true,
+            Solid = false, Opaque = false, Sounds = SoundMaterial.BerryBush,
+            SupportFace = Faces.NegY,
+            Model = BlockModel.Cross(LayerBerryBush, tinted: false),
+        });
+
+        var berryBushRipe = registry.Register(new BlockType
+        {
+            Name = BerryBushRipeName, Hardness = 0.05f,
+            Solid = false, Opaque = false, Sounds = SoundMaterial.BerryBush,
+            SupportFace = Faces.NegY, Use = BlockUse.Berries,
+            Model = BlockModel.Cross(LayerBerryBushRipe, tinted: false),
+        });
 
         var gravel = registry.Register(new BlockType
         {
@@ -1379,7 +1441,7 @@ public static class StarterBlocks
             emberstone, vine, deepstone, coralstone, driftstone, saltstone, copper, gold, stormglass,
             diamond, azurite, clay, sandstone, snow, snowLayer, meadowgrass, seaflax, marshlily,
             emberbloom, sunwort,
-            rubble, glass, bricks, bench, furnace, furnaceLit, lava, wildCrops);
+            rubble, glass, bricks, bench, furnace, furnaceLit, lava, wildCrops, berryBushRipe);
     }
 
     /// <summary>

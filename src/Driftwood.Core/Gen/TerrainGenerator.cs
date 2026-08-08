@@ -820,6 +820,17 @@ public sealed class TerrainGenerator
             // a patch is carrots or potatoes and never a salad.
             if (roll < 0.006f)
             {
+                // ⛳ A slice off the bottom of the same roll for the BERRY BUSH, so a bush is
+                // exactly as much a member of its meadow as a crop patch is — and every crop cell
+                // above the slice keeps the very kind it had before the bush existed, which is what
+                // the derived-seed discipline means for a world that is already being played in.
+                // Ripe, for the wild crops' reason: finding one is the whole entry to keeping one.
+                if (roll < 0.0018f)
+                {
+                    PlaceIntoAir(chunk, ox, oy, oz, wx, surface + 1, wz, _ids.BerryBushRipe);
+                    continue;
+                }
+
                 var wild = _ids.WildCrops;
                 var pick = Noise.Fbm2(wx / 128f, wz / 128f, _seedMeadow + 37, 2);
 

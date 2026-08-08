@@ -28,6 +28,7 @@ public static class Composting
     private static readonly Dictionary<string, float> Compostables = new(StringComparer.Ordinal)
     {
         ["seeds"] = 0.3f,
+        ["berries"] = 0.3f,
         ["wheat"] = 0.65f,
         ["carrot"] = 0.65f,
         ["potato"] = 0.65f,

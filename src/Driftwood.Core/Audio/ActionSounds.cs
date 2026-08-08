@@ -61,6 +61,9 @@ public static class ActionSounds
     public static readonly string[] Till = Run("item/hoe/till", 4);
     public static readonly string[] Harvest = Run("item/plant/harvest", 4);
 
+    /// <summary>Berries coming off the bush, which stays standing.</summary>
+    public static readonly string[] BerryPick = Run("item/sweet_berries/pick_from_bush", 2);
+
     public static readonly string[] BucketFillWater = Run("item/bucket/fill", 3);
     public static readonly string[] BucketEmptyWater = Run("item/bucket/empty", 3);
     public static readonly string[] BucketFillLava = Run("item/bucket/fill_lava", 3);

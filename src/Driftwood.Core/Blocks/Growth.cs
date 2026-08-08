@@ -51,9 +51,12 @@ public sealed class Growth
 
     private readonly int[] _next;
     private readonly bool[] _isCrop;
+    private readonly bool[] _onFarmland;
     private readonly bool[] _isFarmland;
     private readonly BlockId _farmland;
     private readonly BlockId _farmlandWet;
+    private readonly BlockId _grass;
+    private readonly BlockId _dirt;
     private float _owed;
 
     /// <summary>Cells looked at since this was built, for the check and the report.</summary>
@@ -70,12 +73,15 @@ public sealed class Growth
 
         _next = new int[registry.Count];
         _isCrop = new bool[registry.Count];
+        _onFarmland = new bool[registry.Count];
         _isFarmland = new bool[registry.Count];
 
         for (var i = 0; i < _next.Length; i++) _next[i] = -1;
 
         _farmland = registry.ByName("farmland").Id;
         _farmlandWet = registry.ByName("farmland_wet").Id;
+        _grass = registry.ByName("grass").Id;
+        _dirt = registry.ByName("dirt").Id;
 
         _isFarmland[_farmland.Value] = true;
         _isFarmland[_farmlandWet.Value] = true;
@@ -87,14 +93,16 @@ public sealed class Growth
         // ⛔ That claim used to be FALSE while this loop said WheatName. Adding the root crops is
         // what proved it: the ladders come out of StarterBlocks now, one per crop, and this file
         // has never heard of wheat. A crop with one stage or with nine costs nothing here.
+        // The berry bush is the row that made the GROUND part of the ladder too.
         foreach (var ladder in StarterBlocks.CropLadders())
-        for (var stage = 0; stage < ladder.Length; stage++)
+        for (var stage = 0; stage < ladder.Rungs.Length; stage++)
         {
-            var here = registry.ByName(ladder[stage]).Id;
+            var here = registry.ByName(ladder.Rungs[stage]).Id;
             _isCrop[here.Value] = true;
+            _onFarmland[here.Value] = ladder.OnFarmland;
 
-            if (stage + 1 < ladder.Length)
-                _next[here.Value] = registry.ByName(ladder[stage + 1]).Id.Value;
+            if (stage + 1 < ladder.Rungs.Length)
+                _next[here.Value] = registry.ByName(ladder.Rungs[stage + 1]).Id.Value;
         }
     }
 
@@ -142,7 +150,18 @@ public sealed class Growth
 
         // ⛔ On tilled ground, and WATERED tilled ground. Without this a crop grows on the dry
         // farmland a player never bothered to irrigate, and the whole water mechanic is decoration.
-        if (world.GetBlock(x, y - 1, z) != _farmlandWet) return false;
+        // ⛳ Unless the ladder says otherwise: a berry bush stands on plain grass or dirt and asks
+        // only for light. The flag is the ladder's own, and it cuts both ways — a bush on watered
+        // farmland is refused too, so the two ground rules never blur into "anything underneath".
+        var below = world.GetBlock(x, y - 1, z);
+        if (_onFarmland[here.Value])
+        {
+            if (below != _farmlandWet) return false;
+        }
+        else if (below != _grass && below != _dirt)
+        {
+            return false;
+        }
 
         if (world.GetLight(x, y, z) is var light && LightOf(light) < MinLight) return false;
         if (roll >= StageChance) return false;
@@ -249,6 +268,34 @@ public sealed class Growth
 
         if (world.GetBlock(11, 64, 11) != farmland)
             faults.Add("farmland eleven cells from water turned wet, so the reach is unbounded");
+
+        // ⛳ THE BUSH ARMS — the first ladder that does NOT want farmland. On plain lit grass it
+        // must move, with no hoe and no water anywhere near the rule; a pick puts the young one
+        // back and the same ladder must regrow it; and it must REFUSE tilled ground, because a
+        // bush is not a crop and "anything underneath" is how the two rules would blur.
+        var bushYoung = registry.ByName(StarterBlocks.BerryBushName).Id;
+        var bushRipe = registry.ByName(StarterBlocks.BerryBushRipeName).Id;
+        var grass = registry.ByName("grass").Id;
+
+        world.SetBlock(8, 64, 8, grass);
+        world.SetBlock(8, 65, 8, bushYoung);
+
+        if (!growth.Step(world, 8, 65, 8, 0.0))
+            faults.Add("a berry bush on plain lit grass did not grow");
+        if (world.GetBlock(8, 65, 8) != bushRipe)
+            faults.Add("a bush that grew did not become the ripe bush");
+        if (growth.Step(world, 8, 65, 8, 0.0))
+            faults.Add("a ripe bush grew past ripe");
+
+        // Picked back to young — the ladder is a loop by way of the pick, and this is the regrow.
+        world.SetBlock(8, 65, 8, bushYoung);
+        if (!growth.Step(world, 8, 65, 8, 0.0))
+            faults.Add("a picked bush did not regrow");
+
+        world.SetBlock(2, 64, 2, registry.ByName("farmland_wet").Id);
+        world.SetBlock(2, 65, 2, bushYoung);
+        if (growth.Step(world, 2, 65, 2, 0.0))
+            faults.Add("a berry bush grew on watered farmland, which is the crops' ground");
 
         return faults;
     }
