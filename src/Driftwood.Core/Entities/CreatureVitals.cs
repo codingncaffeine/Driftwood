@@ -51,8 +51,12 @@ public static class CreatureVitals
         ["drowned"] = 40,
         ["husk"] = 40,
         ["skeleton"] = 40,
-        ["creeper"] = 40,
-        ["enderman"] = 80,
+
+        // ⛔ These two were filed under the REFERENCE'S names — creeper, enderman — which our
+        // lookup would never ask for, so both would have spawned with a cow's default health.
+        // Ours by our names, the whole table's own rule.
+        ["crawler"] = 40,
+        ["farwalker"] = 80,
     };
 
     /// <summary>Kinds that leave something behind without being touched.</summary>
@@ -99,13 +103,15 @@ public static class CreatureVitals
     /// The kinds the sun does not agree with.
     /// </summary>
     /// <remarks>
-    /// ⛳ <b>The undead and only the undead.</b> A spider that burned would make daylight a total
-    /// answer rather than a partial one — the point of leaving one kind alive through the morning is
-    /// that going outside is safer rather than safe, which is a more interesting world than either
-    /// extreme. It is also the genre's own line and it is drawn in the right place.
+    /// ⛳ <b>The undead and only the undead — except the husk, and that exception IS the husk.</b>
+    /// A spider that burned would make daylight a total answer rather than a partial one — the
+    /// point of leaving kinds alive through the morning is that going outside is safer rather than
+    /// safe. ⛔ The husk was in this set, which unmade it: a zombie that walks through noon is the
+    /// whole of what a husk is, read off the reference the way the user asked. The drowned burns
+    /// on land like its cousin — its shelter is the water it spawns in.
     /// </remarks>
     private static readonly HashSet<string> Burns =
-        new(StringComparer.Ordinal) { "zombie", "husk", "skeleton" };
+        new(StringComparer.Ordinal) { "zombie", "drowned", "skeleton" };
 
     /// <summary>Half-hearts this kind starts with.</summary>
     public static int HealthFor(string kind) => Health.GetValueOrDefault(kind, DefaultHealth);

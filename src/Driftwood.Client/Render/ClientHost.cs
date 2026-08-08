@@ -1314,7 +1314,11 @@ public sealed class ClientHost : IDisposable
         // back rather than being answered on the next tick.
         if (_spawnRoll.NextDouble() > SpawnRules.Pressure(hostiles, SpawnRules.HostileCap)) return;
 
+        // ⛳ The drowned is not in the open-ground pool — it has its own door below, because a
+        // drowned standing in a midnight meadow is a zombie wearing the wrong colours. Two axes,
+        // the bat's own lesson: what the dark is, and what it is the dark OF.
         var kinds = KindsOf(CreatureFamily.Hostile);
+        kinds.RemoveAll(kind => kind.Name == "drowned");
         if (kinds.Count == 0) return;
 
         var room = Math.Min(SpawnRules.HostileCap - hostiles, SpawnRules.HostileBatch);
@@ -1323,6 +1327,30 @@ public sealed class ClientHost : IDisposable
         _herd.Spawn(
             SolidForCreature, kinds, _player.Position, want,
             where: Dark, minRadius: SpawnRules.HostileMinRadius);
+
+        TopUpDrowned();
+    }
+
+    /// <summary>How many of the sea's own are kept about when there is dark water to hold them.</summary>
+    private const int DrownedCount = 2;
+
+    /// <summary>Puts the drowned where it belongs: standing IN dark water, never on a lawn.</summary>
+    private void TopUpDrowned()
+    {
+        if (_creatureRenderer is null || _herd is null) return;
+
+        var living = 0;
+        foreach (var creature in _herd.All) if (creature.Kind == "drowned") living++;
+        if (living >= DrownedCount) return;
+
+        if (KindFor("drowned") is not { } kind) return;
+
+        _herd.Spawn(
+            SolidForCreature, [kind], _player.Position, DrownedCount - living,
+            where: (x, y, z) =>
+                _registry[_streamer.World.GetBlock(x, y, z)].Fluid == FluidKind.Water
+                && Dark(x, y, z),
+            minRadius: SpawnRules.HostileMinRadius);
     }
 
     /// <summary>True where a creature's feet would stand in the dark.</summary>

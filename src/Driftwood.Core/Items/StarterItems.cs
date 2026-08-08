@@ -767,7 +767,13 @@ public static class StarterItems
         // which the reachability walk said out loud rather than quietly letting them pass.
         new CreatureDrops.Rule("spider", DropTrigger.Killed, "string", 0, 2),
         new CreatureDrops.Rule("skeleton", DropTrigger.Killed, "bone", 1, 3),
-        new CreatureDrops.Rule("zombie", DropTrigger.Killed, "rotten_flesh", 1, 2));
+        new CreatureDrops.Rule("zombie", DropTrigger.Killed, "rotten_flesh", 1, 2),
+
+        // ⛳ The zombie's cousins. The drowned sometimes surfaces with an ingot in its fist — the
+        // reference's own tell, and the one drop that makes wading after one worth the wet.
+        new CreatureDrops.Rule("drowned", DropTrigger.Killed, "rotten_flesh", 1, 2),
+        new CreatureDrops.Rule("drowned", DropTrigger.Killed, "copper_ingot", 0, 1),
+        new CreatureDrops.Rule("husk", DropTrigger.Killed, "rotten_flesh", 1, 2));
 
     /// <summary>What every stage of every root crop leaves when it is pulled up.</summary>
     /// <remarks>

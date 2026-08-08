@@ -230,6 +230,19 @@ public static class StarterCreatures
     /// <summary>The one that comes at you with its arms out.</summary>
     public static CreatureModel Zombie() => Humanoid("zombie", 78f);
 
+    /// <summary>
+    /// Its two cousins: the one the sea kept, and the one the desert dried.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>The same humanoid net, which is the block families' own argument</b> — what tells the
+    /// three walking dead apart is <see cref="CreatureArt"/>'s palette and one behaviour each: the
+    /// drowned spawns in water and burns out of it, the husk walks through noon untouched. The
+    /// drowned's arms hang a little lower; water does that.
+    /// </remarks>
+    public static CreatureModel Drowned() => Humanoid("drowned", 64f);
+
+    public static CreatureModel Husk() => Humanoid("husk", 78f);
+
     /// <summary>And the one that is all bone, whose arms hold something it has not got yet.</summary>
     /// <remarks>
     /// ⚠ Thinner limbs than the zombie's, which is the only difference in the geometry — everything
@@ -307,7 +320,7 @@ public static class StarterCreatures
 
     /// <summary>Every creature that ships with the game, by our name for it.</summary>
     public static IReadOnlyList<CreatureModel> All { get; } =
-        [Cow(), Pig(), Sheep(), Chicken(), Wolf(), Zombie(), Skeleton(), Spider()];
+        [Cow(), Pig(), Sheep(), Chicken(), Wolf(), Zombie(), Drowned(), Husk(), Skeleton(), Spider()];
 
     /// <summary>Ours for this creature, or null when we have not drawn one yet.</summary>
     public static CreatureModel? ByName(string name)

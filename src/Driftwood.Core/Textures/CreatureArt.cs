@@ -75,6 +75,14 @@ public static class CreatureArt
 
         // Near-black with the one thing every drawing of a spider has: eyes that are not black.
         ["spider"] = new((42, 34, 32), (26, 20, 20), (140, 30, 26), (168, 40, 34), 0.30f, 0.10f),
+
+        // The sea's zombie: teal-grey flesh the water has been at, deep sea-blue rags, and
+        // pale weed-green accents. Reads against the zombie by temperature — cold against sick.
+        ["drowned"] = new((88, 124, 118), (46, 84, 100), (62, 96, 86), (118, 150, 128), 0.36f, 0.13f),
+
+        // And the desert's: sun-dried tan over leather the colour of old rope. Reads against
+        // both cousins as the only WARM one, which suits the one that walks through noon.
+        ["husk"] = new((156, 134, 94), (112, 96, 68), (100, 86, 60), (176, 156, 112), 0.32f, 0.14f),
     };
 
     /// <summary>True when we have colours for this creature.</summary>
