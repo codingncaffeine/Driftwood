@@ -4970,12 +4970,42 @@ public sealed class ClientHost : IDisposable
     /// with what it actually took, so this is one question rather than a second copy of the clamp,
     /// and a roast eaten at nineteen of twenty stays in the pocket instead of being spent for one.
     /// </remarks>
+    /// <summary>When the "not hungry yet" notice last went up, so holding the button is not a wall of it.</summary>
+    private long _fullNoticeAt = long.MinValue;
+
     private bool EatHeld()
     {
-        if (_inventory.HeldType is not { IsFood: true } food) return false;
-        if (_vitals.Eat(food.Feeds) == 0) return false;
+        // The main hand first, then the other one — the order placing already uses, and it is
+        // what makes sword-and-steak the loop it is meant to be: the blade stays pointed at the
+        // dark while the meal comes out of the off hand.
+        var offhand = _equipment[EquipSlot.Offhand];
 
-        _inventory.SpendHeld();
+        var (food, fromOffhand) = _inventory.HeldType is { IsFood: true } main
+            ? (main, false)
+            : !offhand.IsEmpty && _items[offhand.Item] is { IsFood: true } spare
+                ? (spare, true)
+                : ((ItemType?)null, false);
+
+        if (food is null) return false;
+
+        if (_vitals.Eat(food.Feeds) == 0)
+        {
+            // ⛔ A refusal that says why, which this did not — and a fresh spawn starts with the
+            // bar FULL, so anybody trying their first cooked steak straight out of the furnace
+            // was told nothing at all and reported eating as not existing. The cooldown is what
+            // keeps a held button from stacking three copies of the same sentence.
+            if (Environment.TickCount64 - _fullNoticeAt > 2000)
+            {
+                _fullNoticeAt = Environment.TickCount64;
+                Notice("not hungry yet", food);
+            }
+
+            return false;
+        }
+
+        if (fromOffhand) SpendOffhand();
+        else _inventory.SpendHeld();
+
         _audio?.Play(Pick(CreatureSounds.Meals), _viewPosition, 0.45f, Wobble());
 
         // The end of a good meal, only when it tops the bar out — a burp per bite is a comedy.
@@ -6042,7 +6072,9 @@ public sealed class ClientHost : IDisposable
         var wanted = _target is { } aimed
                      && _registry[_streamer.World.GetBlock(aimed.X, aimed.Y, aimed.Z)].Use != BlockUse.None;
 
-        if (!wanted && _inventory.HeldType is { IsFood: true } && EatHeld()) return;
+        // Either hand's food, before anything is placed — EatHeld itself answers false when
+        // neither hand holds a meal, and the click carries on to placing.
+        if (!wanted && EatHeld()) return;
 
         PlaceOnTarget();
     }
