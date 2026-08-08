@@ -148,6 +148,41 @@ public static class StarterCreatures
                 Box(0f, 0f, -2f, 3f, 5f, 3f, 26, 0, mirror: true)),
         ]);
 
+    /// <summary>
+    /// The one with teeth, on the reference's own 64×32 wolf net.
+    /// </summary>
+    /// <remarks>
+    /// <para>Smaller than a pig and longer than it is tall, with the mane box that makes a wolf's
+    /// front heavier than its haunches — the silhouette that tells it from a stray sheep at dusk,
+    /// which is when telling matters.</para>
+    /// <para>⚠ The ear patch and the body patch share a few texels of sheet, exactly as the
+    /// reference's net does. Ours paints the ears after the body so the ears win the overlap; a
+    /// pack's sheet was painted against the same collision and carries whatever its author chose.
+    /// </para>
+    /// </remarks>
+    public static CreatureModel Wolf() => new(
+        "wolf", 64, 32,
+        [
+            LaidDown("body", "", new Vector3(0f, 11f, 2f),
+                Box(-3f, 9f, -1f, 6f, 9f, 6f, 18, 14)),
+
+            // The chest fluff, its own bone so it can wear the mane patch — authored standing,
+            // like the body it thickens.
+            LaidDown("mane", "body", new Vector3(0f, 11f, 2f),
+                Box(-4f, 14f, -1.5f, 8f, 6f, 7f, 21, 0)),
+
+            Bone("head", "body", new Vector3(0f, 13f, -4f),
+                Box(-3f, 10f, -10f, 6f, 6f, 4f, 0, 0),
+                Box(-1.5f, 10f, -13f, 3f, 3f, 4f, 0, 10),
+                Box(-3f, 16f, -8f, 2f, 2f, 1f, 16, 14),
+                Box(1f, 16f, -8f, 2f, 2f, 1f, 16, 14, mirror: true)),
+
+            Posed("tail", "body", new Vector3(0f, 12f, 5f), new Vector3(-40f, 0f, 0f),
+                Box(-1f, 12f, 4f, 2f, 8f, 2f, 9, 18)),
+
+            .. Legs("body", 2f, 8f, -3f, 3f, 2f, 8f, 0, 18),
+        ]);
+
     /// <summary>A bone laid out at rest and then turned, reaching its own boxes only.</summary>
     private static CreatureBone Posed(
         string name, string parent, Vector3 pivot, Vector3 bindPose, params CreatureCube[] cubes) =>
@@ -272,7 +307,7 @@ public static class StarterCreatures
 
     /// <summary>Every creature that ships with the game, by our name for it.</summary>
     public static IReadOnlyList<CreatureModel> All { get; } =
-        [Cow(), Pig(), Sheep(), Chicken(), Zombie(), Skeleton(), Spider()];
+        [Cow(), Pig(), Sheep(), Chicken(), Wolf(), Zombie(), Skeleton(), Spider()];
 
     /// <summary>Ours for this creature, or null when we have not drawn one yet.</summary>
     public static CreatureModel? ByName(string name)

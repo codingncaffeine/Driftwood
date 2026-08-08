@@ -40,6 +40,7 @@ public static class CreatureVitals
         ["frog"] = 6,
         ["rabbit"] = 6,
         ["squid"] = 20,
+        ["wolf"] = 16,
 
         // The hostiles, for when they are placed. Written now because the numbers belong beside
         // each other — a table where the dangerous half is added later is a table that gets a
@@ -78,7 +79,21 @@ public static class CreatureVitals
         ["crawler"] = 6,
         ["farwalker"] = 7,
         ["slime"] = 2,
+
+        // The one beast with teeth. Only lands once provoked — see Retaliates.
+        ["wolf"] = 3,
     };
+
+    /// <summary>
+    /// Kinds that answer a blow instead of running from it.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>The third answer to being hit.</b> A beast flees, a hostile was already coming, and a
+    /// wolf does neither until struck — the first creature in the game whose danger is entirely the
+    /// player's own doing. Its packmates take it as personally as it does, which is what makes
+    /// swinging at one of four a different decision from swinging at a stray.
+    /// </remarks>
+    private static readonly HashSet<string> Retaliators = new(StringComparer.Ordinal) { "wolf" };
 
     /// <summary>
     /// The kinds the sun does not agree with.
@@ -100,6 +115,9 @@ public static class CreatureVitals
 
     /// <summary>Half-hearts one of its blows takes off the player.</summary>
     public static int DamageFor(string kind) => Damage.GetValueOrDefault(kind, 0);
+
+    /// <summary>True when a blow makes this kind come back at whoever struck it.</summary>
+    public static bool Retaliates(string kind) => Retaliators.Contains(kind);
 
     /// <summary>True when full daylight sets this one alight.</summary>
     public static bool BurnsInDaylight(string kind) => Burns.Contains(kind);

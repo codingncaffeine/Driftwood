@@ -56,6 +56,10 @@ public static class CreatureArt
 
         ["chicken"] = new((232, 228, 216), (206, 198, 182), (226, 168, 62), (198, 54, 48), 0.16f, 0.05f),
 
+        // Storm-grey over a paler undercoat, with a dark muzzle and amber round the eyes — the
+        // dusk-readable silhouette colours, desaturated to sit with our blocks like the rest.
+        ["wolf"] = new((142, 136, 124), (186, 178, 164), (82, 72, 64), (196, 158, 76), 0.24f, 0.08f),
+
         // ⛳ THE HOSTILES, and the palette is where they are told apart. All three wear the same two
         // nets the beasts do — that is the point of a net — so if they read as one another it is
         // because the colours failed, not the geometry. Grain is turned up on all of them: a rotted

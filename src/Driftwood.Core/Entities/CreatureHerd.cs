@@ -69,6 +69,10 @@ public sealed class Creature
     /// <summary>Seconds left of running away. It moves faster and re-thinks less while this runs.</summary>
     public float FleeFor { get; set; }
 
+    /// <summary>True once a blow has turned a retaliating kind on the player. Never unset: a wolf
+    /// crossed stays crossed, which is what gives striking one a price worth thinking about.</summary>
+    public bool Provoked { get; set; }
+
     /// <summary>Blocks a second it is falling at, when the ground has gone from under it.</summary>
     public float FallSpeed { get; set; }
 
@@ -325,6 +329,9 @@ public sealed class CreatureHerd
     /// <summary>Seconds between blows.</summary>
     public const float StrikeEvery = 1.1f;
 
+    /// <summary>Blocks within which a struck retaliator's own kind takes it personally.</summary>
+    public const float PackAggroRange = 12f;
+
     /// <summary>Seconds of full daylight before one that burns starts taking damage.</summary>
     public const float ScorchSeconds = 1.5f;
 
@@ -492,6 +499,34 @@ public sealed class CreatureHerd
             creature.DyingFor = DyingSeconds;
             _dead.Add(new CreatureDeath(creature.Kind, creature.Middle, creature.Shorn));
             return true;
+        }
+
+        // ⛳ THE THIRD ANSWER TO A BLOW. A beast runs and a hostile was already coming; a
+        // retaliating kind turns on whoever struck it — and so does every packmate of its kind
+        // near enough to have seen. The anger is permanent on purpose: a wolf that forgot being
+        // struck after five seconds would be a beast with an animation, not a risk.
+        if (CreatureVitals.Retaliates(creature.Kind))
+        {
+            creature.Provoked = true;
+
+            foreach (var packmate in _creatures)
+            {
+                if (packmate.Kind != creature.Kind || !packmate.Alive) continue;
+                if (Vector3.DistanceSquared(packmate.Position, creature.Position) > PackAggroRange * PackAggroRange)
+                    continue;
+                packmate.Provoked = true;
+            }
+
+            var toward = from - creature.Position;
+            toward.Y = 0f;
+            if (toward.LengthSquared() > 1e-6f)
+                creature.Yaw = float.RadiansToDegrees(MathF.Atan2(toward.Z, toward.X));
+
+            creature.WantsYaw = creature.Yaw;
+            creature.Moving = true;
+            creature.Thinks = 0.5f;
+
+            return false;
         }
 
         var away = creature.Position - from;
@@ -719,7 +754,7 @@ public sealed class CreatureHerd
     {
         creature.Swings = MathF.Max(0f, creature.Swings - dt);
 
-        if (!creature.Hostile || player is not { } target) return false;
+        if ((!creature.Hostile && !creature.Provoked) || player is not { } target) return false;
 
         var toward = target - creature.Position;
         toward.Y = 0f;
@@ -916,6 +951,73 @@ public sealed class CreatureHerd
         faults.AddRange(ValidateFalling());
         faults.AddRange(ValidateFighting());
         faults.AddRange(ValidateHunting());
+        faults.AddRange(ValidateRetaliation());
+
+        return faults;
+    }
+
+    /// <summary>
+    /// Checks a struck wolf turns on the striker, brings the pack near it, and bites when it
+    /// arrives — and that a cow under the same blow still runs.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>The far wolf and the cow are both controls.</b> "The pack joined" is also true of a
+    /// rule that provokes every wolf in the world, so one stands outside the aggro range and must
+    /// stay calm; and "it turned on the striker" is also true of a rule that made every beast
+    /// fight back, so the same blow lands on a cow and must still be a flight.
+    /// </remarks>
+    private static List<string> ValidateRetaliation()
+    {
+        var faults = new List<string>();
+
+        static bool Flat(int x, int y, int z) => y < 64;
+
+        var wolves = new SpawnKind("wolf", new Vector3(0.9f, 1.1f, 1.4f));
+        var herd = new CreatureHerd(23);
+        herd.Spawn(Flat, [wolves], new Vector3(0f, 64f, 0f), 3);
+        if (herd.Count != 3) return ["the pack for the retaliation check found no room to stand"];
+
+        var struck = herd.All[0];
+        var near = herd.All[1];
+        var far = herd.All[2];
+        struck.Position = new Vector3(0.5f, 64f, 0.5f);
+        near.Position = new Vector3(4.5f, 64f, 0.5f);
+        far.Position = new Vector3(40.5f, 64f, 0.5f);
+
+        var player = new Vector3(0.5f, 64f, -6.5f);
+        herd.Hurt(struck, 3, player);
+
+        if (!struck.Provoked) faults.Add("a struck wolf did not take it personally");
+        if (struck.FleeFor > 0f) faults.Add("a struck wolf ran like a cow");
+        if (!near.Provoked) faults.Add("a packmate four blocks away did not join");
+        if (far.Provoked) faults.Add("a wolf forty blocks away joined a fight it could not have seen");
+
+        // It closes rather than wandering: the distance falls over a second of stepping.
+        var before = Vector3.Distance(struck.Position, player);
+        for (var i = 0; i < 60; i++) herd.Update(1f / 60f, Flat, player);
+        var after = Vector3.Distance(struck.Position, player);
+
+        if (after >= before - 0.5f)
+            faults.Add($"a provoked wolf stood at {after:F1} blocks after a second, from {before:F1}");
+
+        // And it bites when it gets there, for its own number.
+        for (var i = 0; i < 300; i++) herd.Update(1f / 60f, Flat, player);
+        var bites = herd.TakeAttacks();
+        if (bites.Count == 0) faults.Add("a provoked wolf that reached the player never bit");
+
+        foreach (var bite in bites)
+            if (bite.HalfHearts != CreatureVitals.DamageFor("wolf"))
+                faults.Add($"a wolf bit for {bite.HalfHearts} rather than its own {CreatureVitals.DamageFor("wolf")}");
+
+        var cowHerd = new CreatureHerd(29);
+        cowHerd.Spawn(Flat, [new SpawnKind("cow", new Vector3(0.75f, 1.56f, 1.50f))], new Vector3(0f, 64f, 0f), 1);
+        if (cowHerd.Count == 1)
+        {
+            var cow = cowHerd.All[0];
+            cowHerd.Hurt(cow, 3, player);
+            if (cow.Provoked) faults.Add("a cow retaliated, which would make the wolf nothing special");
+            if (cow.FleeFor <= 0f) faults.Add("a struck cow no longer runs");
+        }
 
         return faults;
     }
