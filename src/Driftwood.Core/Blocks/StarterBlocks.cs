@@ -539,7 +539,12 @@ public static class StarterBlocks
     public const ushort LayerBerryBushRipe = LayerBerryBush + 1;
     public const ushort LayerBerries = LayerBerryBush + 2;
 
-    public const int LayerCount = LayerBerryBush + 3;
+    /// <summary>The cave mushrooms, then the roast either one becomes on a fire.</summary>
+    public const ushort LayerMushroomBrown = LayerBerries + 1;
+    public const ushort LayerMushroomRed = LayerMushroomBrown + 1;
+    public const ushort LayerRoastedMushroom = LayerMushroomBrown + 2;
+
+    public const int LayerCount = LayerMushroomBrown + 3;
 
     /// <summary>One anvil's name, by how worn it is and which way it lies.</summary>
     /// <remarks>
@@ -715,7 +720,11 @@ public static class StarterBlocks
         BlockId[] WildCrops,
 
         /// <summary>The ripe berry bush, which is how one is found growing wild.</summary>
-        BlockId BerryBushRipe)
+        BlockId BerryBushRipe,
+
+        /// <summary>The cave mushrooms, for the cave-floor decorator and the census.</summary>
+        BlockId MushroomBrown,
+        BlockId MushroomRed)
     {
         /// <summary>Every rock an ore can form in. Ore replaces rock, whichever rock it is.</summary>
         public BlockId[] Rock => [Stone, Deepstone, Coralstone, Driftstone, Saltstone];
@@ -924,6 +933,25 @@ public static class StarterBlocks
             Solid = false, Opaque = false, Sounds = SoundMaterial.BerryBush,
             SupportFace = Faces.NegY, Use = BlockUse.Berries,
             Model = BlockModel.Cross(LayerBerryBushRipe, tinted: false),
+        });
+
+        // ⛳ The cave mushrooms, the underground's own flora. The cave-floor decorator puts them on
+        // stone and deepstone at any depth, so neither is Crafted — the census demands both in the
+        // ground, which is the standing proof the decorator decorates.
+        var mushroomBrown = registry.Register(new BlockType
+        {
+            Name = "mushroom_brown", Hardness = 0.05f,
+            Solid = false, Opaque = false, Sounds = SoundMaterial.Plant,
+            SupportFace = Faces.NegY,
+            Model = BlockModel.Cross(LayerMushroomBrown, tinted: false),
+        });
+
+        var mushroomRed = registry.Register(new BlockType
+        {
+            Name = "mushroom_red", Hardness = 0.05f,
+            Solid = false, Opaque = false, Sounds = SoundMaterial.Plant,
+            SupportFace = Faces.NegY,
+            Model = BlockModel.Cross(LayerMushroomRed, tinted: false),
         });
 
         var gravel = registry.Register(new BlockType
@@ -1441,7 +1469,8 @@ public static class StarterBlocks
             emberstone, vine, deepstone, coralstone, driftstone, saltstone, copper, gold, stormglass,
             diamond, azurite, clay, sandstone, snow, snowLayer, meadowgrass, seaflax, marshlily,
             emberbloom, sunwort,
-            rubble, glass, bricks, bench, furnace, furnaceLit, lava, wildCrops, berryBushRipe);
+            rubble, glass, bricks, bench, furnace, furnaceLit, lava, wildCrops, berryBushRipe,
+            mushroomBrown, mushroomRed);
     }
 
     /// <summary>

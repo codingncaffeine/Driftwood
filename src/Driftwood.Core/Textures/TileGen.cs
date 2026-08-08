@@ -720,6 +720,57 @@ public static class TileGen
         return t;
     }
 
+    /// <summary>
+    /// A mushroom: a pale stem under a domed cap, spotted when the cap is loud.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ <b>The stem is the tell between raw and roasted</b>, the cooked-meat rule at work: a
+    /// roast browns THROUGHOUT, so its stem goes toasted gold where a raw one's is near-white — two
+    /// browns side by side in a slot still read as before-and-after rather than as two kinds.</para>
+    /// <para>⚠ Cap and stem overlap on the rim row, so the drawing is one island. Spots are painted
+    /// over cap ink only. <paramref name="ground"/> roots the stem on the tile's floor for the
+    /// standing block; off, it stops short of the border the way every carried icon must.</para>
+    /// </remarks>
+    public static byte[] Mushroom(
+        int seed, byte capR, byte capG, byte capB, byte stemR, byte stemG, byte stemB,
+        bool spotted, bool ground)
+    {
+        var t = new byte[BytesPerTile];
+
+        // The stem, darker toward its foot, planted or lifted by a row depending on the job.
+        var foot = ground ? Size : Size - 2;
+        for (var y = 8; y < foot; y++)
+        for (var x = 7; x <= 8; x++)
+        {
+            var d = (int)((Noise(x, y, seed) * 2f - 1f) * 10f) - (y - 10) * 2;
+            Put(t, x, y, Clamp(stemR + d), Clamp(stemG + d), Clamp(stemB + d), 255);
+        }
+
+        // The cap: a dome overhanging the stem, lit at its crown, darker along the underside rim.
+        for (var y = 3; y <= 8; y++)
+        {
+            var half = y switch { 3 => 2, 4 => 3, _ => 4 };
+
+            for (var x = 8 - half; x <= 7 + half; x++)
+            {
+                var d = (int)((Noise(x, y, seed + 7) * 2f - 1f) * 14f)
+                        + (5 - y) * 4 + (y == 8 ? -34 : 0);
+                Put(t, x, y, Clamp(capR + d), Clamp(capG + d), Clamp(capB + d), 255);
+            }
+        }
+
+        if (!spotted) return t;
+
+        // The spots, over cap ink only — never beside it.
+        foreach (var (sx, sy) in (ReadOnlySpan<(int X, int Y)>)[(6, 4), (9, 5), (5, 6), (11, 6), (8, 3)])
+        {
+            var d = (int)((Noise(sx, sy, seed + 19) * 2f - 1f) * 10f);
+            Put(t, sx, sy, Clamp(232 + d), Clamp(226 + d), Clamp(214 + d), 255);
+        }
+
+        return t;
+    }
+
     /// <summary>A picked handful: three round berries in a clump, a leaf at the shoulder.</summary>
     /// <remarks>
     /// ⚠ Drawn as one connected clump on purpose — the berries overlap and the leaf touches the top

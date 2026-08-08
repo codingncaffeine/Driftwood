@@ -459,6 +459,36 @@ public static class StarterItems
             IconLayer = StarterBlocks.LayerBerries, Feeds = 2,
         });
 
+        // ⛳ The cave mushrooms: a raw mouthful each, placeable back the way a flower is, and the
+        // reason to carry them is the fire — either roasts to the same meal. A mushroom is what
+        // you eat when the dark caught you unprovisioned, so raw feeds the least of anything.
+        foreach (var (name, label, layer) in ((string, string, ushort)[])
+                 [
+                     ("mushroom_brown", "brown mushroom", StarterBlocks.LayerMushroomBrown),
+                     ("mushroom_red", "red mushroom", StarterBlocks.LayerMushroomRed),
+                 ])
+        {
+            items.Register(new ItemType
+            {
+                Name = name, Label = label, IconLayer = layer,
+                DrawsAsBlock = true, Feeds = 1,
+                Places = new Placeable
+                {
+                    Label = label,
+                    Kind = PlacementKind.Plain,
+                    Variants = [blocks.ByName(name).Id],
+                },
+            });
+        }
+
+        // ⚠ Four: under the baked potato and the meats, because the ingredient was found rather
+        // than grown — but enough that roasting on the way down is worth the furnace slot.
+        items.Register(new ItemType
+        {
+            Name = "roasted_mushroom", Label = "roasted mushroom",
+            IconLayer = StarterBlocks.LayerRoastedMushroom, Feeds = 4,
+        });
+
         // ⚠ Six, which is bread and a cooked steak — so a fire turns the meanest of the three into
         // the best meal a field can produce. That is the whole reason to grow potatoes rather than
         // carrots, and it is the only thing separating the three crops mechanically.

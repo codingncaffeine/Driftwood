@@ -486,6 +486,12 @@ public static class StarterRecipes
         // not involve an animal — it has been a station for meat alone since the day it landed.
         Smelt("potato", "baked_potato", work: SmeltWork.Food);
 
+        // ⛳ Either mushroom roasts to the same meal — the cave's answer to the baked potato, and
+        // the first thing a player can cook before owning a farm, since the ingredient is found on
+        // the way down rather than grown.
+        Smelt("mushroom_brown", "roasted_mushroom", work: SmeltWork.Food);
+        Smelt("mushroom_red", "roasted_mushroom", work: SmeltWork.Food);
+
         return book;
     }
 

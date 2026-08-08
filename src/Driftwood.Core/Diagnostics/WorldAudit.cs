@@ -854,6 +854,22 @@ public static class WorldAudit
             flowers > 0 && flowerPct is > 2.0 and < 25.0 && barren.Count == 0,
             $"{flowers:N0} blooms, {flowerPct:F1}% of ground cover (want 2-25), {bloomCounts}");
 
+        // The cave flora: pockets, not a carpet, and never a bare underground. Correct worlds read
+        // 1,092 to 1,707 across the five test seeds at the gate's chunks; the band is set well
+        // clear of both ends, so it catches the decorator turned off (or its ride to the deep
+        // lost) and the knobs opened into a carpet. ⚠ What it cannot catch, named: one kind
+        // doubling inside a stable total — which is why both kinds are also asked for singly, the
+        // flowers' own rule — and any drift smaller than about half, which a correct seed can show.
+        var brown = counts[ids.MushroomBrown.Value];
+        var red = counts[ids.MushroomRed.Value];
+        var deepFlora = Math.Min(minY[ids.MushroomBrown.Value], minY[ids.MushroomRed.Value]);
+        Check(
+            "caves grow mushrooms in pockets, all the way down",
+            brown > 0 && red > 0 && (brown + red) is > 600 and < 3_000
+                && deepFlora < TerrainGenerator.EmberdeepTop,
+            $"{brown:N0} brown and {red:N0} red (want 600-3,000 together), reaching y {deepFlora} "
+            + $"(want under {TerrainGenerator.EmberdeepTop})");
+
         // The dusting has to be a fringe on the snowfield rather than a second one. Measured as its
         // share of all the white ground: with no band the edge either vanishes (a snow line drawn
         // as a line, which is what this replaced) or swallows the meadows below it, and neither
@@ -6202,17 +6218,19 @@ public static class WorldAudit
         (StarterBlocks.LayerFirstStainedGlass, "stained_glass_white"),
         ((ushort)(StarterBlocks.LayerFirstStainedGlass + 15), "stained_glass_black"),
 
-        // ⛳ Compost-ready by its OWN constant now the bush went on after it — the moving pin
-        // handing its ground to a fixed one on the way past, exactly as bonemeal and black glass
-        // did before it.
+        // ⛳ Compost-ready and berries by their OWN constants now more went on after them — the
+        // moving pin handing its ground to a fixed one on the way past, exactly as bonemeal and
+        // black glass did before them.
         (StarterBlocks.LayerCompostReady, "compost_ready"),
         (StarterBlocks.LayerBerryBush, "berry_bush"),
+        (StarterBlocks.LayerBerries, "berries"),
+        (StarterBlocks.LayerMushroomBrown, "mushroom_brown"),
 
         // The moving pin: the LAST layer, by name. It has now caught three appends in the act —
         // fifteen crop rows landing after "the last layer is bonemeal", the composter's four
         // landing after black glass, and the berry bush's three after compost-ready — which is
         // exactly what it is for. Keep it pointed at whatever is genuinely last.
-        ((ushort)(StarterBlocks.LayerCount - 1), "berries"),
+        ((ushort)(StarterBlocks.LayerCount - 1), "roasted_mushroom"),
     ];
 
     /// <summary>

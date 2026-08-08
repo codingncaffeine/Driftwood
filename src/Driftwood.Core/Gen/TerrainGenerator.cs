@@ -137,6 +137,7 @@ public sealed class TerrainGenerator
     private readonly int _seedDeep;
     private readonly int _seedClay;
     private readonly int _seedMeadow;
+    private readonly int _seedFlora;
     private readonly int _seedLavaTable;
     private readonly int _seedLavaPools;
 
@@ -191,6 +192,7 @@ public sealed class TerrainGenerator
         _seedDeep = seed.Derive("rock.deepstone");
         _seedClay = seed.Derive("deposit.clay");
         _seedMeadow = seed.Derive("decor.meadowgrass");
+        _seedFlora = seed.Derive("decor.cave_flora");
         _seedLavaTable = seed.Derive("deep.lava_table");
         _seedLavaPools = seed.Derive("deep.lava_pools");
 
@@ -737,10 +739,13 @@ public sealed class TerrainGenerator
     {
         var (ox, oy, oz) = chunk.Position.Origin;
 
-        // ⛳ Nothing decorates the deep, and it is worth the two lines. SurfaceHeight is clamped to at
-        // least 1 and the longest vine hangs five below a trunk's base, so no tree, tuft or flower can
-        // reach a cell below y −5. Six of the world's ten chunk layers are under that line and each of
-        // them used to pay a full search over eighty-one tree cells to find nothing.
+        ScatterCaveFlora(chunk, ox, oy, oz);
+
+        // ⛳ Nothing ABOVE ground decorates the deep, and it is worth the two lines. SurfaceHeight is
+        // clamped to at least 1 and the longest vine hangs five below a trunk's base, so no tree, tuft
+        // or flower can reach a cell below y −5. Six of the world's ten chunk layers are under that
+        // line and each of them used to pay a full search over eighty-one tree cells to find nothing.
+        // The cave flora above runs first exactly because the deep is where IT decorates.
         if (oy + Chunk.Size <= -5) return;
 
         var cellMinX = FloorDiv(ox - reach, TreeGrid);
@@ -767,6 +772,50 @@ public sealed class TerrainGenerator
         }
 
         ScatterGroundCover(chunk, ox, oy, oz);
+    }
+
+    /// <summary>Grows the underground's own flora on cave floors, at any depth.</summary>
+    /// <remarks>
+    /// <para>⛳ <b>Reads and writes only this chunk's own cells.</b> A mushroom is one cell, so
+    /// unlike a tree nothing about it can straddle a seam — and the one thing it needs beyond its
+    /// own cell, the floor under it, is required to be inside the chunk too, which is why local y
+    /// starts at 1. A floor on the chunk's bottom row is skipped by both neighbours rather than
+    /// guessed at by either; a scattering does not miss the row.</para>
+    /// <para>⚠ <b>Two slow fields and a fast roll, the meadows' own shape.</b> A pocket field says
+    /// where the underground blooms at all, so caves are mostly bare and then suddenly not; the
+    /// roll picks the cells; and WHICH mushroom is its own field, so a pocket is brown or red the
+    /// way a patch is carrots or potatoes, never a salad.</para>
+    /// <para>⚠ Depth is a heightmap comparison, not a light read — lighting does not exist at
+    /// generation time. Five below the surface is the line the cave ambience already treats as
+    /// underground, and a chunk in the sky pays one heightmap read per column and nothing else.</para>
+    /// </remarks>
+    private void ScatterCaveFlora(Chunk chunk, int ox, int oy, int oz)
+    {
+        for (var z = 0; z < Chunk.Size; z++)
+        for (var x = 0; x < Chunk.Size; x++)
+        {
+            var wx = ox + x;
+            var wz = oz + z;
+
+            var ceiling = SurfaceHeight(wx, wz) - 5;
+            if (oy + 1 >= ceiling) continue;
+
+            var top = Math.Min(Chunk.Size, ceiling - oy);
+            for (var y = 1; y < top; y++)
+            {
+                if (!chunk.Get(x, y, z).IsAir) continue;
+
+                var floor = chunk.Get(x, y - 1, z);
+                if (floor != _ids.Stone && floor != _ids.Deepstone) continue;
+
+                var wy = oy + y;
+                if (Noise.Fbm3(wx / 28f, wy / 28f, wz / 28f, _seedFlora, 2) < 0.24f) continue;
+                if (Noise.Value3(wx, wy, wz, _seedFlora + 7) > 0.012f) continue;
+
+                var red = Noise.Fbm3(wx / 64f, wy / 64f, wz / 64f, _seedFlora + 13, 2) > 0f;
+                chunk.Set(x, y, z, red ? _ids.MushroomRed : _ids.MushroomBrown);
+            }
+        }
     }
 
     /// <summary>Puts something on top of every open column that has earned it.</summary>

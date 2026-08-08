@@ -29,6 +29,8 @@ public static class Composting
     {
         ["seeds"] = 0.3f,
         ["berries"] = 0.3f,
+        ["mushroom_brown"] = 0.65f,
+        ["mushroom_red"] = 0.65f,
         ["wheat"] = 0.65f,
         ["carrot"] = 0.65f,
         ["potato"] = 0.65f,

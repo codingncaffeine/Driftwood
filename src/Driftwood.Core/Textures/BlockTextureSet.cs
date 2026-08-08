@@ -419,6 +419,17 @@ public static class BlockTextureSet
         new("berry_bush_ripe", "textures/block/sweet_berry_bush_stage3.png", true,
             "textures/block/sweet_berry_bush_stage_3.png"),
         new("berries",         "textures/item/sweet_berries.png",            true),
+
+        // ⛳ The cave mushrooms: the block tile serves as the icon too, the flowers' arrangement.
+        // The alternate is the pre-flattening spelling, which happens to be our own name.
+        new("mushroom_brown", "textures/block/brown_mushroom.png", true,
+            "textures/block/mushroom_brown.png"),
+        new("mushroom_red",   "textures/block/red_mushroom.png",   true,
+            "textures/block/mushroom_red.png"),
+
+        // No pack path: the genre roasts no mushroom — its cooked fungus is a stew in a bowl,
+        // which is a different item — so this icon is ours under every pack.
+        new("roasted_mushroom", "", true),
     ];
 
     /// <summary>
@@ -1324,6 +1335,13 @@ public static class BlockTextureSet
             StarterBlocks.LayerBerryBush => TileGen.BerryBush(1320, ripe: false),
             StarterBlocks.LayerBerryBushRipe => TileGen.BerryBush(1320, ripe: true),
             StarterBlocks.LayerBerries => TileGen.IconBerries(1322),
+
+            StarterBlocks.LayerMushroomBrown =>
+                TileGen.Mushroom(1330, 148, 106, 66, 224, 214, 192, spotted: false, ground: true),
+            StarterBlocks.LayerMushroomRed =>
+                TileGen.Mushroom(1331, 198, 52, 46, 224, 214, 192, spotted: true, ground: true),
+            StarterBlocks.LayerRoastedMushroom =>
+                TileGen.Mushroom(1332, 116, 78, 46, 186, 142, 88, spotted: false, ground: false),
 
             _ => Wheat(layer) ?? Crop(layer) ?? CropIcon(layer) ?? StainedGlass(layer)
                  ?? MetalBlock(layer) ?? Wool(layer) ?? Meat(layer) ?? Dye(layer)
