@@ -68,6 +68,12 @@ public static class ActionSounds
 
     public static readonly string[] AnvilUse = ["item/anvil/anvil_use2", "item/anvil/anvil_use3"];
 
+    /// <summary>The bin's four moments: a helping in, the level rising, done, and emptied.</summary>
+    public static readonly string[] ComposterFill = Run("block/composter/fill", 4);
+    public static readonly string[] ComposterRaise = Run("block/composter/fill_success", 4);
+    public static readonly string[] ComposterReady = Run("block/composter/ready", 4);
+    public static readonly string[] ComposterEmpty = Run("block/composter/empty", 3);
+
     /// <summary>Falls that cost hearts, keyed to what was landed on where the pack has it.</summary>
     public static readonly string[] FallSmall = ["damage/fallsmall"];
     public static readonly string[] FallBig = ["damage/fallbig1", "damage/fallbig2"];
@@ -141,7 +147,8 @@ public static class ActionSounds
                 FireIgnite, FireOut, Fizz,
                 ToolBreaks, Burp, Till, Harvest,
                 BucketFillWater, BucketEmptyWater, BucketFillLava, BucketEmptyLava,
-                AnvilUse, FallSmall, FallBig, DrownGasp, BurnHurt, BubblePop,
+                AnvilUse, ComposterFill, ComposterRaise, ComposterReady, ComposterEmpty,
+                FallSmall, FallBig, DrownGasp, BurnHurt, BubblePop,
                 Submerge, Surface, LadderStep, SwimStroke, Pickup,
                 Click, ToastIn, ToastOut, LavaPop,
             };

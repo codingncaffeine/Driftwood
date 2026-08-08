@@ -214,6 +214,11 @@ public static class StarterRecipes
         // than a chest because being able to reach it is a condition rather than a given.
         Shaped("barrel", "barrel", 1, ["PSP", "P P", "PSP"]);
 
+        // ⛳ A composter: an open-topped bin of planks. Scraps and spare seeds go in, bone meal
+        // comes out, which gives a farm the daylight route to the thing skeletons otherwise
+        // guard — feeding a field with the field's own leavings.
+        Shaped("composter", "composter", 1, ["P P", "P P", "PPP"]);
+
         // ⛳ Paper is PULPED WOOD, which is both the real answer and the one that uses a material
         // every player has by their first afternoon. The reference presses it out of a swamp reed;
         // we have no reed and are not adding a plant to the world to serve a single recipe.

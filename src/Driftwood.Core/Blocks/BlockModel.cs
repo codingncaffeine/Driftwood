@@ -531,6 +531,33 @@ public sealed class BlockModel
         ]);
     }
 
+    /// <summary>
+    /// A bin for rot: a floor, four walls, and whatever has been thrown in rising inside.
+    /// </summary>
+    /// <param name="stage">0 empty through 8 ready — how high the fill plate sits.</param>
+    /// <remarks>
+    /// ⚠ Hollow on purpose, so the fill level is read from above at a glance — a solid cube with a
+    /// busier top texture would need walking up to. The fill is its own box rather than a repaint
+    /// of the floor, which is what lets the level rise without another wall texture per stage.
+    /// </remarks>
+    public static BlockModel Composter(ushort side, ushort bottom, ushort fill, int stage)
+    {
+        var elements = new List<ModelElement>
+        {
+            Box(new Vector3(0f, 0f, 0f), new Vector3(16f, 2f, 16f), bottom, side, bottom),
+            Box(new Vector3(0f, 0f, 0f), new Vector3(2f, 16f, 16f), side, side, side),
+            Box(new Vector3(14f, 0f, 0f), new Vector3(16f, 16f, 16f), side, side, side),
+            Box(new Vector3(2f, 0f, 0f), new Vector3(14f, 16f, 2f), side, side, side),
+            Box(new Vector3(2f, 0f, 14f), new Vector3(14f, 16f, 16f), side, side, side),
+        };
+
+        if (stage > 0)
+            elements.Add(Box(
+                new Vector3(2f, 0f, 2f), new Vector3(14f, 2f + stage * 1.65f, 14f), fill, fill, fill));
+
+        return new BlockModel([.. elements]);
+    }
+
     /// <summary>Half a block, lying in either half of the cell.</summary>
     public static BlockModel Slab(ushort top, ushort side, ushort bottom, bool upper) =>
         new([upper

@@ -50,6 +50,15 @@ public enum BlockUse
     /// gives the shovel something to do that is not digging.
     /// </remarks>
     Campfire,
+
+    /// <summary>
+    /// Feeds the composter, or empties it when what is in it has finished rotting.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ No screen, for the anvil's reason again: one bin, one thing thrown in, one thing taken
+    /// out. The fill level is the block id, so the whole interaction is a click and a glance.
+    /// </remarks>
+    Composter,
 }
 
 /// <summary>Which fluid a block is, when it is one.</summary>

@@ -524,7 +524,13 @@ public static class StarterBlocks
     /// </remarks>
     public const ushort LayerFirstStainedGlass = LayerBakedPotato + 1;
 
-    public const int LayerCount = LayerFirstStainedGlass + 16;
+    /// <summary>The composter's slatted side, its floor, and the two states of what is in it.</summary>
+    public const ushort LayerComposterSide = LayerFirstStainedGlass + 16;
+    public const ushort LayerComposterBottom = LayerComposterSide + 1;
+    public const ushort LayerCompost = LayerComposterSide + 2;
+    public const ushort LayerCompostReady = LayerComposterSide + 3;
+
+    public const int LayerCount = LayerComposterSide + 4;
 
     /// <summary>One anvil's name, by how worn it is and which way it lies.</summary>
     /// <remarks>
@@ -1350,6 +1356,24 @@ public static class StarterBlocks
             Model = BlockModel.Cube(LayerBarrelTop, LayerBarrelSide, LayerBarrelTop),
         });
 
+        // ⛳ THE COMPOSTER, the last of #58's group that was blocked on content — and the content
+        // arrived: there are crops now, so there is something to rot. The fill level IS the block
+        // id, exactly as a crop's stage and a furnace's fire are, which is what makes it save for
+        // free and need no bank. Stage 0 is the empty bin, 1..7 are filling, 8 is ready.
+        for (var stage = 0; stage <= ComposterStages; stage++)
+            registry.Register(new BlockType
+            {
+                Name = ComposterName(stage),
+                Hardness = 0.6f, Crafted = true, Derived = stage > 0,
+                Use = BlockUse.Composter,
+                HarvestClass = ToolClass.Axe, HarvestTier = 0,
+                Sounds = SoundMaterial.Wood,
+                Opaque = false,
+                Model = BlockModel.Composter(
+                    LayerComposterSide, LayerComposterBottom,
+                    stage >= ComposterStages ? LayerCompostReady : LayerCompost, stage),
+            });
+
         return new Ids(
             stone, dirt, grass, sand, water, gravel, log, leaves, planks, coal, iron, bedrock,
             emberstone, vine, deepstone, coralstone, driftstone, saltstone, copper, gold, stormglass,
@@ -1768,6 +1792,22 @@ public static class StarterBlocks
 
     /// <summary>And for the smoker.</summary>
     public static BlockId[] Smokers(BlockRegistry registry, bool lit) => Smelters(registry, "smoker", lit);
+
+    /// <summary>Fill stages the composter climbs through before the last one is ready.</summary>
+    public const int ComposterStages = 8;
+
+    /// <summary>The block one fill level of the composter is.</summary>
+    public static string ComposterName(int stage) =>
+        stage <= 0 ? "composter" : stage >= ComposterStages ? "composter_ready" : $"composter_{stage}";
+
+    /// <summary>Every stage of the composter, empty through ready.</summary>
+    public static BlockId[] Composters(BlockRegistry registry)
+    {
+        var ids = new BlockId[ComposterStages + 1];
+        for (var stage = 0; stage <= ComposterStages; stage++)
+            ids[stage] = registry.ByName(ComposterName(stage)).Id;
+        return ids;
+    }
 
     private static BlockId[] Smelters(BlockRegistry registry, string family, bool lit)
     {

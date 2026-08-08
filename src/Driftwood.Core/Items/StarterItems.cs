@@ -365,6 +365,21 @@ public static class StarterItems
         // upward, so there is nothing to point.
         Block(items, blocks, "barrel", "barrel", StarterBlocks.LayerBarrelSide);
 
+        // ⛳ The composter always goes down empty — its fill stages are what it BECOMES, and an
+        // item that placed a half-full one would be free compost. Every stage still resolves to
+        // this one item when mined, which is what Variants is for.
+        items.Register(new ItemType
+        {
+            Name = "composter", Label = "composter", IconLayer = StarterBlocks.LayerComposterSide,
+            DrawsAsBlock = true, BurnSeconds = Timber,
+            Places = new Placeable
+            {
+                Label = "composter",
+                Kind = PlacementKind.Plain,
+                Variants = StarterBlocks.Composters(blocks),
+            },
+        });
+
         // Loose things: nothing puts these down, and half the recipe tree is made of them.
         Loose(items, "stick", "stick", StarterBlocks.LayerStick, burn: 5f);
         Loose(items, "coal", "coal", StarterBlocks.LayerCoal, burn: 80f);

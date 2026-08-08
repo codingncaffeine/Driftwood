@@ -6245,6 +6245,58 @@ public sealed class ClientHost : IDisposable
         return true;
     }
 
+    /// <summary>The composter's stage ids in fill order, resolved once.</summary>
+    private BlockId[]? _composterIds;
+
+    /// <summary>
+    /// Feeds the bin, or empties it — the rules are <see cref="Composting"/>'s, in Core.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ A helping is consumed whether or not the level rises, which is the table's own gamble;
+    /// the two outcomes sound different so a spent helping never reads as a swallowed click. A
+    /// click with nothing compostable in hand does nothing at all — the bin is not a screen and
+    /// has nothing to say about a pickaxe.
+    /// </remarks>
+    private void UseComposter(int x, int y, int z)
+    {
+        _composterIds ??= StarterBlocks.Composters(_registry);
+
+        var here = new Vector3(x + 0.5f, y + 0.5f, z + 0.5f);
+        var stage = Array.IndexOf(_composterIds, _streamer.World.GetBlock(x, y, z));
+        if (stage < 0) return;
+
+        if (stage >= StarterBlocks.ComposterStages)
+        {
+            _streamer.EditBlock(x, y, z, _composterIds[0]);
+
+            var meal = new ItemStack(_items.ByName("bonemeal").Id, Composting.Yield);
+            var kept = _inventory.Add(meal);
+            if (!kept.IsEmpty) _drops.Drop(kept, here + new Vector3(0f, 0.6f, 0f));
+
+            _audio?.Play(Pick(ActionSounds.ComposterEmpty), here, 0.7f, Wobble());
+            return;
+        }
+
+        if (_inventory.HeldType is not { } held) return;
+        if (Composting.Fill(held.Name, stage, _growthRandom.NextDouble()) is not { } after) return;
+
+        _inventory.SpendHeld();
+
+        if (after != stage)
+        {
+            _streamer.EditBlock(x, y, z, _composterIds[after]);
+
+            var done = after >= StarterBlocks.ComposterStages;
+            _audio?.Play(
+                Pick(done ? ActionSounds.ComposterReady : ActionSounds.ComposterRaise),
+                here, 0.65f, Wobble());
+        }
+        else
+        {
+            _audio?.Play(Pick(ActionSounds.ComposterFill), here, 0.6f, Wobble());
+        }
+    }
+
     private void UseAnvil(int x, int y, int z)
     {
         var here = new Vector3(x + 0.5f, y + 0.5f, z + 0.5f);
@@ -6376,6 +6428,10 @@ public sealed class ClientHost : IDisposable
 
             case BlockUse.Anvil:
                 UseAnvil(hit.X, hit.Y, hit.Z);
+                return;
+
+            case BlockUse.Composter:
+                UseComposter(hit.X, hit.Y, hit.Z);
                 return;
 
             // ⛳⛳ THE CAMPFIRE OPENS THE FIRE SCREEN NOW, on the user's instruction — "we'll need the

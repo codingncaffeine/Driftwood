@@ -404,6 +404,12 @@ public static class BlockTextureSet
 
         // ⛳ Sixteen panes of coloured glass, serving both the block and the pane family.
         .. StainedGlassRows(),
+
+        // The composter: its slats, its floor, and the two states of what is rotting in it.
+        new("composter_side",   "textures/block/composter_side.png",    false),
+        new("composter_bottom", "textures/block/composter_bottom.png",  false),
+        new("compost",          "textures/block/composter_compost.png", false),
+        new("compost_ready",    "textures/block/composter_ready.png",   false),
     ];
 
     /// <summary>
@@ -1291,6 +1297,18 @@ public static class BlockTextureSet
             // rather than tapered — so the pair reads as the same vegetable before and after a fire.
             StarterBlocks.LayerBakedPotato =>
                 TileGen.IconRoot(1190, 166, 122, 62, 132, 96, 48, tapered: false),
+
+            // The composter's side is a framed panel of weathered planks — the bench side's own
+            // recipe, darker. ⚠ Not the trapdoor tile, whose slats have real holes: this face is
+            // marked opaque and the audit refuses an opaque layer with clear pixels in it. The
+            // floor is darker planks; the fill is humus, and the ready fill is the same humus
+            // flecked pale with the bone meal in it.
+            StarterBlocks.LayerComposterSide =>
+                TileGen.Panel(TileGen.Planks(1310, 148, 116, 74), 2, 22),
+            StarterBlocks.LayerComposterBottom => TileGen.Planks(1311, 122, 96, 60),
+            StarterBlocks.LayerCompost => TileGen.Speckle(1312, 82, 64, 40, 22, 0.55f),
+            StarterBlocks.LayerCompostReady =>
+                TileGen.Ore(1313, TileGen.Speckle(1312, 82, 64, 40, 22, 0.55f), 216, 214, 206, 7),
 
             _ => Wheat(layer) ?? Crop(layer) ?? CropIcon(layer) ?? StainedGlass(layer)
                  ?? MetalBlock(layer) ?? Wool(layer) ?? Meat(layer) ?? Dye(layer)

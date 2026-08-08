@@ -554,6 +554,12 @@ public static class WorldAudit
         Check("food cooks at all three fires, and each refuses what it is not for", cookFaults.Count == 0,
             cookFaults.Count == 0 ? cookDetail : $"{cookFaults.Count} faults: {cookFaults[0]}");
 
+        var compostFaults = Composting.SelfTest(items);
+        Check("the composter climbs, pays out, and refuses a rock", compostFaults.Count == 0,
+            compostFaults.Count == 0
+                ? $"{Composting.Accepted.Count()} compostables, {StarterBlocks.ComposterStages} helpings certain-full, {Composting.Yield} bone meal a bin"
+                : $"{compostFaults.Count} faults: {compostFaults[0]}");
+
         var dialectFaults = PackDialectSelfTest(out var dialectDetail);
         Check("a pack of either kind is read as itself", dialectFaults.Count == 0,
             dialectFaults.Count == 0 ? dialectDetail : $"{dialectFaults.Count} faults: {dialectFaults[0]}");
@@ -6152,7 +6158,13 @@ public static class WorldAudit
         (StarterBlocks.LayerFirstCropItem, StarterBlocks.Crops[0].Name),
         (StarterBlocks.LayerBakedPotato, "baked_potato"),
         (StarterBlocks.LayerFirstStainedGlass, "stained_glass_white"),
-        ((ushort)(StarterBlocks.LayerCount - 1), "stained_glass_black"),
+        ((ushort)(StarterBlocks.LayerFirstStainedGlass + 15), "stained_glass_black"),
+
+        // The moving pin: the LAST layer, by name. It has now caught two appends in the act —
+        // fifteen crop rows landing after "the last layer is bonemeal", and the composter's four
+        // landing after black glass — which is exactly what it is for. Keep it pointed at
+        // whatever is genuinely last.
+        ((ushort)(StarterBlocks.LayerCount - 1), "compost_ready"),
     ];
 
     /// <summary>
