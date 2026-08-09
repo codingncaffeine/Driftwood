@@ -624,6 +624,14 @@ public static class WorldAudit
         // at all — every block registered and textured, half of them nowhere in the ground. Anything
         // that is only ever built rather than dug is named here on purpose, so adding a block and
         // forgetting to place it fails rather than quietly joining the list.
+        // ⛳ Climate-gated blocks are the census's third named category. Ice exists only where the
+        // temperature field grants it, and seed 'stonebreak' is legitimately too warm for any —
+        // failing a warm world for being warm is the snow lesson again. Existence-when-possible
+        // is owned by each block's own equivalence check instead ("cold water wears ice" goes red
+        // the moment the generator stops freezing a cold coast), so the census skipping it here
+        // gives up nothing.
+        var climatic = new HashSet<ushort> { ids.Ice.Value };
+
         var missing = new List<string>();
         var crafted = 0;
         var derived = 0;
@@ -635,14 +643,16 @@ public static class WorldAudit
             // built, so a census of terrain will not find it and is not the right thing to ask.
             if (registry[id].Derived) { derived++; continue; }
 
+            if (climatic.Contains(id)) continue;
+
             if (counts[id] > 0) continue;
             missing.Add(registry[id].Name);
         }
 
         Check("every material is in the world", missing.Count == 0,
             missing.Count == 0
-                ? $"{registry.Count - crafted - derived - 1} of {registry.Count - 1} blocks generate; "
-                  + $"{crafted} are built, {derived} only ever flow"
+                ? $"{registry.Count - crafted - derived - climatic.Count - 1} of {registry.Count - 1} blocks generate; "
+                  + $"{crafted} are built, {derived} only ever flow, {climatic.Count} is climate's to grant"
                 : $"never generated: {string.Join(", ", missing)}");
 
         // Ore gets a band, not a floor. Too little and mining never gates progression; too much
@@ -803,6 +813,41 @@ public static class WorldAudit
             "clay sits in the shallows",
             clayPct is > 1.0 and < 15.0 && maxY[ids.Clay.Value] <= TerrainGenerator.SeaLevel + 2,
             $"{clayPct:F1}% of shore (want 1-15), highest at y {maxY[ids.Clay.Value]}");
+
+        // ⛳ Ice is winter's lid, checked as the EQUIVALENCE rather than as coverage: every
+        // sea-level water cell in a cold column is frozen and no warm one is, asked of the
+        // generator's own predicate column for column. Coverage would be the snow lesson again —
+        // climate runs on a 1,400-block wavelength and a band tight enough to mean anything
+        // fails a seed for being warm. The counts are reported so a run with no cold coast says
+        // so out loud instead of passing on nothing.
+        var frozenSeen = 0;
+        var liquidSeen = 0;
+        var warmIce = 0;
+        var coldWater = 0;
+
+        for (var z = minBlock; z <= maxBlock; z += 2)
+        for (var x = minBlock; x <= maxBlock; x += 2)
+        {
+            var lid = world.GetBlock(x, TerrainGenerator.SeaLevel, z);
+
+            if (lid == ids.Ice.Value)
+            {
+                frozenSeen++;
+                if (!generator.FrozenSurface(x, z)) warmIce++;
+            }
+            else if (lid == ids.Water.Value)
+            {
+                liquidSeen++;
+                if (generator.FrozenSurface(x, z)) coldWater++;
+            }
+        }
+
+        Check(
+            "cold water wears ice",
+            warmIce == 0 && coldWater == 0 && frozenSeen + liquidSeen > 0
+                && maxY[ids.Ice.Value] <= TerrainGenerator.SeaLevel,
+            $"{frozenSeen:N0} frozen and {liquidSeen:N0} open cells at sea level, {warmIce} frozen "
+            + $"in the warm, {coldWater} liquid in the cold, nothing above y {TerrainGenerator.SeaLevel}");
 
         Check(
             "sandstone lies under the sand",
@@ -6565,11 +6610,13 @@ public static class WorldAudit
         (StarterBlocks.LayerRawRabbit, "raw_rabbit"),
         (StarterBlocks.LayerRabbitHide, "rabbit_hide"),
 
+        (StarterBlocks.LayerInkSac, "ink_sac"),
+
         // The moving pin: the LAST layer, by name. It has now caught three appends in the act —
         // fifteen crop rows landing after "the last layer is bonemeal", the composter's four
         // landing after black glass, and the berry bush's three after compost-ready — which is
         // exactly what it is for. Keep it pointed at whatever is genuinely last.
-        ((ushort)(StarterBlocks.LayerCount - 1), "ink_sac"),
+        ((ushort)(StarterBlocks.LayerCount - 1), "ice"),
     ];
 
     /// <summary>

@@ -304,7 +304,14 @@ public sealed class TerrainGenerator
                 }
                 else if (wy > surface)
                 {
-                    id = wy <= SeaLevel ? _ids.Water.Value : (ushort)0;
+                    // ⛳ Cold water wears a lid of ice: the top cell of the sea freezes below the
+                    // ice line — the temperature field's own coldest fringe, a new READ of the
+                    // shipped field and never a re-banding, so played worlds keep every coastline
+                    // they had. (Not the snow's rule: that line lives below the field's floor and
+                    // only altitude ever crosses it — see IceLine for the measurement.)
+                    id = wy > SeaLevel ? (ushort)0
+                        : wy == SeaLevel && FrozenSurface(wx, wz) ? _ids.Ice.Value
+                        : _ids.Water.Value;
                 }
                 else
                 {
@@ -671,6 +678,26 @@ public sealed class TerrainGenerator
         var above = MathF.Max(0f, surface - SeaLevel);
         return SnowLine - (_climate.Temperature(x, z) - above * above / 2600f);
     }
+
+    /// <summary>
+    /// Warmth below which open water freezes over.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>Ice cannot ride the snow line, and the first draft did — a rule that could never
+    /// fire.</b> The snow line sits at about 0.26 while the temperature field's own floor is about
+    /// 0.31: snow only ever exists by the ALTITUDE term, and at sea level that term is zero, so
+    /// "freeze where snow lies" froze nothing on any seed. The audit's census said "never
+    /// generated" and the equivalence check counted 0 of 1,963. Ice takes its own line, inside
+    /// the field's range on purpose: the coldest fringe of coasts freezes, most water never does.
+    /// </remarks>
+    public const float IceLine = 0.36f;
+
+    /// <summary>Whether water at this column freezes — its own line, not the snow's (see it).</summary>
+    /// <remarks>
+    /// Public so the audit can ask the same question the generator answered, column for column,
+    /// rather than restating the formula beside it.
+    /// </remarks>
+    public bool FrozenSurface(int x, int z) => _climate.Temperature(x, z) < IceLine;
 
     /// <summary>
     /// How far short of the snow line a column may sit and still carry a dusting of it.

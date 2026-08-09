@@ -571,7 +571,14 @@ public static class StarterBlocks
     public const ushort LayerRabbitHide = LayerCobweb + 6;
     public const ushort LayerInkSac = LayerCobweb + 7;
 
-    public const int LayerCount = LayerInkSac + 1;
+    /// <summary>The seed's missing nature (#95), in the order the slices land.</summary>
+    /// <remarks>
+    /// ⚠ Appended, like everything since the fluids, because
+    /// <see cref="Textures.BlockTextureSet"/>'s array order IS this numbering.
+    /// </remarks>
+    public const ushort LayerIce = LayerCobweb + 8;
+
+    public const int LayerCount = LayerIce + 1;
 
     /// <summary>One anvil's name, by how worn it is and which way it lies.</summary>
     /// <remarks>
@@ -755,7 +762,10 @@ public static class StarterBlocks
 
         /// <summary>The pumpkin as found wild, and the webs the cave decorator spins.</summary>
         BlockId Pumpkin,
-        BlockId Cobweb)
+        BlockId Cobweb,
+
+        /// <summary>The frozen lid cold water wears, by the snow's own rule.</summary>
+        BlockId Ice)
     {
         /// <summary>Every rock an ore can form in. Ore replaces rock, whichever rock it is.</summary>
         public BlockId[] Rock => [Stone, Deepstone, Coralstone, Driftstone, Saltstone];
@@ -1034,6 +1044,17 @@ public static class StarterBlocks
             Name = "gravel", Hardness = 0.6f, Sounds = SoundMaterial.Gravel,
             HarvestClass = ToolClass.Shovel,
             TopLayer = LayerGravel, SideLayer = LayerGravel, BottomLayer = LayerGravel,
+        });
+
+        // ⛳ Ice: the top cell of cold water, frozen by the same rule that lays the snow beside it.
+        // Glass's own two-flag shape — stood on and seen through — and it leaves NOTHING when
+        // broken: there is no way to carry a pane of winter home yet, and saying so beats a block
+        // that pretends. It is the one natural block with no item on purpose.
+        var ice = registry.Register(new BlockType
+        {
+            Name = "ice", Hardness = 0.5f, Opaque = false,
+            Sounds = SoundMaterial.Glass,
+            Model = BlockModel.Cube(LayerIce, LayerIce, LayerIce),
         });
         var log = registry.Register(new BlockType
         {
@@ -1545,7 +1566,7 @@ public static class StarterBlocks
             diamond, azurite, clay, sandstone, snow, snowLayer, meadowgrass, seaflax, marshlily,
             emberbloom, sunwort,
             rubble, glass, bricks, bench, furnace, furnaceLit, lava, wildCrops, berryBushRipe,
-            mushroomBrown, mushroomRed, pumpkin, cobweb);
+            mushroomBrown, mushroomRed, pumpkin, cobweb, ice);
     }
 
     /// <summary>

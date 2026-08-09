@@ -454,6 +454,10 @@ public static class BlockTextureSet
 
         // The old layout kept no ink of its own — an ink sac WAS the black dye there.
         new("ink_sac", "textures/item/ink_sac.png", true, "textures/items/dye_powder_black.png"),
+
+        // ⛳ #95, the seed's missing nature. Cutout because every pack paints ice with alpha in
+        // it, and a translucent texel survives the cutout rule at better than half solid.
+        new("ice", "textures/block/ice.png", true),
     ];
 
     /// <summary>
@@ -1412,6 +1416,8 @@ public static class BlockTextureSet
 
             // Ink is a lump so dark its blue only shows against the black dye it becomes.
             StarterBlocks.LayerInkSac => TileGen.IconLump(1356, 38, 42, 56),
+
+            StarterBlocks.LayerIce => TileGen.Ice(1360),
 
             _ => Wheat(layer) ?? Crop(layer) ?? CropIcon(layer) ?? StainedGlass(layer)
                  ?? MetalBlock(layer) ?? Wool(layer) ?? Meat(layer) ?? Dye(layer)

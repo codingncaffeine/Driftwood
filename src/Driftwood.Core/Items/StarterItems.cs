@@ -870,6 +870,10 @@ public static class StarterItems
         new BlockDrops.Rule("driftoak_leaves", null),
         new BlockDrops.Rule("vine", null),
 
+        // Winter cannot be carried home yet: broken ice is simply gone. An ice ITEM would need a
+        // way to keep it frozen in a pocket, which is a mechanic, not a row.
+        new BlockDrops.Rule("ice", null),
+
         // ⚠ Grass still leaves nothing and the flowers no longer do. The difference is that one of
         // them is now a material: every colour in the game starts as something picked out of a
         // field, so a bloom that vanished when it was broken would be a dye source a player could

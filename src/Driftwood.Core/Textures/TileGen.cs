@@ -2261,6 +2261,51 @@ public static class TileGen
         return t;
     }
 
+    /// <summary>
+    /// Ice: winter's lid on the water — pale blue faintly swirled, with bright pressure cracks.
+    /// </summary>
+    /// <remarks>
+    /// Fully opaque texels on a see-through BLOCK, the leaves' own arrangement: what makes ice
+    /// read as ice at distance is colour against dark water below, not holes in the picture. The
+    /// cracks run one diagonal and are FILLED per pixel by remainder, not walked — the feather's
+    /// checkerboard lesson.
+    /// </remarks>
+    public static byte[] Ice(int seed)
+    {
+        var t = new byte[BytesPerTile];
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            // A scatter of clear pinpricks — trapped air. Honest holes: this layer is cutout so
+            // a pack's translucent ice can land on it, and the cutout audit refuses a cutout
+            // with nothing cut; water glinting through its own lid is also simply what ice does.
+            if ((x * 7 + y * 11 + seed) % 53 == 0)
+            {
+                Put(t, x, y, 0, 0, 0, 0);
+                continue;
+            }
+
+            var swirl = Noise(x, y, seed) * 2f - 1f;
+            var r = Clamp((int)(170 + swirl * 9f));
+            var g = Clamp((int)(198 + swirl * 9f));
+            var b = Clamp((int)(228 + swirl * 7f));
+
+            // Two long pressure cracks, jittered so neither reads as a ruled line.
+            var drift = (int)(Noise(x / 5, y / 5, seed + 9) * 5f);
+            if ((x + y + drift) % 11 == 0 || (x - y + 32 + drift) % 13 == 0)
+            {
+                r = Clamp(r + 42);
+                g = Clamp(g + 34);
+                b = Clamp(b + 24);
+            }
+
+            Put(t, x, y, r, g, b, 255);
+        }
+
+        return t;
+    }
+
     /// <summary>A sheet of flame, transparent around it — what stands in a campfire.</summary>
     /// <remarks>
     /// Tapering as it rises and eaten into at the edges, so the two crossed planes it is drawn on
