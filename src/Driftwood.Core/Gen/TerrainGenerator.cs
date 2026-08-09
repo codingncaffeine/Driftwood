@@ -138,6 +138,12 @@ public sealed class TerrainGenerator
     private readonly int _seedClay;
     private readonly int _seedMeadow;
     private readonly int _seedDune;
+    private readonly int _seedGlowcap;
+
+    /// <summary>Depth above which no glowcap grows. The deep earns its own light; the shallows
+    /// have torches and daylight down their shafts, and a glow that grows everywhere means
+    /// nothing anywhere.</summary>
+    public const int GlowFloor = -80;
     private readonly int _seedFlora;
     private readonly int _seedLavaTable;
     private readonly int _seedLavaPools;
@@ -194,6 +200,7 @@ public sealed class TerrainGenerator
         _seedClay = seed.Derive("deposit.clay");
         _seedMeadow = seed.Derive("decor.meadowgrass");
         _seedDune = seed.Derive("decor.dunes");
+        _seedGlowcap = seed.Derive("decor.glowcap");
         _seedFlora = seed.Derive("decor.cave_flora");
         _seedLavaTable = seed.Derive("deep.lava_table");
         _seedLavaPools = seed.Derive("deep.lava_pools");
@@ -861,6 +868,19 @@ public sealed class TerrainGenerator
                 {
                     if (Noise.Value3(wx, wy, wz, _seedFlora + 31) < 0.03f)
                         chunk.Set(x, y, z, _ids.Cobweb);
+                    continue;
+                }
+
+                // ⛳ The glowcap, the deep's own light: pockets on their OWN derived seed so the
+                // mushroom fields keep every roll they had, and only below the glow floor — the
+                // one flora with a depth to it, because a light that grows everywhere is a light
+                // that means nothing. Asked before the mushrooms so a glowcap pocket is a glowcap
+                // pocket rather than a mushroom pocket with intruders.
+                if (wy < GlowFloor
+                    && Noise.Fbm3(wx / 24f, wy / 24f, wz / 24f, _seedGlowcap, 2) > 0.30f)
+                {
+                    if (Noise.Value3(wx, wy, wz, _seedGlowcap + 7) < 0.02f)
+                        chunk.Set(x, y, z, _ids.Glowcap);
                     continue;
                 }
 

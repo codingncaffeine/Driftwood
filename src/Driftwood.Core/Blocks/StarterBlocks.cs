@@ -580,8 +580,9 @@ public static class StarterBlocks
     public const ushort LayerCactusSide = LayerCobweb + 9;
     public const ushort LayerCactusTop = LayerCobweb + 10;
     public const ushort LayerDeadBush = LayerCobweb + 11;
+    public const ushort LayerGlowcap = LayerCobweb + 12;
 
-    public const int LayerCount = LayerDeadBush + 1;
+    public const int LayerCount = LayerGlowcap + 1;
 
     /// <summary>One anvil's name, by how worn it is and which way it lies.</summary>
     /// <remarks>
@@ -772,7 +773,10 @@ public static class StarterBlocks
 
         /// <summary>The arid fringe's two tells, stood on hot dry sand.</summary>
         BlockId Cactus,
-        BlockId DeadBush)
+        BlockId DeadBush,
+
+        /// <summary>The deep's own light, growing only below the glow floor.</summary>
+        BlockId Glowcap)
     {
         /// <summary>Every rock an ore can form in. Ore replaces rock, whichever rock it is.</summary>
         public BlockId[] Rock => [Stone, Deepstone, Coralstone, Driftstone, Saltstone];
@@ -1087,6 +1091,19 @@ public static class StarterBlocks
             Sounds = SoundMaterial.Grass,
             SupportFace = Faces.NegY,
             Model = BlockModel.Cross(LayerDeadBush, tinted: false),
+        });
+
+        // ⛳ The glowcap — ours, in the coined register beside driftoak and stormglass. The deep's
+        // own light: a luminous mushroom that grows only below the glow floor, and picked and
+        // replanted it is a light a player can FARM — the lamp that costs no coal and no trip
+        // back. Cold light on purpose, against lava's orange and a lantern's warm white.
+        var glowcap = registry.Register(new BlockType
+        {
+            Name = "glowcap", Hardness = 0.05f, Solid = false, Opaque = false,
+            Sounds = SoundMaterial.Grass,
+            SupportFace = Faces.NegY,
+            LightEmission = LightValue.PackBlock(5, 10, 9),
+            Model = BlockModel.Cross(LayerGlowcap, tinted: false),
         });
         var log = registry.Register(new BlockType
         {
@@ -1598,7 +1615,7 @@ public static class StarterBlocks
             diamond, azurite, clay, sandstone, snow, snowLayer, meadowgrass, seaflax, marshlily,
             emberbloom, sunwort,
             rubble, glass, bricks, bench, furnace, furnaceLit, lava, wildCrops, berryBushRipe,
-            mushroomBrown, mushroomRed, pumpkin, cobweb, ice, cactus, deadBush);
+            mushroomBrown, mushroomRed, pumpkin, cobweb, ice, cactus, deadBush, glowcap);
     }
 
     /// <summary>

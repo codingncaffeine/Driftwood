@@ -503,6 +503,9 @@ public static class StarterRecipes
         // otherwise only comes out of mixing. The genre's own recipe, worth keeping real.
         Smelt("cactus", "dye_green");
 
+        // And the deep's: a glowcap grinds to cyan at the bench.
+        LooseAt("cyan dye from a glowcap", "dye_cyan", 1, CraftStation.Bench, "glowcap");
+
         // ⛳ A torch shut inside a carved pumpkin. The carve itself is the shears' act on the
         // standing block, not a recipe — so this is the one bench step in the pumpkin's whole run.
         LooseAt("jack o'lantern", "jack_o_lantern", 1, CraftStation.Bench, "carved_pumpkin", "torch");

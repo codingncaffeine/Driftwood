@@ -123,6 +123,9 @@ public static class StarterItems
         Block(items, blocks, "sandstone", "sandstone", StarterBlocks.LayerSandstone);
         Block(items, blocks, "snow", "snow", StarterBlocks.LayerSnow);
         Block(items, blocks, "cactus", "cactus", StarterBlocks.LayerCactusSide);
+
+        // The farmable light: pick one in the deep, plant it at home, and the lamp grows back.
+        Block(items, blocks, "glowcap", "glowcap", StarterBlocks.LayerGlowcap);
         Block(items, blocks, "deepstone", "deepstone", StarterBlocks.LayerDeepstone);
         Block(items, blocks, "coralstone", "coralstone", StarterBlocks.LayerCoralstone);
         Block(items, blocks, "driftstone", "driftstone", StarterBlocks.LayerDriftstone);

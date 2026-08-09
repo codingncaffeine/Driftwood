@@ -955,6 +955,20 @@ public static class WorldAudit
             $"{brown:N0} brown and {red:N0} red (want 600-3,000 together), reaching y {deepFlora} "
             + $"(want under {TerrainGenerator.EmberdeepTop})");
 
+        // ⛳ The deep grows its own light: glowcaps exist, NONE above the glow floor — the depth
+        // gate is the block's whole meaning — and the block emits exactly the cold teal it is
+        // drawn in, the emission pinned as a literal (the held-glow rule: the one thing that can
+        // rot silently here is the number). Band measured across the five seeds at the gate's
+        // chunks; depth needs no band because it is the rule itself.
+        var glowcaps = counts[ids.Glowcap.Value];
+        Check(
+            "the deep grows its own light",
+            glowcaps is > 40 and < 1_200
+                && maxY[ids.Glowcap.Value] < TerrainGenerator.GlowFloor
+                && registry[ids.Glowcap].LightEmission == LightValue.PackBlock(5, 10, 9),
+            $"{glowcaps:N0} glowcaps (want 40-1,200), topmost at y {maxY[ids.Glowcap.Value]} "
+            + $"(want under {TerrainGenerator.GlowFloor}), emitting 5/10/9");
+
         // The dusting has to be a fringe on the snowfield rather than a second one. Measured as its
         // share of all the white ground: with no band the edge either vanishes (a snow line drawn
         // as a line, which is what this replaced) or swallows the meadows below it, and neither
@@ -6687,11 +6701,13 @@ public static class WorldAudit
         (StarterBlocks.LayerInkSac, "ink_sac"),
         (StarterBlocks.LayerIce, "ice"),
 
+        (StarterBlocks.LayerDeadBush, "dead_bush"),
+
         // The moving pin: the LAST layer, by name. It has now caught three appends in the act —
         // fifteen crop rows landing after "the last layer is bonemeal", the composter's four
         // landing after black glass, and the berry bush's three after compost-ready — which is
         // exactly what it is for. Keep it pointed at whatever is genuinely last.
-        ((ushort)(StarterBlocks.LayerCount - 1), "dead_bush"),
+        ((ushort)(StarterBlocks.LayerCount - 1), "glowcap"),
     ];
 
     /// <summary>

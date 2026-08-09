@@ -2368,6 +2368,44 @@ public static class TileGen
         return t;
     }
 
+    /// <summary>
+    /// The glowcap: a pale stem under a teal cap freckled with its own light.
+    /// </summary>
+    /// <remarks>
+    /// The freckles are near-white and the cap is deliberately dimmer than they are — a luminous
+    /// thing reads by CONTRAST inside itself, and the block's real light does the rest.
+    /// </remarks>
+    public static byte[] Glowcap(int seed)
+    {
+        var t = new byte[BytesPerTile];
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var grain = (int)((Noise(x, y, seed) * 2f - 1f) * 10f);
+
+            // The stem, two texels wide, from under the cap to the ground.
+            if (x is 7 or 8 && y >= 7)
+            {
+                Put(t, x, y, Clamp(178 + grain), Clamp(192 + grain), Clamp(182 + grain), 255);
+                continue;
+            }
+
+            // The cap: a dome five wide at the brim, freckled with light.
+            var dx = (x - 7.5f) / 5.5f;
+            var dy = (y - 6f) / 4.5f;
+            if (y <= 7 && dx * dx + dy * dy <= 1f)
+            {
+                if ((x * 5 + y * 7 + seed) % 9 == 0)
+                    Put(t, x, y, 172, 240, 220, 255);
+                else
+                    Put(t, x, y, Clamp(58 + grain), Clamp(148 + grain), Clamp(130 + grain), 255);
+            }
+        }
+
+        return t;
+    }
+
     /// <summary>The dead bush: a dry fork of twigs on nothing, in old-rope browns.</summary>
     public static byte[] DeadBush(int seed)
     {

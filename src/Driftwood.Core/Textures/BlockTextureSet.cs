@@ -462,6 +462,11 @@ public static class BlockTextureSet
         new("cactus_side", "textures/block/cactus_side.png", true),
         new("cactus_top", "textures/block/cactus_top.png", true),
         new("dead_bush", "textures/block/dead_bush.png", true, "textures/blocks/deadbush.png"),
+
+        // ⛳ Ours alone, and the empty path says so on purpose: the glowcap is coined, and the
+        // genre's luminous flora are a solid block and a wall lichen — neither is a cross-plant
+        // net, so there is no honest file for a pack to land on.
+        new("glowcap", "", true),
     ];
 
     /// <summary>
@@ -1425,6 +1430,7 @@ public static class BlockTextureSet
             StarterBlocks.LayerCactusSide => TileGen.CactusSide(1361),
             StarterBlocks.LayerCactusTop => TileGen.CactusTop(1361),
             StarterBlocks.LayerDeadBush => TileGen.DeadBush(1363),
+            StarterBlocks.LayerGlowcap => TileGen.Glowcap(1364),
 
             _ => Wheat(layer) ?? Crop(layer) ?? CropIcon(layer) ?? StainedGlass(layer)
                  ?? MetalBlock(layer) ?? Wool(layer) ?? Meat(layer) ?? Dye(layer)
