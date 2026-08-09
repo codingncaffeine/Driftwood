@@ -83,6 +83,11 @@ public static class CreatureArt
         // And the desert's: sun-dried tan over leather the colour of old rope. Reads against
         // both cousins as the only WARM one, which suits the one that walks through noon.
         ["husk"] = new((156, 134, 94), (112, 96, 68), (100, 86, 60), (176, 156, 112), 0.32f, 0.14f),
+
+        // Pond-green through and through — the one hostile that is a colour before it is a shape.
+        // Its face is boxes rather than paint (see StarterCreatures.Slime), so Muzzle here is the
+        // mouth box's colour and the eyes carry their own part.
+        ["slime"] = new((116, 162, 100), (98, 142, 86), (58, 82, 52), (70, 104, 62), 0.22f, 0.06f),
     };
 
     /// <summary>True when we have colours for this creature.</summary>
@@ -110,6 +115,7 @@ public static class CreatureArt
         foreach (var bone in model.Bones)
         {
             var role = RoleOf(bone.Name);
+            if (role == Part.Shell) continue;
 
             foreach (var cube in bone.Cubes)
             {
@@ -153,12 +159,20 @@ public static class CreatureArt
         "head" => Part.Head,
         "beak" => Part.Muzzle,
         "comb" => Part.Horn,
+        "mouth" => Part.Muzzle,
+
+        // ⛔ The slime's shell. Left entirely unpainted — transparent texels are discarded by the
+        // cutout shader, which is the only honest way to draw a translucent thing without blending.
+        // Painting it opaque would box the face in; see StarterCreatures.Slime for the trade.
+        "gel" => Part.Shell,
+
+        var n when n.StartsWith("eye", StringComparison.Ordinal) => Part.Eye,
         var n when n.StartsWith("leg", StringComparison.Ordinal) => Part.Leg,
         var n when n.StartsWith("wing", StringComparison.Ordinal) => Part.Wing,
         _ => Part.Body,
     };
 
-    private enum Part { Body, Head, Leg, Wing, Muzzle, Horn }
+    private enum Part { Body, Head, Leg, Wing, Muzzle, Horn, Eye, Shell }
 
     private static void PaintFace(
         byte[] pixels, CreatureModel model, in CreatureHide hide, Part role,
@@ -205,6 +219,11 @@ public static class CreatureArt
         in CreatureHide hide, Part role, Vector3 at, Vector3 min, Vector3 max, Vector3 normal,
         float s, float t, int seed)
     {
+        // An eye that is a box wears the face's own eye colours: dark, with the one light quarter
+        // that makes it read as wet. The same drawing the painted-on face uses, at box scale.
+        if (role == Part.Eye)
+            return s < 0.34f && t < 0.44f ? (232f, 232f, 228f) : (26f, 22f, 20f);
+
         var coat = role switch
         {
             Part.Muzzle => hide.Muzzle,
@@ -405,7 +424,16 @@ public static class CreatureArt
             var head = Array.Find(model.Bones, x => x.Name == "head");
             if (head.Cubes is null || head.Cubes.Length == 0)
             {
-                faults.Add($"{model.Name} has no head to put a face on");
+                // ⛳ Two creatures are headless on purpose and each carries its own claim instead.
+                // The slime's face is boxes — so its eye patch has to differ from its coat, which
+                // is the same "something is drawn there" question asked of the parts it does have.
+                // The squid has no face at all in v1, and that is honest: its net has no head and
+                // painting eyes on the mantle is its own small job, said here rather than skipped.
+                if (!Faceless.Contains(model.Name))
+                    faults.Add($"{model.Name} has no head to put a face on");
+                else if (EyeFault(model, sheet) is { Length: > 0 } eyeless)
+                    faults.Add(eyeless);
+
                 continue;
             }
 
@@ -432,6 +460,28 @@ public static class CreatureArt
         }
 
         return faults;
+    }
+
+    /// <summary>The kinds allowed to have no head bone. Each is a decision, not an oversight.</summary>
+    private static readonly HashSet<string> Faceless = new(StringComparer.Ordinal) { "slime", "squid" };
+
+    /// <summary>For a headless kind with eye boxes: are the eyes actually drawn on?</summary>
+    private static string EyeFault(CreatureModel model, Image sheet)
+    {
+        var eye = Array.Find(model.Bones, x => x.Name == "eye0");
+        if (eye.Cubes is null || eye.Cubes.Length == 0) return "";
+
+        var e = eye.Cubes[0];
+        var c = model.Bones[0].Cubes[0];
+
+        var eyeFront = Mean(sheet, PlayerModel.FaceRect(
+            e.U, e.V, (int)e.Size.X, (int)e.Size.Y, (int)e.Size.Z, e.Mirror, 0));
+        var coatFront = Mean(sheet, PlayerModel.FaceRect(
+            c.U, c.V, (int)c.Size.X, (int)c.Size.Y, (int)c.Size.Z, c.Mirror, 0));
+
+        return MathF.Abs(eyeFront - coatFront) < 3f
+            ? $"{model.Name}'s eyes read {eyeFront:F1} against its coat at {coatFront:F1} — nothing is drawn on them"
+            : "";
     }
 
     private static float Mean(Image sheet, (int X, int Y, int W, int H) rect)

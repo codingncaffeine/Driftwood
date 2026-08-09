@@ -1396,7 +1396,8 @@ public sealed class ClientHost : IDisposable
         {
             if (kind.Family != family) continue;
             if (!_creatureRenderer.TryMeasure(kind.Name, out var size)) continue;
-            kinds.Add(new SpawnKind(kind.Name, size, family == CreatureFamily.Hostile));
+            kinds.Add(new SpawnKind(
+                kind.Name, size, family == CreatureFamily.Hostile, CreatureSet.MoveFor(kind.Name)));
         }
 
         return kinds;
@@ -1408,7 +1409,8 @@ public sealed class ClientHost : IDisposable
         if (_creatureRenderer is null || !_creatureRenderer.TryMeasure(kind, out var size))
             return null;
 
-        return new SpawnKind(kind, size, FamilyOf(kind) == CreatureFamily.Hostile);
+        return new SpawnKind(
+            kind, size, FamilyOf(kind) == CreatureFamily.Hostile, CreatureSet.MoveFor(kind));
     }
 
     private void BuildWorld()

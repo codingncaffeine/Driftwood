@@ -551,7 +551,14 @@ public static class StarterBlocks
     public const ushort LayerJackOLantern = LayerPumpkinSide + 3;
     public const ushort LayerCobweb = LayerPumpkinSide + 4;
 
-    public const int LayerCount = LayerPumpkinSide + 5;
+    /// <summary>What the rest of the hostile roster leaves behind (#93).</summary>
+    /// <remarks>
+    /// ⚠ Appended, like everything since the fluids, because
+    /// <see cref="Textures.BlockTextureSet"/>'s array order IS this numbering.
+    /// </remarks>
+    public const ushort LayerSlimeball = LayerCobweb + 1;
+
+    public const int LayerCount = LayerSlimeball + 1;
 
     /// <summary>One anvil's name, by how worn it is and which way it lies.</summary>
     /// <remarks>

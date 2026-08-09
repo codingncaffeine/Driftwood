@@ -10,7 +10,8 @@ namespace Driftwood.Core.Entities;
 /// than looked up per frame because a herd is stepped sixty times a second and a skeleton never
 /// changes shape.
 /// </remarks>
-public readonly record struct SpawnKind(string Name, Vector3 Size, bool Hostile = false);
+public readonly record struct SpawnKind(
+    string Name, Vector3 Size, bool Hostile = false, CreatureMove Move = CreatureMove.Walk);
 
 /// <summary>One blow a creature landed on the player, for whoever turns that into damage.</summary>
 public readonly record struct CreatureAttack(string Kind, Vector3 Position, int HalfHearts);
@@ -30,6 +31,12 @@ public sealed class Creature
     /// nothing until there are two hundred of them.
     /// </remarks>
     public required bool Hostile { get; init; }
+
+    /// <summary>How it crosses the world. Carried for the same reason <see cref="Hostile"/> is.</summary>
+    public CreatureMove Move { get; init; } = CreatureMove.Walk;
+
+    /// <summary>Seconds until a hopping kind may launch again. Meaningless for anything else.</summary>
+    public float HopRest { get; set; }
 
     /// <summary>Seconds until it may swing again.</summary>
     public float Swings { get; set; }
@@ -361,6 +368,21 @@ public sealed class CreatureHerd
     /// <summary>Half-hearts a second the sun costs one that burns in it.</summary>
     public const float ScorchRate = 1.6f;
 
+    /// <summary>Blocks a second straight up, the moment a hopping kind launches.</summary>
+    /// <remarks>
+    /// Eight against a gravity of 26 is a hop of about one and a quarter blocks — enough to clear a
+    /// step and land on a ledge, short of clearing a two-block wall, which keeps walls an answer.
+    /// </remarks>
+    public const float HopLaunch = 8f;
+
+    /// <summary>Blocks a second a hopper covers while it is in the air. The hop IS its stride.</summary>
+    public const float HopStride = 3.2f;
+
+    /// <summary>Seconds a grazing hopper sits between hops. Hunting, it barely pauses.</summary>
+    public const float HopRestSeconds = 0.9f;
+
+    public const float HopRestHunting = 0.25f;
+
     /// <summary>Degrees a second it can turn. Fast enough to look intentional, slow enough to see.</summary>
     public const float TurnSpeed = 140f;
 
@@ -446,6 +468,7 @@ public sealed class CreatureHerd
                 Kind = kind.Name,
                 Size = kind.Size,
                 Hostile = kind.Hostile,
+                Move = kind.Move,
                 MaxHealth = CreatureVitals.HealthFor(kind.Name),
                 Health = CreatureVitals.HealthFor(kind.Name),
                 Position = new Vector3(x + 0.5f, y, z + 0.5f),
@@ -688,6 +711,7 @@ public sealed class CreatureHerd
             Kind = creature.Kind,
             Size = creature.Size,
             Hostile = false,
+            Move = creature.Move,
             MaxHealth = CreatureVitals.HealthFor(creature.Kind),
             Health = CreatureVitals.HealthFor(creature.Kind),
             Position = between,
@@ -767,6 +791,7 @@ public sealed class CreatureHerd
                 Kind = one.Kind,
                 Size = kind.Size,
                 Hostile = kind.Hostile,
+                Move = kind.Move,
                 MaxHealth = most,
                 Health = Math.Clamp(one.Health, 1, most),
                 Position = one.Position,
@@ -924,7 +949,13 @@ public sealed class CreatureHerd
 
             creature.BreedRest = MathF.Max(0f, creature.BreedRest - dt);
 
-            if (Fall(creature, dt, solid)) continue;
+            if (Fall(creature, dt, solid))
+            {
+                // A hopper travels while it is in the air — the hop IS the stride. Straight along
+                // the yaw it launched with, no steering: it aimed on the ground.
+                if (creature.Move == CreatureMove.Hop) HopDrift(creature, dt, solid);
+                continue;
+            }
 
             Scorch(creature, dt, sunlit);
             var hunting = Hunt(creature, dt, player);
@@ -956,6 +987,20 @@ public sealed class CreatureHerd
             creature.Yaw = Wrap(creature.Yaw + MathF.Sign(difference) * step);
 
             if (!creature.Moving) continue;
+
+            // A hopping kind never walks: grounded, it sits out its rest and then launches. The
+            // travel itself happens in HopDrift while the body is airborne.
+            if (creature.Move == CreatureMove.Hop)
+            {
+                creature.HopRest -= dt;
+                if (creature.HopRest > 0f) continue;
+
+                creature.HopRest = hunting
+                    ? HopRestHunting
+                    : HopRestSeconds * (0.7f + (float)_random.NextDouble() * 0.6f);
+                creature.FallSpeed = -HopLaunch;
+                continue;
+            }
 
             var yaw = float.DegreesToRadians(creature.Yaw);
             var ahead = new Vector3(MathF.Cos(yaw), 0f, MathF.Sin(yaw));
@@ -989,6 +1034,26 @@ public sealed class CreatureHerd
             _creatures.AddRange(_newborn);
             _newborn.Clear();
         }
+    }
+
+    /// <summary>Carries an airborne hopper forward, unless a wall is in the way.</summary>
+    /// <remarks>
+    /// ⚠ The refusal leaves the vertical motion alone: blocked, it rises and falls where it is,
+    /// which is what a thing bouncing against a wall looks like. The ground decision will turn it.
+    /// </remarks>
+    private static void HopDrift(Creature creature, float dt, Func<int, int, int, bool> solid)
+    {
+        var yaw = float.DegreesToRadians(creature.Yaw);
+        var ahead = new Vector3(MathF.Cos(yaw), 0f, MathF.Sin(yaw));
+        var wanted = creature.Position + ahead * (HopStride * dt);
+
+        var x = (int)MathF.Floor(wanted.X);
+        var y = (int)MathF.Floor(creature.Position.Y + 0.5f);
+        var z = (int)MathF.Floor(wanted.Z);
+
+        if (solid(x, y, z) || solid(x, y + 1, z)) return;
+
+        creature.Position = new Vector3(wanted.X, creature.Position.Y, wanted.Z);
     }
 
     /// <summary>
@@ -1100,7 +1165,10 @@ public sealed class CreatureHerd
             ? y
             : 0f;
 
-        if (creature.Position.Y - ground <= 0.02f)
+        // ⚠ Only a body on its way DOWN can be standing. A hopper the instant it launches is at
+        // ground height with upward speed, and the unguarded test read that as "landed" and zeroed
+        // the launch before it moved a frame.
+        if (creature.Position.Y - ground <= 0.02f && creature.FallSpeed >= 0f)
         {
             // Landed, or never left. Anything that fell far enough pays for it now.
             if (creature.FellFor > SafeFall)
@@ -1117,6 +1185,18 @@ public sealed class CreatureHerd
         var drop = creature.FallSpeed * dt;
         var to = MathF.Max(creature.Position.Y - drop, ground);
 
+        // Rising into a roof stops the rise where it is — a slime under a two-block ceiling bonks
+        // and comes straight back down rather than drawing its head through the rock.
+        if (creature.FallSpeed < 0f
+            && solid(x, (int)MathF.Floor(to + creature.Size.Y * creature.Scale), z))
+        {
+            creature.FallSpeed = 0f;
+            to = creature.Position.Y;
+        }
+
+        // ⚠ Signed on purpose: the rise pays its height back before the fall counts. A hop's own
+        // arc then nets to nothing, and a hop off a cliff is charged the true drop below the
+        // launch point rather than the whole arc.
         creature.FellFor += creature.Position.Y - to;
         creature.Position = creature.Position with { Y = to };
 
@@ -1204,6 +1284,68 @@ public sealed class CreatureHerd
         faults.AddRange(ValidateFighting());
         faults.AddRange(ValidateHunting());
         faults.AddRange(ValidateRetaliation());
+        faults.AddRange(ValidateHopping());
+
+        return faults;
+    }
+
+    /// <summary>
+    /// Checks a hopping kind actually hops: it leaves the ground, comes back to it, and gets
+    /// somewhere doing it.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>The walkers of every other arm are this check's control.</b> They already assert a
+    /// flat-ground herd never leaves y 64 ("walked off its own floor"), so air on a walker is
+    /// caught there; what no other arm can see is a hop that never happens — a slime demoted to a
+    /// glide passes every walking claim there is, which is exactly why the peak height is asserted.
+    /// </remarks>
+    private static List<string> ValidateHopping()
+    {
+        var faults = new List<string>();
+
+        static bool Flat(int x, int y, int z) => y < 64;
+
+        var slime = new SpawnKind("slime", new Vector3(1f, 1f, 1f), Hostile: true, Move: CreatureMove.Hop);
+
+        var herd = new CreatureHerd(37);
+        herd.Spawn(Flat, [slime], new Vector3(0f, 64f, 0f), 3);
+        if (herd.Count != 3) return ["the hop check's slimes found no room on an open plain"];
+
+        var start = herd.All.Select(c => c.Position).ToList();
+        var peak = 0f;
+
+        for (var i = 0; i < 900; i++)
+        {
+            herd.Update(1f / 60f, Flat);
+            foreach (var one in herd.All)
+                peak = MathF.Max(peak, one.Position.Y - 64f);
+        }
+
+        // Fifteen seconds of a kind whose walk is hops. Half a block of air is under half its own
+        // arc, so a working hop clears it easily and a glide never does.
+        if (peak < 0.5f)
+            faults.Add($"a hopping kind peaked {peak:F2} blocks off the floor in fifteen seconds");
+
+        // ⚠ Against the arc's own figure as well: a launch that never comes down again would pass
+        // "it left the ground" while drifting into the sky.
+        if (peak > 2.5f)
+            faults.Add($"a hop reached {peak:F2} blocks, which is not the arc its launch speed buys");
+
+        foreach (var one in herd.All)
+            if (one.Position.Y - 64f > 2f)
+                faults.Add($"a hopper ended the run {one.Position.Y - 64f:F1} blocks up in the air");
+
+        var moved = 0;
+        for (var i = 0; i < herd.Count; i++)
+            if (Vector3.Distance(herd.All[i].Position, start[i]) > 2f) moved++;
+
+        if (moved == 0)
+            faults.Add("not one of three hoppers went anywhere in fifteen seconds of hopping");
+
+        // And it hurts nothing doing it: a hop's arc must never charge fall damage.
+        foreach (var one in herd.All)
+            if (one.Health < one.MaxHealth)
+                faults.Add("a hopper hurt itself hopping on flat ground");
 
         return faults;
     }

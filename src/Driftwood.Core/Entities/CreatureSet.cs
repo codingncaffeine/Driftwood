@@ -3,6 +3,21 @@ using Driftwood.Core.Textures;
 
 namespace Driftwood.Core.Entities;
 
+/// <summary>How a kind crosses the world: on legs, in hops, on the wing, or through water.</summary>
+public enum CreatureMove
+{
+    Walk,
+
+    /// <summary>Its walk IS hops — grounded it only sits and aims; the travel happens in the air.</summary>
+    Hop,
+
+    /// <summary>Never touches down. The herd flies it instead of standing it on ground.</summary>
+    Fly,
+
+    /// <summary>Lives in water and drifts through it; out of water it can only sink.</summary>
+    Swim,
+}
+
 /// <summary>What a creature is for, which is also what decides how it behaves.</summary>
 public enum CreatureFamily
 {
@@ -100,7 +115,7 @@ public static class CreatureSet
         new("spider", "spider", CreatureFamily.Hostile, "spider",
             ["textures/entity/spider/spider.png"]),
         new("slime", "slime", CreatureFamily.Hostile, "slime",
-            ["textures/entity/slime/slime.png"]),
+            ["textures/entity/slime/slime.png", "textures/entity/slime.png"]),
 
         // ⛳ Ours. 'Creeper' and 'enderman' are coined, so these are too — same register as
         // driftoak and stormglass. The skeleton and the sheet stay theirs, which is the point.
@@ -119,6 +134,40 @@ public static class CreatureSet
         new("husk", "husk", CreatureFamily.Hostile, "zombie.husk",
             ["textures/entity/zombie/husk.png"]),
     ];
+
+    /// <summary>
+    /// How each kind carries itself. Anything not named walks.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ Here rather than on <see cref="CreatureKind"/>'s rows, for the same reason the vitals are
+    /// their own table: a kind that moves oddly and a kind we have colours for are different claims,
+    /// and fusing them means one cannot exist without the other.
+    /// </remarks>
+    private static readonly Dictionary<string, CreatureMove> Moves = new(StringComparer.Ordinal)
+    {
+        ["slime"] = CreatureMove.Hop,
+    };
+
+    public static CreatureMove MoveFor(string kind) => Moves.GetValueOrDefault(kind, CreatureMove.Walk);
+
+    /// <summary>
+    /// How big each kind is drawn against its authored units. Anything not named is 1.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>The net is the contract, so the boxes cannot shrink — the drawing scales instead.</b>
+    /// A box's size is also its patch's size on the sheet: author a bat at bat size and every pack's
+    /// bat lands on the wrong texels. The reference has the same problem and solves it the same way
+    /// — its client scales several models at draw time (a bat to about a third, a slime by its size
+    /// class) — so these numbers are that table, ours. TryMeasure reports the scaled size, which is
+    /// what makes the hitbox and the drawing one thing.
+    /// </remarks>
+    private static readonly Dictionary<string, float> DrawScales = new(StringComparer.Ordinal)
+    {
+        // The reference's medium size class: an eight-unit cube drawn at two is a one-block slime.
+        ["slime"] = 2f,
+    };
+
+    public static float DrawScaleFor(string kind) => DrawScales.GetValueOrDefault(kind, 1f);
 
     /// <summary>What a creature resolved to, or why it did not.</summary>
     /// <param name="SkinWidth">

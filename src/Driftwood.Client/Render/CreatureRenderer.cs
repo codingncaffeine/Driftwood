@@ -202,12 +202,17 @@ public sealed class CreatureRenderer : IDisposable
     }
 
     /// <summary>How big one kind is, in blocks, standing the way it will be drawn.</summary>
+    /// <remarks>
+    /// ⚠ Scaled by the kind's own draw scale, so the box a blow lands in is the animal on screen.
+    /// The mesh keeps its authored units because its net is a contract — see
+    /// <see cref="CreatureSet.DrawScaleFor"/>.
+    /// </remarks>
     public bool TryMeasure(string kind, out Vector3 size)
     {
         if (!_kinds.TryGetValue(kind, out var found)) { size = Vector3.Zero; return false; }
 
         var (min, max) = found.Mesh.PosedBounds();
-        size = max - min;
+        size = (max - min) * CreatureSet.DrawScaleFor(kind);
         return true;
     }
 
@@ -255,7 +260,9 @@ public sealed class CreatureRenderer : IDisposable
         var root = Matrix4x4.CreateRotationY(-(yaw + MathF.PI / 2f)) * Matrix4x4.CreateTranslation(feet);
 
         // A calf is its parents at small — same skeleton, same skin, scaled about its own feet
-        // before anything else moves it.
+        // before anything else moves it. The kind's own draw scale folds in here too, so a bat
+        // authored at the net's units is drawn at bat size and hit at bat size.
+        scale *= CreatureSet.DrawScaleFor(kind);
         if (scale != 1f) root = Matrix4x4.CreateScale(scale) * root;
 
         // ⚠ Going over is a roll about the model's OWN forward axis, applied before the yaw — which

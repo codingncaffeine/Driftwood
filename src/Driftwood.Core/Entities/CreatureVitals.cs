@@ -57,6 +57,10 @@ public static class CreatureVitals
         // Ours by our names, the whole table's own rule.
         ["crawler"] = 40,
         ["farwalker"] = 80,
+
+        // ⚠ Soft on purpose: it closes slowly and in the open, so it is the hostile a new player
+        // can actually beat — two swings of a bare fist. Its threat is arithmetic, not health.
+        ["slime"] = 8,
     };
 
     /// <summary>Kinds that leave something behind without being touched.</summary>

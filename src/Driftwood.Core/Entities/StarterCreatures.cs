@@ -318,9 +318,44 @@ public static class StarterCreatures
         return new CreatureModel("spider", 64, 32, [.. bones]);
     }
 
+    /// <summary>
+    /// The one that is mostly liquid: a core with a face, inside a shell of gel.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ <b>The reference cuts this creature as two skeletons</b> — the core on one file and
+    /// the gel shell on its own "armor" file, drawn over it translucent. Ours is one model carrying
+    /// both, because they share a sheet and a creature is one thing here; the shell's box is the
+    /// armor file's, to the unit.</para>
+    /// <para>⛔ <b>The shell is a bone named <c>gel</c> and <see cref="Textures.CreatureArt"/> leaves
+    /// it unpainted on purpose.</b> The entity shader is cutout, not blending — a translucent shell
+    /// cannot be drawn honestly, and an opaque one would hide the face this thing aims at you. Left
+    /// transparent it is discarded per pixel, so ours is the core with its eyes; a pack whose gel is
+    /// painted more than half solid gets its full cube back, which is the better of the two readings
+    /// under a rule that cannot blend.</para>
+    /// </remarks>
+    public static CreatureModel Slime() => new(
+        "slime", 64, 32,
+        [
+            Bone("core", "", new Vector3(0f, 4f, 0f),
+                Box(-3f, 1f, -3f, 6f, 6f, 6f, 0, 16)),
+
+            Bone("eye0", "core", new Vector3(0f, 4f, 0f),
+                Box(-3.3f, 4f, -3.5f, 2f, 2f, 2f, 32, 0)),
+
+            Bone("eye1", "core", new Vector3(0f, 4f, 0f),
+                Box(1.3f, 4f, -3.5f, 2f, 2f, 2f, 32, 4)),
+
+            Bone("mouth", "core", new Vector3(0f, 4f, 0f),
+                Box(0f, 2f, -3.5f, 1f, 1f, 1f, 32, 8)),
+
+            Bone("gel", "core", new Vector3(0f, 4f, 0f),
+                Box(-4f, 0f, -4f, 8f, 8f, 8f, 0, 0)),
+        ]);
+
     /// <summary>Every creature that ships with the game, by our name for it.</summary>
     public static IReadOnlyList<CreatureModel> All { get; } =
-        [Cow(), Pig(), Sheep(), Chicken(), Wolf(), Zombie(), Drowned(), Husk(), Skeleton(), Spider()];
+        [Cow(), Pig(), Sheep(), Chicken(), Wolf(), Zombie(), Drowned(), Husk(), Skeleton(), Spider(),
+         Slime()];
 
     /// <summary>Ours for this creature, or null when we have not drawn one yet.</summary>
     public static CreatureModel? ByName(string name)

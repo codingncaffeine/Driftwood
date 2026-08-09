@@ -544,6 +544,10 @@ public static class StarterItems
         Loose(items, "string", "string", StarterBlocks.LayerString);
         Loose(items, "bone", "bone", StarterBlocks.LayerBone);
 
+        // ⚠ A component with nothing yet to spend it on, the leather-and-feather posture: M1's
+        // reagents are what it is for, and being obtainable is this phase's whole claim.
+        Loose(items, "slimeball", "slimeball", StarterBlocks.LayerSlimeball);
+
         items.Register(new ItemType
         {
             Name = "rotten_flesh", Label = "rotten flesh",
@@ -773,7 +777,11 @@ public static class StarterItems
         // reference's own tell, and the one drop that makes wading after one worth the wet.
         new CreatureDrops.Rule("drowned", DropTrigger.Killed, "rotten_flesh", 1, 2),
         new CreatureDrops.Rule("drowned", DropTrigger.Killed, "copper_ingot", 0, 1),
-        new CreatureDrops.Rule("husk", DropTrigger.Killed, "rotten_flesh", 1, 2));
+        new CreatureDrops.Rule("husk", DropTrigger.Killed, "rotten_flesh", 1, 2),
+
+        // ⛳ #93's first new drop. A component the magic arc (M1) is waiting on, obtainable the
+        // day the slime is — the string-and-bone posture exactly.
+        new CreatureDrops.Rule("slime", DropTrigger.Killed, "slimeball", 1, 2));
 
     /// <summary>What every stage of every root crop leaves when it is pulled up.</summary>
     /// <remarks>

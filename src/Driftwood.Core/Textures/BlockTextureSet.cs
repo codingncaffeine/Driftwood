@@ -439,6 +439,9 @@ public static class BlockTextureSet
         new("jack_o_lantern", "textures/block/jack_o_lantern.png", false),
 
         new("cobweb", "textures/block/cobweb.png", true, "textures/block/web.png"),
+
+        // What the slime leaves. The modern name has an underscore; the pre-flattening one did not.
+        new("slimeball", "textures/item/slime_ball.png", true, "textures/items/slimeball.png"),
     ];
 
     /// <summary>
@@ -1359,6 +1362,10 @@ public static class BlockTextureSet
             StarterBlocks.LayerPumpkinFace => TileGen.PumpkinFace(1340, lit: false),
             StarterBlocks.LayerJackOLantern => TileGen.PumpkinFace(1340, lit: true),
             StarterBlocks.LayerCobweb => TileGen.Cobweb(1345),
+
+            // A slimeball is a lump in the slime's own pond-green, its coat colour exactly, so the
+            // drop and the creature read as one thing in a pocket.
+            StarterBlocks.LayerSlimeball => TileGen.IconLump(1350, 116, 162, 100),
 
             _ => Wheat(layer) ?? Crop(layer) ?? CropIcon(layer) ?? StainedGlass(layer)
                  ?? MetalBlock(layer) ?? Wool(layer) ?? Meat(layer) ?? Dye(layer)
