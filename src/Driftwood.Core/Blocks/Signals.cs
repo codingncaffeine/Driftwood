@@ -144,6 +144,18 @@ public sealed class SignalTable
                 continue;
             }
 
+            // ⛳ The blastcask is a sink with ONE direction: the cold cask answers power by
+            // becoming the lit one, and the lit form is deliberately not a sink at all — a fuse
+            // does not go out when the lever drops. The client hears the switch and lights the
+            // fuse; what happens from there is Blastcask's file to say.
+            if (name == Blastcask.Cold)
+            {
+                _sink[id] = true;
+                _sinkPowered[id] = false;
+                _sinkTwin[id] = registry.ByName(Blastcask.Lit).Id.Value;
+                continue;
+            }
+
             // The sinks: the tidelamp pair, and every door and trapdoor — whose powered state is
             // its open one. Wet trapdoors carry the same "_open" in their names, so the sea makes
             // no difference to a hinge.

@@ -679,9 +679,9 @@ public static class StarterItems
         Loose(items, "slimeball", "slimeball", StarterBlocks.LayerSlimeball);
         Block(items, blocks, "slime_block", "slime block", StarterBlocks.LayerSlimeBlock);
 
-        // Same posture: what will eventually want it is its own work (#27's signals arc talks of
-        // blasting; nothing is promised). It is the crawler's tell in a pocket.
+        // Five measures pack into the blastcask (#97) — the crawler's tell, finally spendable.
         Loose(items, "gunpowder", "gunpowder", StarterBlocks.LayerGunpowder);
+        Block(items, blocks, "blastcask", "blastcask", StarterBlocks.LayerBlastcaskSide);
 
         // The farwalker's pearl — the teleport reagent M1's summons are written against.
         Loose(items, "farpearl", "farpearl", StarterBlocks.LayerFarpearl);
@@ -889,6 +889,10 @@ public static class StarterItems
         foreach (var name in StarterBlocks.UpperHalves) rules.Add(new BlockDrops.Rule(name, null));
         foreach (var name in StarterBlocks.OpenLowerHalves) rules.Add(new BlockDrops.Rule(name, "door"));
         foreach (var name in StarterBlocks.OpenTrapdoors) rules.Add(new BlockDrops.Rule(name, "trapdoor"));
+
+        // ⛳ Mining a LIT cask is the defusal, and getting the cask back is what defusing pays —
+        // without this row the lit form has no placing item and would leave nothing.
+        rules.Add(new BlockDrops.Rule(Blocks.Blastcask.Lit, Blocks.Blastcask.Cold));
 
         return new BlockDrops(blocks, items, [.. rules]);
     }

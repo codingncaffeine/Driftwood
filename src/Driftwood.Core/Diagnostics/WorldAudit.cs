@@ -1175,6 +1175,10 @@ public static class WorldAudit
         Check("a slime floor returns a fall and never bills it", bounceFaults.Count == 0,
             bounceFaults.Count == 0 ? bounceDetail : $"{bounceFaults.Count} faults: {bounceFaults[0]}");
 
+        var caskFaults = BlastcaskSelfTest(registry, out var caskDetail);
+        Check("a cask fuse burns down once, defuses when mined, and never unlights", caskFaults.Count == 0,
+            caskFaults.Count == 0 ? caskDetail : $"{caskFaults.Count} faults: {caskFaults[0]}");
+
         var herdSaveFaults = HerdSaveSelfTest(out var herdSaveDetail);
         Check("a herd survives the trip through a save", herdSaveFaults.Count == 0,
             herdSaveFaults.Count == 0 ? herdSaveDetail : $"{herdSaveFaults.Count} faults: {herdSaveFaults[0]}");
@@ -4810,6 +4814,81 @@ public static class WorldAudit
     }
 
     /// <summary>
+    /// Works the blastcask's rulebook headlessly: the fuse ladder, the defusal, and the two
+    /// one-way doors — the toggle with no return row and the sink with no lit form.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ The crater itself is the crawler's already-proven path and is not re-proven here; what
+    /// the cask adds is the FUSE, and every claim about one is a few frames of arithmetic.
+    /// </remarks>
+    private static List<string> BlastcaskSelfTest(BlockRegistry registry, out string detail)
+    {
+        var faults = new List<string>();
+        const float Step = 1f / 60f;
+
+        var cold = registry.ByName(Blastcask.Cold).Id;
+        var lit = registry.ByName(Blastcask.Lit).Id;
+
+        // The two one-way doors, asked of the tables rather than restated.
+        var toggles = new Dictionary<ushort, BlockId>();
+        foreach (var (from, to) in StarterBlocks.Toggles(registry)) toggles[from.Value] = to;
+
+        if (!toggles.TryGetValue(cold.Value, out var togglesTo) || togglesTo != lit)
+            faults.Add("a right click on a cold cask does not light it");
+        if (toggles.ContainsKey(lit.Value))
+            faults.Add("the LIT cask has a toggle row — a fuse that can be clicked back out");
+
+        var table = new SignalTable(registry);
+        if (!table.IsSink(cold.Value))
+            faults.Add("the cold cask is not a signal sink — a wire cannot light it");
+        else if (table.SinkTwin(cold.Value) != lit)
+            faults.Add("power swaps the cold cask to something that is not the lit one");
+        if (table.IsSink(lit.Value))
+            faults.Add("the LIT cask is a sink — a fuse the wire going dark would put out");
+
+        // The fuse ladder: lit at second nought, burning at 2.9, gone off at 3.1 — exactly once.
+        var fuses = new Blastcask.Fuses();
+        var burned = new List<(int X, int Y, int Z)>();
+        var standing = true;
+
+        fuses.Light((5, 60, 5), Blastcask.FuseSeconds);
+
+        for (var t = 0f; t < 2.9f; t += Step) fuses.Update(Step, _ => standing, burned);
+        if (burned.Count != 0)
+            faults.Add($"a fuse went off at 2.9 seconds of its {Blastcask.FuseSeconds}");
+
+        for (var t = 2.9f; t < 3.4f; t += Step) fuses.Update(Step, _ => standing, burned);
+        if (burned.Count != 1)
+            faults.Add($"{burned.Count} burn-downs came off one fuse");
+        if (fuses.Count != 0)
+            faults.Add("a burned-down fuse is still in the list");
+
+        // The defusal: mine the lit cask and the fuse dies with nothing to show.
+        burned.Clear();
+        standing = false;
+        fuses.Light((6, 60, 6), Blastcask.FuseSeconds);
+        for (var t = 0f; t < 4f; t += Step) fuses.Update(Step, _ => standing, burned);
+        if (burned.Count != 0)
+            faults.Add("a fuse whose cask was mined away still went off");
+
+        // Re-lighting shortens, never lengthens — a blast washing over a lit cask must not
+        // grant it more time.
+        burned.Clear();
+        standing = true;
+        fuses.Light((7, 60, 7), Blastcask.FuseSeconds);
+        fuses.Light((7, 60, 7), Blastcask.ChainSeconds);
+        for (var t = 0f; t < Blastcask.ChainSeconds + 0.2f; t += Step)
+            fuses.Update(Step, _ => standing, burned);
+        if (burned.Count != 1)
+            faults.Add("a hurried fuse did not go off on the shorter time");
+
+        detail = "the fuse holds at 2.9s and goes off once past 3, mining the lit cask defuses "
+               + "it, a re-light only ever shortens, and both ignition doors are one-way";
+
+        return faults;
+    }
+
+    /// <summary>
     /// Checks that the light a player can build gets brighter, and that smokeglass stops it.
     /// </summary>
     /// <remarks>
@@ -4907,6 +4986,17 @@ public static class WorldAudit
             {
                 if (pairs.ContainsKey(to.Value))
                     faults.Add($"{registry[to].Name} can be clicked back off, so the button is not momentary");
+                continue;
+            }
+
+            // ⛳ The blastcask is the second one-way pair: a fuse cannot be clicked back out,
+            // so the lit form must have no toggle row — the button's own asymmetric assert.
+            // (The change-something rule below would call the pair inert; what this pair
+            // changes arrives three seconds later.)
+            if (registry[to].Name == Blastcask.Lit)
+            {
+                if (pairs.ContainsKey(to.Value))
+                    faults.Add("the lit cask can be clicked back out, so a fuse is not a commitment");
                 continue;
             }
 
@@ -6997,17 +7087,19 @@ public static class WorldAudit
         ((ushort)(StarterBlocks.LayerGateFirst + 9), "gate_latch_top_on"),
         (StarterBlocks.LayerRail, "rail"),
 
-        // Cart icon and the fried egg by their own constants now more went on after them — the
-        // moving pin handing its ground to fixed ones on the way past, as every run before it has.
+        // Cart icon, the fried egg and the slime block by their own constants now more went on
+        // after them — the moving pin handing its ground to fixed ones on the way past, as every
+        // run before it has.
         (StarterBlocks.LayerCartIcon, "cart_icon"),
         (StarterBlocks.LayerFriedEgg, "fried_egg"),
+        (StarterBlocks.LayerSlimeBlock, "slime_block"),
 
-        // The moving pin: the LAST layer, by name. It has now caught SEVEN appends in the act —
+        // The moving pin: the LAST layer, by name. It has now caught EIGHT appends in the act —
         // fifteen crop rows landing after "the last layer is bonemeal", the composter's four
         // landing after black glass, the berry bush's three after compost-ready, seagrass after
-        // mossy rubble, the signal kit after seagrass, the track after the gates, and the fried
-        // egg after the cart. Keep it pointed at the true end.
-        ((ushort)(StarterBlocks.LayerCount - 1), "slime_block"),
+        // mossy rubble, the signal kit after seagrass, the track after the gates, the fried egg
+        // after the cart, and the cask after the slime block. Keep it pointed at the true end.
+        ((ushort)(StarterBlocks.LayerCount - 1), "blastcask_bottom"),
     ];
 
     /// <summary>
@@ -9222,12 +9314,13 @@ public static class WorldAudit
         var table = new SignalTable(registry);
         var switched = new List<(int X, int Y, int Z, BlockId Now)>();
 
-        // 78 as a literal: 32 door forms, 16 trapdoors, their 16 wet twins, the lamp pair, and
-        // the twelve booster forms.
+        // 79 as a literal: 32 door forms, 16 trapdoors, their 16 wet twins, the lamp pair, the
+        // twelve booster forms — and the blastcask, whose LIT form is deliberately not counted:
+        // a fuse does not go out when the lever drops, so only the cold cask is a sink.
         var (wires, sources, gates, sinks) = table.Census();
-        if (wires != 16 || sources != 11 || gates != 20 || sinks != 78)
+        if (wires != 16 || sources != 11 || gates != 20 || sinks != 79)
             faults.Add($"the table reads {wires} wire strengths, {sources} live sources, {gates} "
-                     + $"lit gates and {sinks} sinks — wanted 16, 11, 20, 78");
+                     + $"lit gates and {sinks} sinks — wanted 16, 11, 20, 79");
 
         var leverOff = registry.ByName("lever_floor").Id;
         var leverOn = registry.ByName("lever_floor_on").Id;

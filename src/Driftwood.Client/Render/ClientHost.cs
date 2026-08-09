@@ -522,6 +522,15 @@ public sealed class ClientHost : IDisposable
     /// <summary>Each block with two states, and the one a right click swaps it to.</summary>
     private readonly Dictionary<ushort, BlockId> _toggle = [];
 
+    /// <summary>The burning cask fuses. Every ignition door funnels through LightFuse.</summary>
+    private readonly Blastcask.Fuses _fuses = new();
+
+    /// <summary>Scratch for the fuse pass, so a quiet frame allocates nothing.</summary>
+    private readonly List<(int X, int Y, int Z)> _burnedDown = [];
+
+    /// <summary>The lit cask's id, asked once — the fuse pass wants it every frame.</summary>
+    private BlockId _litCask;
+
     /// <summary>Each lower half of a two-cell block, and what goes above it.</summary>
     private readonly Dictionary<ushort, BlockId> _tallUpper = [];
 
@@ -1491,6 +1500,7 @@ public sealed class ClientHost : IDisposable
         foreach (var (from, to) in StarterBlocks.Toggles(registry)) _toggle[from.Value] = to;
         foreach (var (lower, upper) in StarterBlocks.TallPairs(registry)) _tallUpper[lower.Value] = upper;
         _supports = new SupportTable(registry);
+        _litCask = registry.ByName(Blastcask.Lit).Id;
 
         // Each pressed button's idle form, for the spring back — the press itself rides the
         // toggle table, which deliberately has no return row for a momentary thing.
@@ -2052,6 +2062,10 @@ public sealed class ClientHost : IDisposable
         {
             var swung = _registry[_waterlogging.DryOf(id)].Name;
             var at = new Vector3(x + 0.5f, y + 0.5f, z + 0.5f);
+
+            // ⛳ The second ignition door: a powered wire lit a cask. The sink is one-way in the
+            // table, so the fuse starting here can never be un-started by the wire going dark.
+            if (swung == Blastcask.Lit) LightFuse(x, y, z, Blastcask.FuseSeconds);
 
             if (swung.Contains("door", StringComparison.Ordinal))
                 _audio?.Play(
@@ -5284,6 +5298,38 @@ public sealed class ClientHost : IDisposable
     /// player their wall AND the stone it was built from. Forty percent is punishment that leaves
     /// something to rebuild with.</para>
     /// </remarks>
+    /// <summary>Starts a cell's fuse burning — every ignition door funnels through here.</summary>
+    private void LightFuse(int x, int y, int z, float seconds)
+    {
+        _fuses.Light((x, y, z), seconds);
+        _audio?.Play(
+            Pick(CreatureSounds.Fuses), new Vector3(x + 0.5f, y + 0.5f, z + 0.5f), 0.9f, Wobble());
+    }
+
+    /// <summary>Burns the cask fuses down and detonates whatever ran out.</summary>
+    /// <remarks>
+    /// ⛳ <b>The cask cell is cleared BEFORE its blast is applied</b>, or the crater's own sweep
+    /// would find the cask still standing and light it again — a self-chain with no end. Mining
+    /// the lit cask defuses it: the fuse asks its block still stands every frame, and a fuse
+    /// whose block is gone dies with nothing to show for it.
+    /// </remarks>
+    private void StepFuses(float dt)
+    {
+        if (!_walking || !_spawned || _fuses.Count == 0) return;
+
+        _burnedDown.Clear();
+        _fuses.Update(
+            dt,
+            cell => _streamer.World.GetBlock(cell.X, cell.Y, cell.Z) == _litCask,
+            _burnedDown);
+
+        foreach (var (x, y, z) in _burnedDown)
+        {
+            _streamer.EditBlock(x, y, z, BlockId.Air);
+            Detonate(new Vector3(x + 0.5f, y + 0.5f, z + 0.5f));
+        }
+    }
+
     private void Detonate(Vector3 centre)
     {
         _audio?.Play(Pick(CreatureSounds.Explosions), centre, 1f, Wobble());
@@ -5308,6 +5354,16 @@ public sealed class ClientHost : IDisposable
             if (was == BlockId.Air) continue;   // the support pass may have dropped it already
 
             var at = new Vector3(x + 0.5f, y + 0.5f, z + 0.5f);
+
+            // ⛳ A cask in the crater is LIT, not scattered — the chain is the whole point of
+            // laying a line of them. One already burning has its fuse hurried instead, because
+            // Light shortens and never lengthens.
+            if (Blastcask.IsCask(_registry[was].Name))
+            {
+                if (was != _litCask) _streamer.EditBlock(x, y, z, _litCask);
+                LightFuse(x, y, z, Blastcask.ChainSeconds);
+                continue;
+            }
 
             // A station in the crater spills what it held, exactly as mining it does.
             foreach (var spilled in _furnaces.Remove(x, y, z)) _drops.Drop(spilled, at);
@@ -5829,6 +5885,7 @@ public sealed class ClientHost : IDisposable
         StepFluid((float)dt);
         _signalNow += dt;
         StepSignals(_signalNow, (float)dt);
+        StepFuses((float)dt);
         StepLeaffall((float)dt);
         StepFurnaces((float)dt);
         StepCreatures((float)dt);
@@ -7129,6 +7186,10 @@ public sealed class ClientHost : IDisposable
 
             case BlockUse.Toggle when _toggle.TryGetValue(struck.Id.Value, out var other):
                 _streamer.EditBlock(hit.X, hit.Y, hit.Z, other);
+
+                // ⛳ The first ignition door: a right click lit a cask. The toggle table has no
+                // return row, so there is no clicking a fuse back out.
+                if (other == _litCask) LightFuse(hit.X, hit.Y, hit.Z, Blastcask.FuseSeconds);
 
                 // A button is momentary: the press books its own spring back, and the signal tick
                 // is what honours it.

@@ -516,6 +516,14 @@ public static class BlockTextureSet
         // ⚠ Not cutout: the tile is a full square of jelly with no holes — the coloured-glass
         // answer, not the clear pane's. The see-through look is the translucent PASS's alpha.
         new("slime_block", "textures/block/slime_block.png", false, "textures/blocks/slime.png"),
+
+        new("blastcask_side", "textures/block/tnt_side.png", false, "textures/blocks/tnt_side.png"),
+        new("blastcask_top", "textures/block/tnt_top.png", false, "textures/blocks/tnt_top.png"),
+
+        // ⚠ No pack path, honestly: the reference draws no lit lid — igniting swaps the whole
+        // block to an entity there, so there is no file to name.
+        new("blastcask_lit_top", "", false),
+        new("blastcask_bottom", "textures/block/tnt_bottom.png", false, "textures/blocks/tnt_bottom.png"),
     ];
 
     /// <summary>
@@ -1506,6 +1514,10 @@ public static class BlockTextureSet
             StarterBlocks.LayerCartIcon => TileGen.IconCart(1374),
             StarterBlocks.LayerFriedEgg => TileGen.IconFriedEgg(1375),
             StarterBlocks.LayerSlimeBlock => TileGen.SlimeBlock(1376),
+            StarterBlocks.LayerBlastcaskSide => TileGen.BlastcaskSide(1377),
+            StarterBlocks.LayerBlastcaskTop => TileGen.BlastcaskTop(1378, lit: false),
+            StarterBlocks.LayerBlastcaskLitTop => TileGen.BlastcaskTop(1378, lit: true),
+            StarterBlocks.LayerBlastcaskBottom => TileGen.Planks(1379, 108, 56, 40),
 
             _ when layer >= StarterBlocks.LayerGateFirst
                    && layer < StarterBlocks.LayerGateFirst + 10 =>

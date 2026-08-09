@@ -505,6 +505,55 @@ public static class TileGen
         return t;
     }
 
+    /// <summary>The blastcask: powder-keg staves in warning red-brown, banded twice with iron.</summary>
+    public static byte[] BlastcaskSide(int seed)
+    {
+        var t = Planks(seed, 158, 74, 52);
+
+        // Two iron bands round the staves, each lit on its upper row the way a bevel is.
+        foreach (var band in (int[])[3, 11])
+        for (var dy = 0; dy < 2; dy++)
+        for (var x = 0; x < Size; x++)
+        {
+            var d = (int)((Noise(x, band + dy, seed + 31) * 2f - 1f) * 9f);
+            var lift = dy == 0 ? 10 : -6;
+            Put(t, x, band + dy,
+                Clamp(120 + lift + d), Clamp(120 + lift + d), Clamp(126 + lift + d), 255);
+        }
+
+        return t;
+    }
+
+    /// <summary>The cask's lid: powder showing through the open ring, and the fuse out of it.</summary>
+    public static byte[] BlastcaskTop(int seed, bool lit)
+    {
+        var t = Planks(seed, 122, 60, 44);
+
+        // The powder: a grey disc under the ring of the lid.
+        for (var y = 3; y < 13; y++)
+        for (var x = 3; x < 13; x++)
+        {
+            var dx = x - 7.5f;
+            var dy = y - 7.5f;
+            if (dx * dx + dy * dy > 20f) continue;
+
+            var d = (int)((Noise(x, y, seed + 7) * 2f - 1f) * 12f);
+            Put(t, x, y, Clamp(88 + d), Clamp(86 + d), Clamp(84 + d), 255);
+        }
+
+        // The fuse; lit, its tip burns white-orange — the one difference between the lids.
+        Put(t, 7, 7, 62, 48, 36, 255);
+        Put(t, 8, 6, 62, 48, 36, 255);
+
+        if (lit)
+        {
+            Put(t, 8, 6, 255, 224, 120, 255);
+            Put(t, 9, 5, 255, 168, 64, 255);
+        }
+
+        return t;
+    }
+
     /// <summary>
     /// A fried egg: the white spread flat with a wandering edge, the yolk a domed disc set
     /// off-centre — dead centre reads as a target rather than a meal.

@@ -603,12 +603,17 @@ public static class StarterBlocks
     public const ushort LayerRailBoostOn = LayerCobweb + 36;
     public const ushort LayerCartIcon = LayerCobweb + 37;
 
-    // #97, the unconsumed items given consumers: the egg's answer to a fire, then the slimeball
-    // packed away into the first floor that returns a landing.
+    // #97, the unconsumed items given consumers: the egg's answer to a fire, the slimeball
+    // packed away into the first floor that returns a landing, and the crawler's powder in a
+    // cask — side, cold top, lit top, bottom.
     public const ushort LayerFriedEgg = LayerCobweb + 38;
     public const ushort LayerSlimeBlock = LayerCobweb + 39;
+    public const ushort LayerBlastcaskSide = LayerCobweb + 40;
+    public const ushort LayerBlastcaskTop = LayerCobweb + 41;
+    public const ushort LayerBlastcaskLitTop = LayerCobweb + 42;
+    public const ushort LayerBlastcaskBottom = LayerCobweb + 43;
 
-    public const int LayerCount = LayerSlimeBlock + 1;
+    public const int LayerCount = LayerBlastcaskBottom + 1;
 
     /// <summary>One anvil's name, by how worn it is and which way it lies.</summary>
     /// <remarks>
@@ -929,6 +934,28 @@ public static class StarterBlocks
             Opaque = false, Translucent = true, Bouncy = true,
             Sounds = SoundMaterial.Cloth,
             Model = BlockModel.Cube(LayerSlimeBlock, LayerSlimeBlock, LayerSlimeBlock),
+        });
+
+        // ⛳ THE BLASTCASK — five measures of the crawler's powder packed in sand, and a third way
+        // to the blast the crawler already proved. A right click lights it (the button's own
+        // one-way toggle), a powered wire lights it (a one-way sink), and a blast lights it
+        // instead of scattering it. Three seconds of fuse; mining the lit cask IS the defusal.
+        registry.Register(new BlockType
+        {
+            Name = Blastcask.Cold, Hardness = 0.6f, Crafted = true,
+            Sounds = SoundMaterial.Wood, Use = BlockUse.Toggle,
+            TopLayer = LayerBlastcaskTop, SideLayer = LayerBlastcaskSide,
+            BottomLayer = LayerBlastcaskBottom,
+        });
+
+        // The lit form: no Use, because a burning fuse answers nobody. It leaves the COLD item
+        // when mined — getting the cask back is what defusing pays.
+        registry.Register(new BlockType
+        {
+            Name = Blastcask.Lit, Hardness = 0.6f, Crafted = true,
+            Sounds = SoundMaterial.Wood,
+            TopLayer = LayerBlastcaskLitTop, SideLayer = LayerBlastcaskSide,
+            BottomLayer = LayerBlastcaskBottom,
         });
 
         // ⛳ THE ANVIL, and it wears out. Three stages on one side texture, each its own pair of
@@ -2357,6 +2384,10 @@ public static class StarterBlocks
 
         foreach (var form in AttachedForms("button"))
             yield return (registry.ByName(form).Id, registry.ByName(form + "_pressed").Id);
+
+        // The blastcask lights the button's way: one direction, no return. A fuse cannot be
+        // clicked back out — mining the lit cask is the only way off the ride.
+        yield return (registry.ByName(Blastcask.Cold).Id, registry.ByName(Blastcask.Lit).Id);
 
         for (var i = 0; i < Placeable.Facings.Length; i++)
         {

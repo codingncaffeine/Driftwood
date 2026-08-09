@@ -460,6 +460,12 @@ public static class StarterRecipes
             station: CraftStation.Bench);
         Loose("slimeballs from a block", "slimeball", 9, "slime_block");
 
+        // ⛳ The crawler's powder packed in sand ballast, the genre's own X (#97). What it does
+        // when lit is Blastcask's file to say; there is no recipe back OUT of a cask on purpose —
+        // powder committed to a fuse is committed.
+        Shaped("blastcask", "blastcask", 1, ["MEM", "EME", "MEM"], "gunpowder",
+            station: CraftStation.Bench);
+
         // Every tool, off the two tables. The material is a tag for the tiers that have more than
         // one source — any plank, any rough stone — and a plain item for the metals.
         foreach (var tier in StarterItems.Tiers)
@@ -624,6 +630,7 @@ public static class StarterRecipes
         'U' => "copper_ingot",
         'O' => "stone",
         'Y' => "gold_ingot",
+        'E' => "sand",
         _ => throw new InvalidOperationException($"recipe '{recipe}' uses unknown key '{key}'"),
     };
 }
