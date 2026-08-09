@@ -1319,8 +1319,8 @@ public static class BlockTextureSet
             // Stations wear StationArt from here: hand-drawn grids, studied off the reference
             // packs [user directive 2026-08-09] — a workbench is a drawing, not a texture.
             StarterBlocks.LayerBenchFront => StationArt.BenchFront(),
-            StarterBlocks.LayerStonecutterTop => TileGen.StonecutterTop(1064, 122, 122, 128),
-            StarterBlocks.LayerStonecutterSide => TileGen.StonecutterSide(1064, 122, 122, 128),
+            StarterBlocks.LayerStonecutterTop => StationArt.StonecutterTopTile(),
+            StarterBlocks.LayerStonecutterSide => StationArt.StonecutterSideTile(),
 
             StarterBlocks.LayerBenchTop => StationArt.BenchTop(),
             StarterBlocks.LayerBenchSide => StationArt.BenchSide(),
@@ -1423,12 +1423,12 @@ public static class BlockTextureSet
 
             // ⛳ The anvil is dark worked iron. Its face is scored where it has been struck, and each
             // stage takes more of it — which is the same Scored/Panel vocabulary the stations use.
-            StarterBlocks.LayerAnvilSide => TileGen.Panel(TileGen.Speckle(1130, 74, 74, 80, 9, 0.4f), 3, 30),
-            StarterBlocks.LayerAnvilTop => TileGen.Speckle(1131, 96, 96, 102, 7, 0.3f),
+            StarterBlocks.LayerAnvilSide => StationArt.AnvilSideTile(),
+            StarterBlocks.LayerAnvilTop => StationArt.AnvilTopTile(),
             StarterBlocks.LayerAnvilChipped => TileGen.Ore(
-                1132, TileGen.Speckle(1131, 96, 96, 102, 7, 0.3f), 58, 56, 54, 4),
+                1132, StationArt.AnvilTopTile(), 58, 56, 54, 4),
             StarterBlocks.LayerAnvilDamaged => TileGen.Ore(
-                1133, TileGen.Speckle(1131, 90, 90, 96, 9, 0.35f), 48, 44, 42, 9),
+                1133, StationArt.AnvilTopTile(), 48, 44, 42, 9),
 
             // ⛳ Tilled ground is dirt turned over: same colour, combed into rows. Wet is the same
             // tile darkened, because that is what wet earth is and a player has to tell them apart
@@ -1544,14 +1544,14 @@ public static class BlockTextureSet
 
             // The smithing table: a scored iron worktop on a banded timber body — the anvil's
             // face on the bench's build, which is what the station is.
-            StarterBlocks.LayerSmithingTop => TileGen.Scored(
-                1380, TileGen.Speckle(1381, 70, 70, 76, 8, 0.35f)),
-            StarterBlocks.LayerSmithingSide => TileGen.Panel(TileGen.Planks(1382, 118, 88, 56), 2, 24),
+            StarterBlocks.LayerSmithingTop => StationArt.SmithingTop(),
+            StarterBlocks.LayerSmithingSide => StationArt.SmithingSide(),
 
             // The loom: warp threads combed across the top — the tilled field's own drawing in
+            // spirit, hand-drawn now with the shed and the batten bar read off the reference.
             // thread's colours — over a paler timber frame than the bench's.
-            StarterBlocks.LayerLoomTop => TileGen.Tilled(1383, 214, 206, 188),
-            StarterBlocks.LayerLoomSide => TileGen.Panel(TileGen.Planks(1384, 168, 132, 92), 2, 28),
+            StarterBlocks.LayerLoomTop => StationArt.LoomTop(),
+            StarterBlocks.LayerLoomSide => StationArt.LoomSide(),
 
             StarterBlocks.LayerCargoCartIcon => TileGen.IconCart(1374, laden: true),
 
@@ -1747,14 +1747,18 @@ public static class BlockTextureSet
     }
 
     /// <summary>The head colour of each tool tier, in the order the layers run.</summary>
+    /// <remarks>⛳ Punched toward the user's own example sheet (art exmaples.png, 2026-08-09):
+    /// its gold blade reads 245,224,83 and its teal one 76,247,211 — a brighter, more
+    /// saturated register than the old values, and it is what makes a tier legible in a
+    /// dark slot well at a glance.</remarks>
     private static readonly (byte R, byte G, byte B)[] ToolPalettes =
     [
-        (158, 122, 72),     // wood
-        (132, 132, 137),    // stone
-        (196, 112, 62),     // copper
-        (232, 196, 82),     // gold
-        (214, 214, 220),    // iron
-        (118, 224, 220),    // stormglass
+        (162, 124, 70),     // wood
+        (138, 138, 144),    // stone
+        (204, 116, 62),     // copper
+        (244, 220, 84),     // gold
+        (226, 228, 234),    // iron
+        (86, 238, 212),     // stormglass
         (Items.Armour.DiamondR, Items.Armour.DiamondG, Items.Armour.DiamondB),
     ];
 

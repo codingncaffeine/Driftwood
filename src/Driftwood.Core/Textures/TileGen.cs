@@ -96,6 +96,37 @@ public static class TileGen
     private static int MidTone(float roll) =>
         roll < 0.07f ? 0 : roll < 0.26f ? 1 : roll < 0.62f ? 2 : roll < 0.87f ? 3 : roll < 0.975f ? 4 : 5;
 
+    /// <summary>
+    /// Rims an item sprite with a dark outline: every clear pixel touching ink becomes line.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ The user's own example sheets (art exmaples.png, 2026-08-09) outline every item like
+    /// a sticker, full silhouette, near-black — and that outline is most of why their icons
+    /// read at a glance on a dark well. Grown outward so the drawing itself is untouched, and
+    /// four-connected so a diagonal edge gets a clean stair rather than a doubled line.
+    /// </remarks>
+    internal static byte[] Outline(byte[] tile, byte r = 22, byte g = 17, byte b = 14)
+    {
+        var src = (byte[])tile.Clone();
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var i = y * Stride + x * 4;
+            if (src[i + 3] >= 128) continue;      // ink stays ink
+
+            var beside =
+                (x > 0 && src[i - 4 + 3] >= 128) ||
+                (x < Size - 1 && src[i + 4 + 3] >= 128) ||
+                (y > 0 && src[i - Stride + 3] >= 128) ||
+                (y < Size - 1 && src[i + Stride + 3] >= 128);
+
+            if (beside) Put(tile, x, y, r, g, b, 255);
+        }
+
+        return tile;
+    }
+
     /// <summary>Scatters cell centres over the tile's torus — the partition under stones, clods and pebbles.</summary>
     private static void Scatter(int seed, Span<int> cx, Span<int> cy)
     {
@@ -626,7 +657,7 @@ public static class TileGen
             Put(t, x, y, Metal, Metal, Clamp(Metal + 10), 255);
         }
 
-        return t;
+        return Outline(t);
     }
 
     /// <summary>
@@ -3517,7 +3548,7 @@ public static class TileGen
                 Put(t, x, y, Clamp(70 + grain), Clamp(72 + grain), Clamp(78 + grain), 255);
         }
 
-        return t;
+        return Outline(t);
     }
 
     /// <summary>A sheet of flame, transparent around it — what stands in a campfire.</summary>
@@ -4351,7 +4382,7 @@ public static class TileGen
         for (var x = 7; x <= 8; x++)
             Put(t, x, y, Clamp(r - 62), Clamp(g - 58), Clamp(b - 52), 255);
 
-        return t;
+        return Outline(t);
     }
 
     /// <summary>How far a point is from a line segment. The one primitive a stroke needs.</summary>

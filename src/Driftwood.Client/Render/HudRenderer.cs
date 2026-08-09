@@ -2602,6 +2602,12 @@ public sealed class HudRenderer : IDisposable
     /// <param name="spin">
     /// Radians about the block's own upright axis, or 0 for the fixed three-quarter view.
     /// </param>
+    /// <summary>The dark rim drawn behind every slot icon — the user's own example sheets
+    /// outline each icon like a sticker, and it is most of why theirs sit ON the well where
+    /// ours floated in it. Multiplying the texture down to near-black keeps the cut-out
+    /// silhouette, so the rim is the icon's own shape at one texel's offset.</summary>
+    private static readonly Vector4 IconRim = new(0.055f, 0.045f, 0.04f, 1f);
+
     private void SlotIcon(
         ItemRegistry catalogue, ItemStack stack, float x, float y, float size, Vector4 tint,
         float spin = 0f)
@@ -2609,16 +2615,46 @@ public sealed class HudRenderer : IDisposable
         if (stack.IsEmpty) return;
 
         var type = catalogue[stack.Item];
+        var rim = new Vector4(IconRim.X, IconRim.Y, IconRim.Z, tint.W);
+        var o = size / 16f;
 
         if (!type.DrawsAsBlock || type.IconModel is not { Icon.Length: > 0 } model)
         {
-            if (spin != 0f) TurningCard(type.IconLayer, x, y, size, tint, spin);
-            else Rect(_blocks, x, y, size, size, tint, type.IconLayer);
+            if (spin != 0f)
+            {
+                TurningCard(type.IconLayer, x - o, y, size, rim, spin);
+                TurningCard(type.IconLayer, x + o, y, size, rim, spin);
+                TurningCard(type.IconLayer, x, y - o, size, rim, spin);
+                TurningCard(type.IconLayer, x, y + o, size, rim, spin);
+                TurningCard(type.IconLayer, x, y, size, tint, spin);
+            }
+            else
+            {
+                Rect(_blocks, x - o, y, size, size, rim, type.IconLayer);
+                Rect(_blocks, x + o, y, size, size, rim, type.IconLayer);
+                Rect(_blocks, x, y - o, size, size, rim, type.IconLayer);
+                Rect(_blocks, x, y + o, size, size, rim, type.IconLayer);
+                Rect(_blocks, x, y, size, size, tint, type.IconLayer);
+            }
             return;
         }
 
-        if (spin != 0f) TurningIcon(model, x, y, size, tint, spin);
-        else foreach (var box in model.Icon) IconBox(box, x, y, size, tint);
+        if (spin != 0f)
+        {
+            TurningIcon(model, x - o, y, size, rim, spin);
+            TurningIcon(model, x + o, y, size, rim, spin);
+            TurningIcon(model, x, y - o, size, rim, spin);
+            TurningIcon(model, x, y + o, size, rim, spin);
+            TurningIcon(model, x, y, size, tint, spin);
+        }
+        else
+        {
+            foreach (var box in model.Icon) IconBox(box, x - o, y, size, rim);
+            foreach (var box in model.Icon) IconBox(box, x + o, y, size, rim);
+            foreach (var box in model.Icon) IconBox(box, x, y - o, size, rim);
+            foreach (var box in model.Icon) IconBox(box, x, y + o, size, rim);
+            foreach (var box in model.Icon) IconBox(box, x, y, size, tint);
+        }
     }
 
     /// <summary>How thick a flat thing is made so it can be turned, in sixteenths.</summary>
@@ -2761,7 +2797,7 @@ public sealed class HudRenderer : IDisposable
             var weight = MathF.Abs(normal.X) + MathF.Abs(normal.Y) + MathF.Abs(normal.Z);
             var shade = weight <= 0f
                 ? 1f
-                : (MathF.Abs(normal.Y) + MathF.Abs(normal.Z) * 0.80f + MathF.Abs(normal.X) * 0.62f) / weight;
+                : (MathF.Abs(normal.Y) + MathF.Abs(normal.Z) * 0.85f + MathF.Abs(normal.X) * 0.46f) / weight;
 
             var lit = tint * new Vector4(shade, shade, shade, 1f);
 
@@ -2821,7 +2857,10 @@ public sealed class HudRenderer : IDisposable
         var lBottomIn = At(hi.X, lo.Y, hi.Z);
         var lBottom = At(lo.X, lo.Y, hi.Z);
 
-        Quad(_blocks, box.Left, tint * new Vector4(0.80f, 0.80f, 0.80f, 1f),
+        // 0.85 and 0.46: measured off the user's own example sheet (block examples.png,
+        // 2026-08-09), not invented — its stone icon reads 135/114/62 across the three faces,
+        // and that hard right-face drop is most of why those icons pop where ours sat flat.
+        Quad(_blocks, box.Left, tint * new Vector4(0.85f, 0.85f, 0.85f, 1f),
             lTop.X, lTop.Y, lo.X, 1f - hi.Y,
             lTopIn.X, lTopIn.Y, hi.X, 1f - hi.Y,
             lBottomIn.X, lBottomIn.Y, hi.X, 1f - lo.Y,
@@ -2833,7 +2872,7 @@ public sealed class HudRenderer : IDisposable
         var rBottom = At(hi.X, lo.Y, lo.Z);
         var rBottomIn = At(hi.X, lo.Y, hi.Z);
 
-        Quad(_blocks, box.Right, tint * new Vector4(0.62f, 0.62f, 0.62f, 1f),
+        Quad(_blocks, box.Right, tint * new Vector4(0.46f, 0.46f, 0.46f, 1f),
             rTopIn.X, rTopIn.Y, 1f - hi.Z, 1f - hi.Y,
             rTop.X, rTop.Y, 1f - lo.Z, 1f - hi.Y,
             rBottom.X, rBottom.Y, 1f - lo.Z, 1f - lo.Y,

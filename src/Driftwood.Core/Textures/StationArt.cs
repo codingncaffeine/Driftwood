@@ -545,4 +545,220 @@ public static class StationArt
         ".wvvvvvvvvvvvvv.",
         "..wW........Wv..",
     ], null, DoorPalette);
+
+    // ───────────────────── The smithing table and the loom ─────────────────────
+    // The reference's smithing table is an iron top over an OXBLOOD cabinet with copper
+    // tools on its face; the loom's whole identity is the warp — pale threads stretched
+    // over the top frame — and the woven cloth growing on its side.
+
+    private static readonly (char, byte, byte, byte)[] SmithingPalette =
+    [
+        ('D', 18, 18, 22),
+        ('m', 52, 56, 66),      // iron top
+        ('M', 66, 72, 86),      // iron, lit
+        ('B', 88, 96, 128),     // blued steel accent
+        ('x', 38, 42, 50),      // iron, shadow
+        ('r', 96, 30, 30),      // oxblood panel
+        ('R', 118, 40, 38),     // oxblood, lit
+        ('k', 66, 20, 20),      // oxblood, shadow
+        ('C', 176, 104, 70),    // copper tool
+        ('c', 132, 74, 50),     // copper, shadow
+        ('w', 118, 88, 54),     // timber feet
+    ];
+
+    public static byte[] SmithingTop() => Grid(
+    [
+        "DmMMMMMMMMMMMMmD",
+        "mMmmmmmmmmmmmmMm",
+        "mMmxxmmmmmmxmmMm",
+        "mMmmmmmmmmmmmmBm",
+        "mMmmmxxxxxxmmmMm",
+        "mMmmxmmmmmmxmmMm",
+        "mMmmxmmBmmmxmmMm",
+        "mMmmxmmmmmmxmmMm",
+        "mMmmxmmmmBmxmmMm",
+        "mMmmxmmmmmmxmmMm",
+        "mMmmmxxxxxxmmmMm",
+        "mBmmmmmmmmmmmmMm",
+        "mMmmxmmmmmmmxmMm",
+        "mMmmmmmmmmmmmmMm",
+        "mMmmmmmmmmmmmmMm",
+        "DmmmmmmmmmmmmmmD",
+    ], null, SmithingPalette);
+
+    public static byte[] SmithingSide() => Grid(
+    [
+        "DmMMMMMMMMMMMMmD",
+        "mMmmmmmmmmmmmmMm",
+        "mxmmmmmmmmmmmmxm",
+        "DDDDDDDDDDDDDDDD",
+        "krrrrrrrrrrrrrrk",
+        "krRRrrrrrrrRRrrk",
+        "krRCCcrrrCCCCrrk",
+        "krrCcrrrrrCcrrrk",
+        "krrCcrrrrrCcrrrk",
+        "krrCcrrrrrCCcrrk",
+        "krrccrrrrrrccrrk",
+        "krrrrrrrrrrrrrrk",
+        "krrrrrrrrrrrrrrk",
+        "kkrrrrrrrrrrrrkk",
+        "wwkkkkkkkkkkkkww",
+        "DwwDDDDDDDDDDwwD",
+    ], null, SmithingPalette);
+
+    private static readonly (char, byte, byte, byte)[] LoomPalette =
+    [
+        ('D', 30, 20, 12),
+        ('w', 128, 96, 56),     // frame wood
+        ('W', 156, 120, 70),    // frame wood, lit
+        ('u', 100, 74, 44),     // frame wood, shadow
+        ('T', 240, 238, 228),   // warp thread, lit
+        ('t', 208, 204, 190),   // warp thread
+        ('s', 96, 66, 40),      // the shed between threads
+        ('K', 54, 36, 24),      // woven cloth, dark
+        ('k', 74, 50, 32),      // woven cloth
+        ('b', 96, 112, 128),    // a weft stripe, dusty blue
+        ('q', 142, 74, 48),     // a weft stripe, rust
+    ];
+
+    public static byte[] LoomTop() => Grid(
+    [
+        "DwWWWWWWWWWWWWwD",
+        "wWwwwwwwwwwwwwWw",
+        "wWsTtTtTtTtTtsWw",
+        "wWsTtTtTtTtTtsWw",
+        "wWstTtTtTtTtTsWw",
+        "wWsTtTtTtTtTtsWw",
+        "wWsTtTtTtTtTtsWw",
+        "wWwuuuuuuuuuuwWw",
+        "wWwuuuuuuuuuuwWw",
+        "wWsTtTtTtTtTtsWw",
+        "wWstTtTtTtTtTsWw",
+        "wWsTtTtTtTtTtsWw",
+        "wWsTtTtTtTtTtsWw",
+        "wWsTtTtTtTtTtsWw",
+        "wWwwwwwwwwwwwwWw",
+        "DwwwwwwwwwwwwwwD",
+    ], null, LoomPalette);
+
+    public static byte[] LoomSide() => Grid(
+    [
+        "DwWWWWWWWWWWWWwD",
+        "wWwwwwwwwwwwwwWw",
+        "wWKkKkKkKkKkKkWw",
+        "wWkKkKkKkKkKkKWw",
+        "wWKkKkKkKkKkKkWw",
+        "wWbbbbbbbbbbbbWw",
+        "wWkKkKkKkKkKkKWw",
+        "wWKkKkKkKkKkKkWw",
+        "wWqqqqqqqqqqqqWw",
+        "wWkKkKkKkKkKkKWw",
+        "wWKkKkKkKkKkKkWw",
+        "wWkKkKkKkKkKkKWw",
+        "wWKkKkKkKkKkKkWw",
+        "wWwwwwwwwwwwwwWw",
+        "wuwwwwwwwwwwwwuw",
+        "DuuDDDDDDDDDDuuD",
+    ], null, LoomPalette);
+
+    // ─────────────────── The stonecutter and the anvil ───────────────────
+    // Stone furniture: the cutter is a stone bed with a metal blade track ruled across it,
+    // the anvil is one worn lump of iron — dents on the crown, rivets at the foot.
+
+    private static readonly (char, byte, byte, byte)[] StonePalette =
+    [
+        ('D', 24, 24, 26),
+        ('f', 66, 66, 70),      // dark stone
+        ('a', 104, 104, 108),   // stone
+        ('b', 124, 124, 128),   // stone, lit
+        ('w', 112, 82, 48),     // timber peg
+        ('t', 168, 170, 176),   // track metal
+        ('T', 198, 200, 206),   // track metal, lit
+        ('M', 14, 14, 15),      // the slot
+        ('i', 88, 88, 94),      // iron
+        ('I', 108, 108, 114),   // iron, lit
+        ('e', 56, 56, 60),      // iron, shadow
+    ];
+
+    public static byte[] StonecutterTopTile() => Grid(
+    [
+        "DwfaaaaaaaaaafwD",
+        "wfabbaabbaabbafw",
+        "faabababbabbaaaf",
+        "fabaabbabbaabbaf",
+        "faaabbaabbabaabf",
+        "fTTTTTTTTTTTTTTf",
+        "fttttttttttttttf",
+        "fMMMMMMMMMMMMMMf",
+        "fMMMMMMMMMMMMMMf",
+        "fttttttttttttttf",
+        "fTTTTTTTTTTTTTTf",
+        "faabbaababbaabaf",
+        "fabaabbabaabbaaf",
+        "faabbaabbaabbabf",
+        "wfaabababbabaafw",
+        "DwfaaaaaaaaaafwD",
+    ], null, StonePalette);
+
+    public static byte[] StonecutterSideTile() => Grid(
+    [
+        "DffffffffffffffD",
+        "fbbbbbbbbbbbbbbf",
+        "fabbaabbaabbaabf",
+        "faabbaabbaabbaaf",
+        "DffffffffffffffD",
+        "wwuwwwwwwwwwwuww",
+        "................",
+        "................",
+        "................",
+        "................",
+        "................",
+        "................",
+        "................",
+        "................",
+        "wwuwwwwwwwwwwuww",
+        "DDDDDDDDDDDDDDDD",
+    ], TileGen.Planks(1064, 128, 96, 56), StonePalette);
+
+    public static byte[] AnvilTopTile() => Grid(
+    [
+        "DiIIIIIIIIIIIIiD",
+        "iIiiiiiiiiiiiiIi",
+        "iIiieiiiiiiiiiIi",
+        "iIiiiiiiiieiiiIi",
+        "iIiiiieeiiiiiiIi",
+        "iIiiiiiiiiiiiiIi",
+        "iIieiiiiiiieiiIi",
+        "iIiiiiieiiiiiiIi",
+        "iIiiiiiiiiiiiiIi",
+        "iIiieiiiiiiiiiIi",
+        "iIiiiiiiieiiiiIi",
+        "iIiiieiiiiiiiiIi",
+        "iIiiiiiiiiiieiIi",
+        "iIiiiiiiiiiiiiIi",
+        "iIiiiiiiiiiiiiIi",
+        "DiiiiiiiiiiiiiiD",
+    ], null, StonePalette);
+
+    /// <summary>Flat worn iron — the anvil's SHAPE is its model's boxes, so the tile stays a
+    /// surface: lit crown edge, dents, and a riveted line along the foot.</summary>
+    public static byte[] AnvilSideTile() => Grid(
+    [
+        "DiIIIIIIIIIIIIiD",
+        "iIiiiiiiiiiiiiIi",
+        "iIiieiiiiiieiiIi",
+        "iIiiiiiiiiiiiiIi",
+        "ieiiiiieeiiiiiei",
+        "ieiiiiiiiiiiiiei",
+        "ieiieiiiiiiieiei",
+        "ieiiiiiiiiiiiiei",
+        "ieiiiiiieiiiiiei",
+        "ieiiiiiiiiiiiiei",
+        "ieiieiiiiiieiiei",
+        "ieiiiiiiiiiiiiei",
+        "ieiiiiiiiiiiiiei",
+        "eIiiiiiiiiiiiiIe",
+        "eIeieieiieieieIe",
+        "DeeeeeeeeeeeeeeD",
+    ], null, StonePalette);
 }
