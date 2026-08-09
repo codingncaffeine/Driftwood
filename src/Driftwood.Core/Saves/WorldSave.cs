@@ -52,10 +52,18 @@ public sealed record WorldState(
 
     /// <summary>The animals standing in the world, both ways through a save.</summary>
     /// <remarks>
-    /// ⛳ A list rather than the herd itself, because the herd does not exist until the world has
+    /// ⳳ A list rather than the herd itself, because the herd does not exist until the world has
     /// been stood up — loading stashes these and the herd takes them the moment it is built.
     /// </remarks>
     public List<Entities.CreatureHerd.SavedCreature> Creatures { get; } = [];
+
+    /// <summary>The carts standing on the track, both ways through a save (#28).</summary>
+    /// <remarks>
+    /// A cart is (cell, parameter, signed speed) and nothing else — its position is derived from
+    /// the rail under it, exactly as the world is derived from the seed. The rider is never
+    /// saved: whoever was aboard steps off as the world closes, which is also the genre's rule.
+    /// </remarks>
+    public List<(int X, int Y, int Z, float T, float Velocity)> Carts { get; } = [];
 }
 
 /// <summary>
@@ -308,6 +316,21 @@ public static class WorldSave
                 // story: the reader skips unknown tags, so a save with animals in it opens
                 // everywhere — an old build re-rolls its herds, which is what it always did.
                 SaveSection.Write(into, "CRTR", Bytes(beasts => WriteCreatures(beasts, state.Creatures)));
+
+                // The carts, on the same discipline: its own section, skipped clean by any build
+                // that has never heard of a track.
+                SaveSection.Write(into, "CART", Bytes(carts =>
+                {
+                    carts.Write(state.Carts.Count);
+                    foreach (var (x, y, z, t, velocity) in state.Carts)
+                    {
+                        carts.Write(x);
+                        carts.Write(y);
+                        carts.Write(z);
+                        carts.Write(t);
+                        carts.Write(velocity);
+                    }
+                }));
             }
 
             File.Move(temporary, path, overwrite: true);
@@ -462,6 +485,17 @@ public static class WorldSave
                     case "PLYR": player = payload; break;
                     case "UNLK": unlocks = payload; break;
                     case "CRTR": into.Creatures.AddRange(ReadCreatures(Reader(payload))); break;
+
+                    case "CART":
+                    {
+                        using var carts = Reader(payload);
+                        var count = carts.ReadInt32();
+                        for (var i = 0; i < count; i++)
+                            into.Carts.Add((
+                                carts.ReadInt32(), carts.ReadInt32(), carts.ReadInt32(),
+                                carts.ReadSingle(), carts.ReadSingle()));
+                        break;
+                    }
 
                     // Written by a newer build than this one. Skipped, and deliberately not an
                     // error: the length said how far, which is the whole reason sections carry one.

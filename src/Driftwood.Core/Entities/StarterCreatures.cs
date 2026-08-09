@@ -63,6 +63,23 @@ public static class StarterCreatures
             Box(outAcross - half, 0f, front - half, width, height, width, u, v, mirror: true));
     }
 
+    /// <summary>
+    /// The cart (#28) — not a creature, but cut and painted through the same pipeline: a net, a
+    /// palette row, the entity shader. An open iron tub on axles, feet at the wheels.
+    /// </summary>
+    public static CreatureModel Cart() => new(
+        "cart", 64, 64,
+        [
+            Bone("body", "", new Vector3(0f, 2f, 0f),
+                Box(-5f, 1f, -7f, 10f, 2f, 14f, 0, 0),        // floor
+                Box(-5f, 3f, -7f, 1f, 5f, 14f, 0, 16),        // left wall
+                Box(4f, 3f, -7f, 1f, 5f, 14f, 30, 16, mirror: true),
+                Box(-5f, 3f, -8f, 10f, 5f, 1f, 0, 40),        // front wall
+                Box(-5f, 3f, 7f, 10f, 5f, 1f, 22, 40),        // back wall
+                Box(-4f, 0f, -5f, 8f, 1f, 2f, 44, 46),        // front axle
+                Box(-4f, 0f, 3f, 8f, 1f, 2f, 44, 49)),        // back axle
+        ]);
+
     public static CreatureModel Cow() => new(
         "cow", 64, 32,
         [

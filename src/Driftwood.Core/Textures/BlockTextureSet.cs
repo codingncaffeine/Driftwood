@@ -499,6 +499,16 @@ public static class BlockTextureSet
         new("gate_not_top_on", "", false),
         new("gate_latch_top", "", false),
         new("gate_latch_top_on", "", false),
+
+        // ⛳ #28. The straight and the booster land on the genre's own files; the bend does not —
+        // theirs bends inside one texture per orientation set, ours is one drawing turned, so the
+        // pack's curved file would land sideways three ways out of four.
+        new("rail", "textures/block/rail.png", true, "textures/blocks/rail.png"),
+        new("rail_bend", "", true),
+        new("rail_boost", "textures/block/powered_rail.png", true, "textures/blocks/goldenRail.png"),
+        new("rail_boost_on", "textures/block/powered_rail_on.png", true,
+            "textures/blocks/goldenRail_powered.png"),
+        new("cart_icon", "textures/item/minecart.png", true, "textures/items/minecart.png"),
     ];
 
     /// <summary>
@@ -1481,6 +1491,12 @@ public static class BlockTextureSet
             // The tidelamp on the stormglass lamp's own drawing: cold and dark, then cold and lit.
             StarterBlocks.LayerTidelamp => TileGen.Lamp(1371, 46, 66, 70),
             StarterBlocks.LayerTidelampLit => TileGen.Lamp(1371, 118, 226, 236),
+
+            StarterBlocks.LayerRail => TileGen.RailStraight(1373),
+            StarterBlocks.LayerRailBend => TileGen.RailBend(1373),
+            StarterBlocks.LayerRailBoost => TileGen.RailStraight(1373, boosted: true),
+            StarterBlocks.LayerRailBoostOn => TileGen.RailStraight(1373, boosted: true, lit: true),
+            StarterBlocks.LayerCartIcon => TileGen.IconCart(1374),
 
             _ when layer >= StarterBlocks.LayerGateFirst
                    && layer < StarterBlocks.LayerGateFirst + 10 =>

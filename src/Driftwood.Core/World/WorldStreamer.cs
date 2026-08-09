@@ -101,6 +101,9 @@ public sealed class WorldStreamer : IDisposable
     /// <summary>The signal pass, when anybody has handed one over. Null costs nothing.</summary>
     public Blocks.SignalPass? Signals { get; set; }
 
+    /// <summary>The track's reshape table, when anybody has handed one over.</summary>
+    public Blocks.RailTable? Rails { get; set; }
+
     /// <summary>
     /// Sinks the signal pass switched — a door swung by a wire rather than a hand — for the
     /// client to voice and then clear. Only ever touched on the main thread.
@@ -254,8 +257,13 @@ public sealed class WorldStreamer : IDisposable
 
         Rewire(wx, wy, wz);
 
-        // The wiring hears about it last, once the world holds whatever the edit and the rewire
-        // made of it. The pass writes through its own door below, so it cannot re-enter here.
+        // The track re-picks its shapes on the same existence argument the fence pass stands on —
+        // one ring, and a reshape write cannot make a further cell want to move. Through the
+        // signal door so the mesh and light hear it without re-entering this method.
+        Rails?.Reshape(_world, wx, wy, wz, WriteSignal);
+
+        // The wiring hears about it last, once the world holds whatever the edit, the rewire and
+        // the reshape made of it. The pass writes through its own door below, so it cannot re-enter.
         Signals?.Update(_world, wx, wy, wz, WriteSignal, SignalSwitched);
     }
 

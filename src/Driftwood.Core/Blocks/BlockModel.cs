@@ -543,6 +543,61 @@ public sealed class BlockModel
         ]);
     }
 
+    /// <summary>
+    /// A rail: a film on the floor whose top face turns with the track, or climbs at forty-five.
+    /// </summary>
+    /// <param name="rotation">Quarter turns of the top tile — an elbow is the straight tile bent
+    /// in the art, so each orientation is the one drawing turned.</param>
+    /// <param name="climb">The face a climbing rail rises toward, or -1 for one lying flat.</param>
+    /// <remarks>
+    /// The climb is the crossed plant's own trick at a different angle: a flat sheet turned
+    /// forty-five degrees about the cell's centre line, rescaled so its corners land on the cell
+    /// bounds — the low edge on one floor seam, the high edge on the ceiling seam it hands over to.
+    /// </remarks>
+    public static BlockModel Rail(ushort layer, int rotation, int climb)
+    {
+        var faces = new ModelFace?[Faces.Count];
+        faces[Faces.PosY] = new ModelFace { Layer = layer, Rotation = rotation };
+        faces[Faces.NegY] = new ModelFace { Layer = layer, Rotation = rotation, CullFace = Faces.NegY };
+
+        if (climb < 0)
+        {
+            return new BlockModel(
+            [
+                new ModelElement
+                {
+                    From = new Vector3(0f, 0.25f, 0f),
+                    To = new Vector3(16f, 0.25f, 16f),
+                    Faces = faces,
+                },
+            ]);
+        }
+
+        // Rising along x turns about z, and along z about x; the sign puts the high edge on the
+        // named side. Rescale stretches the sheet's 16 units across the cell's diagonal.
+        var (axis, angle) = climb switch
+        {
+            Faces.PosX => (2, -45f),
+            Faces.NegX => (2, 45f),
+            Faces.PosZ => (0, 45f),
+            _ => (0, -45f),
+        };
+
+        return new BlockModel(
+        [
+            new ModelElement
+            {
+                From = new Vector3(0f, 8f, 0f),
+                To = new Vector3(16f, 8f, 16f),
+                Faces = faces,
+                RotationAxis = axis,
+                RotationAngle = angle,
+                RotationOrigin = new Vector3(8f, 8f, 8f),
+                Rescale = true,
+            },
+        ]);
+    }
+
     /// <summary>A box turned about one axis, for the parts whose state is a lean.</summary>
     private static ModelElement RotatedBox(
         Vector3 from, Vector3 to, ushort layer, int axis, Vector3 pivot, float angle)

@@ -75,6 +75,10 @@ public static class CreatureArt
         // dusk-readable silhouette colours, desaturated to sit with our blocks like the rest.
         ["wolf"] = new((142, 136, 124), (186, 178, 164), (82, 72, 64), (196, 158, 76), 0.24f, 0.08f),
 
+        // The cart (#28): riveted iron over a darker frame. Not a creature — the one machine on
+        // the roster — but painted through the same brush as everything else that moves.
+        ["cart"] = new((104, 106, 112), (134, 136, 142), (62, 64, 70), (122, 96, 60), 0.18f, 0.05f),
+
         // ⛳ THE HOSTILES, and the palette is where they are told apart. All three wear the same two
         // nets the beasts do — that is the point of a net — so if they read as one another it is
         // because the colours failed, not the geometry. Grain is turned up on all of them: a rotted

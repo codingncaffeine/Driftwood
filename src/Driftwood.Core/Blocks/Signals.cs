@@ -131,6 +131,19 @@ public sealed class SignalTable
                 continue;
             }
 
+            // ⳸ The booster answers the wire exactly as a lamp does: a sink pair by name. Rails
+            // land after signals so a station is a lever, a wire and two boosters, with nothing
+            // new taught to either side.
+            if (name.StartsWith("powered_rail", StringComparison.Ordinal))
+            {
+                var boosting = name.EndsWith("_on", StringComparison.Ordinal);
+                _sink[id] = true;
+                _sinkPowered[id] = boosting;
+                _sinkTwin[id] = registry
+                    .ByName(boosting ? name[..^"_on".Length] : name + "_on").Id.Value;
+                continue;
+            }
+
             // The sinks: the tidelamp pair, and every door and trapdoor — whose powered state is
             // its open one. Wet trapdoors carry the same "_open" in their names, so the sea makes
             // no difference to a hinge.

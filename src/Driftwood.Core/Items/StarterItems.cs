@@ -209,6 +209,39 @@ public static class StarterItems
                 },
             });
         }
+
+        // ── The track (#28): a rail lies along the look, and the pass bends it from there. ──────
+        // Flat icons, not extruded blocks: a rail's model is a film with no solid in it, and its
+        // tile already IS the picture of the thing.
+        items.Register(new ItemType
+        {
+            Name = "rail", Label = "rail", IconLayer = StarterBlocks.LayerRail,
+            Places = new Placeable
+            {
+                Label = "rail",
+                Kind = PlacementKind.Axis,
+                Variants = [blocks.ByName("rail_x").Id, blocks.ByName("rail_z").Id],
+            },
+        });
+
+        items.Register(new ItemType
+        {
+            Name = "powered_rail", Label = "powered rail", IconLayer = StarterBlocks.LayerRailBoost,
+            Places = new Placeable
+            {
+                Label = "powered rail",
+                Kind = PlacementKind.Axis,
+                Variants = [blocks.ByName("powered_rail_x").Id, blocks.ByName("powered_rail_z").Id],
+            },
+        });
+
+        // The cart is used ON a rail rather than placed as a block — the first item whose result
+        // is an entity, so it has no Places at all and the client owns the gesture.
+        items.Register(new ItemType
+        {
+            Name = "cart", Label = "cart", IconLayer = StarterBlocks.LayerCartIcon,
+            MaxStack = 1,
+        });
         Block(items, blocks, "moss", "moss", StarterBlocks.LayerMoss);
         Block(items, blocks, "mossy_rubble", "mossy rubble", StarterBlocks.LayerMossyRubble);
         Block(items, blocks, "deepstone", "deepstone", StarterBlocks.LayerDeepstone);

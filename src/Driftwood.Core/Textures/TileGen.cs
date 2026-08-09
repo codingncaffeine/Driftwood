@@ -2661,6 +2661,106 @@ public static class TileGen
         return t;
     }
 
+    /// <summary>
+    /// A straight run of track: two iron rails on wooden ties, drawn running +z.
+    /// </summary>
+    public static byte[] RailStraight(int seed, bool boosted = false, bool lit = false)
+    {
+        var t = new byte[BytesPerTile];
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var grain = (int)((Noise(x, y, seed) * 2f - 1f) * 12f);
+
+            // Four ties, full width, under everything else.
+            if (y is 1 or 2 or 6 or 7 or 11 or 12 && x is >= 1 and <= 14)
+            {
+                Put(t, x, y, Clamp(96 + grain), Clamp(74 + grain), Clamp(48 + grain), 255);
+            }
+
+            // The two rails, over the ties.
+            if (x is 3 or 12)
+                Put(t, x, y, Clamp(126 + grain), Clamp(128 + grain), Clamp(134 + grain), 255);
+
+            // The booster's third rail down the middle: gold cold, teal lit.
+            if (boosted && x is 7 or 8)
+            {
+                if (lit) Put(t, x, y, Clamp(88 + grain), Clamp(232 + grain), Clamp(242 + grain), 255);
+                else Put(t, x, y, Clamp(180 + grain), Clamp(148 + grain), Clamp(62 + grain), 255);
+            }
+        }
+
+        return t;
+    }
+
+    /// <summary>
+    /// A bend of track joining the north edge to the east — the one drawing every elbow is a
+    /// quarter turn of.
+    /// </summary>
+    /// <remarks>
+    /// The rails are two arcs about the north-east corner, filled per pixel against radius — the
+    /// ToSegment discipline bent into a circle, since a stepped arc dithers exactly the way a
+    /// stepped diagonal does. Ties fan along the bend at three angles.
+    /// </remarks>
+    public static byte[] RailBend(int seed)
+    {
+        var t = new byte[BytesPerTile];
+        const float cx = 15.5f;
+        const float cy = 0.5f;
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var grain = (int)((Noise(x, y, seed) * 2f - 1f) * 12f);
+            var r = MathF.Sqrt((x - cx) * (x - cx) + (y - cy) * (y - cy));
+
+            // Three fanned ties: bands of angle across the quarter.
+            var angle = MathF.Atan2(y - cy, cx - x);
+            var tie = r is > 2f and < 15f
+                && (MathF.Abs(angle - 0.4f) < 0.12f
+                    || MathF.Abs(angle - 0.8f) < 0.12f
+                    || MathF.Abs(angle - 1.2f) < 0.12f);
+            if (tie)
+                Put(t, x, y, Clamp(96 + grain), Clamp(74 + grain), Clamp(48 + grain), 255);
+
+            // The two arcs, at the straight tile's own rail offsets.
+            if (MathF.Abs(r - 3.5f) < 0.7f || MathF.Abs(r - 12.5f) < 0.7f)
+                Put(t, x, y, Clamp(126 + grain), Clamp(128 + grain), Clamp(134 + grain), 255);
+        }
+
+        return t;
+    }
+
+    /// <summary>The cart as an item: an open iron box on wheels, side on.</summary>
+    public static byte[] IconCart(int seed)
+    {
+        var t = new byte[BytesPerTile];
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var grain = (int)((Noise(x, y, seed) * 2f - 1f) * 10f);
+
+            // The tub: walls up, hollow inside, floor under.
+            var wall = y is >= 4 and <= 11 && x is >= 1 and <= 14 && (x is 1 or 2 or 13 or 14 || y is 10 or 11);
+            var hollow = y is >= 4 and <= 9 && x is >= 3 and <= 12;
+
+            if (wall)
+                Put(t, x, y, Clamp(108 + grain), Clamp(110 + grain), Clamp(116 + grain), 255);
+            else if (hollow)
+                Put(t, x, y, Clamp(52 + grain), Clamp(54 + grain), Clamp(58 + grain), 255);
+
+            // Two wheels below the tub.
+            var wheel = (x - 4) * (x - 4) + (y - 13) * (y - 13) <= 2
+                     || (x - 11) * (x - 11) + (y - 13) * (y - 13) <= 2;
+            if (wheel)
+                Put(t, x, y, Clamp(70 + grain), Clamp(72 + grain), Clamp(78 + grain), 255);
+        }
+
+        return t;
+    }
+
     /// <summary>A sheet of flame, transparent around it — what stands in a campfire.</summary>
     /// <remarks>
     /// Tapering as it rises and eaten into at the edges, so the two crossed planes it is drawn on

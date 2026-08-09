@@ -1132,6 +1132,13 @@ public sealed class ClientHost : IDisposable
 
             var resolved = CreatureLibrary.Resolve(models, pack);
 
+            // ⳸ The cart rides the same pipeline without being a creature: its own net, its own
+            // palette row, drawn through the entity shader like everything that moves. Appended
+            // here so CreatureSet.All — and every census that walks it — never hears about it.
+            resolved.Add(new CreatureSet.Resolved(
+                new CreatureKind("cart", "cart", default, "cart", []),
+                StarterCreatures.Cart(), "ours", "", 0, 0));
+
             // ⚠ The renderer only. The herd is made when the player spawns, because a herd made here
             // is one SpawnCreatures finds already present and declines to fill — which is a world
             // with every animal loaded, none of them placed, and nothing anywhere saying so.
@@ -1532,9 +1539,14 @@ public sealed class ClientHost : IDisposable
             // And what makes a lever mean something. Every block edit runs the wiring pass; the
             // gates think on their own tick below, at a rate that is a game decision too.
             Signals = new SignalPass(registry),
+
+            // And what keeps the track joined up when a rail lands or leaves.
+            Rails = new RailTable(registry),
         };
 
         _signalTable = _streamer.Signals!.Table;
+        _railTable = _streamer.Rails!;
+        _cartSystem = new CartSystem(_railTable);
 
         var reach = viewRadius * Chunk.Size;
         _fogEnd = MathF.Min(reach * 0.90f, 700f);
@@ -1765,6 +1777,13 @@ public sealed class ClientHost : IDisposable
         _savedCreatures.Clear();
         _savedCreatures.AddRange(state.Creatures);
 
+        // The carts stand back on the track exactly where they were; nobody is aboard, which is
+        // also how they were written.
+        _cartSystem.All.Clear();
+        _ridingCart = null;
+        foreach (var (cx, cy, cz, t, velocity) in state.Carts)
+            _cartSystem.All.Add(new Cart { X = cx, Y = cy, Z = cz, T = t, Velocity = velocity });
+
         // ⚠ Brought up to date rather than left to work itself out. Poll announces everything the
         // pockets can pay for that has not been announced, so a world loaded with a full inventory
         // fires a notice for every one of them in the first frame unless it is primed first.
@@ -1807,6 +1826,10 @@ public sealed class ClientHost : IDisposable
         };
 
         if (_herd is not null) state.Creatures.AddRange(_herd.Capture());
+
+        foreach (var cart in _cartSystem.All)
+            state.Carts.Add((cart.X, cart.Y, cart.Z, cart.T, cart.Velocity));
+
         return state;
     }
 
@@ -1934,6 +1957,12 @@ public sealed class ClientHost : IDisposable
     private readonly List<(int X, int Y, int Z)> _fluidMoved = [];
 
     private SignalTable _signalTable = null!;
+    private RailTable _railTable = null!;
+    private CartSystem _cartSystem = null!;
+
+    /// <summary>The cart under the player, or null on foot. The first ridden thing in the game.</summary>
+    private Cart? _ridingCart;
+
     private float _signalClock;
 
     /// <summary>A plain accumulating clock for the button springs. Never wraps in a session.</summary>
@@ -2047,6 +2076,36 @@ public sealed class ClientHost : IDisposable
 
     /// <summary>Each pressed button's idle form, for the spring back.</summary>
     private ushort[] _buttonIdle = null!;
+
+    /// <summary>
+    /// Rolls the carts, drops any whose rail was mined out from under them, and keeps a rider in
+    /// the seat.
+    /// </summary>
+    private void StepCarts(float dt)
+    {
+        if (!_walking || !_spawned) return;
+
+        var homeless = _cartSystem.Step(_streamer.World, dt);
+
+        if (homeless is not null)
+        {
+            foreach (var cart in homeless)
+            {
+                var at = new Vector3(cart.X + 0.5f, cart.Y + 0.5f, cart.Z + 0.5f);
+                _drops.Drop(new ItemStack(_items.ByName("cart").Id, 1), at);
+                if (_ridingCart == cart) _ridingCart = null;
+            }
+        }
+
+        if (_ridingCart is not { } riding) return;
+
+        // The seat: the body parks on the cart and the camera follows the eyes as it always does.
+        var form = _railTable.FormOf(
+            _streamer.World.GetBlock(riding.X, riding.Y, riding.Z).Value);
+        if (form == RailForm.None) return;
+
+        _player.Teleport(riding.Position(form) + new Vector3(0f, 0.35f, 0f));
+    }
 
     private void StepAutosave(double dt)
     {
@@ -5773,6 +5832,7 @@ public sealed class ClientHost : IDisposable
         StepLeaffall((float)dt);
         StepFurnaces((float)dt);
         StepCreatures((float)dt);
+        StepCarts((float)dt);
         StepToasts((float)dt);
         StepAmbience((float)dt);
         StepAutosave(dt);
@@ -6413,6 +6473,17 @@ public sealed class ClientHost : IDisposable
     /// <summary>Removes the targeted block, and empties it first if it was holding anything.</summary>
     private void BreakTarget()
     {
+        // A cart under the crosshair comes apart before any block behind it — it is nearer.
+        if (_cartSystem.Pick(_streamer.World, _camera.Position, _camera.Forward, Combat.Reach) is { } cart)
+        {
+            _cartSystem.All.Remove(cart);
+            if (_ridingCart == cart) _ridingCart = null;
+
+            var at = new Vector3(cart.X + 0.5f, cart.Y + 0.5f, cart.Z + 0.5f);
+            _drops.Drop(new ItemStack(_items.ByName("cart").Id, 1), at);
+            return;
+        }
+
         if (_target is not { } hit) return;
 
         // A furnace comes apart with its contents on the floor rather than taking them with it.
@@ -6500,6 +6571,34 @@ public sealed class ClientHost : IDisposable
         if (PlaceOnTarget()) return;
 
         EatHeld();
+    }
+
+    /// <summary>
+    /// Boards the cart under the crosshair, or puts the held one down on a rail. True when it did.
+    /// </summary>
+    private bool TryCartUse()
+    {
+        if (_ridingCart is not null) return false;
+
+        // Boarding first: a click on a cart means the cart whatever is in hand.
+        if (_cartSystem.Pick(_streamer.World, _camera.Position, _camera.Forward, 5f) is { } cart)
+        {
+            _ridingCart = cart;
+            return true;
+        }
+
+        if (_inventory.HeldType is not { Name: "cart" }) return false;
+        if (_target is not { } hit) return false;
+
+        // On the rail that was struck — a cart is used on track, never on ground.
+        if (!_railTable.IsRail(_streamer.World.GetBlock(hit.X, hit.Y, hit.Z).Value)) return false;
+
+        _cartSystem.Place(hit.X, hit.Y, hit.Z);
+        _inventory.SpendHeld();
+        PlaySound(
+            _registry[_streamer.World.GetBlock(hit.X, hit.Y, hit.Z)], SoundEvent.Place,
+            new Vector3(hit.X + 0.5f, hit.Y + 0.5f, hit.Z + 0.5f), 0.8f);
+        return true;
     }
 
     /// <summary>
@@ -6959,6 +7058,11 @@ public sealed class ClientHost : IDisposable
 
     private bool PlaceOnTarget()
     {
+        // ⳸ The cart, before everything: using one is boarding it, whatever is in hand, and a
+        // cart in hand aimed at a rail becomes a cart on it. Both reach past the crosshair the
+        // way the bucket does, because neither a cart nor the rail under water is a full block.
+        if (TryCartUse()) return true;
+
         // A bucket is used on the world rather than placed into it, and it reaches things the
         // crosshair cannot — so it is asked before anything that needs a target at all.
         if (UseBucket()) return true;
@@ -7254,6 +7358,38 @@ public sealed class ClientHost : IDisposable
             _player.Step(_streamer.World, dt, Vector3.Zero, false, false, false);
             _camera.Position = _player.EyePosition;
             return;
+        }
+
+        // ⳸ Riding: the cart owns the body's position and the keys mean the cart. Forward pushes
+        // along wherever the player is LOOKING projected on the track — so "press toward where I
+        // want to go" is the whole of driving — back brakes, and sneak steps off beside the rail.
+        if (_ridingCart is { } riding)
+        {
+            if (_keys.Held(_input, GameAction.Sneak))
+            {
+                var offAt = _player.Position + new Vector3(0.8f, 0.2f, 0f);
+                _ridingCart = null;
+                _player.Teleport(offAt);
+            }
+            else
+            {
+                var form = _railTable.FormOf(
+                    _streamer.World.GetBlock(riding.X, riding.Y, riding.Z).Value);
+
+                if (form != RailForm.None)
+                {
+                    var along = RailForms.Heading(form, riding.T);
+                    var look = Vector3.Dot(new Vector3(flat.X, 0f, flat.Z), along) >= 0f ? 1f : -1f;
+
+                    if (_keys.Held(_input, GameAction.MoveForward))
+                        riding.Velocity += look * 4f * dt;
+                    if (_keys.Held(_input, GameAction.MoveBack))
+                        riding.Velocity -= MathF.Sign(riding.Velocity) * MathF.Min(MathF.Abs(riding.Velocity), 6f * dt);
+                }
+
+                _camera.Position = _player.EyePosition;
+                return;
+            }
         }
 
         var wish = Vector3.Zero;
@@ -10358,6 +10494,27 @@ public sealed class ClientHost : IDisposable
                     creature.Kind, creature.Position, creature.Yaw,
                     creature.HurtFor / CreatureHerd.HurtSeconds, creature.TippedOver,
                     creature.Scale * (1f + 0.25f * creature.FuseFraction));
+            }
+        }
+
+        // The carts, through the same shader — each lit where it stands, yawed the way its own
+        // stretch of track runs.
+        if (_creatureRenderer is not null)
+        {
+            foreach (var cart in _cartSystem.All)
+            {
+                var form = _railTable.FormOf(
+                    _streamer.World.GetBlock(cart.X, cart.Y, cart.Z).Value);
+                if (form == RailForm.None) continue;
+
+                var at = cart.Position(form);
+                var heading = RailForms.Heading(form, cart.T);
+                var yawDeg = float.RadiansToDegrees(MathF.Atan2(heading.Z, heading.X));
+
+                _creatureRenderer.Draw(
+                    viewProj, _viewPosition, sky,
+                    SampleLight(at + new Vector3(0f, 0.4f, 0f)),
+                    "cart", at, yawDeg);
             }
         }
 

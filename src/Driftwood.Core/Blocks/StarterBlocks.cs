@@ -595,7 +595,15 @@ public static class StarterBlocks
     public const ushort LayerTidelampLit = LayerCobweb + 22;
     public const ushort LayerGateFirst = LayerCobweb + 23;   // and, or, xor, not, latch; off then on
 
-    public const int LayerCount = LayerGateFirst + 10;
+    // #28, the track: one straight drawing turned four ways, one bend turned four ways, and the
+    // booster pair. The cart icon is the one item drawing the kit needs.
+    public const ushort LayerRail = LayerCobweb + 33;
+    public const ushort LayerRailBend = LayerCobweb + 34;
+    public const ushort LayerRailBoost = LayerCobweb + 35;
+    public const ushort LayerRailBoostOn = LayerCobweb + 36;
+    public const ushort LayerCartIcon = LayerCobweb + 37;
+
+    public const int LayerCount = LayerCartIcon + 1;
 
     /// <summary>One anvil's name, by how worn it is and which way it lies.</summary>
     /// <remarks>
@@ -1678,6 +1686,7 @@ public static class StarterBlocks
             });
 
         RegisterSignals(registry);
+        RegisterRails(registry);
         RegisterWaterlogged(registry);
 
         return new Ids(
@@ -1811,6 +1820,68 @@ public static class StarterBlocks
                 Model = BlockModel.Gate(
                     GateLayer(kind, on), LayerDeepstonePolished, Placeable.Facings[i]),
             });
+        }
+    }
+
+    /// <summary>
+    /// The track (#28): ten forms of rail, and the six boosters that answer the wire.
+    /// </summary>
+    /// <remarks>
+    /// <para>The item places a straight and <see cref="RailTable"/> re-picks everything from
+    /// there, so the bends and climbs are <c>Derived</c> — a census never finds one and only the
+    /// pass makes them. Curves never carry power, the genre's own rule, so the powered family is
+    /// the two straights and the four climbs.</para>
+    /// <para>⚠ The booster pair is a SINK to <see cref="SignalTable"/> by name, which is the whole
+    /// point of building rails after signals: a station is a lever, a wire and two boosters, with
+    /// nothing new taught to either side.</para>
+    /// </remarks>
+    private static void RegisterRails(BlockRegistry registry)
+    {
+        // name, top-tile, quarter turns of it, the face a climb rises toward (or -1), derived
+        (string Name, ushort Tile, int Turn, int Climb, bool Derived)[] forms =
+        [
+            ("x", LayerRail, 90, -1, false),
+            ("z", LayerRail, 0, -1, false),
+            ("ne", LayerRailBend, 0, -1, true),
+            ("se", LayerRailBend, 90, -1, true),
+            ("sw", LayerRailBend, 180, -1, true),
+            ("nw", LayerRailBend, 270, -1, true),
+            ("up_e", LayerRail, 90, Faces.PosX, true),
+            ("up_w", LayerRail, 90, Faces.NegX, true),
+            ("up_s", LayerRail, 0, Faces.PosZ, true),
+            ("up_n", LayerRail, 0, Faces.NegZ, true),
+        ];
+
+        foreach (var f in forms)
+        {
+            registry.Register(new BlockType
+            {
+                Name = $"rail_{f.Name}",
+                Hardness = 0.7f, Solid = false, Opaque = false, Crafted = true,
+                Derived = f.Derived,
+                Sounds = SoundMaterial.Stone,
+                HarvestClass = ToolClass.Pickaxe,
+                SupportFace = Faces.NegY,
+                Model = BlockModel.Rail(f.Tile, f.Turn, f.Climb),
+            });
+
+            if (f.Name.StartsWith("n", StringComparison.Ordinal)
+                || f.Name.StartsWith("s", StringComparison.Ordinal))
+                continue;   // no powered bends
+
+            foreach (var on in (bool[])[false, true])
+            {
+                registry.Register(new BlockType
+                {
+                    Name = $"powered_rail_{f.Name}" + (on ? "_on" : ""),
+                    Hardness = 0.7f, Solid = false, Opaque = false, Crafted = true,
+                    Derived = f.Derived || on,
+                    Sounds = SoundMaterial.Stone,
+                    HarvestClass = ToolClass.Pickaxe,
+                    SupportFace = Faces.NegY,
+                    Model = BlockModel.Rail(on ? LayerRailBoostOn : LayerRailBoost, f.Turn, f.Climb),
+                });
+            }
         }
     }
 

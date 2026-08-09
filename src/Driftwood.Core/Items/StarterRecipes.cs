@@ -297,6 +297,13 @@ public static class StarterRecipes
         Shaped("not gate", "gate_not", 1, [" D ", "OOO"], station: CraftStation.Bench);
         Shaped("latch gate", "gate_latch", 1, ["D D", "OIO"], station: CraftStation.Bench);
 
+        // ── The track (#28). Iron rails on a stick of ties; the booster is gold with a wire's
+        // heart; the cart is a tub of iron. The genre's own grammar at our own counts.
+        Shaped("rail", "rail", 16, ["I I", "ISI", "I I"], mirrored: false, station: CraftStation.Bench);
+        Shaped("powered rail", "powered_rail", 6, ["Y Y", "YSY", "YDY"],
+            mirrored: false, station: CraftStation.Bench);
+        Shaped("cart", "cart", 1, ["I I", "III"], mirrored: false, station: CraftStation.Bench);
+
         // ⚠ The first thing azurite has ever been for. Six ores come up out of the ground and this
         // was the one with no recipe anywhere in the tree — a mineral a player mines four of and
         // can do nothing whatever with, which is a hole rather than a decision. Set round a
@@ -605,6 +612,7 @@ public static class StarterRecipes
         'D' => "tidewire",
         'U' => "copper_ingot",
         'O' => "stone",
+        'Y' => "gold_ingot",
         _ => throw new InvalidOperationException($"recipe '{recipe}' uses unknown key '{key}'"),
     };
 }

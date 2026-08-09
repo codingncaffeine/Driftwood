@@ -356,6 +356,10 @@ public static class WorldAudit
         Check("a lever means something at the far end of a wire", signalFaults.Count == 0,
             signalFaults.Count == 0 ? signalDetail : string.Join("; ", signalFaults));
 
+        var railFaults = RailFaults(registry, ids, out var railDetail);
+        Check("the track joins up and the cart obeys it", railFaults.Count == 0,
+            railFaults.Count == 0 ? railDetail : string.Join("; ", railFaults));
+
         var spawnFaults = SpawnBandFaults(out var spawnDetail);
         Check("where a thing lives takes two questions", spawnFaults.Count == 0,
             spawnFaults.Count == 0 ? spawnDetail : string.Join("; ", spawnFaults));
@@ -6394,6 +6398,7 @@ public static class WorldAudit
     {
         var faults = new List<string>();
         var signals = new SignalTable(registry);
+        var railTable = new RailTable(registry);
 
         (Vector3 Look, int Facing)[] looks =
         [
@@ -6531,6 +6536,18 @@ public static class WorldAudit
                 if (entry.Kind == PlacementKind.Axis)
                 {
                     var wantAxis = wantFacing is Faces.PosX or Faces.NegX ? 0 : 2;
+
+                    // ⚠ A rail is a flat film whose axis lives in its tile's rotation, not in any
+                    // box — so its geometry answers -1 and the fact asserted is the one the cart
+                    // actually reads: which way the resolved form says the line runs.
+                    if (railTable.IsRail(id.Value))
+                    {
+                        var runs = railTable.FormOf(id.Value) == RailForm.AlongX ? 0 : 2;
+                        if (runs != wantAxis)
+                            faults.Add($"{where}: the track runs axis {runs}, wanted {wantAxis}");
+                        continue;
+                    }
+
                     var gotAxis = LongAxis(model);
 
                     if (gotAxis != wantAxis)
@@ -6853,11 +6870,16 @@ public static class WorldAudit
         (StarterBlocks.LayerTidewireOff, "tidewire_off"),
         (StarterBlocks.LayerTidelampLit, "tidelamp_lit"),
 
-        // The moving pin: the LAST layer, by name. It has now caught FIVE appends in the act —
+        // And the signal kit's end by its own constant, the track landing after it.
+        ((ushort)(StarterBlocks.LayerGateFirst + 9), "gate_latch_top_on"),
+        (StarterBlocks.LayerRail, "rail"),
+
+        // The moving pin: the LAST layer, by name. It has now caught SIX appends in the act —
         // fifteen crop rows landing after "the last layer is bonemeal", the composter's four
         // landing after black glass, the berry bush's three after compost-ready, seagrass after
-        // mossy rubble, and the signal kit after seagrass. Keep it pointed at the true end.
-        ((ushort)(StarterBlocks.LayerCount - 1), "gate_latch_top_on"),
+        // mossy rubble, the signal kit after seagrass, and the track after the gates. Keep it
+        // pointed at the true end.
+        ((ushort)(StarterBlocks.LayerCount - 1), "cart_icon"),
     ];
 
     /// <summary>
@@ -7670,6 +7692,8 @@ public static class WorldAudit
     [
         ("torch", "a cut-out on crossed planes: a solid of it is a solid of black"),
         ("ladder", "a cut-out on one sheet, with nothing behind it to shade"),
+        ("rail", "a film on the floor with no solid in it; its tile is the picture"),
+        ("powered_rail", "the same film as the rail, with a third rail drawn in"),
     ];
 
     /// <summary>
@@ -9070,11 +9094,12 @@ public static class WorldAudit
         var table = new SignalTable(registry);
         var switched = new List<(int X, int Y, int Z, BlockId Now)>();
 
-        // 66 as a literal: 32 door forms, 16 trapdoors, their 16 wet twins, and the lamp pair.
+        // 78 as a literal: 32 door forms, 16 trapdoors, their 16 wet twins, the lamp pair, and
+        // the twelve booster forms.
         var (wires, sources, gates, sinks) = table.Census();
-        if (wires != 16 || sources != 11 || gates != 20 || sinks != 66)
+        if (wires != 16 || sources != 11 || gates != 20 || sinks != 78)
             faults.Add($"the table reads {wires} wire strengths, {sources} live sources, {gates} "
-                     + $"lit gates and {sinks} sinks — wanted 16, 11, 20, 66");
+                     + $"lit gates and {sinks} sinks — wanted 16, 11, 20, 78");
 
         var leverOff = registry.ByName("lever_floor").Id;
         var leverOn = registry.ByName("lever_floor_on").Id;
@@ -9238,6 +9263,233 @@ public static class WorldAudit
         detail = "a lever's run measured at all 16 cells, broken in the middle and killed at the "
                + "switch; the lamp and a wireless door follow the level both ways; nine truth-table "
                + "rows, the inverter both ways, and the latch set, held and reset through the tick";
+        return faults;
+    }
+
+    /// <summary>
+    /// Everything the track claims (#28), each claim with the arm that stops it passing broken.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ The reshape rule reads EXISTENCE and never form, which is the one-ring argument —
+    /// so beside the shape cases there is a sweep: after every scenario, no rail anywhere in the
+    /// box wants a different form than it wears. The fence pass measures the same property for the
+    /// same reason.</para>
+    /// <para>The cart arms run the physics the player feels: a push coasts and stops, an elbow is
+    /// held, a climb rolls back, a lever through a wire lights a booster that shoves — the whole
+    /// #27 chain driving #28's machine — and an unfed booster is a brake. What no arm can see:
+    /// whether riding FEELS right, which is the session's one hand-off to eyes.</para>
+    /// </remarks>
+    private static List<string> RailFaults(
+        BlockRegistry registry, StarterBlocks.Ids ids, out string detail)
+    {
+        var faults = new List<string>();
+        var rails = new RailTable(registry);
+        var signals = new SignalPass(registry);
+
+        var railX = registry.ByName("rail_x").Id;
+        var railZ = registry.ByName("rail_z").Id;
+
+        VoxelWorld Box() => FluidBox(registry, ids, 0, 0, 0);
+
+        void Lay(VoxelWorld world, int x, int z, BlockId id, int y = 1)
+        {
+            Put(world, x, y, z, id);
+            rails.Reshape(world, x, y, z, (wx, wy, wz, w) => world.SetBlock(wx, wy, wz, w));
+        }
+
+        string FormAt(VoxelWorld world, int x, int z, int y = 1) =>
+            registry[At(world, x, y, z)].Name;
+
+        // The sweep that measures the one-ring property: nothing anywhere wants to move again.
+        void Settled(VoxelWorld world, string scene)
+        {
+            for (var x = -10; x <= 10; x++)
+            for (var z = -10; z <= 10; z++)
+            for (var y = 1; y <= 3; y++)
+            {
+                var here = At(world, x, y, z).Value;
+                if (!rails.IsRail(here)) continue;
+
+                var want = rails.Wearing(here, rails.Wanted(world, x, y, z, here));
+                if (want.Value != here)
+                    faults.Add($"{scene}: the rail at ({x},{y},{z}) wears "
+                             + $"'{registry[here].Name}' and wants '{registry[want].Name}' — "
+                             + "one ring under-updated");
+            }
+        }
+
+        // ── A run joins, an elbow turns, a tee keeps its straight-through, a climb climbs ────────
+        {
+            var world = Box();
+            Lay(world, 0, 0, railX);
+            Lay(world, 1, 0, railX);
+            Lay(world, 2, 0, railX);
+
+            if (FormAt(world, 1, 0) != "rail_x")
+                faults.Add($"the middle of a straight run wears '{FormAt(world, 1, 0)}'");
+
+            // Turn the corner: the joint must bend to join both arms.
+            Lay(world, 2, 1, railZ);
+            if (FormAt(world, 2, 0) != "rail_sw" && FormAt(world, 2, 0) != "rail_se")
+                faults.Add($"an L of track left its corner as '{FormAt(world, 2, 0)}', not a bend");
+
+            Settled(world, "the elbow");
+
+            // The tee: a third arm arrives and the through-line holds.
+            Lay(world, 1, 1, railZ);
+            if (FormAt(world, 1, 0) != "rail_x")
+                faults.Add($"a tee bent its through-line into '{FormAt(world, 1, 0)}'");
+
+            Settled(world, "the tee");
+        }
+
+        {
+            var world = Box();
+            Put(world, 1, 1, 0, ids.Stone);   // a shelf one up
+            Lay(world, 0, 0, railX);
+            Lay(world, 1, 0, railX, y: 2);
+
+            if (FormAt(world, 0, 0) != "rail_up_e")
+                faults.Add($"track under a shelf wears '{FormAt(world, 0, 0)}', not the climb");
+
+            Settled(world, "the climb");
+        }
+
+        // ── The cart: pushed, it coasts and stops; on an elbow it turns; on a climb it returns ──
+        {
+            var world = Box();
+            for (var x = 0; x <= 8; x++) Lay(world, x, 0, railX);
+
+            var carts = new CartSystem(rails);
+            var cart = carts.Place(0, 1, 0);
+            cart.Velocity = 4f;
+
+            for (var i = 0; i < 400; i++) carts.Step(world, 0.05f);
+
+            var form = rails.FormOf(At(world, cart.X, 1, cart.Z).Value);
+            var travelled = cart.Position(form).X;
+
+            if (cart.Velocity != 0f)
+                faults.Add($"a pushed cart never stopped rolling ({cart.Velocity:F2} b/s left)");
+            if (travelled is < 2f or > 9.1f)
+                faults.Add($"a 4 b/s push carried the cart {travelled:F1} blocks — friction is "
+                         + "not the constant it claims");
+
+            // The control: a cart nobody pushed goes nowhere at all.
+            var parked = carts.Place(0, 1, 0);
+            for (var i = 0; i < 40; i++) carts.Step(world, 0.05f);
+            if (parked.X != 0 || parked.T is < 0.45f or > 0.55f)
+                faults.Add("a cart nobody pushed moved on its own");
+        }
+
+        {
+            var world = Box();
+            Lay(world, 0, 0, railX);
+            Lay(world, 1, 0, railX);
+            Lay(world, 2, 0, railX);
+            Lay(world, 2, 1, railZ);
+            Lay(world, 2, 2, railZ);
+
+            var carts = new CartSystem(rails);
+            var cart = carts.Place(0, 1, 0);
+            cart.Velocity = 3f;
+
+            for (var i = 0; i < 100; i++) carts.Step(world, 0.05f);
+
+            if (cart.Z < 1)
+                faults.Add($"a cart at the elbow never turned the corner (ended at {cart.X},{cart.Z})");
+        }
+
+        {
+            var world = Box();
+            Put(world, 2, 1, 0, ids.Stone);
+            Lay(world, 0, 0, railX);
+            Lay(world, 1, 0, railX);
+            Lay(world, 2, 0, railX, y: 2);
+
+            var carts = new CartSystem(rails);
+            var cart = carts.Place(1, 1, 0);
+            cart.T = 0.1f;
+            cart.Velocity = 1.5f;   // not enough to crest the climb
+
+            var highest = 0f;
+            for (var i = 0; i < 200; i++)
+            {
+                carts.Step(world, 0.05f);
+                var f = rails.FormOf(At(world, cart.X, cart.Y, cart.Z).Value);
+                if (f != RailForm.None) highest = MathF.Max(highest, cart.Position(f).Y);
+            }
+
+            if (highest < 1.1f)
+                faults.Add("a cart pushed at a climb never started up it");
+            if (cart.X > 1 && cart.Y > 1)
+                faults.Add("a cart without the speed to crest a climb stayed up it anyway");
+        }
+
+        // ── The whole chain: a lever, a wire, a booster, a cart — #27 driving #28 ────────────────
+        // ⚠ The booster sits ONE cell along, because the first draft parked it at three and the
+        // check reported its own fixture: a 2 b/s push dies in 1.7 blocks of friction and the cart
+        // never reached the thing being tested.
+        {
+            var world = Box();
+            Lay(world, 0, 0, railX);
+            Put(world, 1, 1, 0, registry.ByName("powered_rail_x").Id);
+            for (var x = 2; x <= 12; x++) Lay(world, x, 0, railX);
+
+            Put(world, 1, 1, 1, registry.ByName("tidewire_0").Id);
+            Put(world, 1, 1, 2, registry.ByName("lever_floor_on").Id);
+            signals.Update(world, 1, 1, 2, (x, y, z, id) => world.SetBlock(x, y, z, id));
+
+            if (!rails.IsOn(At(world, 1, 1, 0).Value))
+                faults.Add("a lever through a wire never lit the booster beside it");
+
+            var carts = new CartSystem(rails);
+            var cart = carts.Place(0, 1, 0);
+            cart.Velocity = 3f;
+
+            var fastest = 0f;
+            for (var i = 0; i < 120; i++)
+            {
+                carts.Step(world, 0.05f);
+                fastest = MathF.Max(fastest, MathF.Abs(cart.Velocity));
+            }
+
+            if (fastest < 4f)
+                faults.Add($"a lit booster only got the cart to {fastest:F1} b/s — no shove in it");
+
+            // The other half: the lever off, the booster dark, and the same push dies ON it.
+            world.SetBlock(1, 1, 2, registry.ByName("lever_floor").Id);
+            signals.Update(world, 1, 1, 2, (x, y, z, id) => world.SetBlock(x, y, z, id));
+
+            if (rails.IsOn(At(world, 1, 1, 0).Value))
+                faults.Add("the lever went off and the booster stayed lit");
+
+            var braked = carts.Place(0, 1, 0);
+            braked.Velocity = 3f;
+            for (var i = 0; i < 100; i++) carts.Step(world, 0.05f);
+
+            if (braked.X > 1)
+                faults.Add($"an unfed booster let a cart roll past it to x {braked.X} — no brake in it");
+        }
+
+        // ── Mined out from under: the cart is handed back, not stranded ──────────────────────────
+        {
+            var world = Box();
+            Lay(world, 0, 0, railX);
+
+            var carts = new CartSystem(rails);
+            carts.Place(0, 1, 0);
+            world.SetBlock(0, 1, 0, BlockId.Air);
+
+            var homeless = carts.Step(world, 0.05f);
+            if (homeless is null || homeless.Count != 1 || carts.All.Count != 0)
+                faults.Add("mining the rail out from under a cart did not hand the cart back");
+        }
+
+        detail = "a run, an elbow, a tee and a climb all reshape and the sweep finds nothing "
+               + "under-updated; a pushed cart coasts to rest, holds the corner, fails a climb it "
+               + "cannot crest; a lever through a wire lights the booster that shoves it and the "
+               + "same booster dark is a brake; a mined rail hands the cart back";
         return faults;
     }
 
