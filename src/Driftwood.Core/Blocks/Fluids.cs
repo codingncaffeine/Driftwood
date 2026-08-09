@@ -447,8 +447,41 @@ public sealed class FluidEngine
     private (FluidKind Kind, int Level, bool Falling) Resolve(
         VoxelWorld world, int x, int y, int z, ushort have)
     {
-        // A source is permanent until a bucket or a block takes it away. Nothing derives one.
+        // A source is permanent until a bucket or a block takes it away. Flow derives one in
+        // exactly one place: F8, just below.
         if (_table.IsSource(have)) return (_table.KindOf(have), MaxLevel, false);
+
+        // ⛳⛳ F8 — a cell held between two settled water sources becomes a source itself. The
+        // design decided this the day the flow was designed ("it is what makes an ocean an
+        // ocean") and the build forgot it, which the user then watched from the shore: without
+        // it a scooped pool refills WEAKER, a channel off the sea is a seven-cell tongue that
+        // dies, and empty space sits beside standing water for ever — water that "forgets" to
+        // flow.
+        //
+        // Never for lava (a second infinite feed into coal would flatten the early economy), and
+        // only AT REST — a cell with somewhere below to go falls rather than settling, which is
+        // what keeps a waterfall threading between two sources from freezing into a pillar of
+        // springs. A waterlogged block counts as the source it holds, so two wet fence posts
+        // flank a gap the way two open sources do.
+        //
+        // ⛳ Still one monotone fixpoint: sourceness only ever gets ADDED while filling, so the
+        // settle stays order-independent and a save that stores no fluid stays correct — a dug
+        // pool re-promotes the same cells every time it is re-derived from the seed and the
+        // edits.
+        if (!Draining(world, x, y, z, FluidKind.Water))
+        {
+            var springs = 0;
+            foreach (var (dx, dz) in Sides)
+            {
+                int nx = x + dx, nz = z + dz;
+                if (!Loaded(world, nx, y, nz)) continue;
+
+                var n = world.GetBlock(nx, y, nz).Value;
+                if (_table.KindOf(n) == FluidKind.Water && _table.IsSource(n)) springs++;
+            }
+
+            if (springs >= 2) return (FluidKind.Water, MaxLevel, false);
+        }
 
         // Fed from directly above: full strength, and falling. This is the rule that makes a
         // waterfall reach the floor at the strength it left the top rather than fading out on the
@@ -571,7 +604,18 @@ public sealed class FluidEngine
     private void Seed(int x, int y, int z)
     {
         if (!TerrainGenerator.InWorld(y)) return;
-        if (!_queued.Add((x, y, z))) return;
+
+        if (!_queued.Add((x, y, z)))
+        {
+            // ⛔ Already waiting — somewhere in the PATIENT queue, possibly behind thousands of
+            // chunk-arrival cells. An urgent ask may not wait there: the front-of-the-queue
+            // promise is the whole reason the urgent lane exists, and dropping the promotion here
+            // silently was water arriving minutes after the block came out, which reads from the
+            // beach as water that forgot to flow. A duplicate entry is harmless — resolving a
+            // cell is idempotent, and the stale copy finds nothing to change when its turn comes.
+            if (_urgentNow) _urgent.Enqueue((x, y, z));
+            return;
+        }
 
         if (_urgentNow) _urgent.Enqueue((x, y, z));
         else _pending.Enqueue((x, y, z));

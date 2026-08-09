@@ -9787,6 +9787,118 @@ public static class WorldAudit
                 faults.Add("a settling river marked the world dirty, so an autosave would fire on it");
         }
 
+        // ── F8: water held between two springs becomes one; nothing else ever does ───────────────
+        // The rule the design decided and the build forgot, found by the user from the shore:
+        // without it a scooped pool refills WEAKER and dies, and empty space sits beside standing
+        // water for ever. Each arm in its own box — the scratch repro that found this had its lava
+        // arm poisoned by an earlier arm's spread, which is why these are fixtures, not one world.
+        {
+            // The middle of a three-source row comes back a SOURCE.
+            var world = FluidBox(registry, ids, 0, 0, 1);
+            for (var z = -1; z <= 1; z++) Put(world, 0, 1, z, ids.Water);
+            Put(world, 0, 1, 0, BlockId.Air);
+
+            var engine = new FluidEngine(table);
+            engine.Touch(0, 1, 0, urgent: true);
+            engine.Settle(world, changed);
+
+            if (!table.IsSource(At(world, 0, 1, 0).Value)
+                || table.KindOf(At(world, 0, 1, 0).Value) != FluidKind.Water)
+                faults.Add($"the scooped middle of a three-source pool refilled as "
+                         + $"'{registry[At(world, 0, 1, 0)].Name}', not a source — F8 is not promoting");
+
+            // The control: the END of a two-source row has ONE source neighbour and stays flowing.
+            var end = FluidBox(registry, ids, 0, 0, 1);
+            Put(end, 0, 1, 0, ids.Water);
+            Put(end, 0, 1, 1, ids.Water);
+            Put(end, 0, 1, 1, BlockId.Air);
+
+            var control = new FluidEngine(table);
+            control.Touch(0, 1, 1, urgent: true);
+            control.Settle(end, changed);
+
+            if (table.IsSource(At(end, 0, 1, 1).Value))
+                faults.Add("the end of a two-source row promoted itself, so F8 is minting springs "
+                         + "off a single neighbour");
+        }
+
+        {
+            // Lava never promotes: a second infinite feed into coal would flatten the economy.
+            var world = FluidBox(registry, ids, 0, 0, 1);
+            Put(world, 0, 1, -1, ids.Lava);
+            Put(world, 0, 1, 1, ids.Lava);
+
+            var engine = new FluidEngine(table);
+            engine.Touch(0, 1, 0, urgent: true);
+            engine.Settle(world, changed);
+
+            var gap = At(world, 0, 1, 0).Value;
+            if (table.KindOf(gap) != FluidKind.Lava)
+                faults.Add($"a gap between two lava sources holds '{registry[gap].Name}', not lava");
+            else if (table.IsSource(gap))
+                faults.Add("a gap between two lava sources became a SPRING, and F8 is water-only");
+        }
+
+        {
+            // The at-rest gate: a gap over a hole falls through rather than freezing into a spring.
+            var world = FluidBox(registry, ids, 0, 0, 1);
+            Put(world, 0, 0, 0, BlockId.Air);
+            Put(world, 0, 1, -1, ids.Water);
+            Put(world, 0, 1, 1, ids.Water);
+
+            var engine = new FluidEngine(table);
+            engine.Touch(0, 1, 0, urgent: true);
+            engine.Settle(world, changed);
+
+            if (table.IsSource(At(world, 0, 1, 0).Value))
+                faults.Add("a draining gap between two sources promoted itself — the waterfall "
+                         + "between springs freezes into a pillar of them");
+            if (table.KindOf(At(world, 0, 0, 0).Value) != FluidKind.Water)
+                faults.Add("the hole under a fed gap never took the fall");
+        }
+
+        {
+            // ⚠ The genre's own LIMIT, pinned so nobody 'fixes' it into wrongness: a one-wide
+            // channel off a pool has one source neighbour at its mouth and dies seven cells out.
+            var world = FluidBox(registry, ids, 0, 0, 1);
+            for (var x = -3; x <= -1; x++)
+            for (var z = -1; z <= 1; z++)
+                Put(world, x, 1, z, ids.Water);
+
+            var engine = new FluidEngine(table);
+            engine.Touch(0, 1, 0, urgent: true);
+            engine.Settle(world, changed);
+
+            if (table.KindOf(At(world, 0, 1, 0).Value) != FluidKind.Water)
+                faults.Add("the mouth of a channel off a pool took no water at all");
+            if (table.KindOf(At(world, 7, 1, 0).Value) != FluidKind.None)
+                faults.Add("a one-wide channel ran past seven cells, which is not the genre's flow");
+        }
+
+        // ── The urgent lane cannot be starved by a cell already queued patiently ─────────────────
+        {
+            var world = FluidBox(registry, ids, 0, 0, 1);
+            Put(world, 5, 1, 0, ids.Water);
+            Put(world, 6, 1, 0, ids.Stone);   // the wall a player is about to break
+
+            var engine = new FluidEngine(table);
+
+            // A fat patient backlog, the shape a walk to the beach leaves — INCLUDING the very
+            // cell about to be dug, waiting somewhere in the middle of it.
+            for (var i = 0; i < 3_000; i++) engine.Touch(-10 + i % 30, 1, 4 + i / 30 % 12);
+            engine.Touch(6, 1, 0);
+
+            Put(world, 6, 1, 0, BlockId.Air);
+            engine.Touch(6, 1, 0, urgent: true);
+
+            var scratch = new List<(int X, int Y, int Z)>();
+            engine.Step(world, 64, scratch);
+
+            if (table.KindOf(At(world, 6, 1, 0).Value) != FluidKind.Water)
+                faults.Add($"a block broken beside water waited behind {engine.Pending:N0} queued "
+                         + "cells — the urgent lane was starved by its own dedup");
+        }
+
         // ── It settles the same way whatever order the cells are looked at in ────────────────────
         {
             var straight = FluidBox(registry, ids, 0, -1, 1);

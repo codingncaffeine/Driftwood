@@ -6529,6 +6529,11 @@ public sealed class ClientHost : IDisposable
             // back through EditBlock would re-run the whole pass once per block that came down.
             _streamer.TouchBlock(fx, fy, fz);
 
+            // ⛔ And the FLOW has to be woken, which nothing here ever did: a reed shed at the
+            // waterline left a dry hole beside the sea for ever, and a shed wet block wrote its
+            // water and nothing asked the neighbours. Same urgency as the swing that caused it.
+            _streamer.Fluids?.Touch(fx, fy, fz, urgent: true);
+
             var at = new Vector3(fx + 0.5f, fy + 0.5f, fz + 0.5f);
             var type = _registry[was];
 
