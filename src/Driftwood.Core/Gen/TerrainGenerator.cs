@@ -163,6 +163,7 @@ public sealed class TerrainGenerator
     private readonly int _seedFlora;
     private readonly int _seedLavaTable;
     private readonly int _seedLavaPools;
+    private readonly int _seedSeam;
 
     /// <summary>
     /// Climate, for the one thing terrain reads out of it: where snow lies.
@@ -225,6 +226,7 @@ public sealed class TerrainGenerator
         _seedFlora = seed.Derive("decor.cave_flora");
         _seedLavaTable = seed.Derive("deep.lava_table");
         _seedLavaPools = seed.Derive("deep.lava_pools");
+        _seedSeam = seed.Derive("ore.seams");
 
         _climate = new ClimateField(seed);
 
@@ -362,6 +364,8 @@ public sealed class TerrainGenerator
                 raw[Chunk.Index(x, y, z)] = id;
             }
         }
+
+        LayOreSeams(chunk);
 
         chunk.RecountSolid();
     }
@@ -685,6 +689,166 @@ public sealed class TerrainGenerator
             return _ids.Emberstone;
 
         return rock;
+    }
+
+    /// <summary>The seam grid's footprint. One existence roll per cell of this lattice.</summary>
+    private const int SeamGridXZ = 64;
+
+    private const int SeamGridY = 48;
+
+    /// <summary>Longest walk a seam makes, in steps of its dominant axis.</summary>
+    private const int SeamMaxLength = 40;
+
+    /// <summary>
+    /// How far any cell a seam paints can sit from its origin: the walk, the accumulated wobble,
+    /// and the bead around the walk's spine. What a chunk widens its search by.
+    /// </summary>
+    private const int SeamReach = SeamMaxLength + 14;
+
+    /// <summary>Share of eligible grid cells that grow an iron seam, and the gold's rarer share.</summary>
+    /// <remarks>
+    /// ⚠ Calibrated against the seed-wide probe in the audit, not against a window: at these odds
+    /// the fixed span carries a few hundred of each, which is one iron seam per hundred-odd blocks
+    /// of ground and gold at half that — a find, not a floor covering.
+    /// </remarks>
+    private const float IronSeamOdds = 0.15f;
+
+    private const float GoldSeamOdds = 0.02f;
+
+    /// <summary>Everything about one ore seam, decided from its grid cell and nothing else.</summary>
+    /// <remarks>
+    /// ⛳ <b>P4's vein placement, landed additively.</b> The noise-thresholded ore is untouched —
+    /// every vein every world already has stays exactly where it was, because replacing that field
+    /// would reshuffle every mine in every played world (the <c>ore.diamond</c> seed-name remark is
+    /// the standing witness). Seams are what vein placement is FOR: a long snaking body a player
+    /// can follow through rock, placed as a walk rather than a threshold, on its own derived seed.
+    /// Iron seams thread the ordinary underground; gold seams thread the deep.
+    /// </remarks>
+    public readonly record struct SeamSpec(
+        int X, int Y, int Z, int Length, int Axis, int Sign, int DriftSeed, bool Gold);
+
+    /// <summary>
+    /// Decides whether a seam grid cell grows a seam, and everything about it. Pure — the trees'
+    /// own discipline, because a seam straddles chunk seams in all three axes.
+    /// </summary>
+    public bool TrySeamAt(int cellX, int cellY, int cellZ, out SeamSpec spec)
+    {
+        spec = default;
+
+        var jx = (int)(Noise.Value3(cellX, cellY, cellZ, _seedSeam + 17) * SeamGridXZ);
+        var jy = (int)(Noise.Value3(cellX, cellY, cellZ, _seedSeam + 31) * SeamGridY);
+        var jz = (int)(Noise.Value3(cellX, cellY, cellZ, _seedSeam + 43) * SeamGridXZ);
+        var x = cellX * SeamGridXZ + jx;
+        var y = cellY * SeamGridY + jy;
+        var z = cellZ * SeamGridXZ + jz;
+
+        // Which metal is the origin's depth to say — the two bands never meet, so a cell is one
+        // thing or nothing. The margins inside each declared ore band leave the walk room to
+        // drift without ever stepping outside what OreBands() promises the census.
+        bool gold;
+        var roll = Noise.Value3(cellX, cellY, cellZ, _seedSeam);
+        if (y is >= 10 and <= 44) { if (roll > IronSeamOdds) return false; gold = false; }
+        else if (y is >= -196 and <= -44) { if (roll > GoldSeamOdds) return false; gold = true; }
+        else return false;
+
+        spec = new SeamSpec(
+            X: x, Y: y, Z: z,
+            Length: 24 + (int)(Noise.Value3(cellX, cellY, cellZ, _seedSeam + 53) * (SeamMaxLength - 23)),
+            Axis: Noise.Value3(cellX, cellY, cellZ, _seedSeam + 61) < 0.5f ? 0 : 1,
+            Sign: Noise.Value3(cellX, cellY, cellZ, _seedSeam + 67) < 0.5f ? 1 : -1,
+            DriftSeed: Noise.Hash2(cellX * 73 + cellY, cellZ, _seedSeam),
+            Gold: gold);
+        return true;
+    }
+
+    /// <summary>
+    /// The seam's spine, one statement: every bead centre of the walk, in order.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ The painter lays ore around these centres and the audit replays them to prove the ore
+    /// landed — written twice the two would drift, and a drifted replay is a check measuring a
+    /// seam that does not exist. The walk advances its dominant axis a block a step, wobbles
+    /// sideways on a fast roll, and drifts up or down on a slower one, clamped a bead's width
+    /// inside its metal's declared band so the census's depth table stays the truth.
+    /// </remarks>
+    public void WalkSeam(in SeamSpec seam, Action<int, int, int> centre)
+    {
+        var x = seam.X;
+        var y = seam.Y;
+        var z = seam.Z;
+        var yMin = (seam.Gold ? WorldBottom + 6 : 4) + 1;
+        var yMax = (seam.Gold ? 32 : 58) - 1;
+        y = Math.Clamp(y, yMin, yMax);
+
+        for (var step = 0; step < seam.Length; step++)
+        {
+            if (seam.Axis == 0) x += seam.Sign; else z += seam.Sign;
+
+            var wobble = Noise.Value3(step, seam.DriftSeed, 11, _seedSeam + 5);
+            if (wobble < 0.30f)
+            {
+                var side = wobble < 0.15f ? 1 : -1;
+                if (seam.Axis == 0) z += side; else x += side;
+            }
+
+            var rise = Noise.Value3(step, seam.DriftSeed, 23, _seedSeam + 7);
+            if (rise < 0.22f) y = Math.Clamp(y + (rise < 0.11f ? 1 : -1), yMin, yMax);
+
+            centre(x, y, z);
+        }
+    }
+
+    /// <summary>
+    /// Writes every seam that reaches into this chunk — the chunk's own share of each, the trees'
+    /// pattern in three axes.
+    /// </summary>
+    /// <remarks>
+    /// Runs after the fill so the walk sees the world it lands in: a bead cell only ever replaces
+    /// bare rock, so a seam shows in a cave wall rather than sealing the cave, never eats a vein
+    /// the old field already placed, and never grows into soil, sea or bedrock. The read is of
+    /// this chunk's own cells only — pre-seam content is chunk-pure, so every chunk answers the
+    /// same — and the fixed cell walk order means crossing seams resolve identically everywhere.
+    /// </remarks>
+    private void LayOreSeams(Chunk chunk)
+    {
+        var (ox, oy, oz) = chunk.Position.Origin;
+
+        var cellMinX = FloorDiv(ox - SeamReach, SeamGridXZ);
+        var cellMaxX = FloorDiv(ox + Chunk.Size - 1 + SeamReach, SeamGridXZ);
+        var cellMinY = FloorDiv(oy - SeamReach, SeamGridY);
+        var cellMaxY = FloorDiv(oy + Chunk.Size - 1 + SeamReach, SeamGridY);
+        var cellMinZ = FloorDiv(oz - SeamReach, SeamGridXZ);
+        var cellMaxZ = FloorDiv(oz + Chunk.Size - 1 + SeamReach, SeamGridXZ);
+
+        for (var cz = cellMinZ; cz <= cellMaxZ; cz++)
+        for (var cy = cellMinY; cy <= cellMaxY; cy++)
+        for (var cx = cellMinX; cx <= cellMaxX; cx++)
+        {
+            if (!TrySeamAt(cx, cy, cz, out var seam)) continue;
+
+            var ore = seam.Gold ? _ids.GoldOre : _ids.IronOre;
+            WalkSeam(in seam, (x, y, z) =>
+            {
+                SeamCell(chunk, ox, oy, oz, x, y, z, ore);
+                SeamCell(chunk, ox, oy, oz, x + 1, y, z, ore);
+                SeamCell(chunk, ox, oy, oz, x - 1, y, z, ore);
+                SeamCell(chunk, ox, oy, oz, x, y + 1, z, ore);
+                SeamCell(chunk, ox, oy, oz, x, y - 1, z, ore);
+                SeamCell(chunk, ox, oy, oz, x, y, z + 1, ore);
+                SeamCell(chunk, ox, oy, oz, x, y, z - 1, ore);
+            });
+        }
+    }
+
+    /// <summary>One bead cell: bare rock becomes the seam's ore, anything else is left alone.</summary>
+    private void SeamCell(Chunk chunk, int ox, int oy, int oz, int wx, int wy, int wz, BlockId ore)
+    {
+        var lx = wx - ox;
+        var ly = wy - oy;
+        var lz = wz - oz;
+        if ((uint)lx >= Chunk.Size || (uint)ly >= Chunk.Size || (uint)lz >= Chunk.Size) return;
+        if (!IsRock(chunk.Get(lx, ly, lz).Value)) return;
+        chunk.Set(lx, ly, lz, ore);
     }
 
     /// <summary>Which rock fills a cell: deepstone at depth, three intrusions, stone otherwise.</summary>

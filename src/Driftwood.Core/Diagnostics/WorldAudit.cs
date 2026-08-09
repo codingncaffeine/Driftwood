@@ -464,6 +464,72 @@ public static class WorldAudit
             wideHollowShare >= wideTunnelShare * 1.6 && wideHollowShare is > 13 and < 25,
             $"seed-wide: hollows {wideHollowShare:F1}% (want 13-25) vs tunnels {wideTunnelShare:F1}% "
             + "(want at least 1.6x)");
+
+        // ⛳ ORE SEAMS, both arms. The seed-wide arm counts the seam table over the fixed span —
+        // pure, so it is the rate the whole seed carries, not the window's roll of it. The
+        // in-volume arm replays every seam that fits wholly inside the walked world through the
+        // generator's own WalkSeam — one statement of the walk, shared with the painter — and a
+        // spine centre still standing as BARE rock is the writer having skipped a cell it owed:
+        // carved air, older veins, gravel and soil are the honest excuses, rock is not.
+        static int DivFloor(int a, int b) => a >= 0 ? a / b : -(((-a) + b - 1) / b);
+
+        var wideIronSeams = 0;
+        var wideGoldSeams = 0;
+        for (var cz = DivFloor(-ReliefProbeSpan / 2, 64); cz <= DivFloor(ReliefProbeSpan / 2 - 1, 64); cz++)
+        for (var cy = DivFloor(TerrainGenerator.WorldBottom, 48); cy <= DivFloor(TerrainGenerator.WorldTop - 1, 48); cy++)
+        for (var cx = DivFloor(-ReliefProbeSpan / 2, 64); cx <= DivFloor(ReliefProbeSpan / 2 - 1, 64); cx++)
+        {
+            if (!generator.TrySeamAt(cx, cy, cz, out var seam)) continue;
+            if (seam.Gold) wideGoldSeams++; else wideIronSeams++;
+        }
+
+        var bareRock = new bool[registry.Count];
+        foreach (var block in ids.Rock) bareRock[block.Value] = true;
+
+        var seamsContained = 0;
+        var seamCentresPainted = 0L;
+        var seamCentresExcused = 0L;
+        var seamCentresMissed = 0L;
+        string? firstSeamMiss = null;
+
+        const int SeamMargin = 42;   // a walk's hard extent plus its bead
+        for (var cz = DivFloor(minBlock, 64); cz <= DivFloor(maxBlock, 64); cz++)
+        for (var cy = DivFloor(TerrainGenerator.WorldBottom, 48); cy <= DivFloor(TerrainGenerator.WorldTop - 1, 48); cy++)
+        for (var cx = DivFloor(minBlock, 64); cx <= DivFloor(maxBlock, 64); cx++)
+        {
+            if (!generator.TrySeamAt(cx, cy, cz, out var seam)) continue;
+            if (seam.X < minBlock + SeamMargin || seam.X > maxBlock - SeamMargin) continue;
+            if (seam.Z < minBlock + SeamMargin || seam.Z > maxBlock - SeamMargin) continue;
+
+            seamsContained++;
+            var ore = seam.Gold ? ids.GoldOre : ids.IronOre;
+            generator.WalkSeam(in seam, (x, y, z) =>
+            {
+                var cell = world.GetBlock(x, y, z);
+                if (cell == ore)
+                {
+                    seamCentresPainted++;
+                }
+                else if (bareRock[cell.Value])
+                {
+                    seamCentresMissed++;
+                    firstSeamMiss ??= $"{registry[cell.Value].Name} at {x},{y},{z}";
+                }
+                else
+                {
+                    seamCentresExcused++;
+                }
+            });
+        }
+
+        Check("ore seams thread the rock",
+            wideIronSeams is > 350 and < 560 && wideGoldSeams is > 190 and < 340
+            && seamCentresMissed == 0 && (seamsContained == 0 || seamCentresPainted > 0),
+            $"seed-wide {wideIronSeams} iron (want 350-560) and {wideGoldSeams} gold (want 190-340); "
+            + $"{seamsContained} in this volume, {seamCentresPainted:N0} spine cells ore, "
+            + (seamCentresMissed == 0
+                ? $"{seamCentresExcused:N0} excused, none missed"
+                : $"{seamCentresMissed:N0} MISSED, first {firstSeamMiss}"));
         Check("geometry produced", tris > 0, $"{tris:N0} tris");
 
         // Relief and mix gates. A world can pass every "does this block exist" check above and
