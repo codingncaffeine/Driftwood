@@ -652,13 +652,21 @@ public static class StarterItems
         // turning a forest into paper to feed a furnace when the planks would do it five times over.
         Loose(items, "paper", "paper", StarterBlocks.LayerPaper, burn: 1f);
 
-        // What an animal leaves. ⚠ Leather and feather are components with nothing yet to spend
-        // them on, and that is honest rather than an oversight — armour and arrows are the two
-        // things they are for, and both are their own work. They are obtainable, which is what the
+        // What an animal leaves. ⚠ Feather is a component with nothing yet to spend it on, and
+        // that is honest rather than an oversight — arrows are what it is for, and the projectile
+        // pool they ride on is M4's own work (#78). It is obtainable, which is what the
         // reachability walk asks of an item; being consumed is a different claim.
         Loose(items, "leather", "leather", StarterBlocks.LayerLeather);
         Loose(items, "feather", "feather", StarterBlocks.LayerFeather);
         Loose(items, "egg", "egg", StarterBlocks.LayerEgg);
+
+        // ⚠ Three: a light meal off a shed egg — under the roast because nothing was hunted for
+        // it, over the raw mouthfuls because a fire did real work. The egg's one consumer (#97).
+        items.Register(new ItemType
+        {
+            Name = "fried_egg", Label = "fried egg",
+            IconLayer = StarterBlocks.LayerFriedEgg, Feeds = 3,
+        });
 
         // And what the dark leaves. ⚠ Rotten flesh is food, which is a joke the genre makes and a
         // real decision here: it is worth one half-heart against a cooked steak's six, so a player

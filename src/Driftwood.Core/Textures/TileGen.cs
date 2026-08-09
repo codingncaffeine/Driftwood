@@ -484,6 +484,50 @@ public static class TileGen
     }
 
     /// <summary>
+    /// A fried egg: the white spread flat with a wandering edge, the yolk a domed disc set
+    /// off-centre — dead centre reads as a target rather than a meal.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ One island of ink by construction: the yolk sits ON the white, so the icon check's
+    /// island count stays one. The white browns at its very rim — the cooked-meat rule at the
+    /// smallest scale it applies at.
+    /// </remarks>
+    public static byte[] IconFriedEgg(int seed)
+    {
+        var t = new byte[BytesPerTile];
+
+        for (var y = 2; y < Size - 1; y++)
+        for (var x = 1; x < Size - 1; x++)
+        {
+            var dx = (x - 7.4f) / 6.1f;
+            var dy = (y - 8.6f) / 5.0f;
+            var d = dx * dx + dy * dy;
+
+            var edge = 0.78f + (Noise(x, y, seed) - 0.5f) * 0.5f;
+            if (d > edge) continue;
+
+            var lift = (int)((Noise(x, y, seed + 7) * 2f - 1f) * 8f + (8 - x) * 1.2f - (y - 8) * 2.2f);
+
+            if (d > edge - 0.16f)
+                Put(t, x, y, Clamp(214 + lift), Clamp(188 + lift), Clamp(148 + lift), 255);
+            else
+                Put(t, x, y, Clamp(238 + lift), Clamp(234 + lift), Clamp(224 + lift), 255);
+        }
+
+        // The yolk, lit high on its upper left the way every icon here is.
+        for (var dy = -2; dy <= 2; dy++)
+        for (var dx = -2; dx <= 2; dx++)
+        {
+            if (dx * dx + dy * dy > 5) continue;
+
+            var lift = (2 - dx - dy) * 9;
+            Put(t, 6 + dx, 7 + dy, Clamp(226 + lift), Clamp(168 + lift / 2), Clamp(38 + lift / 4), 255);
+        }
+
+        return t;
+    }
+
+    /// <summary>
     /// A scatter of grains: seed corn, or a pinch of meal.
     /// </summary>
     /// <remarks>

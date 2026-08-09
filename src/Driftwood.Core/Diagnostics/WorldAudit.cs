@@ -6874,12 +6874,16 @@ public static class WorldAudit
         ((ushort)(StarterBlocks.LayerGateFirst + 9), "gate_latch_top_on"),
         (StarterBlocks.LayerRail, "rail"),
 
-        // The moving pin: the LAST layer, by name. It has now caught SIX appends in the act —
+        // Cart icon by its own constant now the fried egg went on after it — the moving pin
+        // handing its ground to a fixed one on the way past, as every run before it has.
+        (StarterBlocks.LayerCartIcon, "cart_icon"),
+
+        // The moving pin: the LAST layer, by name. It has now caught SEVEN appends in the act —
         // fifteen crop rows landing after "the last layer is bonemeal", the composter's four
         // landing after black glass, the berry bush's three after compost-ready, seagrass after
-        // mossy rubble, the signal kit after seagrass, and the track after the gates. Keep it
-        // pointed at the true end.
-        ((ushort)(StarterBlocks.LayerCount - 1), "cart_icon"),
+        // mossy rubble, the signal kit after seagrass, the track after the gates, and the fried
+        // egg after the cart. Keep it pointed at the true end.
+        ((ushort)(StarterBlocks.LayerCount - 1), "fried_egg"),
     ];
 
     /// <summary>

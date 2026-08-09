@@ -603,7 +603,10 @@ public static class StarterBlocks
     public const ushort LayerRailBoostOn = LayerCobweb + 36;
     public const ushort LayerCartIcon = LayerCobweb + 37;
 
-    public const int LayerCount = LayerCartIcon + 1;
+    // #97, the unconsumed items given consumers: the egg's answer to a fire.
+    public const ushort LayerFriedEgg = LayerCobweb + 38;
+
+    public const int LayerCount = LayerFriedEgg + 1;
 
     /// <summary>One anvil's name, by how worn it is and which way it lies.</summary>
     /// <remarks>

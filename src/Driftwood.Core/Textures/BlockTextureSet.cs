@@ -509,6 +509,9 @@ public static class BlockTextureSet
         new("rail_boost_on", "textures/block/powered_rail_on.png", true,
             "textures/blocks/goldenRail_powered.png"),
         new("cart_icon", "textures/item/minecart.png", true, "textures/items/minecart.png"),
+
+        // ⚠ No pack path, honestly: the reference never fries an egg, so there is no file to name.
+        new("fried_egg", "", true),
     ];
 
     /// <summary>
@@ -1497,6 +1500,7 @@ public static class BlockTextureSet
             StarterBlocks.LayerRailBoost => TileGen.RailStraight(1373, boosted: true),
             StarterBlocks.LayerRailBoostOn => TileGen.RailStraight(1373, boosted: true, lit: true),
             StarterBlocks.LayerCartIcon => TileGen.IconCart(1374),
+            StarterBlocks.LayerFriedEgg => TileGen.IconFriedEgg(1375),
 
             _ when layer >= StarterBlocks.LayerGateFirst
                    && layer < StarterBlocks.LayerGateFirst + 10 =>

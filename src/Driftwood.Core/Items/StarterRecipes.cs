@@ -527,6 +527,10 @@ public static class StarterRecipes
         Smelt("mushroom_brown", "roasted_mushroom", work: SmeltWork.Food);
         Smelt("mushroom_red", "roasted_mushroom", work: SmeltWork.Food);
 
+        // The egg's one consumer (#97): the hen keeps laying whether or not anybody wants an
+        // omelette, so the surplus needed somewhere honest to go.
+        Smelt("egg", "fried_egg", work: SmeltWork.Food);
+
         // The desert's dye: a cactus cooks down to green, the second door into a colour that
         // otherwise only comes out of mixing. The genre's own recipe, worth keeping real.
         Smelt("cactus", "dye_green");
