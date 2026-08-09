@@ -1023,7 +1023,7 @@ public static class BlockTextureSet
 
         void Add(ushort layer, byte[][] frames, float[] hold)
         {
-            var scaled = Upscale(frames, size);
+            var scaled = Upscale(frames, size, layer);
             moving.Add(new LayerAnimation(layer, scaled, hold));
 
             // Frame 0 written back over the still tile, so a build that never ticks the clock is
@@ -1033,12 +1033,13 @@ public static class BlockTextureSet
     }
 
     /// <summary>Nearest-neighbour, the same way <see cref="Own"/> takes a 16px tile to the pack's size.</summary>
-    private static byte[][] Upscale(byte[][] frames, int size)
+    private static byte[][] Upscale(byte[][] frames, int size, int seed)
     {
         if (size == TileGen.Size) return frames;
 
         var scaled = new byte[frames.Length][];
-        for (var f = 0; f < frames.Length; f++) scaled[f] = TileGen.Upscale(frames[f], size);
+        for (var f = 0; f < frames.Length; f++)
+            scaled[f] = TileGen.DetailUpscale(frames[f], size, seed * 101 + f);
         return scaled;
     }
 
@@ -1159,7 +1160,7 @@ public static class BlockTextureSet
         // Drawn at the native tile size and then scaled, so the generators stay written for one
         // size rather than being parameterised over every resolution a pack might arrive at.
         var tile = Draw(layer);
-        return TileGen.Upscale(tile, size);
+        return TileGen.DetailUpscale(tile, size, layer);
     }
 
     /// <summary>

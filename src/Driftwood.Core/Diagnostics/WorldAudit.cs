@@ -10,6 +10,7 @@ using Driftwood.Core.Lighting;
 using Driftwood.Core.Meshing;
 using Driftwood.Core.Particles;
 using Driftwood.Core.Physics;
+using Driftwood.Core.Players;
 using Driftwood.Core.Saves;
 using Driftwood.Core.Settings;
 using Driftwood.Core.Sky;
@@ -784,6 +785,20 @@ public static class WorldAudit
                 ? $"{book.Recipes.Count} recipes and {book.Smelting.Count} smelts, each laid back "
                   + "into a grid and found again, none duplicated, none bigger than a bench"
                 : $"{recipeFaults.Count} faults: {recipeFaults[0]}");
+
+        var guideFaults = RecipeGuideSelfTest(registry, items, drops, book, out var guideDetail);
+        Check("the recipe book answers why", guideFaults.Count == 0,
+            guideFaults.Count == 0 ? guideDetail : $"{guideFaults.Count} faults: {guideFaults[0]}");
+
+        var trailFaults = PlayerTrailSelfTest(generator, world, out var trailDetail);
+        Check("a player's trail becomes a record", trailFaults.Count == 0,
+            trailFaults.Count == 0 ? trailDetail : $"{trailFaults.Count} faults: {trailFaults[0]}");
+
+        var interfaceFaults = InterfaceArtSelfTest(out var interfaceDetail);
+        Check("interface art keeps its detail", interfaceFaults.Count == 0,
+            interfaceFaults.Count == 0
+                ? interfaceDetail
+                : $"{interfaceFaults.Count} faults: {interfaceFaults[0]}");
 
         // ⛔ What a square SAYS, which is a different claim from where it is drawn. The ui-check can
         // see that a box appeared; only this can see that it named the right thing, and it is the
@@ -2640,6 +2655,234 @@ public static class WorldAudit
         return faults;
     }
 
+    /// <summary>Checks the parts of the book that explain a recipe instead of merely matching it.</summary>
+    private static List<string> RecipeGuideSelfTest(
+        BlockRegistry blocks, ItemRegistry items, BlockDrops drops, RecipeBook book, out string detail)
+    {
+        var faults = new List<string>();
+        var shelves = Enum.GetValues<RecipeCategory>()
+            .Where(category => category != RecipeCategory.All)
+            .ToDictionary(category => category, _ => 0);
+
+        foreach (var recipe in book.Recipes) shelves[book.CategoryOf(recipe)]++;
+        foreach (var (shelf, count) in shelves)
+            if (count == 0) faults.Add($"the {shelf.ToString().ToLowerInvariant()} shelf is empty");
+
+        var pick = book.Recipes.FirstOrDefault(recipe =>
+            items[recipe.Result.Item].Name == "wood_pickaxe");
+        if (pick is null)
+        {
+            faults.Add("there is no wooden pickaxe with which to prove the guide");
+        }
+        else
+        {
+            if (book.CategoryOf(pick) != RecipeCategory.Tools)
+                faults.Add("the wooden pickaxe is not on the tools shelf");
+            if (!book.Matches(pick, RecipeCategory.Tools, "pickaxe"))
+                faults.Add("searching the tools shelf for pickaxe hid the wooden pickaxe");
+            if (!book.Matches(pick, RecipeCategory.Tools, pick.Ingredients.First().Name))
+                faults.Add("searching by an ingredient did not find what it makes");
+            if (book.Matches(pick, RecipeCategory.Building, "pickaxe"))
+                faults.Add("the building shelf admitted a tool");
+            if (book.Matches(pick, RecipeCategory.Tools, "no-such-ingredient"))
+                faults.Add("a search for a thing no recipe names still found the pickaxe");
+
+            var empty = new Inventory(items);
+            var costs = book.CostLines(pick, empty);
+            if (costs.Length < 2)
+                faults.Add("the pickaxe's cost stopped at its immediate ingredients");
+            if (!costs.Any(line => line.Contains("log", StringComparison.OrdinalIgnoreCase)))
+                faults.Add("the pickaxe's recursive cost never reached a log");
+            if (!costs.Any(line => line.Contains("have 0", StringComparison.OrdinalIgnoreCase)))
+                faults.Add("the cost does not name what an empty inventory is missing");
+        }
+
+        var handbook = new Handbook(items, blocks, book, drops);
+        var pickFacts = handbook.Describe(items.ByName("stone_pickaxe"));
+        if (!pickFacts.Contains("tier", StringComparison.OrdinalIgnoreCase)
+            || !pickFacts.Contains("uses", StringComparison.OrdinalIgnoreCase))
+            faults.Add("the handbook does not tell a pickaxe's tier and durability");
+
+        var stickFacts = handbook.Describe(items.ByName("stick"));
+        if (!stickFacts.Contains("made by", StringComparison.OrdinalIgnoreCase)
+            || !stickFacts.Contains("used to make", StringComparison.OrdinalIgnoreCase))
+            faults.Add("the handbook does not name both how a stick is made and what it makes");
+
+        if (!handbook.Describe(items.ByName("raw_iron"))
+                .Contains("smelts into", StringComparison.OrdinalIgnoreCase)
+            || !handbook.Describe(items.ByName("iron_ingot"))
+                .Contains("smelted from", StringComparison.OrdinalIgnoreCase))
+            faults.Add("the handbook lost one direction of the smelting chain");
+
+        if (!handbook.Describe(items.ByName("driftoak_log"))
+                .Contains("found from", StringComparison.OrdinalIgnoreCase))
+            faults.Add("the handbook does not name the block that drops a log");
+
+        detail = $"search, affordability, recursive costs and two-way handbook facts over "
+               + $"{book.Recipes.Count} recipes; "
+               + string.Join(", ", shelves.Select(pair =>
+                   $"{pair.Key.ToString().ToLowerInvariant()} {pair.Value}"));
+        return faults;
+    }
+
+    /// <summary>Exercises the persistent counters and one explored map chunk against the real world.</summary>
+    private static List<string> PlayerTrailSelfTest(
+        TerrainGenerator terrain, VoxelWorld world, out string detail)
+    {
+        var faults = new List<string>();
+        var progress = new PlayerProgress();
+        progress.Broke(7);
+        progress.Placed(5);
+        progress.Walked(12.5);
+        progress.Walked(-4);
+        progress.Survived(61.25);
+        progress.Reached(40.9f);
+        progress.Reached(70f);
+        progress.Reached(-18.1f);
+        progress.WoreOut(2);
+        progress.Smelted(9);
+        progress.Died();
+
+        if (progress.BlocksBroken != 7 || progress.BlocksPlaced != 5)
+            faults.Add("the build counters did not keep what happened");
+        if (Math.Abs(progress.DistanceWalked - 12.5) > 0.001
+            || Math.Abs(progress.TimeSurvived - 61.25) > 0.001)
+            faults.Add("distance or survival time accepted a backwards step");
+        if (progress.DeepestY != -19)
+            faults.Add($"the deepest point came back as {progress.DeepestY}, not -19");
+        if (progress.ToolsWornOut != 2 || progress.ItemsSmelted != 9 || progress.Deaths != 1)
+            faults.Add("wear, smelting or death was not counted");
+        if (!progress.Dirty) faults.Add("a changed record does not ask to be saved");
+        progress.Settled();
+        if (progress.Dirty) faults.Add("a saved record still asks to be saved");
+
+        var map = new WorldMap();
+        if (!map.Visit(0.5f, 0.5f, terrain, world))
+            faults.Add("the first visit to a chunk drew nothing");
+        if (map.Tiles.Count != Chunk.Size * Chunk.Size)
+            faults.Add($"one explored chunk drew {map.Tiles.Count} columns, not {Chunk.Size * Chunk.Size}");
+        if (!map.Dirty) faults.Add("an explored map does not ask to be saved");
+
+        WorldMap.Tile? sample = null;
+        foreach (var tile in map.Tiles)
+            if (tile.X == 0 && tile.Z == 0) { sample = tile; break; }
+
+        if (sample is not { } at)
+        {
+            faults.Add("the explored chunk has no tile at the player's column");
+        }
+        else
+        {
+            var expectedHeight = TerrainGenerator.WorldBottom;
+            for (var y = TerrainGenerator.WorldTop - 1; y >= TerrainGenerator.WorldBottom; y--)
+                if (world.Registry[world.GetBlock(0, y, 0)].Opaque)
+                {
+                    expectedHeight = y;
+                    break;
+                }
+
+            var surface = terrain.SurfaceHeight(0, 0);
+            if (at.Height != expectedHeight)
+                faults.Add($"the map put 0,0 at y {at.Height}, whose highest opaque block is y {expectedHeight}");
+            if (at.Biome != terrain.BiomeAt(0, 0, surface))
+                faults.Add("the map's biome at 0,0 differs from the generator's");
+        }
+
+        var tiles = map.Tiles.ToArray();
+        map.Settled();
+        if (map.Dirty) faults.Add("a saved map still asks to be saved");
+        if (map.Visit(0.5f, 0.5f, terrain, world))
+            faults.Add("revisiting a chunk drew it a second time");
+
+        var loaded = new WorldMap();
+        loaded.Reload(tiles);
+        if (loaded.Dirty) faults.Add("a loaded map immediately asks to be saved");
+        if (loaded.Visit(0.5f, 0.5f, terrain, world))
+            faults.Add("a loaded map forgot which chunk had been explored");
+
+        detail = $"7 broken, 5 placed, 12.5 walked, y -19 deepest; "
+               + $"{map.Tiles.Count} highest-opaque map columns drawn once";
+        return faults;
+    }
+
+    /// <summary>Checks generated high-resolution detail and the explicit pack GUI contract.</summary>
+    private static List<string> InterfaceArtSelfTest(out string detail)
+    {
+        var faults = new List<string>();
+        const int size = 64;
+        var native = BlockTextureSet.OwnTile(StarterBlocks.LayerStone);
+        var detailed = TileGen.DetailUpscale(native, size, StarterBlocks.LayerStone);
+        var repeated = TileGen.DetailUpscale(native, size, StarterBlocks.LayerStone);
+
+        if (!detailed.AsSpan().SequenceEqual(repeated))
+            faults.Add("the same generated tile gains different detail on two builds");
+
+        var nativeColours = new HashSet<int>();
+        for (var pixel = 0; pixel < TileGen.Size * TileGen.Size; pixel++)
+            if (native[pixel * 4 + 3] > 0)
+                nativeColours.Add(native[pixel * 4] << 16 | native[pixel * 4 + 1] << 8 | native[pixel * 4 + 2]);
+
+        var detailedColours = new HashSet<int>();
+        var variedCell = false;
+        var scale = size / TileGen.Size;
+        for (var y = 0; y < size; y++)
+        for (var x = 0; x < size; x++)
+        {
+            var at = (y * size + x) * 4;
+            var source = ((y / scale) * TileGen.Size + x / scale) * 4;
+            if (detailed[at + 3] != native[source + 3])
+                faults.Add($"high-resolution detail changed the silhouette at {x},{y}");
+            if (detailed[at + 3] > 0)
+                detailedColours.Add(detailed[at] << 16 | detailed[at + 1] << 8 | detailed[at + 2]);
+        }
+
+        for (var ly = 0; ly < TileGen.Size && !variedCell; ly++)
+        for (var lx = 0; lx < TileGen.Size && !variedCell; lx++)
+        {
+            var colours = new HashSet<int>();
+            for (var dy = 0; dy < scale; dy++)
+            for (var dx = 0; dx < scale; dx++)
+            {
+                var at = ((ly * scale + dy) * size + lx * scale + dx) * 4;
+                if (detailed[at + 3] > 0)
+                    colours.Add(detailed[at] << 16 | detailed[at + 1] << 8 | detailed[at + 2]);
+            }
+            variedCell = colours.Count > 1;
+        }
+
+        if (detailedColours.Count <= nativeColours.Count)
+            faults.Add($"64px stone has {detailedColours.Count} colours against the native {nativeColours.Count}");
+        if (!variedCell) faults.Add("every logical pixel is still one flat stretched square");
+
+        var guiLayers = Enum.GetValues<GuiTextureSet.Layer>();
+        if (GuiTextureSet.Entries.Length != guiLayers.Length)
+            faults.Add($"{GuiTextureSet.Entries.Length} GUI paths describe {guiLayers.Length} layers");
+        if (GuiTextureSet.Entries.Select(entry => entry.Layer).Distinct().Count() != guiLayers.Length)
+            faults.Add("a GUI layer is missing or mapped twice");
+        if (GuiTextureSet.Entries.Select(entry => entry.Path).Distinct(StringComparer.Ordinal).Count()
+            != GuiTextureSet.Entries.Length)
+            faults.Add("two GUI layers borrow the same pack sprite");
+
+        GuiTextureSet.Layer[] required =
+        [
+            GuiTextureSet.Layer.Inventory, GuiTextureSet.Layer.CraftingTable,
+            GuiTextureSet.Layer.Furnace, GuiTextureSet.Layer.Chest,
+            GuiTextureSet.Layer.Hotbar, GuiTextureSet.Layer.HotbarSelection,
+            GuiTextureSet.Layer.HeartFull, GuiTextureSet.Layer.FoodFull,
+            GuiTextureSet.Layer.Air, GuiTextureSet.Layer.ArmourFull,
+            GuiTextureSet.Layer.AttackProgress, GuiTextureSet.Layer.RecipeTab,
+            GuiTextureSet.Layer.RecipeFilterOn, GuiTextureSet.Layer.WidgetButton,
+            GuiTextureSet.Layer.Scroller,
+        ];
+        foreach (var layer in required)
+            if (!GuiTextureSet.Entries.Any(entry => entry.Layer == layer))
+                faults.Add($"the pack contract has no {layer} sprite");
+
+        detail = $"64px stone gains {detailedColours.Count} colours from {nativeColours.Count} without "
+               + $"moving its silhouette; {GuiTextureSet.Entries.Length} pack GUI layers mapped";
+        return faults;
+    }
+
     /// <summary>
     /// Starts a player in this world with nothing and works out what they could eventually hold.
     /// </summary>
@@ -3399,6 +3642,7 @@ public static class WorldAudit
         // silently taking clicks meant for a slot.
         var overlapping = 0;
         var recipes = 0;
+        var shelfTabs = 0;
 
         foreach (var (kind, cells) in new[] { (PanelKind.Player, 2), (PanelKind.Bench, 3) })
         {
@@ -3406,25 +3650,51 @@ public static class WorldAudit
 
             foreach (var zone in layout.Zones)
             {
-                if (zone.Kind != ZoneKind.Recipe) continue;
-                recipes++;
-                if (zone.X + zone.W > layout.OriginX) overlapping++;
+                if (zone.Kind == ZoneKind.Recipe)
+                {
+                    recipes++;
+                    if (zone.X + zone.W > layout.OriginX) overlapping++;
+                    continue;
+                }
+
+                var shelf = zone.Index - (int)ScreenButton.RecipeCategoryAll;
+                if (zone.Kind != ZoneKind.Button
+                    || shelf < 0 || shelf >= Enum.GetValues<RecipeCategory>().Length) continue;
+
+                shelfTabs++;
+                var wantX = layout.BookX - ScreenLayout.BookTabReach * layout.Zoom;
+                var wantY = layout.Y(2 + shelf * ScreenLayout.BookTabHeight);
+                if (MathF.Abs(zone.X - wantX) > 0.01f || MathF.Abs(zone.Y - wantY) > 0.01f
+                    || MathF.Abs(zone.W / layout.Zoom - 35f) > 0.01f
+                    || MathF.Abs(zone.H / layout.Zoom - 27f) > 0.01f)
+                    faults.Add($"{kind}'s {((RecipeCategory)shelf).ToString().ToLowerInvariant()} shelf "
+                        + "is not on its 35x27 tab down the book's side");
+
+                if (layout.At(zone.CentreX, zone.CentreY) is not { Kind: ZoneKind.Button } hit
+                    || hit.Index != zone.Index)
+                    faults.Add($"{kind}'s {((RecipeCategory)shelf).ToString().ToLowerInvariant()} shelf "
+                        + "does not answer at its own middle");
             }
 
             if (layout.BookX + ScreenLayout.BookWidth * layout.Zoom > layout.OriginX)
                 faults.Add($"{kind}'s book runs into the panel by "
                     + $"{layout.BookX + ScreenLayout.BookWidth * layout.Zoom - layout.OriginX:F0} units");
 
-            if (layout.BookX < 0f) faults.Add($"{kind}'s book starts {-layout.BookX:F0} units off the left of the screen");
+            var leftmost = layout.BookX - ScreenLayout.BookTabReach * layout.Zoom;
+            if (leftmost < 0f)
+                faults.Add($"{kind}'s shelf tabs start {-leftmost:F0} units off the left of the screen");
         }
 
         if (overlapping > 0) faults.Add($"{overlapping} of the book's recipes are laid over the panel");
         if (recipes == 0) faults.Add("the book laid out no recipes at all");
+        if (shelfTabs != Enum.GetValues<RecipeCategory>().Length * 2)
+            faults.Add($"the two books laid out {shelfTabs} shelf tabs, not "
+                + $"{Enum.GetValues<RecipeCategory>().Length * 2}");
 
         _ = z;
         detail = $"{tested} squares over 3 panels x 3 window shapes at zooms {string.Join("/", zooms)}, "
             + $"each hit-tested from its own middle and placed against the pack's own grid; "
-            + $"{recipes} book entries all clear of it";
+            + $"{recipes} book entries and {shelfTabs} shelf tabs all clear of it";
 
         return faults;
     }
@@ -4108,6 +4378,8 @@ public static class WorldAudit
         var worn = new Equipment(items);
         var vitals = new PlayerVitals(registry);
         var unlocks = new RecipeUnlocks();
+        var progress = new PlayerProgress();
+        var map = new WorldMap();
 
         var stone = registry.ByName("stone").Id;
         var bench = registry.ByName("bench").Id;
@@ -4140,6 +4412,15 @@ public static class WorldAudit
         worn.Restore(EquipSlot.Offhand, items.Stack("torch", 8));
         vitals.Restore(13, 220);
         unlocks.Reload(["sticks", "bench"]);
+        progress.Broke(7);
+        progress.Placed(5);
+        progress.Walked(123.5);
+        progress.Survived(900.25);
+        progress.Reached(-27f);
+        progress.WoreOut(2);
+        progress.Smelted(9);
+        progress.Died();
+        map.Reload([new WorldMap.Tile(-2, 3, Biome.Woodland, WorldMap.Surface.Grass, 71)]);
 
         var state = new WorldState(
             "driftwood", items, world, furnaces, chests, pockets, worn, vitals, unlocks)
@@ -4150,6 +4431,8 @@ public static class WorldAudit
             Played = 3725.5,
             DayTime = 0.375f,
             BedSpawn = new Vector3(3.5f, 65.6f, 1.5f),
+            Progress = progress,
+            Map = map,
         };
 
         // A plain cart and a laden one, so CRGO proves it hands the hold to the RIGHT cart —
@@ -4191,9 +4474,15 @@ public static class WorldAudit
             var backWorn = new Equipment(items);
             var backVitals = new PlayerVitals(registry);
             var backUnlocks = new RecipeUnlocks();
+            var backProgress = new PlayerProgress();
+            var backMap = new WorldMap();
 
             var into = new WorldState(
-                "", items, back, backFurnaces, backChests, backPockets, backWorn, backVitals, backUnlocks);
+                "", items, back, backFurnaces, backChests, backPockets, backWorn, backVitals, backUnlocks)
+            {
+                Progress = backProgress,
+                Map = backMap,
+            };
 
             var missing = new List<string>();
             if (WorldSave.Read(written, registry, items, into, missing) is { } read)
@@ -4289,6 +4578,18 @@ public static class WorldAudit
                     $"a world written holding 220 ticks of air came back with {backVitals.Breath} of "
                     + $"{PlayerVitals.MaxBreath} rather than a full lungful");
             if (backUnlocks.Announced != 2) faults.Add($"{backUnlocks.Announced} unlocks came back of 2");
+            if (backProgress.BlocksBroken != 7 || backProgress.BlocksPlaced != 5
+                || Math.Abs(backProgress.DistanceWalked - 123.5) > 0.001
+                || Math.Abs(backProgress.TimeSurvived - 900.25) > 0.001
+                || backProgress.DeepestY != -27 || backProgress.ToolsWornOut != 2
+                || backProgress.ItemsSmelted != 9 || backProgress.Deaths != 1)
+                faults.Add("the player's progress record did not come back whole");
+            if (backProgress.Dirty) faults.Add("a loaded progress record immediately asks to be saved");
+            if (backMap.Tiles.Count != 1
+                || !backMap.Tiles.Contains(
+                    new WorldMap.Tile(-2, 3, Biome.Woodland, WorldMap.Surface.Grass, 71)))
+                faults.Add("the explored map tile did not come back whole");
+            if (backMap.Dirty) faults.Add("a loaded explored map immediately asks to be saved");
             if (Math.Abs(into.Position.X - 1.5f) > 0.001f) faults.Add("the player came back somewhere else");
 
             // ⛔ THE PALETTE, and the only test that can tell it from a format keyed on ids. Every
@@ -4316,7 +4617,8 @@ public static class WorldAudit
             if (partial[0] != stone.Value) faults.Add("a missing name took a real one down with it");
 
             detail = $"{world.Edits.Count} edits, a furnace mid-smelt, a {Chest.Slots}-slot chest, "
-                   + $"{backPockets.Used} pockets and {backUnlocks.Announced} unlocks written and read back; "
+                   + $"{backPockets.Used} pockets, {backUnlocks.Announced} unlocks, the progress record "
+                   + "and an explored map tile written and read back; "
                    + "names survive every id moving, and a name this build lost is reported not guessed";
         }
         finally

@@ -109,21 +109,24 @@ public sealed class FurnaceBank
     /// world written by a newer build and read by an older one would come back with every blast
     /// furnace quietly behaving as a plain one.
     /// </remarks>
-    public void Update(
+    public int Update(
         float dt, List<(int X, int Y, int Z, bool Lit)> relit,
         Func<int, int, int, FurnaceKind>? kindOf = null)
     {
         relit.Clear();
+        var made = 0;
 
         foreach (var (cell, furnace) in _at)
         {
             var wasLit = furnace.Lit;
-            Step(furnace, dt, kindOf?.Invoke(cell.X, cell.Y, cell.Z) ?? FurnaceKind.Furnace);
+            made += Step(furnace, dt, kindOf?.Invoke(cell.X, cell.Y, cell.Z) ?? FurnaceKind.Furnace);
             if (furnace.Lit != wasLit) relit.Add((cell.X, cell.Y, cell.Z, furnace.Lit));
         }
+
+        return made;
     }
 
-    private void Step(Furnace furnace, float dt, FurnaceKind kind)
+    private int Step(Furnace furnace, float dt, FurnaceKind kind)
     {
         var recipe = Smeltable(furnace, kind);
 
@@ -166,11 +169,11 @@ public sealed class FurnaceBank
             // Half-cooked work slides back rather than being thrown away, so a furnace that runs out
             // of fuel for a moment does not start from nothing.
             furnace.Progress = MathF.Max(0f, furnace.Progress - dt);
-            return;
+            return 0;
         }
 
         furnace.Progress += dt;
-        if (furnace.Progress < furnace.Takes) return;
+        if (furnace.Progress < furnace.Takes) return 0;
 
         furnace.Progress = 0f;
         furnace.Input = furnace.Input.MinusOne();
@@ -181,6 +184,8 @@ public sealed class FurnaceBank
         // furnace that silently eats what it made is invisible until somebody counts.
         if (!spilled.IsEmpty)
             throw new InvalidOperationException($"a furnace lost {spilled.Count} {_items[spilled.Item].Name}");
+
+        return recipe.Result.Count;
     }
 
     /// <summary>What this furnace would make next, or null when it has nothing to do.</summary>

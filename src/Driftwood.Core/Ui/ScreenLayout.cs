@@ -72,6 +72,9 @@ public enum ZoneKind
     /// <summary>Something that does one thing when pressed. The index says which.</summary>
     Button,
 
+    /// <summary>The explored map canvas; dragging it pans without stealing clicks from its tabs.</summary>
+    Map,
+
     /// <summary>
     /// A box to type into, sitting on a row. The index is that row's.
     /// </summary>
@@ -92,6 +95,17 @@ public enum ScreenButton
 
     PageBack,
     PageForward,
+
+    /// <summary>The six recipe shelves, kept consecutive so the category is the offset.</summary>
+    RecipeCategoryAll,
+    RecipeCategoryBuilding,
+    RecipeCategoryTools,
+    RecipeCategoryMaterials,
+    RecipeCategoryLight,
+    RecipeCategoryMachines,
+
+    /// <summary>Shows every matching recipe, or only those craftable here and now.</summary>
+    CraftableOnly,
 }
 
 /// <summary>
@@ -200,6 +214,13 @@ public sealed class ScreenLayout
     /// <summary>Between the book and the panel it hangs off.</summary>
     public const int BookGap = 4;
 
+    /// <summary>How far the 35x27 shelf tabs protrude past the book's left edge.</summary>
+    public const int BookTabReach = 28;
+
+    public const int BookTabWidth = 35;
+
+    public const int BookTabHeight = 27;
+
     /// <summary>A recipe in the book. Twenty five, which is what the pack's own slot sprite is.</summary>
     public const int BookCell = 25;
 
@@ -276,7 +297,7 @@ public sealed class ScreenLayout
     /// </remarks>
     public static float ZoomFor(float width, float height, bool bookOut = false)
     {
-        var across = bookOut ? PanelWidth + BookWidth + BookGap : PanelWidth;
+        var across = bookOut ? PanelWidth + BookWidth + BookGap + BookTabReach : PanelWidth;
 
         var want = MathF.Round(height * 0.62f / PanelHeight);
         var fitsTall = MathF.Floor((height - 40f) / PanelHeight);
@@ -315,6 +336,8 @@ public sealed class ScreenLayout
 
         // The pair is centred together when the book is out, so folding it away does not leave the
         // panel sitting off to one side of the screen.
+        // Centre the book and panel as the pair they have always been; the category tabs protrude
+        // from that pair like tabs do. ZoomFor still budgets their reach so none are clipped.
         var spread = BookOut ? (BookWidth + BookGap) * Zoom : 0f;
         OriginX = MathF.Round((screenWidth - PanelWidth * Zoom + spread) * 0.5f);
         OriginY = MathF.Round((screenHeight - PanelHeight * Zoom) * 0.5f);
@@ -409,6 +432,26 @@ public sealed class ScreenLayout
 
         var from = page * BookPage;
         var to = Math.Min(count, from + BookPage);
+
+        // A real field and two real buttons, in the header that used to hold only a caption.
+        // They are zones from the same layout the renderer reads, so filtering does not grow a
+        // second set of almost-the-same hit-test constants.
+        _zones.Add(new Zone(
+            ZoneKind.Field, SlotRole.None, -1,
+            BookX + 8f * Zoom, Y(12), Size(101), Size(15)));
+
+        var shelves = Enum.GetValues<RecipeCategory>().Length;
+        for (var shelf = 0; shelf < shelves; shelf++)
+            _zones.Add(new Zone(
+                ZoneKind.Button, SlotRole.None,
+                (int)ScreenButton.RecipeCategoryAll + shelf,
+                BookX - BookTabReach * Zoom,
+                Y(2 + shelf * BookTabHeight),
+                Size(BookTabWidth), Size(BookTabHeight)));
+
+        _zones.Add(new Zone(
+            ZoneKind.Button, SlotRole.None, (int)ScreenButton.CraftableOnly,
+            BookX + 113f * Zoom, Y(11), Size(26), Size(16)));
 
         for (var i = from; i < to; i++)
         {

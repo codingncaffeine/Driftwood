@@ -13,6 +13,7 @@ using Driftwood.Core.Items;
 using Driftwood.Core.Lighting;
 using Driftwood.Core.Meshing;
 using Driftwood.Core.Particles;
+using Driftwood.Core.Players;
 using Driftwood.Core.Saves;
 using Driftwood.Core.Settings;
 using Driftwood.Core.Physics;
@@ -362,6 +363,10 @@ public sealed class ClientHost : IDisposable
     private readonly TextField _seedBox =
         new(32, TextAllows.FileSafe) { Placeholder = "a fresh one" };
 
+    private readonly TextField _handbookSearch = new(40) { Placeholder = "an item or use" };
+
+    private bool _progressResetArmed;
+
     /// <summary>What the box held when it took the keyboard, for escape to put back.</summary>
     private string _typingWas = "";
 
@@ -373,6 +378,7 @@ public sealed class ClientHost : IDisposable
     private readonly Dictionary<ChunkPos, ChunkMeshGpu> _meshes = [];
     private readonly FlyCamera _camera = new();
     private WorldStreamer _streamer = null!;
+    private TerrainGenerator _terrain = null!;
     private int _viewRadius;
 
     private PlayerBody _player = null!;
@@ -451,6 +457,7 @@ public sealed class ClientHost : IDisposable
 
     /// <summary>Everything that can be made, and every furnace and chest in the world.</summary>
     private RecipeBook _book = null!;
+    private Handbook _handbook = null!;
     private FurnaceBank _furnaces = null!;
     private ChestBank _chests = null!;
 
@@ -495,6 +502,8 @@ public sealed class ClientHost : IDisposable
 
     /// <summary>What has become makeable, and the notices on screen saying so.</summary>
     private readonly RecipeUnlocks _unlocks = new();
+    private readonly PlayerProgress _progress = new();
+    private readonly WorldMap _map = new();
     private readonly List<Recipe> _justUnlocked = [];
     private readonly List<Toast> _toasts = [];
 
@@ -1505,6 +1514,7 @@ public sealed class ClientHost : IDisposable
         _dropTable = StarterItems.Drops(registry, _items);
         _creatureDropTable = StarterItems.Creatures(_items);
         _book = StarterRecipes.Build(_items);
+        _handbook = new Handbook(_items, _registry, _book, _dropTable);
         _furnaces = new FurnaceBank(_items, _book);
         _chests = new ChestBank(_items);
         (_smelterLighting, _smelterCooling) = StarterBlocks.SmelterStates(registry);
@@ -1533,6 +1543,7 @@ public sealed class ClientHost : IDisposable
         _startup.Mark("item sprites");
 
         var generator = new TerrainGenerator(_seed, ids, _options.OceanCoverage);
+        _terrain = generator;
 
         // --chunks used to size a fixed box; it now sets how far the world is kept loaded around
         // the viewer, which is the same dial pointed at a world that no longer has edges. The
@@ -1862,6 +1873,8 @@ public sealed class ClientHost : IDisposable
             Played = _playedBefore + _elapsed,
             DayTime = _clock.TimeOfDay,
             BedSpawn = _bedSpawn,
+            Progress = _progress,
+            Map = _map,
         };
 
         if (_herd is not null) state.Creatures.AddRange(_herd.Capture());
@@ -2160,7 +2173,7 @@ public sealed class ClientHost : IDisposable
 
         _sinceSave += dt;
         if (_sinceSave < AutosaveSeconds) return;
-        if (!_streamer.World.Changed && !_unlocks.Dirty) return;
+        if (!_streamer.World.Changed && !_unlocks.Dirty && !_progress.Dirty && !_map.Dirty) return;
 
         _autosaves++;
         SaveWorld("automatically");
@@ -2640,6 +2653,29 @@ public sealed class ClientHost : IDisposable
                     RefreshScreen();
                     return true;
 
+                case Key.R when _hudScreen.BookOut:
+                    StartTyping(_hudScreen.RecipeSearch);
+                    return true;
+
+                case Key.C when _hudScreen.BookOut:
+                    StepRecipeCategory();
+                    return true;
+
+                case Key.F when _hudScreen.BookOut:
+                    _hudScreen.CraftableOnly = !_hudScreen.CraftableOnly;
+                    RecipeFilterChanged();
+                    return true;
+
+                case Key.H when _hudScreen.Kind == HudScreenKind.Player:
+                    var lookedAt = _hudScreen.Hovered is { Kind: ZoneKind.Slot } slot
+                        ? StackAt(slot)
+                        : _hudScreen.Selected >= 0 && _hudScreen.Selected < _hudScreen.Recipes.Count
+                            ? _hudScreen.Recipes[_hudScreen.Selected].Result
+                            : ItemStack.Empty;
+                    _handbookSearch.Text = lookedAt.IsEmpty ? "" : _items[lookedAt.Item].Label;
+                    OpenPlayer(PlayerTab.Handbook, atBench: false, default);
+                    return true;
+
                 case Key.Enter or Key.KeypadEnter or Key.Space:
                     ScreenClick(MouseButton.Left);
                     RefreshScreen();
@@ -2649,6 +2685,23 @@ public sealed class ClientHost : IDisposable
                 // button does, because there is no second button on a keyboard.
                 case Key.Backspace:
                     ScreenClick(MouseButton.Right);
+                    RefreshScreen();
+                    return true;
+            }
+        }
+
+        // A map has no rows. Arrows pan it, the wheel zooms it, and Home follows the player again.
+        if (_hudScreen.Kind == HudScreenKind.Player
+            && _hudScreen.Tab == (int)PlayerTab.Map)
+        {
+            switch (key)
+            {
+                case Key.Left or Key.A: _hudScreen.MapPan.X -= 1f; RefreshScreen(); return true;
+                case Key.Right or Key.D: _hudScreen.MapPan.X += 1f; RefreshScreen(); return true;
+                case Key.Up or Key.W: _hudScreen.MapPan.Y -= 1f; RefreshScreen(); return true;
+                case Key.Down or Key.S: _hudScreen.MapPan.Y += 1f; RefreshScreen(); return true;
+                case Key.Home:
+                    _hudScreen.MapPan = Vector2.Zero;
                     RefreshScreen();
                     return true;
             }
@@ -2804,6 +2857,14 @@ public sealed class ClientHost : IDisposable
             // pressing enter on its row — so it goes through the same door.
             case ZoneKind.Field:
                 if (button != MouseButton.Left) return;
+
+                // The book's search is not a menu row. Its negative index distinguishes it from
+                // every row-backed field while keeping both kinds on the same zone primitive.
+                if (at.Value.Index < 0)
+                {
+                    StartTyping(_hudScreen.RecipeSearch);
+                    return;
+                }
                 _hudScreen.Selected = at.Value.Index;
                 ActivateRow();
                 RefreshScreen();
@@ -2825,6 +2886,20 @@ public sealed class ClientHost : IDisposable
                             (_hudScreen.Recipes.Count + ScreenLayout.BookPage - 1) / ScreenLayout.BookPage);
                         _hudScreen.BookPage = Math.Min(pages - 1, _hudScreen.BookPage + 1);
                         break;
+
+                    case ScreenButton.CraftableOnly:
+                        _hudScreen.CraftableOnly = !_hudScreen.CraftableOnly;
+                        RecipeFilterChanged();
+                        return;
+
+                    default:
+                        var shelf = at.Value.Index - (int)ScreenButton.RecipeCategoryAll;
+                        if (shelf >= 0 && shelf < Enum.GetValues<RecipeCategory>().Length)
+                        {
+                            _hudScreen.RecipeCategory = (RecipeCategory)shelf;
+                            RecipeFilterChanged();
+                        }
+                        return;
                 }
 
                 RefreshScreen();
@@ -2866,6 +2941,9 @@ public sealed class ClientHost : IDisposable
 
     /// <summary>True while the left button is down on the scrollbar.</summary>
     private bool _draggingScrollbar;
+
+    private bool _draggingMap;
+    private Vector2 _mapDragAt;
 
     /// <summary>Puts the pointer's share of the track on screen.</summary>
     private void DragScrollbar(Zone track)
@@ -2937,6 +3015,23 @@ public sealed class ClientHost : IDisposable
         SlotRole.Smelting or SlotRole.Fuel => EmptyFurnaceSlot(zone.Role),
         SlotRole.Stored => TakeStored(zone.Index, half: false),
         SlotRole.Cutting => TakeCutting(),
+        _ => ItemStack.Empty,
+    };
+
+    /// <summary>Reads a visible slot without moving it, for the handbook shortcut.</summary>
+    private ItemStack StackAt(Zone zone) => zone.Role switch
+    {
+        SlotRole.Pocket => _inventory[zone.Index],
+        SlotRole.Craft => _hudScreen.Grid?[zone.Index] ?? ItemStack.Empty,
+        SlotRole.Result => _hudScreen.Grid?.Result ?? ItemStack.Empty,
+        SlotRole.Equip => _equipment.At(zone.Index),
+        SlotRole.Smelting => _hudScreen.Burning?.Input ?? ItemStack.Empty,
+        SlotRole.Fuel => _hudScreen.Burning?.Fuel ?? ItemStack.Empty,
+        SlotRole.Smelted => _hudScreen.Burning?.Output ?? ItemStack.Empty,
+        SlotRole.Stored => _hudScreen.Stored?.Contents[zone.Index] ?? ItemStack.Empty,
+        SlotRole.Cutting => _hudScreen.Cutting,
+        SlotRole.Cut => _hudScreen.Cut >= 0 && _hudScreen.Cut < _hudScreen.Cuts.Count
+            ? _hudScreen.Cuts[_hudScreen.Cut].Result : ItemStack.Empty,
         _ => ItemStack.Empty,
     };
 
@@ -3326,7 +3421,11 @@ public sealed class ClientHost : IDisposable
             if (at == 0 || at == _hudScreen.Rows.Count - 1) return;
         }
 
-        if (at != _hudScreen.Selected) DisarmDelete();
+        if (at != _hudScreen.Selected)
+        {
+            DisarmDelete();
+            _progressResetArmed = false;
+        }
 
         _hudScreen.Selected = at;
         ShowSelectedRow();
@@ -3629,6 +3728,7 @@ public sealed class ClientHost : IDisposable
         // of it, so a shift-click on a pocket goes back to trading with the bar.
         _hudScreen.Stored = null;
         _hudScreen.Hovered = null;
+        _draggingMap = false;
         _shown.Clear();
         _hudScreen.Recipes.Clear();
         _hudScreen.Payable.Clear();
@@ -3692,17 +3792,57 @@ public sealed class ClientHost : IDisposable
             foreach (var smelt in _book.SmeltsAt(kind))
                 _shown.Add(smelt.AsShown());
 
+        FilterRecipes(recipe => _book.CanPay(_inventory, recipe));
+    }
+
+    /// <summary>Applies the book's live words, shelf and craftable switch without moving its source.</summary>
+    private void FilterRecipes(Func<Recipe, bool> payableHere)
+    {
+        var chosen = _hudScreen.Selected >= 0 && _hudScreen.Selected < _hudScreen.Recipes.Count
+            ? _hudScreen.Recipes[_hudScreen.Selected]
+            : null;
+
         _hudScreen.Recipes.Clear();
-        _hudScreen.Recipes.AddRange(_shown);
-
         _hudScreen.Payable.Clear();
+
         foreach (var recipe in _shown)
-            _hudScreen.Payable.Add(_book.CanPay(_inventory, recipe));
+        {
+            if (!_book.Matches(recipe, _hudScreen.RecipeCategory, _hudScreen.RecipeSearch.Text)) continue;
 
-        _hudScreen.Selected = Math.Clamp(_hudScreen.Selected, 0, Math.Max(0, _shown.Count - 1));
+            var payable = payableHere(recipe);
+            if (_hudScreen.CraftableOnly && !payable) continue;
 
-        var pages = Math.Max(1, (_shown.Count + ScreenLayout.BookPage - 1) / ScreenLayout.BookPage);
+            _hudScreen.Recipes.Add(recipe);
+            _hudScreen.Payable.Add(payable);
+        }
+
+        var kept = chosen is null ? -1 : _hudScreen.Recipes.IndexOf(chosen);
+        _hudScreen.Selected = kept >= 0
+            ? kept
+            : Math.Clamp(_hudScreen.Selected, 0, Math.Max(0, _hudScreen.Recipes.Count - 1));
+
+        _hudScreen.RecipeCosts = _hudScreen.Selected >= 0
+            && _hudScreen.Selected < _hudScreen.Recipes.Count
+            ? _book.CostLines(_hudScreen.Recipes[_hudScreen.Selected], _inventory)
+            : [];
+
+        var pages = Math.Max(1,
+            (_hudScreen.Recipes.Count + ScreenLayout.BookPage - 1) / ScreenLayout.BookPage);
         _hudScreen.BookPage = Math.Clamp(_hudScreen.BookPage, 0, pages - 1);
+    }
+
+    private void RecipeFilterChanged()
+    {
+        _hudScreen.BookPage = 0;
+        _hudScreen.Selected = 0;
+        RefreshScreen();
+    }
+
+    private void StepRecipeCategory()
+    {
+        var count = Enum.GetValues<RecipeCategory>().Length;
+        _hudScreen.RecipeCategory = (RecipeCategory)(((int)_hudScreen.RecipeCategory + 1) % count);
+        RecipeFilterChanged();
     }
 
     private void RefreshScreen()
@@ -3766,22 +3906,12 @@ public sealed class ClientHost : IDisposable
             // Built once per opening and only its affordability recomputed. A list that changed
             // length as things were picked up would move the selection out from under a player on
             // the frame they clicked it.
-            _hudScreen.Recipes.Clear();
-            _hudScreen.Recipes.AddRange(_shown);
-
             // ⚠ Lit means "you can make this, here, now" — so a recipe you can afford and cannot
             // work at this grid is dim, exactly like one you cannot afford. Its tooltip is what
             // tells the two apart, and that is the line that says where to go.
-            _hudScreen.Payable.Clear();
-            foreach (var recipe in _shown)
-                _hudScreen.Payable.Add(
-                    recipe.WorkedAt(_hudScreen.Grid.Station, _hudScreen.Grid.Width)
-                    && _book.CanPay(_inventory, recipe));
-
-            _hudScreen.Selected = Math.Clamp(_hudScreen.Selected, 0, Math.Max(0, _shown.Count - 1));
-
-            var pages = Math.Max(1, (_shown.Count + ScreenLayout.BookPage - 1) / ScreenLayout.BookPage);
-            _hudScreen.BookPage = Math.Clamp(_hudScreen.BookPage, 0, pages - 1);
+            FilterRecipes(recipe =>
+                recipe.WorkedAt(_hudScreen.Grid.Station, _hudScreen.Grid.Width)
+                && _book.CanPay(_inventory, recipe));
             return;
         }
 
@@ -3814,8 +3944,12 @@ public sealed class ClientHost : IDisposable
             HudScreenKind.Game when _atStartScreen =>
                 $"up and down pick, left and right change it, tab changes tab{wheel}, "
                 + $"{close} goes back to the menu",
+            HudScreenKind.Player when _hudScreen.Tab == (int)PlayerTab.Map =>
+                $"drag or arrows pan, wheel zooms, home follows you, tab changes tab, {close} closes",
+            HudScreenKind.Player when _hudScreen.Tab == (int)PlayerTab.Items =>
+                $"arrows pick, h opens the handbook, tab changes tab, {close} closes",
             HudScreenKind.Player =>
-                $"arrows pick, enter makes one, shift and enter makes as many as it can, {close} closes",
+                $"arrows pick, enter chooses, wheel scrolls, tab changes tab, {close} closes",
             _ when OnTab(GameTab.Controls) =>
                 $"up and down pick, enter listens for a key, left clears it{wheel}, {close} closes",
             _ => $"up and down pick, left and right change it, tab changes tab{wheel}, {close} closes",
@@ -3916,6 +4050,12 @@ public sealed class ClientHost : IDisposable
             return;
         }
 
+        if (_hudScreen.Kind == HudScreenKind.Player)
+        {
+            BuildPlayerRows();
+            return;
+        }
+
         // ⛔ A visible way out, because escape is not one. It works, and the user's verdict on that
         // was "if hitting the esc key is the only way to get out of the settings area that's not
         // intuitive enough for most users" — which is right: a settings screen reached from a menu
@@ -4001,7 +4141,7 @@ public sealed class ClientHost : IDisposable
                     Note: _saveFault ?? "enter writes it; closing the window writes it anyway"));
                 _hudScreen.Rows.Add(new MenuRow(
                     "last saved",
-                    _streamer.World.Changed || _unlocks.Dirty
+                    _streamer.World.Changed || _unlocks.Dirty || _progress.Dirty || _map.Dirty
                         ? $"{(int)_sinceSave}s ago, with changes since"
                         : $"{(int)_sinceSave}s ago, up to date",
                     Note: $"written by itself every {(int)AutosaveSeconds}s when anything has changed, "
@@ -4086,6 +4226,77 @@ public sealed class ClientHost : IDisposable
         }
     }
 
+    /// <summary>The three non-container pages of the player's own screen.</summary>
+    private void BuildPlayerRows()
+    {
+        switch ((PlayerTab)_hudScreen.Tab)
+        {
+            case PlayerTab.Progress:
+                _hudScreen.Rows.Add(new MenuRow("this journey", Heading: true));
+                _hudScreen.Rows.Add(new MenuRow("blocks broken", $"{_progress.BlocksBroken:N0}"));
+                _hudScreen.Rows.Add(new MenuRow("blocks placed", $"{_progress.BlocksPlaced:N0}"));
+                _hudScreen.Rows.Add(new MenuRow("distance walked", $"{_progress.DistanceWalked:N0} blocks"));
+                _hudScreen.Rows.Add(new MenuRow("time survived", Spoken(_progress.TimeSurvived)));
+                _hudScreen.Rows.Add(new MenuRow(
+                    "deepest point", _progress.DeepestY == int.MaxValue ? "not explored" : $"y {_progress.DeepestY}"));
+                _hudScreen.Rows.Add(new MenuRow("tools worn out", $"{_progress.ToolsWornOut:N0}"));
+                _hudScreen.Rows.Add(new MenuRow("items smelted", $"{_progress.ItemsSmelted:N0}"));
+                _hudScreen.Rows.Add(new MenuRow("deaths", $"{_progress.Deaths:N0}"));
+                _hudScreen.Rows.Add(new MenuRow(
+                    "reset progress", _progressResetArmed ? "reset it? enter again" : "",
+                    Note: "also forgets the recipe discoveries in this world"));
+
+                _hudScreen.Rows.Add(new MenuRow(
+                    $"recipes — {_unlocks.Announced} of {_book.Recipes.Count} discovered", Heading: true));
+                foreach (var recipe in _book.Recipes)
+                {
+                    var known = _unlocks.Names.Contains(recipe.Name);
+                    _hudScreen.Rows.Add(new MenuRow(
+                        recipe.Name, known ? "known" : "locked",
+                        Note: known
+                            ? string.Join(". ", _book.CostLines(recipe)) + $". Made {recipe.MadeAt}."
+                            : "discover it by carrying everything it needs at once"));
+                }
+                break;
+
+            case PlayerTab.Handbook:
+                _hudScreen.Rows.Add(new MenuRow(
+                    "search", Edits: _handbookSearch,
+                    Note: "matches names and every fact in the entry"));
+
+                var found = new List<(ItemType Item, string Note)>();
+                foreach (var item in _items.All.Skip(1))
+                {
+                    var note = _handbook.Describe(item);
+                    var search = _handbookSearch.Text;
+                    if (search.Length > 0
+                        && !item.Label.Contains(search, StringComparison.OrdinalIgnoreCase)
+                        && !item.Name.Contains(search, StringComparison.OrdinalIgnoreCase)
+                        && !note.Contains(search, StringComparison.OrdinalIgnoreCase)) continue;
+                    found.Add((item, note));
+                }
+
+                _hudScreen.Rows.Add(new MenuRow(
+                    found.Count == 1 ? "1 item" : $"{found.Count} items", Heading: true));
+                foreach (var (item, note) in found)
+                    _hudScreen.Rows.Add(new MenuRow(item.Label, HandbookKind(item), Note: note));
+                break;
+
+            case PlayerTab.Map:
+                _hudScreen.Map = _map;
+                _hudScreen.MapPlayer = new Vector2(_player.Position.X, _player.Position.Z);
+                _hudScreen.MapFacing = _camera.Yaw;
+                break;
+        }
+    }
+
+    private static string HandbookKind(ItemType item) => item.IsFood ? "food"
+        : item.IsTool ? "tool"
+        : item.Wears is not null ? "armour"
+        : item.PlacesEntity ? "vehicle"
+        : item.Places is not null ? "block"
+        : "material";
+
     private static string OnOff(bool value) => value ? "on" : "off";
 
     /// <summary>
@@ -4105,6 +4316,25 @@ public sealed class ClientHost : IDisposable
         if (_hudScreen.Selected < 0 || _hudScreen.Selected >= _hudScreen.Rows.Count) return;
 
         var label = _hudScreen.Rows[_hudScreen.Selected].Label;
+
+        if (_hudScreen.Kind == HudScreenKind.Player)
+        {
+            if (_hudScreen.Tab == (int)PlayerTab.Progress && label == "reset progress" && activated)
+            {
+                if (!_progressResetArmed)
+                {
+                    _progressResetArmed = true;
+                }
+                else
+                {
+                    _progress.Reset();
+                    _unlocks.Forget();
+                    _progressResetArmed = false;
+                }
+                RefreshScreen();
+            }
+            return;
+        }
 
         switch ((GameTab)_hudScreen.Tab)
         {
@@ -4853,8 +5083,8 @@ public sealed class ClientHost : IDisposable
     /// </remarks>
     private void LayOut(int index)
     {
-        if (index < 0 || index >= _shown.Count) return;
-        LayOut(_shown[index]);
+        if (index < 0 || index >= _hudScreen.Recipes.Count) return;
+        LayOut(_hudScreen.Recipes[index]);
     }
 
     /// <summary>
@@ -4935,8 +5165,8 @@ public sealed class ClientHost : IDisposable
     /// </remarks>
     private void LoadFire(int index, bool all)
     {
-        if (index < 0 || index >= _shown.Count) return;
-        if (_shown[index].At(0, 0) is not { } want) return;
+        if (index < 0 || index >= _hudScreen.Recipes.Count) return;
+        if (_hudScreen.Recipes[index].At(0, 0) is not { } want) return;
 
         var fire = _furnaces.Open(_station.X, _station.Y, _station.Z);
 
@@ -4995,9 +5225,9 @@ public sealed class ClientHost : IDisposable
     /// <summary>Makes the selected recipe outright, straight into the pockets.</summary>
     private void CraftSelected(int index, bool all)
     {
-        if (index < 0 || index >= _shown.Count) return;
+        if (index < 0 || index >= _hudScreen.Recipes.Count) return;
 
-        var recipe = _shown[index];
+        var recipe = _hudScreen.Recipes[index];
         var many = all;
         var made = 0;
 
@@ -5547,7 +5777,7 @@ public sealed class ClientHost : IDisposable
         var voice = CreatureSounds.VoicesFor(quarry.Kind);
         if (voice.Length > 0) _audio?.Play(Pick(voice), quarry.Middle, 0.6f, 1.14f);
 
-        if (held is { IsTool: true } && _inventory.WearHeld())
+        if (held is { IsTool: true } && WearHeld())
             _audio?.Play(Pick(ActionSounds.ToolBreaks), _viewPosition, 0.7f, Wobble());
 
         return true;
@@ -5641,7 +5871,7 @@ public sealed class ClientHost : IDisposable
         var cry = CreatureSounds.HurtFor(quarry.Kind);
         if (cry.Length > 0 && quarry.Alive) _audio?.Play(Pick(cry), quarry.Middle, 0.85f, Wobble());
 
-        if (_inventory.HeldType is { IsTool: true } && _inventory.WearHeld())
+        if (_inventory.HeldType is { IsTool: true } && WearHeld())
             _audio?.Play(Pick(ActionSounds.ToolBreaks), _viewPosition, 0.7f, Wobble());
     }
 
@@ -5656,7 +5886,9 @@ public sealed class ClientHost : IDisposable
     {
         if (_furnaces.Count == 0) return;
 
-        _furnaces.Update(dt, _relit, (x, y, z) => _smelterKind[_streamer.World.GetBlock(x, y, z).Value]);
+        var made = _furnaces.Update(
+            dt, _relit, (x, y, z) => _smelterKind[_streamer.World.GetBlock(x, y, z).Value]);
+        if (made > 0) _progress.Smelted(made);
 
         foreach (var (x, y, z, lit) in _relit)
         {
@@ -5686,15 +5918,30 @@ public sealed class ClientHost : IDisposable
     {
         if (wheelY == 0f) return;
 
+        if (_hudScreen.Kind == HudScreenKind.Player
+            && _hudScreen.Tab == (int)PlayerTab.Map)
+        {
+            ZoomMap(Math.Sign(wheelY));
+            return;
+        }
+
         // Over a list, the wheel is the list's. Three lines a notch, which is what a wheel means
         // everywhere else on the machine.
-        if (_hudScreen.Kind == HudScreenKind.Game)
+        if (_hudScreen.Kind == HudScreenKind.Game
+            || (_hudScreen.Kind == HudScreenKind.Player && !_hudScreen.IsContainer))
         {
             ScrollRows(_hudScreen.Scroll - Math.Sign(wheelY) * 3);
             return;
         }
 
         _inventory.Scroll(-Math.Sign(wheelY));
+    }
+
+    private void ZoomMap(int by)
+    {
+        _hudScreen.MapZoom = Math.Clamp(
+            _hudScreen.MapZoom * (by > 0 ? 1.5f : 1f / 1.5f), 0.25f, 4f);
+        RefreshScreen();
     }
 
     /// <summary>Moves the settings list's window, held inside what there is to look at.</summary>
@@ -5715,7 +5962,8 @@ public sealed class ClientHost : IDisposable
     /// </remarks>
     private void ShowSelectedRow()
     {
-        if (_hudScreen.Kind != HudScreenKind.Game) return;
+        if (_hudScreen.Kind != HudScreenKind.Game
+            && !(_hudScreen.Kind == HudScreenKind.Player && !_hudScreen.IsContainer)) return;
 
         var lines = ScreenLayout.MenuLines(LayoutHeight);
 
@@ -5744,6 +5992,16 @@ public sealed class ClientHost : IDisposable
         // system's arrow appeared over a screen full of squares, and every click landed on nothing.
         if (_hudScreen.IsOpen)
         {
+            if (button == MouseButton.Left
+                && _hudScreen.Kind == HudScreenKind.Player
+                && _hudScreen.Tab == (int)PlayerTab.Map
+                && _layout.At(_hudScreen.Pointer.X, _hudScreen.Pointer.Y) is { Kind: ZoneKind.Map })
+            {
+                _draggingMap = true;
+                _mapDragAt = _hudScreen.Pointer;
+                return;
+            }
+
             ScreenClick(button);
             return;
         }
@@ -5776,7 +6034,11 @@ public sealed class ClientHost : IDisposable
     {
         switch (button)
         {
-            case MouseButton.Left: _holdingBreak = false; _draggingScrollbar = false; break;
+            case MouseButton.Left:
+                _holdingBreak = false;
+                _draggingScrollbar = false;
+                _draggingMap = false;
+                break;
             case MouseButton.Right: _holdingPlace = false; break;
         }
     }
@@ -5831,6 +6093,15 @@ public sealed class ClientHost : IDisposable
             {
                 foreach (var zone in _layout.Zones)
                     if (zone.Kind == ZoneKind.Scrollbar) DragScrollbar(zone);
+            }
+
+            if (_draggingMap)
+            {
+                var moved = _hudScreen.Pointer - _mapDragAt;
+                var zoom = Math.Clamp(_hudScreen.MapZoom, 0.25f, 4f);
+                _hudScreen.MapPan -= moved / (Chunk.Size * zoom);
+                _mapDragAt = _hudScreen.Pointer;
+                RefreshScreen();
             }
 
             _haveMouseAnchor = false;
@@ -5918,6 +6189,9 @@ public sealed class ClientHost : IDisposable
         }
 
         _elapsed += dt;
+
+        if (_walking && !_atStartScreen && _bench is null)
+            _progress.Survived(dt);
 
         // Closed the way a player closes it, so the exit path under test is the one that ships.
         // ⛳ Frames counted through the ORDINARY loop, which --bench cannot report because it is
@@ -6072,6 +6346,9 @@ public sealed class ClientHost : IDisposable
             !blocking && (_holdingBreak || _holdingPlace),
             blocking);
 
+        _hudScreen.AttackCooling = _animator.Swinging;
+        _hudScreen.AttackReady = _animator.Swinging ? _animator.SwingProgress : 1f;
+
         // ⚠ Taken and then discarded rather than not taken. The animator counts swings whether or
         // not anybody asks for them, so a shield held up for a minute would otherwise release a
         // minute's worth of blows the moment it came down.
@@ -6160,7 +6437,7 @@ public sealed class ClientHost : IDisposable
 
             // A tool that did the work wears from it. Only the tool: a bare hand is free, and so is
             // a plank held like a club, which is why this asks the item rather than the swing.
-            if (_inventory.HeldType is { IsTool: true } && _inventory.WearHeld())
+            if (_inventory.HeldType is { IsTool: true } && WearHeld())
                 _audio?.Play(Pick(ActionSounds.ToolBreaks), _viewPosition, 0.7f, Wobble());
         }
 
@@ -6466,6 +6743,7 @@ public sealed class ClientHost : IDisposable
     /// </summary>
     private void OpenDeathScreen(VitalsCause cause)
     {
+        _progress.Died();
         _diedOf = cause;
         _walking = false;
 
@@ -6708,6 +6986,7 @@ public sealed class ClientHost : IDisposable
         _streamer.EditBlock(
             hit.X, hit.Y, hit.Z,
             _waterlogging.Remains(_streamer.World.GetBlock(hit.X, hit.Y, hit.Z)));
+        _progress.Broke();
         ShedUnsupported(hit.X, hit.Y, hit.Z);
 
         // ⛳ Digging is work, and it is most of what a player does. Charged here rather than per
@@ -6937,7 +7216,7 @@ public sealed class ClientHost : IDisposable
         // ⚠ A hoe wears out tilling, exactly as a pickaxe wears out digging. Same call the mining
         // path makes, same snap when it goes — without it the one tool in the game with a single
         // purpose would be the one tool that lasts forever.
-        if (_inventory.WearHeld())
+        if (WearHeld())
             _audio?.Play(Pick(ActionSounds.ToolBreaks), _viewPosition, 0.7f, Wobble());
 
         _audio?.Play(
@@ -7036,7 +7315,7 @@ public sealed class ClientHost : IDisposable
         var here = new Vector3(hit.X + 0.5f, hit.Y + 0.5f, hit.Z + 0.5f);
         _audio?.Play(Pick(ActionSounds.PumpkinCarve), here, 0.8f, Wobble());
 
-        if (_inventory.HeldType is { IsTool: true } && _inventory.WearHeld())
+        if (_inventory.HeldType is { IsTool: true } && WearHeld())
             _audio?.Play(Pick(ActionSounds.ToolBreaks), _viewPosition, 0.7f, Wobble());
 
         return true;
@@ -7520,6 +7799,7 @@ public sealed class ClientHost : IDisposable
                 _waterlogging.DryOf(_streamer.World.GetBlock(hit.X, hit.Y, hit.Z))) >= 0)
         {
             _streamer.EditBlock(hit.X, hit.Y, hit.Z, whole);
+            _progress.Placed();
             _inventory.SpendHeld();
             PlaySound(
                 _registry[whole], SoundEvent.Place,
@@ -7643,6 +7923,8 @@ public sealed class ClientHost : IDisposable
             _streamer.EditBlock(x + px, y + py, z + pz, _bedHead[block.Value]);
         }
 
+        _progress.Placed(1 + (tall ? 1 : 0) + (flat ? 1 : 0));
+
         if (fromOffhand) SpendOffhand();
         else _inventory.SpendHeld();
 
@@ -7758,7 +8040,13 @@ public sealed class ClientHost : IDisposable
         var sneak = _keys.Held(_input, GameAction.Sneak);
         var sprint = _keys.Held(_input, GameAction.Sprint) && !sneak;
 
+        var before = _player.Position;
         _player.Step(_streamer.World, dt, wish, jump, sneak, sprint);
+
+        var walked = new Vector2(_player.Position.X - before.X, _player.Position.Z - before.Z).Length();
+        if (walked > 0f) _progress.Walked(walked);
+        _progress.Reached(_player.Position.Y);
+        _map.Visit(_player.Position.X, _player.Position.Z, _terrain, _streamer.World);
 
         // A body that has fallen out of the world goes back to where it started rather than
         // falling forever. It can only happen where the ground has not streamed in yet.
@@ -7769,6 +8057,14 @@ public sealed class ClientHost : IDisposable
         }
 
         _camera.Position = _player.EyePosition;
+    }
+
+    /// <summary>Wears the held tool and records the exact use that finally broke it.</summary>
+    private bool WearHeld()
+    {
+        var broke = _inventory.WearHeld();
+        if (broke) _progress.WoreOut();
+        return broke;
     }
 
     /// <summary>Books the frame that just ended and stops the run once the flight is over.</summary>
@@ -8880,6 +9176,7 @@ public sealed class ClientHost : IDisposable
                 // being half a block high, cannot.
                 SampleHeldIcon(size, "stone", "icon block top", 0f, 0.2f);
                 SampleHeldIcon(size, "stone_slab", "icon slab top", 0f, 0.2f);
+                SampleEmptyPocket(size, "icon empty top", 0f, 0.2f);
                 _inventory.Clear();
                 break;
 
@@ -9042,14 +9339,42 @@ public sealed class ClientHost : IDisposable
                 StopTyping(accept: false);
                 break;
 
+            // P7's three non-container tabs, through the same doors a player uses. Each is sampled
+            // off the framebuffer and then asked for the one interaction that makes it more than a
+            // title: a durable record, a searchable item entry, and a draggable/zoomable map.
+            case 331:
+                CloseScreen();
+                _progress.Broke(7);
+                _progress.Placed(5);
+                _unlocks.Reload(_book.Recipes.Take(3).Select(recipe => recipe.Name));
+                OpenPlayer(PlayerTab.Progress, atBench: false, default);
+                break;
+
+            case 340: SampleUi(size, "progress"); ProbeProgressTab(); break;
+
+            case 341:
+                CloseScreen();
+                _handbookSearch.Text = "stone pickaxe";
+                OpenPlayer(PlayerTab.Handbook, atBench: false, default);
+                break;
+
+            case 350: SampleUi(size, "handbook"); ProbeHandbookTab(); break;
+
+            case 351:
+                CloseScreen();
+                _map.Visit(_player.Position.X, _player.Position.Z, _terrain, _streamer.World);
+                OpenPlayer(PlayerTab.Map, atBench: false, default);
+                break;
+
+            case 360: SampleUi(size, "map"); ProbeMapTab(size); break;
+
             // ⛔⛔ THE FIRE'S BOOK, WHICH IS THE THING A USER HAD TO REPORT: "I'm not seeing any
             // recipes for food when i look in the furnace." There was no list at all, and no screen
-            // in this script had ever opened a furnace — the eight it walks are the eight that had
-            // one. A page counted here is a page that exists; the sample beside it is a page that
-            // arrived.
-            case 331: CloseScreen(); OpenFireForCheck(); break;
+            // in this script had ever opened a furnace. A page counted here is a page that exists;
+            // the sample beside it is a page that arrived.
+            case 361: CloseScreen(); OpenFireForCheck(); break;
 
-            case 340:
+            case 370:
                 SampleUi(size, "furnace");
                 ProbeFireBook(size);
 
@@ -9534,6 +9859,21 @@ public sealed class ClientHost : IDisposable
         SampleZone(size, zone, what, fromY, toY);
     }
 
+    /// <summary>Reads the first empty pocket as the skin-independent control for an item square.</summary>
+    private unsafe void SampleEmptyPocket(
+        Vector2D<int> size, string what, float fromY = 0f, float toY = 1f)
+    {
+        for (var slot = 0; slot < Inventory.Slots; slot++)
+        {
+            if (!_inventory[slot].IsEmpty) continue;
+            if (_layout.Find(SlotRole.Pocket, slot) is not { } zone) continue;
+            SampleZone(size, zone, what, fromY, toY);
+            return;
+        }
+
+        Console.Error.WriteLine($"ui-check    {what}: no empty pocket was drawn");
+    }
+
     /// <summary>Averages the pixels of one zone the renderer laid down, or a patch of it.</summary>
     /// <remarks>
     /// ⚠ <b>The patch matters more than it looks.</b> A square is mostly its own well: the icon in
@@ -9844,7 +10184,8 @@ public sealed class ClientHost : IDisposable
         // Where the pair sits when the book is out, worked out from the window rather than read
         // off a layout that may currently describe a panel on its own.
         var pairLeft = MathF.Round(
-            (size.X / scale - (ScreenLayout.PanelWidth + ScreenLayout.BookWidth + ScreenLayout.BookGap) * zoom) * 0.5f);
+            (size.X / scale - (ScreenLayout.PanelWidth + ScreenLayout.BookWidth
+                + ScreenLayout.BookGap) * zoom) * 0.5f);
         var top = MathF.Round((size.Y / scale - ScreenLayout.PanelHeight * zoom) * 0.5f);
 
         var wx = (int)((pairLeft + (ScreenLayout.BookWell.X + ScreenLayout.BookWell.W * 0.5f) * zoom) * scale);
@@ -9873,9 +10214,15 @@ public sealed class ClientHost : IDisposable
     {
         var entries = 0;
         var overlapping = 0;
+        var shelfTabs = 0;
 
         foreach (var zone in _layout.Zones)
         {
+            var shelf = zone.Index - (int)ScreenButton.RecipeCategoryAll;
+            if (zone.Kind == ZoneKind.Button
+                && shelf >= 0 && shelf < Enum.GetValues<RecipeCategory>().Length)
+                shelfTabs++;
+
             if (zone.Kind != ZoneKind.Recipe) continue;
             entries++;
 
@@ -9935,14 +10282,34 @@ public sealed class ClientHost : IDisposable
             stopped = (_hudScreen.Grid?.Result ?? ItemStack.Empty).IsEmpty;
         }
 
-        _uiBook = (entries, overlapping, laid, payable, _shown.Count, !makes.IsEmpty, again, stopped);
+        // Click a populated shelf through the same zone a player does. Six painted tabs are only
+        // furniture until one of them actually narrows the live page.
+        var categoryFilter = false;
+        var categoryButton = (int)ScreenButton.RecipeCategoryAll + (int)RecipeCategory.Building;
+        var building = _layout.Zones.FirstOrDefault(zone =>
+            zone.Kind == ZoneKind.Button && zone.Index == categoryButton);
+        if (building.W > 0f)
+        {
+            _hudScreen.Pointer = new Vector2(building.CentreX, building.CentreY);
+            ScreenClick(MouseButton.Left);
+            categoryFilter = _hudScreen.RecipeCategory == RecipeCategory.Building
+                && _hudScreen.Recipes.Count > 0
+                && _hudScreen.Recipes.All(recipe => _book.CategoryOf(recipe) == RecipeCategory.Building);
+            _hudScreen.RecipeCategory = RecipeCategory.All;
+            RecipeFilterChanged();
+        }
+
+        _uiBook = (
+            entries, overlapping, laid, payable, _shown.Count, !makes.IsEmpty, again, stopped,
+            shelfTabs, categoryFilter);
 
         Console.WriteLine(
             $"ui-check    book       {entries} recipes on the page of {_shown.Count}, "
             + $"{overlapping} over the panel; laying out '{(payable >= 0 ? _shown[payable].Name : "nothing")}' "
             + $"filled {laid} squares and makes "
             + (makes.IsEmpty ? "nothing" : $"{makes.Count} {_items[makes.Item].Name}")
-            + $"; taking it laid {again} squares out again and ran out after "
+            + $"; {shelfTabs} shelf tabs, building {(categoryFilter ? "narrowed the page" : "did not filter")}; "
+            + $"taking it laid {again} squares out again and ran out after "
             + (stopped ? "the logs did" : "NOTHING — it is still making them"));
         Console.Out.Flush();
 
@@ -9953,7 +10320,80 @@ public sealed class ClientHost : IDisposable
     }
 
     private (int Entries, int Overlapping, int Laid, int Payable, int Total, bool Makes,
-             int Again, bool Stopped) _uiBook;
+             int Again, bool Stopped, int ShelfTabs, bool CategoryFilter) _uiBook;
+
+    private bool _uiProgressTab;
+    private bool _uiHandbookTab;
+    private bool _uiMapCanvas;
+    private bool _uiMapDragged;
+    private bool _uiMapZoomed;
+    private int _uiMapTiles = -1;
+
+    private void ProbeProgressTab()
+    {
+        var labels = _hudScreen.Rows.Select(row => row.Label).ToHashSet(StringComparer.Ordinal);
+        _uiProgressTab = _hudScreen.TabNames.Length == Enum.GetValues<PlayerTab>().Length
+            && labels.Contains("blocks broken")
+            && labels.Contains("blocks placed")
+            && labels.Contains("distance walked")
+            && labels.Contains("time survived")
+            && labels.Contains("deepest point")
+            && labels.Contains("tools worn out")
+            && labels.Contains("items smelted")
+            && labels.Contains("deaths")
+            && labels.Contains("reset progress")
+            && _hudScreen.Rows.Any(row => row.Label.StartsWith("recipes — ", StringComparison.Ordinal));
+
+        Console.WriteLine(
+            $"ui-check    progress    {_hudScreen.Rows.Count} rows, "
+            + $"{_unlocks.Announced} of {_book.Recipes.Count} recipes, "
+            + (_uiProgressTab ? "all eight counters and reset reached it" : "record rows are missing"));
+        Console.Out.Flush();
+    }
+
+    private void ProbeHandbookTab()
+    {
+        var found = _hudScreen.Rows.Any(row => row.Label == "stone pickaxe");
+        var pick = _hudScreen.Rows.FirstOrDefault(row => row.Label == "stone pickaxe");
+        _uiHandbookTab = found
+            && pick.Note.Contains("tier", StringComparison.OrdinalIgnoreCase)
+            && pick.Note.Contains("uses", StringComparison.OrdinalIgnoreCase)
+            && _hudScreen.Rows.Any(row => row.Label == "search" && row.Edits == _handbookSearch);
+
+        Console.WriteLine(
+            $"ui-check    handbook    '{_handbookSearch.Text}' found "
+            + (!found ? "nothing" : $"{pick.Label}: {pick.Value}")
+            + (_uiHandbookTab ? ", with tier and durability" : ", without its facts"));
+        Console.Out.Flush();
+    }
+
+    private void ProbeMapTab(Vector2D<int> size)
+    {
+        var canvas = _layout.Zones.FirstOrDefault(zone => zone.Kind == ZoneKind.Map);
+        _uiMapCanvas = canvas.W > 0f && canvas.H > 0f
+            && _layout.At(canvas.CentreX, canvas.CentreY) is { Kind: ZoneKind.Map };
+        _uiMapTiles = _map.Tiles.Count;
+
+        if (_uiMapCanvas)
+        {
+            var scale = HudRenderer.ScaleFor(size.Y);
+            _hudScreen.Pointer = new Vector2(canvas.CentreX, canvas.CentreY);
+            var before = _hudScreen.MapPan;
+            OnMouseDown(MouseButton.Left);
+            OnMouseMove(new Vector2((canvas.CentreX + 32f) * scale, (canvas.CentreY + 16f) * scale));
+            OnMouseUp(MouseButton.Left);
+            _uiMapDragged = Vector2.DistanceSquared(before, _hudScreen.MapPan) > 0.0001f;
+        }
+
+        var zoom = _hudScreen.MapZoom;
+        OnScroll(1f);
+        _uiMapZoomed = _hudScreen.MapZoom > zoom;
+
+        Console.WriteLine(
+            $"ui-check    map         {_uiMapTiles} tiles, canvas {_uiMapCanvas}, "
+            + $"drag {_uiMapDragged}, zoom {zoom:0.##} to {_hudScreen.MapZoom:0.##}");
+        Console.Out.Flush();
+    }
 
     /// <summary>
     /// Puts the pointer on a square and asks the layout what it is over.
@@ -10190,6 +10630,9 @@ public sealed class ClientHost : IDisposable
         var chestPanel = Read("chest");
         var cutter = Read("cutter");
         var game = Read("game");
+        var progressPanel = Read("progress");
+        var handbookPanel = Read("handbook");
+        var mapPanel = Read("map");
         var world = Read("no screen corner");
 
         // The crosshair sits at the exact middle of an untouched frame and is nearly white. If the
@@ -10204,6 +10647,22 @@ public sealed class ClientHost : IDisposable
         if (bench == bare) faults.Add("opening a bench changed nothing on screen");
         if (chestPanel == bare) faults.Add("opening a chest changed nothing on screen");
         if (game == bare) faults.Add("opening the game screen changed nothing on screen");
+        if (progressPanel == bare) faults.Add("opening progress changed nothing on screen");
+        if (handbookPanel == bare) faults.Add("opening the handbook changed nothing on screen");
+        if (mapPanel == bare) faults.Add("opening the map changed nothing on screen");
+
+        if (!_uiProgressTab)
+            faults.Add("the progress tab did not show all eight counters, unlocks and its reset row");
+        if (!_uiHandbookTab)
+            faults.Add("searching the handbook for a stone pickaxe did not show its tier and durability");
+        if (_uiMapTiles <= 0)
+            faults.Add("the map tab opened without a single explored surface tile");
+        if (!_uiMapCanvas)
+            faults.Add("the map drew no canvas that can answer a pointer");
+        if (!_uiMapDragged)
+            faults.Add("dragging the map canvas did not pan it");
+        if (!_uiMapZoomed)
+            faults.Add("scrolling over the map did not zoom it");
 
         // A chest slot with something in it must not read as one without. Both are wells drawn from
         // the panel, so this is the only sample that says the screen is reading the chest at all.
@@ -10281,6 +10740,11 @@ public sealed class ClientHost : IDisposable
 
         if (_uiBook.Entries == 0) faults.Add($"the book drew no recipes at all, of {_uiBook.Total}");
         if (_uiBook.Overlapping > 0) faults.Add($"{_uiBook.Overlapping} of the book's recipes are drawn over the panel");
+        if (_uiBook.ShelfTabs != Enum.GetValues<RecipeCategory>().Length)
+            faults.Add($"the book drew {_uiBook.ShelfTabs} shelf tabs, not "
+                + $"{Enum.GetValues<RecipeCategory>().Length}");
+        if (!_uiBook.CategoryFilter)
+            faults.Add("clicking the building shelf did not narrow the live recipe page to building recipes");
 
         // And that it does the one thing it is for. Given something to pay with, a payable recipe
         // must exist, laying it out must fill squares, and those squares must make something.
@@ -10443,10 +10907,10 @@ public sealed class ClientHost : IDisposable
                 $"the stillest square on the page changed by only {_turnMoved * 100f:F0}% anywhere in a "
                 + "whole turn, so something on it is not turning - the line above says which");
 
-        // ⛳ A SLAB IS HALF AS TALL AS THE BLOCK IT IS CUT FROM, SO IT REACHES LESS FAR UP ITS
-        // SQUARE. Both wear the same tile, so nothing but the shape can move this number, and the
-        // block beside it is the control — it is a cube either way, so it reads the same in every
-        // build and any change here is the slab's.
+        // ⛳ A SLAB IS HALF AS TALL AS THE BLOCK IT IS CUT FROM, SO THE TOP OF ITS SQUARE STAYS
+        // close to the EMPTY square beside it. Both wear the same tile, so nothing but the shape can
+        // move this number. The empty square is the skin-independent control: a fallback well is
+        // dark and Vintage's packed inventory well is bright, so absolute brightness proves nothing.
         //
         // ⛔ THE FIRST VERSION OF THIS CHECK PASSED THE BROKEN BUILD. It compared the two whole
         // squares and asked that they differ, which they did — a flat tile fills a square evenly and
@@ -10454,17 +10918,23 @@ public sealed class ClientHost : IDisposable
         // Measured: with the shape drawn the slab's top strip is 62 against the block's 73; with it
         // put back to a flat tile it is 102, which is brighter than the block rather than darker.
         if (_uiSamples.TryGetValue("icon block top", out var blockTop)
-            && _uiSamples.TryGetValue("icon slab top", out var slabTop))
+            && _uiSamples.TryGetValue("icon slab top", out var slabTop)
+            && _uiSamples.TryGetValue("icon empty top", out var emptyTop))
         {
-            if (slabTop.G >= blockTop.G)
+            static int ColourDistance((byte R, byte G, byte B) a, (byte R, byte G, byte B) b) =>
+                Math.Abs(a.R - b.R) + Math.Abs(a.G - b.G) + Math.Abs(a.B - b.B);
+
+            var blockInk = ColourDistance(blockTop, emptyTop);
+            var slabInk = ColourDistance(slabTop, emptyTop);
+            if (blockInk == 0 || slabInk * 4 >= blockInk * 3)
                 faults.Add(
-                    $"the top of a stone slab's square reads {slabTop.G} against a whole block's "
-                    + $"{blockTop.G} — a slab is half as tall and cannot reach as far up it, so a "
-                    + "shaped block is being drawn as one flat tile of the rock it is made of");
+                    $"the top of a stone slab is {slabInk} colour units from an empty square against "
+                    + $"the whole block's {blockInk} — a slab is half as tall and should leave most "
+                    + "of that strip empty, so a shaped block may be one flat tile");
         }
         else
         {
-            faults.Add("the block-against-slab pair was never sampled");
+            faults.Add("the block, slab and empty-square shape controls were not all sampled");
         }
 
         // ⛔ THE PAIR, AND WITHOUT IT NEITHER HALF MEANS ANYTHING. An empty box and a box with a
@@ -10567,7 +11037,8 @@ public sealed class ClientHost : IDisposable
         // claim and never was.
         foreach (var (screen, middle) in (ReadOnlySpan<(string, (byte R, byte G, byte B))>)
                  [("items", items), ("book", book), ("bench", bench), ("chest", chestPanel),
-                  ("cutter", cutter), ("game", game)])
+                  ("cutter", cutter), ("game", game), ("progress", progressPanel),
+                  ("handbook", handbookPanel), ("map", mapPanel)])
         {
             var outside = Read($"{screen} corner");
             if (middle != outside) continue;
@@ -10680,7 +11151,7 @@ public sealed class ClientHost : IDisposable
         if (faults.Count == 0)
         {
             Console.WriteLine(
-                "OK  the overlay reaches the screen: crosshair, eight screens, panels in grey, "
+                "OK  the overlay reaches the screen: crosshair, eleven screen states, panels in grey, "
                 + $"{_uiProbes.Sum(p => p.Value.Hits)} squares answering for their own middles");
         }
         else

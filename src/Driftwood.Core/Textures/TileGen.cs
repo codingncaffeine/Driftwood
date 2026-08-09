@@ -5338,6 +5338,63 @@ public static class TileGen
         return scaled;
     }
 
+    /// <summary>
+    /// Preserves a generated sixteen-pixel tile's shapes while adding deterministic fine octaves
+    /// at resolutions that genuinely have room for them.
+    /// </summary>
+    /// <remarks>
+    /// Alpha is copied exactly, so leaves, tools and every other cut-out keep the same silhouette.
+    /// The three colour channels move together, preserving hue and the broad clusters authored by
+    /// the native generator. Smooth value noise is used instead of per-pixel static: a 512px stone
+    /// gains grain inside its logical texels rather than turning into television snow.
+    /// </remarks>
+    public static byte[] DetailUpscale(byte[] tile, int size, int seed)
+    {
+        if (size <= Size) return Upscale(tile, size);
+
+        var scaled = Upscale(tile, size);
+        var logical = Math.Max(2, size / Size);
+        var broad = Math.Max(1, logical / 4);
+        var fine = Math.Max(1, logical / 9);
+
+        for (var y = 0; y < size; y++)
+        for (var x = 0; x < size; x++)
+        {
+            var at = (y * size + x) * 4;
+            if (scaled[at + 3] == 0) continue;
+
+            var first = SmoothNoise(x, y, broad, seed * 31 + 0x51A7);
+            var second = SmoothNoise(x, y, fine, seed * 67 + 0x2D19);
+            var delta = (int)MathF.Round((first - 0.5f) * 12f + (second - 0.5f) * 5f);
+
+            // Near-black line art needs contrast, not random grey pinholes.
+            var light = Math.Max(scaled[at], Math.Max(scaled[at + 1], scaled[at + 2]));
+            if (light < 20) delta /= 3;
+
+            scaled[at] = Clamp(scaled[at] + delta);
+            scaled[at + 1] = Clamp(scaled[at + 1] + delta);
+            scaled[at + 2] = Clamp(scaled[at + 2] + delta);
+        }
+
+        return scaled;
+    }
+
+    private static float SmoothNoise(int x, int y, int scale, int seed)
+    {
+        var gx = x / scale;
+        var gy = y / scale;
+        var tx = (x % scale) / (float)scale;
+        var ty = (y % scale) / (float)scale;
+        tx = tx * tx * (3f - 2f * tx);
+        ty = ty * ty * (3f - 2f * ty);
+
+        var a = Noise(gx, gy, seed);
+        var b = Noise(gx + 1, gy, seed);
+        var c = Noise(gx, gy + 1, seed);
+        var d = Noise(gx + 1, gy + 1, seed);
+        return float.Lerp(float.Lerp(a, b, tx), float.Lerp(c, d, tx), ty);
+    }
+
     private static void Put(byte[] tile, int x, int y, byte r, byte g, byte b, byte a)
     {
         var i = y * Stride + x * 4;

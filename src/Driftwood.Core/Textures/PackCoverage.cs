@@ -180,6 +180,10 @@ public static class PackCoverage
                 foreach (var stem in PackLayouts.AllStems(layer.PackPathAlt)) consumed.Add(stem);
         }
 
+        var guiConsumed = GuiTextureSet.Entries
+            .SelectMany(entry => entry.Alternate.Length > 0 ? new[] { entry.Path, entry.Alternate } : new[] { entry.Path })
+            .ToArray();
+
         var byFamily = new Dictionary<string, (int Files, int Covered)>(StringComparer.Ordinal);
         int art = 0, covered = 0;
 
@@ -188,6 +192,17 @@ public static class PackCoverage
             if (!entry.EndsWith(".png", StringComparison.OrdinalIgnoreCase)) continue;
             if (entry.Contains("/models/") || entry.Contains("/blockstates/")) continue;
             if (PackLayouts.IsCompanionMap(entry)) continue;
+
+            if (IsGui(entry))
+            {
+                art++;
+                var guiMine = guiConsumed.Any(path => entry.EndsWith(path, StringComparison.OrdinalIgnoreCase)) ? 1 : 0;
+                covered += guiMine;
+                var group = GuiGroup(entry);
+                byFamily.TryGetValue(group.Label, out var run);
+                byFamily[group.Label] = (run.Files + 1, run.Covered + guiMine);
+                continue;
+            }
 
             // Both spellings and both roots, for the reason Report gives: one layout reaches the
             // folder through assets/ and a namespace, the other has it at the pack's own root.
@@ -247,9 +262,12 @@ public static class PackCoverage
             if (layer.PackPathAlt.Length > 0)
                 foreach (var stem in PackLayouts.AllStems(layer.PackPathAlt)) consumed.Add(stem);
         }
+        var guiConsumed = GuiTextureSet.Entries
+            .SelectMany(entry => entry.Alternate.Length > 0 ? new[] { entry.Path, entry.Alternate } : new[] { entry.Path })
+            .ToArray();
 
         var byFamily = new Dictionary<string, (int Total, int Have, List<string> Sample)>(StringComparer.Ordinal);
-        int blocks = 0, items = 0, entities = 0, models = 0, states = 0, other = 0, ungrouped = 0, have = 0;
+        int blocks = 0, items = 0, gui = 0, entities = 0, models = 0, states = 0, other = 0, ungrouped = 0, have = 0;
         var ungroupedNames = new List<string>();
 
         // A texture folder, however the pack spells the path to it. One layout reaches it through
@@ -279,6 +297,18 @@ public static class PackCoverage
             var isItem = Under(entry, "item") || Under(entry, "items");
             var isEntity = Under(entry, "entity");
 
+            if (IsGui(entry))
+            {
+                gui++;
+                var guiMine = guiConsumed.Any(path => entry.EndsWith(path, StringComparison.OrdinalIgnoreCase)) ? 1 : 0;
+                have += guiMine;
+                var group = GuiGroup(entry);
+                if (!byFamily.TryGetValue(group.Label, out var guiTally)) guiTally = (0, 0, []);
+                if (guiMine == 0 && guiTally.Sample.Count < 5) guiTally.Sample.Add(Stem(entry));
+                byFamily[group.Label] = (guiTally.Total + 1, guiTally.Have + guiMine, guiTally.Sample);
+                continue;
+            }
+
             if (isEntity) { entities++; continue; }
             if (!isBlock && !isItem) { other++; continue; }
 
@@ -303,7 +333,7 @@ public static class PackCoverage
 
         sb.AppendLine(
             $"pack          {pack.Name} ({pack.Dialect.ToString().ToLowerInvariant()} layout, format {pack.Format})");
-        sb.AppendLine($"files         {blocks:N0} block, {items:N0} item, {entities:N0} entity textures; "
+        sb.AppendLine($"files         {blocks:N0} block, {items:N0} item, {gui:N0} gui, {entities:N0} entity textures; "
                     + $"{models:N0} models, {states:N0} blockstates, {other:N0} other"
                     + (companions > 0 ? $"; {companions:N0} normal and roughness maps set aside" : ""));
         sb.AppendLine($"we read       {have} of them");
@@ -321,7 +351,7 @@ public static class PackCoverage
 
         foreach (var (label, tally) in ordered)
         {
-            var note = Array.Find(Families, f => f.Label == label)?.Note ?? "";
+            var note = Array.Find(Families, f => f.Label == label)?.Note ?? GuiNote(label);
             var share = tally.Have * 100.0 / tally.Total;
 
             sb.AppendLine($"  {label,-32} {tally.Total,5} files, {tally.Have,3} covered ({share,4:F0}%)   {note}");
@@ -343,6 +373,37 @@ public static class PackCoverage
     }
 
     private static Family? Classify(string name) => Array.Find(Families, f => f.Matches(name));
+
+    private static bool IsGui(string path) =>
+        path.Contains("/textures/gui/", StringComparison.OrdinalIgnoreCase)
+        || path.StartsWith("textures/gui/", StringComparison.OrdinalIgnoreCase);
+
+    private static (string Label, string Note) GuiGroup(string path)
+    {
+        if (path.Contains("/container/", StringComparison.OrdinalIgnoreCase))
+            return ("gui: containers", "fixed inventory and workstation sheets");
+        if (path.Contains("/hud/", StringComparison.OrdinalIgnoreCase))
+            return ("gui: hud", "bars, crosshair, hotbar and combat feedback");
+        if (path.Contains("/recipe_book/", StringComparison.OrdinalIgnoreCase))
+            return ("gui: recipe book", "search, filters, pages and overlays");
+        if (path.Contains("/widget/", StringComparison.OrdinalIgnoreCase))
+            return ("gui: widgets", "buttons, tabs, sliders and scrollbars");
+        if (path.Contains("/advancements/", StringComparison.OrdinalIgnoreCase)
+            || path.Contains("/statistics/", StringComparison.OrdinalIgnoreCase))
+            return ("gui: progress", "progress and statistics screens");
+        return ("gui: other", "tooltips, slots, toasts and specialist chrome");
+    }
+
+    private static string GuiNote(string label) => label switch
+    {
+        "gui: containers" => "fixed inventory and workstation sheets",
+        "gui: hud" => "bars, crosshair, hotbar and combat feedback",
+        "gui: recipe book" => "search, filters, pages and overlays",
+        "gui: widgets" => "buttons, tabs, sliders and scrollbars",
+        "gui: progress" => "progress and statistics screens",
+        "gui: other" => "tooltips, slots, toasts and specialist chrome",
+        _ => "",
+    };
 
     /// <summary>The bare file name, lower-cased, without folders or extension.</summary>
     private static string Stem(string path)

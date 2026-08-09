@@ -2,6 +2,7 @@ using System.Numerics;
 using Driftwood.Core.Blocks;
 using Driftwood.Core.Entities;
 using Driftwood.Core.Items;
+using Driftwood.Core.Players;
 using Driftwood.Core.World;
 
 namespace Driftwood.Core.Saves;
@@ -49,6 +50,11 @@ public sealed record WorldState(
     public float Pitch { get; set; }
     public double Played { get; set; }
     public float DayTime { get; set; }
+
+    /// <summary>Optional, section-backed additions whose absence means a fresh record.</summary>
+    public PlayerProgress Progress { get; set; } = new();
+
+    public WorldMap Map { get; set; } = new();
 
     /// <summary>Where a slept-in bed stands, or null when none ever was (#99).</summary>
     public Vector3? BedSpawn { get; set; }
@@ -321,6 +327,33 @@ public static class WorldSave
                     foreach (var recipe in state.Unlocks.Names) unlocked.Write(recipe);
                 }));
 
+                // Separate sections rather than fields appended to PLYR. Old builds skip both and
+                // still recover the player; new builds read an old save as an empty record/map.
+                SaveSection.Write(into, "STAT", Bytes(stats =>
+                {
+                    stats.Write(state.Progress.BlocksBroken);
+                    stats.Write(state.Progress.BlocksPlaced);
+                    stats.Write(state.Progress.DistanceWalked);
+                    stats.Write(state.Progress.TimeSurvived);
+                    stats.Write(state.Progress.DeepestY);
+                    stats.Write(state.Progress.ToolsWornOut);
+                    stats.Write(state.Progress.ItemsSmelted);
+                    stats.Write(state.Progress.Deaths);
+                }));
+
+                SaveSection.Write(into, "MAPS", Bytes(map =>
+                {
+                    map.Write(state.Map.Tiles.Count);
+                    foreach (var tile in state.Map.Tiles.OrderBy(tile => tile.Z).ThenBy(tile => tile.X))
+                    {
+                        map.Write(tile.X);
+                        map.Write(tile.Z);
+                        map.Write((byte)tile.Biome);
+                        map.Write((byte)tile.Top);
+                        map.Write(tile.Height);
+                    }
+                }));
+
                 // ⛳ A section an older build has never heard of, and that is the compatibility
                 // story: the reader skips unknown tags, so a save with animals in it opens
                 // everywhere — an old build re-rolls its herds, which is what it always did.
@@ -354,6 +387,8 @@ public static class WorldSave
             // notice it had something to write.
             state.World.Settled();
             state.Unlocks.Settled();
+            state.Progress.Settled();
+            state.Map.Settled();
             return null;
         }
         catch (Exception fault)
@@ -474,6 +509,8 @@ public static class WorldSave
             byte[]? cargo = null;
             byte[]? player = null;
             byte[]? unlocks = null;
+            byte[]? stats = null;
+            byte[]? map = null;
 
             while (SaveSection.TryRead(from, out var tag, out var payload))
             {
@@ -499,6 +536,8 @@ public static class WorldSave
                     case "CHST": chests = payload; break;
                     case "PLYR": player = payload; break;
                     case "UNLK": unlocks = payload; break;
+                    case "STAT": stats = payload; break;
+                    case "MAPS": map = payload; break;
                     case "CRTR": into.Creatures.AddRange(ReadCreatures(Reader(payload))); break;
 
                     case "CART":
@@ -539,6 +578,35 @@ public static class WorldSave
                 var names = new List<string>(Math.Clamp(count, 0, 4096));
                 for (var i = 0; i < count; i++) names.Add(reader.ReadString());
                 into.Unlocks.Reload(names);
+            }
+
+            if (stats is not null)
+            {
+                using var saved = Reader(stats);
+                into.Progress.Reload(
+                    saved.ReadInt64(), saved.ReadInt64(), saved.ReadDouble(), saved.ReadDouble(),
+                    saved.ReadInt32(), saved.ReadInt64(), saved.ReadInt64(), saved.ReadInt64());
+            }
+
+            if (map is not null)
+            {
+                using var saved = Reader(map);
+                var count = saved.ReadInt32();
+                if (count is < 0 or > 16_000_000) return $"this world's map says it has {count} tiles";
+
+                var tiles = new List<WorldMap.Tile>(count);
+                for (var i = 0; i < count; i++)
+                {
+                    var x = saved.ReadInt32();
+                    var z = saved.ReadInt32();
+                    var biome = (Gen.Biome)saved.ReadByte();
+                    var top = (WorldMap.Surface)saved.ReadByte();
+                    var height = saved.ReadInt16();
+                    if ((byte)biome >= Gen.Biomes.Count) biome = Gen.Biome.Woodland;
+                    if ((byte)top > (byte)WorldMap.Surface.Other) top = WorldMap.Surface.Other;
+                    tiles.Add(new WorldMap.Tile(x, z, biome, top, height));
+                }
+                into.Map.Reload(tiles);
             }
 
             into.World.Settled();

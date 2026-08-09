@@ -1,9 +1,11 @@
 using System.Numerics;
 using Driftwood.Core.Blocks;
 using Driftwood.Core.Entities;
+using Driftwood.Core.Gen;
 using Driftwood.Core.Items;
 using Driftwood.Core.Textures;
 using Driftwood.Core.Ui;
+using Driftwood.Core.World;
 using Silk.NET.OpenGL;
 
 namespace Driftwood.Client.Render;
@@ -80,6 +82,15 @@ public enum PlayerTab
 {
     /// <summary>What is carried, what is worn, the two-by-two, and the book beside them.</summary>
     Items,
+
+    /// <summary>What this player has done in this world, and what the recipe tree has revealed.</summary>
+    Progress,
+
+    /// <summary>Every item and the ways it is made, found, used, worn, burned, or placed.</summary>
+    Handbook,
+
+    /// <summary>The parts of this world the player has personally visited.</summary>
+    Map,
 }
 
 /// <summary>The tabs of the game screen.</summary>
@@ -147,6 +158,32 @@ public sealed class HudScreen
 
     /// <summary>Whether each of those can be paid for right now, in the same order.</summary>
     public readonly List<bool> Payable = [];
+
+    /// <summary>The recipe book's live search, shelf, and craftable-now switch.</summary>
+    public readonly TextField RecipeSearch = new(36) { Placeholder = "search" };
+
+    public RecipeCategory RecipeCategory;
+
+    public bool CraftableOnly;
+
+    /// <summary>Immediate and recursively expanded cost of the selected recipe.</summary>
+    public string[] RecipeCosts = [];
+
+    /// <summary>Exploration map state. Pan is in chunks; zoom is layout units per tile.</summary>
+    public WorldMap? Map;
+
+    public Vector2 MapPlayer;
+
+    public float MapFacing;
+
+    public float MapZoom = 0.5f;
+
+    public Vector2 MapPan;
+
+    /// <summary>The current swing cooldown, so the crosshair can show when the next strike lands.</summary>
+    public bool AttackCooling;
+
+    public float AttackReady = 1f;
 
     /// <summary>The lines of whichever settings tab is open.</summary>
     public readonly List<MenuRow> Rows = [];
@@ -244,7 +281,8 @@ public sealed class HudScreen
     /// the bottom of the world is not drawn under them — it would be the same nine slots twice.
     /// </remarks>
     public bool IsContainer =>
-        Kind is HudScreenKind.Player or HudScreenKind.Bench or HudScreenKind.Furnace
+        (Kind == HudScreenKind.Player && Tab == (int)PlayerTab.Items)
+        || Kind is HudScreenKind.Bench or HudScreenKind.Furnace
              or HudScreenKind.Chest or HudScreenKind.Stonecutter;
 
     /// <summary>The rock on a stonecutter's bed, what it could become, and which was picked.</summary>
@@ -381,6 +419,7 @@ public sealed class HudRenderer : IDisposable
     private readonly BlockTextureArray _font;
     private readonly int[] _advance;
 
+    private readonly List<float> _backdrop = new(64);
     private readonly List<float> _plain = new(4096);
     private readonly List<float> _blocks = new(2048);
     private readonly List<float> _iconQuads = new(2048);
@@ -388,9 +427,14 @@ public sealed class HudRenderer : IDisposable
     private readonly List<float> _skinQuads = new(256);
 
     private readonly List<float> _armourQuads = new(256);
+    private readonly List<float> _guiUnder = new(512);
+    private readonly List<float> _guiOver = new(512);
 
     /// <summary>The player's own sheet, as a single-layer array so the batcher can sample it.</summary>
     private BlockTextureArray? _skin;
+
+    private BlockTextureArray? _gui;
+    private bool[] _guiPresent = [];
 
     /// <summary>
     /// Every armour sheet in one array, material-major, two layers each.
@@ -524,12 +568,15 @@ public sealed class HudRenderer : IDisposable
         int screenWidth,
         int screenHeight)
     {
+        _backdrop.Clear();
         _plain.Clear();
         _blocks.Clear();
         _iconQuads.Clear();
         _text.Clear();
         _skinQuads.Clear();
         _armourQuads.Clear();
+        _guiUnder.Clear();
+        _guiOver.Clear();
         layout.Clear();
 
         // A whole number of screen pixels per layout unit, never a half. Everything here is pixel
@@ -578,6 +625,7 @@ public sealed class HudRenderer : IDisposable
         else
         {
             Crosshair(w, h);
+            AttackIndicator(screen, w, h);
         }
 
         // A container panel carries the player's own pockets in its bottom half, so the bar along
@@ -648,6 +696,8 @@ public sealed class HudRenderer : IDisposable
         _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
         _gl.BindVertexArray(_vao);
 
+        Flush(_backdrop, textured: false, null);
+        Flush(_guiUnder, textured: true, _gui);
         Flush(_plain, textured: false, null);
         Flush(_skinQuads, textured: true, _skin);
 
@@ -656,6 +706,7 @@ public sealed class HudRenderer : IDisposable
         Flush(_armourQuads, textured: true, _armour);
         Flush(_blocks, textured: true, blocks);
         Flush(_iconQuads, textured: true, _icons);
+        Flush(_guiOver, textured: true, _gui);
         Flush(_text, textured: true, _font);
 
         _gl.BindVertexArray(0);
@@ -734,9 +785,37 @@ public sealed class HudRenderer : IDisposable
         Rect(_plain, cx - 0.5f, cy - 5f, 1f, 10f, bright);
     }
 
+    private void AttackIndicator(HudScreen screen, float w, float h)
+    {
+        if (!screen.AttackCooling) return;
+
+        var ready = Math.Clamp(screen.AttackReady, 0f, 1f);
+        var x = MathF.Round(w * 0.5f - 8f);
+        var y = MathF.Round(h * 0.5f + 9f);
+
+        if (HasGui(GuiTextureSet.Layer.AttackBackground))
+            Rect(_guiOver, x, y, 16f, 4f, Vector4.One, (int)GuiTextureSet.Layer.AttackBackground);
+        else
+            Rect(_plain, x, y, 16f, 3f, new Vector4(0f, 0f, 0f, 0.75f));
+
+        if (ready <= 0f) return;
+        if (HasGui(GuiTextureSet.Layer.AttackProgress))
+            Rect(_guiOver, x, y, 16f * ready, 4f, Vector4.One,
+                (int)GuiTextureSet.Layer.AttackProgress, ready);
+        else
+            Rect(_plain, x + 1f, y + 1f, 14f * ready, 1f,
+                new Vector4(0.92f, 0.92f, 0.84f, 1f));
+    }
+
     /// <summary>The bar, one slot per pocket, with each block's own tile and its count.</summary>
     private void Hotbar(ItemRegistry catalogue, Inventory inventory, float w, float h)
     {
+        if (HasGui(GuiTextureSet.Layer.Hotbar))
+        {
+            SkinnedHotbar(catalogue, inventory, w, h);
+            return;
+        }
+
         // ⛳ The same number the bars over it hang off — see BarSpan. One source, so the rack and the
         // rows above it cannot drift apart.
         const float Slot = HotbarSlot;
@@ -785,6 +864,43 @@ public sealed class HudRenderer : IDisposable
         }
     }
 
+    private void SkinnedHotbar(ItemRegistry catalogue, Inventory inventory, float w, float h)
+    {
+        const float width = 182f;
+        const float height = 22f;
+        const float pitch = 20f;
+        const float icon = 16f;
+
+        var left = MathF.Round((w - width) * 0.5f);
+        var top = MathF.Round(h - height - 8f);
+        Rect(_guiUnder, left, top, width, height, Vector4.One, (int)GuiTextureSet.Layer.Hotbar);
+
+        if (HasGui(GuiTextureSet.Layer.HotbarSelection))
+            Rect(_guiOver, left - 1f + inventory.Selected * pitch, top - 1f, 24f, 23f,
+                Vector4.One, (int)GuiTextureSet.Layer.HotbarSelection);
+
+        for (var i = 0; i < Inventory.HotbarSlots; i++)
+        {
+            var stack = inventory[i];
+            if (stack.IsEmpty) continue;
+
+            var x = left + 3f + i * pitch;
+            var y = top + 3f;
+            var type = catalogue[stack.Item];
+            SlotIcon(catalogue, stack, x, y, icon, Vector4.One);
+
+            if (type.Durability > 0 && stack.Damage > 0)
+            {
+                var life = 1f - stack.Damage / (float)type.Durability;
+                Rect(_plain, x, top + 19f, icon, 2f, new Vector4(0f, 0f, 0f, 0.8f));
+                Rect(_plain, x, top + 19f, icon * life, 2f,
+                    new Vector4(1f - life, 0.25f + life * 0.65f, 0.2f, 1f));
+            }
+
+            if (stack.Count > 1) Number(stack.Count, x + icon + 1f, top + 14f);
+        }
+    }
+
     /// <summary>
     /// A screen over the world: what can be made here, and what the selected one costs.
     /// </summary>
@@ -805,13 +921,20 @@ public sealed class HudRenderer : IDisposable
         float w,
         float h)
     {
-        Rect(_plain, 0f, 0f, w, h, new Vector4(0.04f, 0.04f, 0.04f, 0.72f));
+        Rect(_backdrop, 0f, 0f, w, h, new Vector4(0.04f, 0.04f, 0.04f, 0.72f));
 
         // The three container screens are drawn on the pack's own panel, share every square below
         // the halfway line, and carry the recipe book beside them. Everything else is settings.
         if (screen.IsContainer)
         {
             Container(catalogue, inventory, equipment, screen, layout, w, h);
+            Footer(screen, w, h);
+            return;
+        }
+
+        if (screen.Kind == HudScreenKind.Player && screen.Tab == (int)PlayerTab.Map)
+        {
+            MapScreen(screen, layout, w, h);
             Footer(screen, w, h);
             return;
         }
@@ -835,6 +958,96 @@ public sealed class HudRenderer : IDisposable
 
         Footer(screen, w, h);
     }
+
+    /// <summary>The visited surface, centred on the player unless it has been panned away.</summary>
+    private void MapScreen(HudScreen screen, ScreenLayout layout, float w, float h)
+    {
+        var size = MathF.Floor(MathF.Min(300f, MathF.Min(w - 36f, h - 105f)));
+        var left = MathF.Round((w - size) * 0.5f);
+        var top = MathF.Round((h - size) * 0.44f);
+
+        Tabs(screen, layout, left, top - 22f, size);
+        Bevel(left - 4f, top - 4f, size + 8f, size + 8f, raised: true, PanelFill);
+        Rect(_plain, left, top, size, size, new Vector4(0.06f, 0.07f, 0.07f, 1f));
+        layout.Add(ZoneKind.Map, 0, left, top, size, size);
+
+        var zoom = Math.Clamp(screen.MapZoom, 0.25f, 4f);
+        var centre = screen.MapPlayer + screen.MapPan * Chunk.Size;
+        var stride = Math.Max(1, (int)MathF.Ceiling(4f / zoom));
+        var pitch = stride * zoom;
+
+        if (screen.Map is { } map)
+        {
+            foreach (var tile in map.Tiles)
+            {
+                if (Mod(tile.X, stride) != 0 || Mod(tile.Z, stride) != 0) continue;
+                var x = MathF.Round(left + size * 0.5f + (tile.X + stride * 0.5f - centre.X) * zoom);
+                var y = MathF.Round(top + size * 0.5f + (tile.Z + stride * 0.5f - centre.Y) * zoom);
+                if (x + pitch < left || y + pitch < top || x >= left + size || y >= top + size) continue;
+
+                var shade = Math.Clamp(0.84f + (tile.Height - TerrainGenerator.SeaLevel) * 0.008f, 0.68f, 1.12f);
+                var colour = MapColour(tile.Top, tile.Biome) * new Vector4(shade, shade, shade, 1f);
+                colour.W = 1f;
+                Rect(_plain, x, y, MathF.Max(2f, pitch - 1f), MathF.Max(2f, pitch - 1f), colour);
+            }
+
+            Text($"{map.Tiles.Count:N0} explored", left + 4f, top + size + 10f, 8f, InkDim);
+        }
+
+        // A bright square and a short nose: position and facing, both legible over every biome.
+        var px = left + size * 0.5f - screen.MapPan.X * Chunk.Size * zoom;
+        var py = top + size * 0.5f - screen.MapPan.Y * Chunk.Size * zoom;
+        Rect(_plain, px - 3f, py - 3f, 6f, 6f, new Vector4(1f, 0.92f, 0.38f, 1f));
+        var yaw = float.DegreesToRadians(screen.MapFacing);
+        var dx = MathF.Cos(yaw) * 9f;
+        var dy = MathF.Sin(yaw) * 9f;
+        MapNeedle(px, py, dx, dy);
+
+        TextCentred(
+            $"x {screen.MapPlayer.X:F0}  z {screen.MapPlayer.Y:F0}  {zoom:0.##} px/block",
+            left + size * 0.5f, top + size + 10f, 8f, InkDim);
+    }
+
+    private void MapNeedle(float x, float y, float dx, float dy)
+    {
+        var steps = (int)MathF.Max(MathF.Abs(dx), MathF.Abs(dy));
+        for (var i = 1; i <= steps; i++)
+            Rect(_plain, MathF.Round(x + dx * i / steps), MathF.Round(y + dy * i / steps), 2f, 2f,
+                new Vector4(1f, 0.92f, 0.38f, 1f));
+    }
+
+    private static int Mod(int value, int by) => ((value % by) + by) % by;
+
+    private static Vector4 MapColour(WorldMap.Surface surface, Biome biome) => surface switch
+    {
+        WorldMap.Surface.Water => biome == Biome.FrozenSea
+            ? new Vector4(0.57f, 0.75f, 0.82f, 1f)
+            : new Vector4(0.15f, 0.36f, 0.62f, 1f),
+        WorldMap.Surface.Snow => new Vector4(0.86f, 0.90f, 0.91f, 1f),
+        WorldMap.Surface.Sand => new Vector4(0.79f, 0.68f, 0.40f, 1f),
+        WorldMap.Surface.Stone => new Vector4(0.43f, 0.45f, 0.43f, 1f),
+        WorldMap.Surface.Wood => new Vector4(0.40f, 0.29f, 0.17f, 1f),
+        WorldMap.Surface.Soil => new Vector4(0.36f, 0.28f, 0.17f, 1f),
+        WorldMap.Surface.Other => MapBiomeColour(biome),
+        _ => MapBiomeColour(biome),
+    };
+
+    private static Vector4 MapBiomeColour(Biome biome) => biome switch
+    {
+        Biome.Sea => new Vector4(0.15f, 0.36f, 0.62f, 1f),
+        Biome.FrozenSea => new Vector4(0.57f, 0.75f, 0.82f, 1f),
+        Biome.Shore => new Vector4(0.76f, 0.69f, 0.43f, 1f),
+        Biome.Dunes => new Vector4(0.82f, 0.67f, 0.34f, 1f),
+        Biome.Marsh => new Vector4(0.30f, 0.45f, 0.28f, 1f),
+        Biome.Snowfield => new Vector4(0.86f, 0.90f, 0.91f, 1f),
+        Biome.Tundra => new Vector4(0.61f, 0.70f, 0.60f, 1f),
+        Biome.CherryGrove => new Vector4(0.68f, 0.50f, 0.55f, 1f),
+        Biome.Woods => new Vector4(0.16f, 0.36f, 0.18f, 1f),
+        Biome.Drylands => new Vector4(0.61f, 0.52f, 0.27f, 1f),
+        Biome.Highlands => new Vector4(0.42f, 0.48f, 0.36f, 1f),
+        Biome.Meadow => new Vector4(0.40f, 0.64f, 0.31f, 1f),
+        _ => new Vector4(0.28f, 0.51f, 0.25f, 1f),
+    };
 
     /// <summary>The tabs, with the open one lit and underlined.</summary>
     private void Tabs(HudScreen screen, ScreenLayout layout, float left, float top, float panel)
@@ -904,7 +1117,10 @@ public sealed class HudRenderer : IDisposable
             var lit = i == screen.Selected;
             var hot = screen.Hovered is { Kind: ZoneKind.Row } over && over.Index == i;
 
-            if (lit)
+            if (lit && HasGui(GuiTextureSet.Layer.WidgetButtonHighlighted))
+                NineSlice(_guiOver, left - 2f, y - 2f, panel + 4f, Line,
+                    GuiTextureSet.Layer.WidgetButtonHighlighted, 200f, 20f, 4f);
+            else if (lit)
                 Bevel(left - 2f, y - 2f, panel + 4f, Line, raised: false, new Vector4(0.50f, 0.50f, 0.50f, 0.97f));
             else if (hot)
                 Rect(_plain, left - 2f, y - 2f, panel + 4f, Line, new Vector4(1f, 1f, 1f, 0.10f));
@@ -1072,7 +1288,11 @@ public sealed class HudRenderer : IDisposable
     {
         const float Width = ScreenLayout.ScrollbarWidth;
 
-        Bevel(x, y, Width, height, raised: false, new Vector4(0.17f, 0.17f, 0.17f, 0.97f));
+        if (HasGui(GuiTextureSet.Layer.ScrollerBackground))
+            NineSlice(_guiOver, x, y, Width, height,
+                GuiTextureSet.Layer.ScrollerBackground, 6f, 32f, 3f);
+        else
+            Bevel(x, y, Width, height, raised: false, new Vector4(0.17f, 0.17f, 0.17f, 0.97f));
 
         var span = MathF.Max(1f, total - lines);
         var thumb = MathF.Max(10f, MathF.Round(height * lines / total));
@@ -1080,7 +1300,12 @@ public sealed class HudRenderer : IDisposable
         var at = MathF.Round(y + 2f + travel * (first / span));
 
         var held = screen.Hovered is { Kind: ZoneKind.Scrollbar };
-        Bevel(x + 1f, at, Width - 2f, thumb, raised: true, held ? PanelLight : PanelFill);
+        if (HasGui(GuiTextureSet.Layer.Scroller))
+            NineSlice(_guiOver, x + 1f, at, Width - 2f, thumb,
+                GuiTextureSet.Layer.Scroller, 6f, 32f, 3f,
+                held ? new Vector4(1.12f, 1.12f, 1.12f, 1f) : Vector4.One);
+        else
+            Bevel(x + 1f, at, Width - 2f, thumb, raised: true, held ? PanelLight : PanelFill);
 
         layout.Add(ZoneKind.Scrollbar, 0, x, y, Width, height);
     }
@@ -1162,12 +1387,48 @@ public sealed class HudRenderer : IDisposable
         var pages = Math.Max(1, (screen.Recipes.Count + ScreenLayout.BookPage - 1) / ScreenLayout.BookPage);
         var page = Math.Clamp(screen.BookPage, 0, pages - 1);
 
-        // The header names where these recipes are worked. A fire's book used to say "in your
-        // hands", which is one more way a furnace failed to say it cooks.
-        TextCentred(
-            screen.Kind == HudScreenKind.Furnace ? "on the fire"
-                : screen.Grid is { Width: > 2 } ? "at a bench" : "in your hands",
-            layout.BookX + layout.Size(ScreenLayout.BookWidth * 0.5f), layout.Y(14f), 8f, InkDim);
+        // Search, shelf and craftable-now live in the book's header. Each is drawn from its actual
+        // zone, so what lights under the pointer is exactly what a click will operate.
+        foreach (var zone in layout.Zones)
+        {
+            if (zone.Kind == ZoneKind.Field && zone.Index < 0)
+            {
+                BookSearch(screen, zone);
+                continue;
+            }
+
+            if (zone.Kind != ZoneKind.Button) continue;
+
+            var shelf = zone.Index - (int)ScreenButton.RecipeCategoryAll;
+            var isShelf = shelf >= 0 && shelf < Enum.GetValues<RecipeCategory>().Length;
+            var craftable = zone.Index == (int)ScreenButton.CraftableOnly;
+            if (!isShelf && !craftable) continue;
+
+            var hot = screen.Hovered is { Kind: ZoneKind.Button } over && over.Index == zone.Index;
+            var category = isShelf ? (RecipeCategory)shelf : RecipeCategory.All;
+            var active = craftable ? screen.CraftableOnly : screen.RecipeCategory == category;
+            var guiLayer = craftable
+                ? active ? GuiTextureSet.Layer.RecipeFilterOn : GuiTextureSet.Layer.RecipeFilterOff
+                : active ? GuiTextureSet.Layer.RecipeTabSelected : GuiTextureSet.Layer.RecipeTab;
+            if (HasGui(guiLayer))
+                Rect(_guiOver, zone.X, zone.Y, zone.W, zone.H, Vector4.One, (int)guiLayer);
+            else
+                Bevel(zone.X, zone.Y, zone.W, zone.H, raised: !active,
+                    hot ? PanelLight : active ? SlotFill : PanelFill);
+
+            var label = craftable ? "!" : category switch
+            {
+                RecipeCategory.Building => "build",
+                RecipeCategory.Materials => "raw",
+                RecipeCategory.Tools => "tools",
+                RecipeCategory.Light => "light",
+                RecipeCategory.Machines => "work",
+                _ => "all",
+            };
+            if (!craftable)
+                TextCentred(label, zone.CentreX, zone.Y + MathF.Max(2f, (zone.H - 7f) * 0.5f), 7f,
+                    active ? Highlight : Ink);
+        }
 
         foreach (var zone in layout.Zones)
         {
@@ -1250,6 +1511,38 @@ public sealed class HudRenderer : IDisposable
         TextCentred(
             payableNow ? "click to lay it out" : "not enough for this yet",
             layout.BookX + layout.Size(ScreenLayout.BookWidth * 0.5f), nameY + 12f, 7f, InkFaint);
+
+        for (var i = 0; i < Math.Min(2, screen.RecipeCosts.Length); i++)
+        {
+            var lines = Wrap(screen.RecipeCosts[i], layout.Size(ScreenLayout.BookWidth - 8f), 6f);
+            for (var line = 0; line < Math.Min(2, lines.Count); line++)
+                TextCentred(lines[line],
+                    layout.BookX + layout.Size(ScreenLayout.BookWidth * 0.5f),
+                    nameY + 23f + (i * 2 + line) * 8f, 6f, InkFaint);
+        }
+    }
+
+    /// <summary>The compact text field in the recipe book's header.</summary>
+    private void BookSearch(HudScreen screen, Zone zone)
+    {
+        const float glyph = 7f;
+        var field = screen.RecipeSearch;
+        var focused = ReferenceEquals(screen.Typing, field);
+        var hot = screen.Hovered is { Kind: ZoneKind.Field } over && over.Index == zone.Index;
+
+        Bevel(zone.X, zone.Y, zone.W, zone.H, raised: false,
+            hot || focused ? new Vector4(0.18f, 0.18f, 0.19f, 0.98f)
+                : new Vector4(0.13f, 0.13f, 0.14f, 0.98f));
+
+        var shown = field.Empty && !focused ? field.Placeholder : field.Text;
+        while (shown.Length > 0 && TextWidth(shown, glyph) > zone.W - 6f) shown = shown[1..];
+        Text(shown, zone.X + 3f, zone.Y + 4f, glyph, field.Empty ? InkFaint : Ink);
+
+        if (focused && screen.Clock % 1f < 0.5f)
+        {
+            var at = zone.X + 3f + TextWidth(shown, glyph);
+            Rect(_plain, MathF.Min(at, zone.X + zone.W - 2f), zone.Y + 3f, 1f, glyph + 2f, Highlight);
+        }
     }
 
     /// <summary>A bevel in the book's own pixels, which start at its own left edge.</summary>
@@ -1324,13 +1617,31 @@ public sealed class HudRenderer : IDisposable
         // The book first, so the panel's own frame overlaps it rather than the other way round.
         if (layout.BookOut) Book(catalogue, screen, layout);
 
-        // The panel. Its border is two of the pack's own pixels, so it thickens with the panel
-        // rather than staying two layout units while everything around it grows.
-        PanelBevel(layout, 0f, 0f, ScreenLayout.PanelWidth, ScreenLayout.PanelHeight, raised: true, PanelFill);
+        var panelLayer = kind switch
+        {
+            PanelKind.Player => GuiTextureSet.Layer.Inventory,
+            PanelKind.Bench => GuiTextureSet.Layer.CraftingTable,
+            PanelKind.Furnace => GuiTextureSet.Layer.Furnace,
+            PanelKind.Chest => GuiTextureSet.Layer.Chest,
+            PanelKind.Stonecutter => GuiTextureSet.Layer.Stonecutter,
+            _ => GuiTextureSet.Layer.Inventory,
+        };
+        var skinned = HasGui(panelLayer);
+
+        // A container sheet is a fixed 256 square whose live panel occupies 176x166 at its origin.
+        // The layout was authored in those same pixels, so this is one quad and no remapping.
+        if (skinned)
+            RectUv(_guiUnder, layout.OriginX, layout.OriginY,
+                layout.Size(ScreenLayout.PanelWidth), layout.Size(ScreenLayout.PanelHeight),
+                0f, 0f,
+                ScreenLayout.PanelWidth / (float)GuiTextureSet.Size,
+                ScreenLayout.PanelHeight / (float)GuiTextureSet.Size,
+                Vector4.One, (int)panelLayer);
+        else
+            PanelBevel(layout, 0f, 0f, ScreenLayout.PanelWidth, ScreenLayout.PanelHeight, raised: true, PanelFill);
 
         // The player screen's tabs sit on top of the panel. A station has none — a furnace is not a
-        // place you look up what you have unlocked. There is one tab until the progress, handbook
-        // and map ones land, so the strip draws nothing today.
+        // place you look up what you have unlocked.
         if (screen.TabNames.Length > 1)
             Tabs(screen, layout, layout.X(0f), layout.Y(0f) - 18f, layout.Size(ScreenLayout.PanelWidth));
 
@@ -1340,8 +1651,15 @@ public sealed class HudRenderer : IDisposable
             if (zone.Kind != ZoneKind.Button || zone.Index != (int)ScreenButton.Book) continue;
 
             var hot = screen.Hovered is { Kind: ZoneKind.Button } over && over.Index == zone.Index;
-            Bevel(zone.X, zone.Y, zone.W, zone.H, raised: !screen.BookOut,
-                hot ? PanelLight : screen.BookOut ? SlotFill : PanelFill);
+            var button = hot
+                ? GuiTextureSet.Layer.RecipeButtonHighlighted
+                : GuiTextureSet.Layer.RecipeButton;
+            var packedButton = HasGui(button);
+            if (packedButton)
+                Rect(_guiOver, zone.X, zone.Y, zone.W, zone.H, Vector4.One, (int)button);
+            else
+                Bevel(zone.X, zone.Y, zone.W, zone.H, raised: !screen.BookOut,
+                    hot ? PanelLight : screen.BookOut ? SlotFill : PanelFill);
 
             // ⛳ A DRAWING OF A BOOK, which was three flat rectangles until the user pointed out that
             // it looked like nothing. That is the honest limit of generated chrome: the world's
@@ -1355,27 +1673,31 @@ public sealed class HudRenderer : IDisposable
             var pad = MathF.Max(1f, MathF.Round(z * 2f));
             var tint = screen.BookOut ? Vector4.One : new Vector4(0.82f, 0.82f, 0.82f, 1f);
 
-            Rect(_blocks, zone.X + pad, zone.Y + pad, zone.W - pad * 2f, zone.H - pad * 2f,
-                tint, StarterBlocks.LayerRecipeBook);
+            if (!packedButton)
+                Rect(_blocks, zone.X + pad, zone.Y + pad, zone.W - pad * 2f, zone.H - pad * 2f,
+                    tint, StarterBlocks.LayerRecipeBook);
         }
 
         // A rule where the player's own pockets begin, which is where the pack's sheet puts one too.
-        Rect(_plain, layout.X(7f), layout.Y(78f), layout.Size(162f), z, PanelDark);
-        Rect(_plain, layout.X(7f), layout.Y(79f), layout.Size(162f), z, PanelLight);
+        if (!skinned)
+        {
+            Rect(_plain, layout.X(7f), layout.Y(78f), layout.Size(162f), z, PanelDark);
+            Rect(_plain, layout.X(7f), layout.Y(79f), layout.Size(162f), z, PanelLight);
+        }
 
         switch (kind)
         {
             case PanelKind.Player:
-                Figure(layout, screen, catalogue, equipment, inventory.Held);
-                Arrow(layout, ScreenLayout.PlayerArrow, 1f);
+                Figure(layout, screen, catalogue, equipment, inventory.Held, frame: !skinned);
+                if (!skinned) Arrow(layout, ScreenLayout.PlayerArrow, 1f);
                 break;
 
             case PanelKind.Bench:
-                Arrow(layout, ScreenLayout.BenchArrow, 1f);
+                if (!skinned) Arrow(layout, ScreenLayout.BenchArrow, 1f);
                 break;
 
             case PanelKind.Furnace:
-                Hearth(layout, screen);
+                Hearth(layout, screen, chrome: !skinned);
                 break;
         }
 
@@ -1387,7 +1709,7 @@ public sealed class HudRenderer : IDisposable
             ? layout.Find(SlotRole.Result, 0)
             : kind == PanelKind.Furnace ? layout.Find(SlotRole.Smelted, 0) : null;
 
-        if (giving is { } wide)
+        if (!skinned && giving is { } wide)
             PanelBevel(
                 layout,
                 (wide.X - layout.OriginX) / z - 5f, (wide.Y - layout.OriginY) / z - 5f,
@@ -1401,9 +1723,14 @@ public sealed class HudRenderer : IDisposable
             if (zone.Kind != ZoneKind.Slot) continue;
 
             var stack = Contents(inventory, equipment, screen, zone);
+            var ghost = stack.IsEmpty ? GhostAt(screen, zone) : null;
+
+            if (ghost is not null && HasGui(GuiTextureSet.Layer.RecipeOverlay))
+                Rect(_guiUnder, zone.X, zone.Y, zone.W, zone.H, Vector4.One,
+                    (int)GuiTextureSet.Layer.RecipeOverlay);
 
             // Whatever already has the wider frame keeps it; every other square is a well pressed in.
-            if (giving != zone) Well(layout, zone);
+            if (!skinned && giving != zone) Well(layout, zone);
 
             // A worn slot nobody can fill yet says what it is for rather than sitting blank.
             if (stack.IsEmpty && zone.Role == SlotRole.Equip)
@@ -1419,16 +1746,21 @@ public sealed class HudRenderer : IDisposable
             if (zone.Role == SlotRole.Pocket && zone.Index == inventory.Selected)
                 Select(zone.X, zone.Y, zone.W, zone.H);
 
-            if (stack.IsEmpty) continue;
+            if (stack.IsEmpty && ghost is null) continue;
 
-            var type = catalogue[stack.Item];
+            var drawn = stack.IsEmpty
+                ? new ItemStack(ghost!.Members[0], 1)
+                : stack;
+
+            var type = catalogue[drawn.Item];
             var inset = MathF.Round(z);
-            Bloom(type, zone.X, zone.Y, zone.W, zone.H);
-            SlotIcon(catalogue, stack, zone.X + inset, zone.Y + inset, zone.W - inset * 2f, Vector4.One);
+            if (ghost is null) Bloom(type, zone.X, zone.Y, zone.W, zone.H);
+            SlotIcon(catalogue, drawn, zone.X + inset, zone.Y + inset, zone.W - inset * 2f,
+                ghost is null ? Vector4.One : new Vector4(1f, 1f, 1f, 0.28f));
 
-            if (type.Durability > 0 && stack.Damage > 0)
+            if (ghost is null && type.Durability > 0 && stack.Damage > 0)
             {
-                var life = 1f - stack.Damage / (float)type.Durability;
+                var life = 1f - drawn.Damage / (float)type.Durability;
                 var bar = MathF.Max(1f, MathF.Round(z));
                 Rect(_plain, zone.X + inset, zone.Y + zone.H - bar * 2f, zone.W - inset * 2f, bar,
                     new Vector4(0f, 0f, 0f, 0.8f));
@@ -1436,7 +1768,8 @@ public sealed class HudRenderer : IDisposable
                     new Vector4(1f - life, 0.25f + life * 0.65f, 0.2f, 1f));
             }
 
-            if (stack.Count > 1) Number(stack.Count, zone.X + zone.W, zone.Y + zone.H - digits - 1f, digits);
+            if (ghost is null && drawn.Count > 1)
+                Number(drawn.Count, zone.X + zone.W, zone.Y + zone.H - digits - 1f, digits);
         }
 
         // A stonecutter's list. Every offer is drawn as the thing it would make, which is the only
@@ -1493,6 +1826,22 @@ public sealed class HudRenderer : IDisposable
             : ItemStack.Empty,
         _ => ItemStack.Empty,
     };
+
+    /// <summary>An ingredient shown faintly in an empty craft cell before the recipe is laid out.</summary>
+    private static Ingredient? GhostAt(HudScreen screen, Zone zone)
+    {
+        if (zone.Role != SlotRole.Craft || screen.Grid is not { } grid) return null;
+        if (screen.Selected < 0 || screen.Selected >= screen.Recipes.Count) return null;
+
+        var recipe = screen.Recipes[screen.Selected];
+        if (!recipe.WorkedAt(grid.Station, grid.Width)) return null;
+
+        if (recipe.Shapeless) return Nth(recipe, zone.Index);
+
+        var x = zone.Index % grid.Width;
+        var y = zone.Index / grid.Width;
+        return x < recipe.Width && y < recipe.Height ? recipe.At(x, y) : null;
+    }
 
     /// <summary>
     /// A square pressed into the panel: eighteen across with sixteen inside it.
@@ -1641,14 +1990,15 @@ public sealed class HudRenderer : IDisposable
     /// </remarks>
     private void Figure(
         ScreenLayout layout, HudScreen screen, ItemRegistry catalogue, Equipment equipment,
-        ItemStack held)
+        ItemStack held, bool frame = true)
     {
         _ = screen;
         var box = ScreenLayout.Figure;
 
-        PanelBevel(
-            layout, box.X, box.Y, box.W, box.H,
-            raised: false, new Vector4(0.13f, 0.14f, 0.16f, 0.98f));
+        if (frame)
+            PanelBevel(
+                layout, box.X, box.Y, box.W, box.H,
+                raised: false, new Vector4(0.13f, 0.14f, 0.16f, 0.98f));
 
         if (_skin is null || _dollBoxes.Length == 0) return;
 
@@ -1795,7 +2145,24 @@ public sealed class HudRenderer : IDisposable
         _dollBoxes = PlayerModel.Build(skin.Arms, skin.Legacy);
 
         BuildArmourSheets(pack);
+        BuildGui(pack);
     }
+
+    private void BuildGui(TexturePack? pack)
+    {
+        _gui?.Dispose();
+        _gui = null;
+        _guiPresent = [];
+
+        if (GuiTextureSet.Load(pack) is not { } gui) return;
+
+        _gui = new BlockTextureArray(_gl, gui.Tiles, GuiTextureSet.Size);
+        _guiPresent = gui.Present;
+        Console.WriteLine($"interface   {gui.Summary}");
+    }
+
+    private bool HasGui(GuiTextureSet.Layer layer) =>
+        (int)layer < _guiPresent.Length && _guiPresent[(int)layer];
 
     /// <summary>
     /// Paints every material's two armour sheets into one array for the figure to cut from.
@@ -1835,15 +2202,16 @@ public sealed class HudRenderer : IDisposable
     private float _armourV = ArmourArt.Height / (float)ArmourArt.Width;
 
     /// <summary>A furnace's flame burning down, and the work filling toward the output.</summary>
-    private void Hearth(ScreenLayout layout, HudScreen screen)
+    private void Hearth(ScreenLayout layout, HudScreen screen, bool chrome = true)
     {
         var z = layout.Zoom;
         var fuel = screen.Burning?.FuelLeft ?? 0f;
         var work = screen.Burning?.Fraction ?? 0f;
 
         var flame = ScreenLayout.FurnaceFlame;
-        PanelBevel(layout, flame.X, flame.Y, flame.W, flame.H, raised: false,
-            new Vector4(0.15f, 0.15f, 0.15f, 0.95f));
+        if (chrome)
+            PanelBevel(layout, flame.X, flame.Y, flame.W, flame.H, raised: false,
+                new Vector4(0.15f, 0.15f, 0.15f, 0.95f));
 
         // Quantised to whole panel pixels so it steps rather than slides, which is the aesthetic.
         var lit = MathF.Round((flame.H - 2f) * fuel);
@@ -1854,7 +2222,7 @@ public sealed class HudRenderer : IDisposable
                 new Vector4(1f, 0.55f + fuel * 0.3f, 0.18f, 1f));
 
         // The work arrow: a dim one all the way across, and a bright one as far as it has got.
-        Arrow(layout, ScreenLayout.FurnaceArrow, 0.35f);
+        if (chrome) Arrow(layout, ScreenLayout.FurnaceArrow, 0.35f);
         if (work <= 0f) return;
 
         var full = ScreenLayout.FurnaceArrow;
@@ -2272,6 +2640,14 @@ public sealed class HudRenderer : IDisposable
     /// </remarks>
     private void Hearts(PlayerVitals vitals, float drift, float w, float h)
     {
+        if (HasGui(GuiTextureSet.Layer.HeartContainer)
+            && HasGui(GuiTextureSet.Layer.HeartFull)
+            && HasGui(GuiTextureSet.Layer.HeartHalf))
+        {
+            SkinnedHearts(vitals, drift, w, h);
+            return;
+        }
+
         const float Icon = BarIcon;
         const int Count = PlayerVitals.MaxHealth / 2;
 
@@ -2310,6 +2686,29 @@ public sealed class HudRenderer : IDisposable
         }
     }
 
+    private void SkinnedHearts(PlayerVitals vitals, float drift, float w, float h)
+    {
+        const float icon = BarIcon;
+        const int count = PlayerVitals.MaxHealth / 2;
+        var start = BarsLeft(w);
+        var top = h - 44f;
+        var filled = (vitals.Health + 1) / 2;
+
+        for (var i = 0; i < count; i++)
+        {
+            var x = start + i * icon;
+            var y = top + Tremble(drift, i, filled);
+            var size = icon - 1f;
+            Rect(_guiOver, x, y, size, size, Vector4.One, (int)GuiTextureSet.Layer.HeartContainer);
+
+            var left = vitals.Health - i * 2;
+            if (left >= 2)
+                Rect(_guiOver, x, y, size, size, Vector4.One, (int)GuiTextureSet.Layer.HeartFull);
+            else if (left == 1)
+                Rect(_guiOver, x, y, size, size, Vector4.One, (int)GuiTextureSet.Layer.HeartHalf);
+        }
+    }
+
     /// <summary>
     /// Ten drumsticks, opposite the hearts, draining right to left.
     /// </summary>
@@ -2324,6 +2723,14 @@ public sealed class HudRenderer : IDisposable
     /// </remarks>
     private void Food(PlayerVitals vitals, float drift, float w, float h)
     {
+        if (HasGui(GuiTextureSet.Layer.FoodEmpty)
+            && HasGui(GuiTextureSet.Layer.FoodFull)
+            && HasGui(GuiTextureSet.Layer.FoodHalf))
+        {
+            SkinnedFood(vitals, drift, w, h);
+            return;
+        }
+
         const float Icon = BarIcon;
         const int Count = PlayerVitals.MaxFood / 2;
 
@@ -2357,6 +2764,29 @@ public sealed class HudRenderer : IDisposable
             }
 
             TornFill(x, y, size, level, full, IconFoodFull, i);
+        }
+    }
+
+    private void SkinnedFood(PlayerVitals vitals, float drift, float w, float h)
+    {
+        const float icon = BarIcon;
+        const int count = PlayerVitals.MaxFood / 2;
+        var right = BarsRight(w);
+        var top = h - 44f;
+        var filled = (vitals.Food + 1) / 2;
+
+        for (var i = 0; i < count; i++)
+        {
+            var x = right - (i + 1) * icon;
+            var y = top + Tremble(drift, i, filled);
+            var size = icon - 1f;
+            Rect(_guiOver, x, y, size, size, Vector4.One, (int)GuiTextureSet.Layer.FoodEmpty);
+
+            var left = vitals.Food - i * 2;
+            if (left >= 2)
+                Rect(_guiOver, x, y, size, size, Vector4.One, (int)GuiTextureSet.Layer.FoodFull);
+            else if (left == 1)
+                Rect(_guiOver, x, y, size, size, Vector4.One, (int)GuiTextureSet.Layer.FoodHalf);
         }
     }
 
@@ -2412,6 +2842,21 @@ public sealed class HudRenderer : IDisposable
 
         var worn = vitals.ArmourPoints / (float)Armour.MaxPoints * Count;
 
+        if (HasGui(GuiTextureSet.Layer.ArmourFull) && HasGui(GuiTextureSet.Layer.ArmourHalf))
+        {
+            for (var i = 0; i < Count; i++)
+            {
+                var level = Math.Clamp(worn - i, 0f, 1f);
+                if (level <= 0f) continue;
+                var layer = level >= 0.75f
+                    ? GuiTextureSet.Layer.ArmourFull
+                    : GuiTextureSet.Layer.ArmourHalf;
+                Rect(_guiOver, left + i * Icon, top, Icon - 1f, Icon - 1f,
+                    vitals.ShieldRaised ? new Vector4(1f, 1f, 0.82f, 1f) : Vector4.One, (int)layer);
+            }
+            return;
+        }
+
         for (var i = 0; i < Count; i++)
         {
             var level = Math.Clamp(worn - i, 0f, 1f);
@@ -2451,8 +2896,14 @@ public sealed class HudRenderer : IDisposable
         // Lifted a little while it is up, which is the smallest gesture that reads as raised.
         var top = MathF.Round(h - Slot - 8f) - (vitals.ShieldRaised ? 4f : 0f);
 
-        Bevel(left - 3f, top - 3f, Slot + 6f, Slot + 6f, raised: true, PanelFill);
-        Bevel(left + 1f, top + 1f, Slot - 2f, Slot - 2f, raised: false, SlotFill);
+        if (HasGui(GuiTextureSet.Layer.OffhandLeft))
+            Rect(_guiUnder, left - 3f, top - 1f, 29f, 24f, Vector4.One,
+                (int)GuiTextureSet.Layer.OffhandLeft);
+        else
+        {
+            Bevel(left - 3f, top - 3f, Slot + 6f, Slot + 6f, raised: true, PanelFill);
+            Bevel(left + 1f, top + 1f, Slot - 2f, Slot - 2f, raised: false, SlotFill);
+        }
         if (vitals.ShieldRaised) Select(left + 1f, top + 1f, Slot - 2f, Slot - 2f);
 
         SlotIcon(catalogue, stack, left + Pad, top + Pad, Slot - Pad * 2f, Vector4.One);
@@ -2525,6 +2976,20 @@ public sealed class HudRenderer : IDisposable
         // leaves nothing behind, where an eaten drumstick leaves the bone.
         var remaining = vitals.Breath * count / (float)PlayerVitals.MaxBreath;
         var left = (int)MathF.Ceiling(remaining);
+
+        if (HasGui(GuiTextureSet.Layer.Air))
+        {
+            for (var i = 0; i < count; i++)
+            {
+                if (remaining <= i) continue;
+                var y = top + Tremble(drift, i, left);
+                var x = right - (i + 1) * Icon;
+                Rect(_guiOver, x, y, Icon - 1f, Icon - 1f, Vector4.One, (int)GuiTextureSet.Layer.Air);
+                if (LastBubbles == 0) LastBubbleAt = new Vector2(x, y);
+                LastBubbles++;
+            }
+            return;
+        }
 
         for (var i = 0; i < count; i++)
         {
@@ -3010,6 +3475,29 @@ public sealed class HudRenderer : IDisposable
         Vertex(into, x, y + h, u0, v1, layer, colour);
     }
 
+    /// <summary>Stretches the middle of a pack sprite while leaving its corners at authored size.</summary>
+    private static void NineSlice(
+        List<float> into, float x, float y, float w, float h, GuiTextureSet.Layer layer,
+        float sourceW, float sourceH, float edge, Vector4? tint = null)
+    {
+        var ex = MathF.Min(edge, w * 0.5f);
+        var ey = MathF.Min(edge, h * 0.5f);
+        var u = edge / sourceW;
+        var v = edge / sourceH;
+        var colour = tint ?? Vector4.One;
+
+        var xs = new[] { x, x + ex, x + w - ex, x + w };
+        var ys = new[] { y, y + ey, y + h - ey, y + h };
+        var us = new[] { 0f, u, 1f - u, 1f };
+        var vs = new[] { 0f, v, 1f - v, 1f };
+
+        for (var row = 0; row < 3; row++)
+        for (var column = 0; column < 3; column++)
+            RectUv(into,
+                xs[column], ys[row], xs[column + 1] - xs[column], ys[row + 1] - ys[row],
+                us[column], vs[row], us[column + 1], vs[row + 1], colour, (int)layer);
+    }
+
     private static void Vertex(List<float> into, float x, float y, float u, float v, float layer, Vector4 colour)
     {
         into.Add(x);
@@ -3031,6 +3519,7 @@ public sealed class HudRenderer : IDisposable
         _icons.Dispose();
         _font.Dispose();
         _skin?.Dispose();
+        _gui?.Dispose();
         _shader.Dispose();
     }
 }

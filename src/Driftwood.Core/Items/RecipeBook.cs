@@ -1,5 +1,16 @@
 namespace Driftwood.Core.Items;
 
+/// <summary>The shelves a player can narrow the recipe book to.</summary>
+public enum RecipeCategory
+{
+    All,
+    Building,
+    Tools,
+    Materials,
+    Light,
+    Machines,
+}
+
 /// <summary>
 /// Every recipe, and the two questions worth asking about them: does this grid make anything, and
 /// what could I make with what I am carrying.
@@ -192,6 +203,148 @@ public sealed class RecipeBook
         foreach (var recipe in _recipes)
             if (recipe.WorkedAt(station, grid)) yield return recipe;
     }
+
+    /// <summary>Which shelf a recipe belongs on, derived from the thing it makes.</summary>
+    public RecipeCategory CategoryOf(Recipe recipe)
+    {
+        var type = _items[recipe.Result.Item];
+        var name = type.Name;
+
+        if (type.IsTool || type.Wears is not null || type.ShieldShare > 0f)
+            return RecipeCategory.Tools;
+
+        if (type.Glow.LengthSquared() > 0f) return RecipeCategory.Light;
+
+        // These are useful blocks rather than building fabric. Named here because ItemType's
+        // placement rule deliberately says how something lands, not what right-clicking it does.
+        if (name.Contains("bench", StringComparison.Ordinal)
+            || name.Contains("furnace", StringComparison.Ordinal)
+            || name.Contains("smoker", StringComparison.Ordinal)
+            || name.Contains("chest", StringComparison.Ordinal)
+            || name.Contains("barrel", StringComparison.Ordinal)
+            || name.Contains("anvil", StringComparison.Ordinal)
+            || name.Contains("loom", StringComparison.Ordinal)
+            || name.Contains("stonecutter", StringComparison.Ordinal)
+            || name.Contains("composter", StringComparison.Ordinal)
+            || name.Contains("campfire", StringComparison.Ordinal))
+            return RecipeCategory.Machines;
+
+        return type.Places is not null || type.PlacesEntity
+            ? RecipeCategory.Building
+            : RecipeCategory.Materials;
+    }
+
+    /// <summary>True when a recipe matches both the active shelf and the words in the search box.</summary>
+    public bool Matches(Recipe recipe, RecipeCategory category, string search)
+    {
+        if (category != RecipeCategory.All && CategoryOf(recipe) != category) return false;
+        if (string.IsNullOrWhiteSpace(search)) return true;
+
+        var words = search.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        foreach (var word in words)
+        {
+            var found = recipe.Name.Contains(word, StringComparison.OrdinalIgnoreCase)
+                || _items[recipe.Result.Item].Label.Contains(word, StringComparison.OrdinalIgnoreCase)
+                || recipe.MadeAt.Contains(word, StringComparison.OrdinalIgnoreCase);
+
+            if (!found)
+                foreach (var ingredient in recipe.Ingredients)
+                    if (ingredient.Name.Contains(word, StringComparison.OrdinalIgnoreCase))
+                    {
+                        found = true;
+                        break;
+                    }
+
+            if (!found) return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// The immediate cost and the raw materials underneath its craftable components.
+    /// </summary>
+    /// <remarks>
+    /// The second line is deliberately recursive: a pickaxe does not merely cost sticks and
+    /// planks, it ultimately costs logs. Cycles stop at the first repeated item and alternative
+    /// tag members use the first member written by the recipe set, making the answer stable.
+    /// </remarks>
+    public string[] CostLines(Recipe recipe, Inventory? carrying = null)
+    {
+        var immediate = CountIngredients(recipe, 1);
+        var leaves = new Dictionary<ushort, int>();
+        var visiting = new HashSet<ushort>();
+
+        foreach (var (ingredient, count) in immediate)
+            Expand(ingredient, count, leaves, visiting, 0);
+
+        var first = "needs " + Join(immediate.Select(pair =>
+        {
+            var have = carrying is null ? -1 : pair.Ingredient.Members.Sum(carrying.CountOf);
+            return (pair.Ingredient.Name, pair.Count, have);
+        }));
+        var raw = leaves
+            .OrderBy(pair => _items[pair.Key].Label, StringComparer.OrdinalIgnoreCase)
+            .Select(pair => (
+                _items[pair.Key].Label, pair.Value,
+                carrying is null ? -1 : carrying.CountOf(new ItemId(pair.Key))));
+        var second = "from " + Join(raw);
+
+        return first == second.Replace("from ", "needs ", StringComparison.Ordinal)
+            ? [first]
+            : [first, second];
+    }
+
+    private List<(Ingredient Ingredient, int Count)> CountIngredients(Recipe recipe, int crafts)
+    {
+        var counted = new Dictionary<string, (Ingredient Ingredient, int Count)>(StringComparer.Ordinal);
+        foreach (var ingredient in recipe.Ingredients)
+        {
+            if (counted.TryGetValue(ingredient.Name, out var was))
+                counted[ingredient.Name] = (was.Ingredient, was.Count + crafts);
+            else
+                counted.Add(ingredient.Name, (ingredient, crafts));
+        }
+
+        return [.. counted.Values];
+    }
+
+    private void Expand(
+        Ingredient ingredient, int count, Dictionary<ushort, int> leaves,
+        HashSet<ushort> visiting, int depth)
+    {
+        var item = ingredient.Members[0];
+        if (depth >= 8 || !visiting.Add(item.Value))
+        {
+            leaves[item.Value] = leaves.GetValueOrDefault(item.Value) + count;
+            return;
+        }
+
+        Recipe? madeBy = null;
+        foreach (var candidate in _recipes)
+            if (candidate.Result.Item == item)
+            {
+                madeBy = candidate;
+                break;
+            }
+
+        if (madeBy is null)
+        {
+            leaves[item.Value] = leaves.GetValueOrDefault(item.Value) + count;
+        }
+        else
+        {
+            var crafts = (count + madeBy.Result.Count - 1) / madeBy.Result.Count;
+            foreach (var (part, amount) in CountIngredients(madeBy, crafts))
+                Expand(part, amount, leaves, visiting, depth + 1);
+        }
+
+        visiting.Remove(item.Value);
+    }
+
+    private static string Join(IEnumerable<(string Name, int Count, int Have)> costs) =>
+        string.Join(", ", costs.Select(cost =>
+            cost.Have < 0 ? $"{cost.Count} {cost.Name}" : $"{cost.Count} {cost.Name} (have {cost.Have})"));
 
     /// <summary>
     /// Everything a choosing station would make out of one thing, in the order the book lists them.
