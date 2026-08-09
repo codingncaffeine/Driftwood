@@ -6573,6 +6573,52 @@ public static class WorldAudit
             faults.Add($"layer {layer} should be '{expected}' and the table calls it '{actual}'");
         }
 
+        // ⛳ The lantern's flame moves and its cage does not — both by measurement, because both
+        // can silently fail the other way: a strip of one repeated picture is an animation that
+        // does nothing, and a lean that bleeds into the ironwork is a lamp whose CAGE wobbles.
+        // Frame 0 must BE the still tile, so a build that never ticks a clock is unchanged.
+        var lantern = built.Animations.FirstOrDefault(a => a.Layer == StarterBlocks.LayerLantern);
+        if (lantern.Frames is null || lantern.Frames.Length < 4)
+        {
+            faults.Add($"the lantern animates {lantern.Frames?.Length ?? 0} frames, which is not a flame");
+        }
+        else
+        {
+            var still = built.Tiles[StarterBlocks.LayerLantern];
+            if (!lantern.Frames[0].AsSpan().SequenceEqual(still))
+                faults.Add("the lantern's first frame is not its still tile");
+
+            // The painter's own cage rule, at whatever scale the sheet was built at.
+            var scale = Math.Max(1, built.Size / 16);
+            bool Cage(int x, int y)
+            {
+                var cx = x / scale;
+                var cy = y / scale;
+                return cy <= 2 || cy >= 13 || cx <= 1 || cx >= 14;
+            }
+
+            var cageMoved = false;
+            var flameMoved = false;
+
+            for (var f = 1; f < lantern.Frames.Length; f++)
+            for (var y = 0; y < built.Size; y++)
+            for (var x = 0; x < built.Size; x++)
+            {
+                var i = (y * built.Size + x) * 4;
+                var differs =
+                    lantern.Frames[f][i] != still[i]
+                    || lantern.Frames[f][i + 1] != still[i + 1]
+                    || lantern.Frames[f][i + 2] != still[i + 2];
+
+                if (!differs) continue;
+                if (Cage(x, y)) cageMoved = true;
+                else flameMoved = true;
+            }
+
+            if (cageMoved) faults.Add("the lantern's iron cage moves between frames");
+            if (!flameMoved) faults.Add("the lantern's flame is identical in every frame — nothing moves");
+        }
+
         for (var layer = 0; layer < built.Tiles.Length; layer++)
         {
             var name = BlockTextureSet.Layers[layer].Name;

@@ -29,6 +29,7 @@ public static class ChunkShaders
         uniform vec3 uTint[64];       // this chunk's climate colours; entry 0 is white
         uniform float uFogStart;
         uniform float uFogEnd;
+        uniform float uTime;          // the world's clock, wrapped host-side to keep sin() exact
 
         out vec3 vLight;
         out vec3 vUvw;
@@ -90,6 +91,17 @@ public static class ChunkShaders
             vec3 skyAmbient = mix(uGroundAmbient, uSkyAmbient, upness);
             vec3 sun = uSunColor * max(dot(n, uSunDir), 0.0);
             vec3 daylight = (skyAmbient + sun) * sky;
+
+            // ⛳ FIRELIGHT SWAYS AND DAYLIGHT DOES NOT. Two slow waves out of phase, sampled at
+            // the corner's own position, dim the block-light term by up to a tenth — so the glow
+            // a lantern throws breathes ALONG a wall rather than the room pulsing as one sheet,
+            // and two lamps apart from each other waver apart. Dimming only, never brightening:
+            // the baked value stays the ceiling, and the sun — being the other arm of the max
+            // below — never moves at all. The light itself is still baked; only the shimmer is
+            // computed, which is what makes this affordable where re-flooding light would not be.
+            float sway = sin(uTime * 2.6 + world.x * 1.7 + world.z * 2.3)
+                       + sin(uTime * 7.1 + world.y * 2.9 - world.x * 1.1);
+            block *= 0.95 + 0.025 * sway;
 
             // Block light and daylight do not add: a torch in a lit room is invisible, exactly as
             // it should be, and a torch in a cave is the only thing there. Taking the brighter of

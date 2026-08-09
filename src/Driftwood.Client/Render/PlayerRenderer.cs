@@ -7,6 +7,11 @@ using Silk.NET.OpenGL;
 namespace Driftwood.Client.Render;
 
 /// <summary>Sky and fog terms, shared so the entity pass shades the way the chunk pass does.</summary>
+/// <param name="Flicker">
+/// The world clock the firelight sway runs on, already wrapped by the host — see
+/// <c>ClientHost.FlickerClock</c>. Carried here so every pass that lights a body samples the
+/// same moment the chunk pass does; a default of zero simply holds the flame still.
+/// </param>
 public readonly record struct SkyParams(
     Vector3 SunDirection,
     Vector3 SunColor,
@@ -15,7 +20,8 @@ public readonly record struct SkyParams(
     Vector3 NightFloor,
     Vector3 FogColor,
     float FogStart,
-    float FogEnd);
+    float FogEnd,
+    float Flicker = 0f);
 
 /// <summary>Baked light in the cell a model is standing in.</summary>
 public readonly record struct EntityLight(float Sky, Vector3 Block);
@@ -199,6 +205,7 @@ public sealed class PlayerRenderer : IDisposable
         _shader.SetVec3("uGroundAmbient", sky.GroundAmbient);
         _shader.SetVec3("uNightFloor", sky.NightFloor);
         _shader.SetVec3("uFogColor", sky.FogColor);
+        _shader.SetFloat("uTime", sky.Flicker);
         _shader.SetInt("uSkin", 0);
 
         _gl.ActiveTexture(TextureUnit.Texture0);

@@ -910,6 +910,21 @@ public static class BlockTextureSet
         Add(StarterBlocks.LayerLava, TileGen.LavaFrames(1091, Frames), slow);
         Add(StarterBlocks.LayerLavaFlow, TileGen.FlowFrames(1092, Frames, 176, 74, 22, 46f), slow);
 
+        // ⛳ The lantern's flame, wavering inside a cage that never moves. Eight frames on
+        // IRREGULAR holds — a flame that ticks evenly reads as a signal, not a fire — with frame
+        // 0 the still tile exactly (glow 1, lean 0), so a build that never ticks is unchanged.
+        // ⚠ Safe to animate precisely because no pack can replace this layer: the lantern's art
+        // is a packed sheet in the format and its PackPath is empty on purpose (#56).
+        var lantern = new byte[8][];
+        var flame = ((float Glow, float Lean)[])
+            [(1f, 0f), (0.93f, 0.6f), (0.88f, -0.4f), (0.96f, 0.8f),
+             (1f, -0.7f), (0.9f, 0.3f), (0.97f, -0.6f), (0.92f, 0.5f)];
+        for (var i = 0; i < lantern.Length; i++)
+            lantern[i] = TileGen.LanternTile(1056, 176, 176, 184, flame[i].Glow, flame[i].Lean);
+
+        Add(StarterBlocks.LayerLantern, lantern,
+            [0.22f, 0.16f, 0.20f, 0.13f, 0.24f, 0.17f, 0.12f, 0.19f]);
+
         return moving;
 
         void Add(ushort layer, byte[][] frames, float[] hold)

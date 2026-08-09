@@ -2213,7 +2213,7 @@ public static class TileGen
     /// shape it lands on: art in the margins would be art squeezed onto a face nobody sees, and a
     /// gap in the middle would be a hole in a solid lamp.
     /// </remarks>
-    public static byte[] LanternTile(int seed, byte r, byte g, byte b)
+    public static byte[] LanternTile(int seed, byte r, byte g, byte b, float glow = 1f, float lean = 0f)
     {
         var t = new byte[BytesPerTile];
 
@@ -2221,7 +2221,8 @@ public static class TileGen
         for (var x = 0; x < Size; x++)
         {
             // The two bars top and bottom and the two posts either side are the cage; everything
-            // inside it is the flame it is holding.
+            // inside it is the flame it is holding. ⚠ The cage never takes glow or lean — it is
+            // iron, and the animation check below holds it to that by measurement.
             var frame = y <= 2 || y >= Size - 3 || x <= 1 || x >= Size - 2;
             var grain = (int)((Noise(x, y, seed) * 2f - 1f) * 12f);
 
@@ -2235,11 +2236,12 @@ public static class TileGen
             }
 
             // Hottest low and in the middle, cooling outward, so it reads as a flame rather than
-            // as a coloured pane behind a grille.
-            var dx = (x - (Size - 1) / 2f) / 5f;
+            // as a coloured pane behind a grille. Glow breathes the whole bead and lean sways its
+            // centre — at the defaults both fall away exactly, so frame 0 IS the still tile.
+            var dx = (x - (Size - 1) / 2f - lean) / 5f;
             var dy = (y - (Size - 2f)) / 9f;
             var heat = Math.Clamp(1f - MathF.Sqrt(dx * dx + dy * dy), 0f, 1f);
-            heat = Math.Clamp(heat + (Noise(x, y, seed + 17) * 2f - 1f) * 0.12f, 0f, 1f);
+            heat = Math.Clamp((heat + (Noise(x, y, seed + 17) * 2f - 1f) * 0.12f) * glow, 0f, 1f);
 
             Put(t, x, y,
                 Clamp((int)(150 + heat * 105f)),

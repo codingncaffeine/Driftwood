@@ -7194,6 +7194,7 @@ public sealed class ClientHost : IDisposable
         _blockTextures.Bind();
         _chunkShader.SetFloat("uFogStart", _fogStart);
         _chunkShader.SetFloat("uFogEnd", _fogEnd);
+        _chunkShader.SetFloat("uTime", FlickerClock);
 
         _chunkShader.SetFloat("uAlpha", 1f);
 
@@ -10069,6 +10070,19 @@ public sealed class ClientHost : IDisposable
 
     private static readonly Vector3 HalfChunk = new(Chunk.Size * 0.5f);
 
+    /// <summary>
+    /// The clock the firelight sway runs on: the world's own elapsed time, wrapped.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ <b>Wrapped at 300π, and the number is doing work.</b> sin() of a large float steps
+    /// visibly once the argument outgrows the mantissa, so the clock has to wrap — and it has to
+    /// wrap where every sway frequency completes a whole number of turns, or the flame jumps
+    /// once per wrap. At 300π a frequency f has made f·150 full turns, an integer for every
+    /// one-decimal frequency the shaders use (2.6 → 390, 7.1 → 1065). Off the world clock, not a
+    /// frame counter, for the water animation's own reason.
+    /// </remarks>
+    private float FlickerClock => (float)(_elapsed % (300.0 * Math.PI));
+
     private void DrawPlayer(Matrix4x4 viewProj, Matrix4x4 projection, Matrix4x4 view)
     {
         // Neither the benchmark nor the menu has anybody in the world. ⚠ The menu matters for a
@@ -10078,7 +10092,7 @@ public sealed class ClientHost : IDisposable
 
         var sky = new SkyParams(
             _skyState.SunDirection, _skyState.SunColor, _skyState.SkyAmbient, _skyState.GroundAmbient,
-            NightFloor, _skyState.Horizon, _fogStart, _fogEnd);
+            NightFloor, _skyState.Horizon, _fogStart, _fogEnd, FlickerClock);
 
         var light = SampleLight(_camera.Position);
 

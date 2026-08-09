@@ -34,6 +34,7 @@ public static class EntityShaders
         uniform vec3 uBlockLight;    // and its coloured block light
         uniform float uFogStart;
         uniform float uFogEnd;
+        uniform float uTime;         // the world's clock, wrapped host-side; see ChunkShaders
 
         out vec3 vLight;
         out vec2 vUv;
@@ -51,7 +52,14 @@ public static class EntityShaders
             vec3 sun = uSunColor * max(dot(n, uSunDir), 0.0);
             vec3 daylight = (skyAmbient + sun) * uSky;
 
-            vLight = max(max(daylight, uBlockLight), uNightFloor);
+            // The chunk pass's firelight sway, mirrored term for term — a body standing in
+            // lantern light has to breathe with the wall behind it or it reads as pasted on.
+            // Same deliberate duplication as the rest of this file's lighting maths.
+            float sway = sin(uTime * 2.6 + world.x * 1.7 + world.z * 2.3)
+                       + sin(uTime * 7.1 + world.y * 2.9 - world.x * 1.1);
+            vec3 block = uBlockLight * (0.95 + 0.025 * sway);
+
+            vLight = max(max(daylight, block), uNightFloor);
             vUv = aUv;
 
             float d = length(world - uCameraPos);
