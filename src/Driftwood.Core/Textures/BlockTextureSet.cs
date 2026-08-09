@@ -1307,41 +1307,35 @@ public static class BlockTextureSet
 
             // Things that open, all cut from the same timber the planks are, so a door in a plank
             // wall reads as part of it rather than as something bolted on.
-            StarterBlocks.LayerLadder => TileGen.Ladder(1060, 152, 118, 70),
-            StarterBlocks.LayerDoorLower => TileGen.Door(1061, 168, 132, 80, upper: false),
-            StarterBlocks.LayerDoorUpper => TileGen.Door(1061, 168, 132, 80, upper: true),
-            StarterBlocks.LayerTrapdoor => TileGen.Trapdoor(1062, 164, 128, 76),
+            StarterBlocks.LayerLadder => StationArt.LadderTile(),
+            StarterBlocks.LayerDoorLower => StationArt.DoorLower(),
+            StarterBlocks.LayerDoorUpper => StationArt.DoorUpper(),
+            StarterBlocks.LayerTrapdoor => StationArt.TrapdoorTile(),
 
             StarterBlocks.LayerChestTop => TileGen.ChestFace(1063, 158, 118, 68, front: false, lid: true),
             StarterBlocks.LayerChestSide => TileGen.ChestFace(1063, 158, 118, 68, front: false, lid: false),
             StarterBlocks.LayerChestFront => TileGen.ChestFace(1063, 158, 118, 68, front: true, lid: false),
 
-            // Stations. The bench's front takes the same planks its side does, so the two read as
-            // one piece of furniture seen from two angles rather than as two blocks.
-            StarterBlocks.LayerBenchFront => TileGen.BenchFront(1038, 168, 132, 80),
+            // Stations wear StationArt from here: hand-drawn grids, studied off the reference
+            // packs [user directive 2026-08-09] — a workbench is a drawing, not a texture.
+            StarterBlocks.LayerBenchFront => StationArt.BenchFront(),
             StarterBlocks.LayerStonecutterTop => TileGen.StonecutterTop(1064, 122, 122, 128),
             StarterBlocks.LayerStonecutterSide => TileGen.StonecutterSide(1064, 122, 122, 128),
 
-            // The bench is planks that have been worked on: grooves where a straight edge was laid
-            // and nicks where it was not.
-            StarterBlocks.LayerBenchTop => TileGen.Scored(1037, TileGen.Planks(1011, 179, 143, 87)),
-            StarterBlocks.LayerBenchSide => TileGen.Panel(TileGen.Planks(1038, 168, 132, 80), 3, 26),
+            StarterBlocks.LayerBenchTop => StationArt.BenchTop(),
+            StarterBlocks.LayerBenchSide => StationArt.BenchSide(),
 
-            StarterBlocks.LayerFurnaceTop => TileGen.Speckle(1039, 112, 110, 112, 14, 0.5f),
-            StarterBlocks.LayerFurnaceSide => TileGen.Cobble(1040, 116, 114, 116),
-            StarterBlocks.LayerFurnaceFront =>
-                TileGen.Hearth(1041, TileGen.Cobble(1040, 116, 114, 116), lit: false),
-            StarterBlocks.LayerFurnaceFrontLit =>
-                TileGen.Hearth(1042, TileGen.Cobble(1040, 116, 114, 116), lit: true),
+            StarterBlocks.LayerFurnaceTop => StationArt.FurnaceTop(1039),
+            StarterBlocks.LayerFurnaceSide => StationArt.FurnaceSide(1040),
+            StarterBlocks.LayerFurnaceFront => StationArt.FurnaceFront(),
+            StarterBlocks.LayerFurnaceFrontLit => StationArt.FurnaceFrontLit(),
 
-            // Deepstone brick rather than cobble, and a letterbox rather than an arch. Both, so the
-            // two are told apart by shape as well as by shade — see the note on TileGen.Hearth.
-            StarterBlocks.LayerBlastTop => TileGen.Speckle(1080, 74, 74, 82, 12, 0.5f),
-            StarterBlocks.LayerBlastSide => TileGen.Bricks(1081, 78, 78, 86, 52),
-            StarterBlocks.LayerBlastFront =>
-                TileGen.Hearth(1082, TileGen.Bricks(1081, 78, 78, 86, 52), lit: false, slot: true),
-            StarterBlocks.LayerBlastFrontLit =>
-                TileGen.Hearth(1083, TileGen.Bricks(1081, 78, 78, 86, 52), lit: true, slot: true),
+            // Deepstone brick rather than cobble, and a letterbox rather than an arch. Both, so
+            // the two are told apart by shape as well as by shade; the hand art keeps the rule.
+            StarterBlocks.LayerBlastTop => StationArt.BlastTop(),
+            StarterBlocks.LayerBlastSide => StationArt.BlastSide(1081),
+            StarterBlocks.LayerBlastFront => StationArt.BlastFront(),
+            StarterBlocks.LayerBlastFrontLit => StationArt.BlastFrontLit(),
 
             StarterBlocks.LayerStick => TileGen.IconStick(1043, 150, 112, 66),
             StarterBlocks.LayerCoal => TileGen.IconLump(1044, 46, 44, 46),
@@ -1415,8 +1409,8 @@ public static class BlockTextureSet
             // box would have to be told apart by shade alone, which survives neither a wall at
             // distance nor a sixteen-pixel slot. Its mouth is an arch, like the furnace it is a
             // specialisation of, because the two do the same job on different things.
-            StarterBlocks.LayerSmokerTop => TileGen.Scored(1105, TileGen.Planks(1106, 146, 108, 62)),
-            StarterBlocks.LayerSmokerSide => TileGen.Planks(1106, 146, 108, 62),
+            StarterBlocks.LayerSmokerTop => StationArt.SmokerTop(1106),
+            StarterBlocks.LayerSmokerSide => StationArt.SmokerSide(1106),
             StarterBlocks.LayerSmokerFront =>
                 TileGen.Hearth(1107, TileGen.Planks(1106, 146, 108, 62), lit: false),
             StarterBlocks.LayerSmokerFrontLit =>
@@ -1424,8 +1418,8 @@ public static class BlockTextureSet
 
             // A barrel: staves banded round with a lid on top. Darker than the bench's planks so a
             // room with both in it reads as two things.
-            StarterBlocks.LayerBarrelTop => TileGen.Scored(1109, TileGen.Planks(1110, 128, 94, 54)),
-            StarterBlocks.LayerBarrelSide => TileGen.Panel(TileGen.Planks(1110, 128, 94, 54), 2, 34),
+            StarterBlocks.LayerBarrelTop => StationArt.BarrelTop(),
+            StarterBlocks.LayerBarrelSide => StationArt.BarrelSide(),
 
             // ⛳ The anvil is dark worked iron. Its face is scored where it has been struck, and each
             // stage takes more of it — which is the same Scored/Panel vocabulary the stations use.
