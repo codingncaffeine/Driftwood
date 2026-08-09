@@ -157,6 +157,11 @@ public static class WorldAudit
 
         var rockByY = new long[TerrainGenerator.WorldHeight];
 
+        // Air and lava by height too, because "how carved is this band" needs both: a cavern
+        // under the lava table is a lava lake, and it is still the carver's room.
+        var airByY = new long[TerrainGenerator.WorldHeight];
+        var lavaByY = new long[TerrainGenerator.WorldHeight];
+
         // The same census split at y 0, because the world has two undergrounds now and one number
         // describes neither. Deepstone is a minority intrusion above the line and the whole of the
         // rock below it; a single share reads as "correct" for a world that is either.
@@ -178,6 +183,8 @@ public static class WorldAudit
                 if (wy > maxY[id]) maxY[id] = wy;
 
                 if (isRock[id]) rockByY[wy - TerrainGenerator.WorldBottom]++;
+                if (id == 0) airByY[wy - TerrainGenerator.WorldBottom]++;
+                else if (id == ids.Lava.Value) lavaByY[wy - TerrainGenerator.WorldBottom]++;
                 if (wy >= TerrainGenerator.DeepFloor) shallowCounts[id]++; else deepCounts[id]++;
             }
         }
@@ -400,6 +407,63 @@ public static class WorldAudit
             && lavaHigh < TerrainGenerator.HollowsTop,
             $"lava {counts[ids.Lava.Value]:N0} blocks, y {lavaLow}..{lavaHigh} "
             + $"(want down to {TerrainGenerator.WorldBottom + 30} and no higher than {TerrainGenerator.HollowsTop})");
+
+        // ⛳ THE HOLLOWS ARE ROOMIER THAN THE TUNNELS, which is the band table's whole promise and
+        // was unbuilt for three sessions — the same tunnels ran at every depth and only the lava
+        // table changed. Carved space is air plus the lava standing in it (a lake is the carver's
+        // room too). This world's own share is held to a wide band; the RATIO is judged over the
+        // fixed span below, because the cavern field's wavelength is 90 blocks and a 384 window
+        // holds four of them — the window read 12.7-20.2% across the five calibration seeds while
+        // the seed-wide rate barely moved, the forest field's own sample-size lesson.
+        long BandCells(long[] byY, int low, int high)
+        {
+            long total = 0;
+            for (var y = low; y < high; y++) total += byY[y - TerrainGenerator.WorldBottom];
+            return total;
+        }
+
+        var extentCells = (long)extent * extent;
+        var hollowsCarved = BandCells(airByY, TerrainGenerator.EmberdeepTop, TerrainGenerator.HollowsTop)
+                          + BandCells(lavaByY, TerrainGenerator.EmberdeepTop, TerrainGenerator.HollowsTop);
+        var hollowsShare = hollowsCarved * 100.0
+            / (extentCells * (TerrainGenerator.HollowsTop - TerrainGenerator.EmberdeepTop));
+
+        Check("the hollows are carved into caverns", hollowsShare is > 8 and < 32,
+            $"{hollowsShare:F1}% of the band is open or molten (want 8-32)");
+
+        // The seed-wide arm: Carved() is the whole rule, sea guard and all, and pure — so the
+        // probe asks it directly over the span. The tunnel band starts under every surface (and
+        // skips a column's own shallows), and both bands carry the same dilution from the
+        // never-carved columns under the sea, so the ratio is fair.
+        long wideTunnelCarved = 0, wideTunnelCells = 0, wideHollowCarved = 0, wideHollowCells = 0;
+        for (var wz = -ReliefProbeSpan / 2; wz < ReliefProbeSpan / 2; wz += 16)
+        for (var wx = -ReliefProbeSpan / 2; wx < ReliefProbeSpan / 2; wx += 16)
+        {
+            var colSurface = generator.SurfaceHeight(wx, wz);
+            for (var y = 4; y < 30; y += 2)
+            {
+                if (y >= colSurface - 4) break;
+                wideTunnelCells++;
+                if (generator.Carved(wx, y, wz, colSurface)) wideTunnelCarved++;
+            }
+
+            for (var y = TerrainGenerator.EmberdeepTop; y < TerrainGenerator.HollowsTop; y += 2)
+            {
+                wideHollowCells++;
+                if (generator.Carved(wx, y, wz, colSurface)) wideHollowCarved++;
+            }
+        }
+
+        // Measured across the five seeds: hollows 16.9-17.7%, tunnels 9.0-9.4%, ratio 1.87-1.95.
+        // The bands sit round that spread — the ratio floor is what catches the carver dying
+        // (spaghetti alone is 1.0), the share band what catches it exploding. Not 2.0 on purpose:
+        // the world is tuned to the look, and a check must not be the reason terrain changes.
+        var wideTunnelShare = wideTunnelCarved * 100.0 / Math.Max(wideTunnelCells, 1);
+        var wideHollowShare = wideHollowCarved * 100.0 / Math.Max(wideHollowCells, 1);
+        Check("the hollows out-carve the tunnels",
+            wideHollowShare >= wideTunnelShare * 1.6 && wideHollowShare is > 13 and < 25,
+            $"seed-wide: hollows {wideHollowShare:F1}% (want 13-25) vs tunnels {wideTunnelShare:F1}% "
+            + "(want at least 1.6x)");
         Check("geometry produced", tris > 0, $"{tris:N0} tris");
 
         // Relief and mix gates. A world can pass every "does this block exist" check above and

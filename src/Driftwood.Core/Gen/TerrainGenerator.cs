@@ -78,9 +78,16 @@ public sealed class TerrainGenerator
     /// <item><term>62 .. 128</term><description>surface and sky</description></item>
     /// <item><term>0 .. 62</term><description>the ordinary underground — caves, coal, iron, copper</description></item>
     /// <item><term>−64 .. 0</term><description>the deep — deepstone, gold, stormglass, azurite</description></item>
-    /// <item><term>−160 .. −64</term><description>the hollows — big caverns, the first lava, water pockets</description></item>
+    /// <item><term>−160 .. −64</term><description>the hollows — big caverns and the first lava</description></item>
     /// <item><term>−256 .. −160</term><description>the Emberdeep — lava rivers, and the core at the bottom</description></item>
     /// </list>
+    /// <para>⚠ The hollows were promised "water pockets" here once, and the line is withdrawn on
+    /// purpose rather than quietly unbuilt: generated water below the sea would break the reaction
+    /// rule's own worldgen guarantee (water only ever generates at or under the sea, so lava and
+    /// water never meet without a player — the fluid build's correction #5), and a pond standing
+    /// open in a cavern has an unsupported horizontal edge the load-time settle sweep would
+    /// immediately re-flow. Underground water is the fluid design's own future item — cave
+    /// springs — and belongs to it.</para>
     /// </remarks>
     public const int HollowsTop = -64;
 
@@ -120,6 +127,7 @@ public sealed class TerrainGenerator
     private readonly int _seedDetail;
     private readonly int _seedCaveA;
     private readonly int _seedCaveB;
+    private readonly int _seedCavern;
     private readonly int _seedCoal;
     private readonly int _seedIron;
     private readonly int _seedGravel;
@@ -187,6 +195,7 @@ public sealed class TerrainGenerator
         _seedDetail = seed.Derive("terrain.detail");
         _seedCaveA = seed.Derive("caves.a");
         _seedCaveB = seed.Derive("caves.b");
+        _seedCavern = seed.Derive("caves.cavern");
         _seedCoal = seed.Derive("ore.coal");
         _seedIron = seed.Derive("ore.iron");
         _seedGravel = seed.Derive("deposit.gravel");
@@ -373,7 +382,7 @@ public sealed class TerrainGenerator
         if (wy <= WorldBottom + 1) return false;
         if (surface - wy <= 1) return false;
         if (wy <= SeaLevel && surface <= SeaLevel) return false;
-        return IsCave(wx, wy, wz);
+        return IsCave(wx, wy, wz) || IsCavern(wx, wy, wz);
     }
 
     /// <summary>
@@ -493,6 +502,46 @@ public sealed class TerrainGenerator
         if (MathF.Abs(a) >= threshold) return false;
         var b = Noise.Fbm3(x / 48f, y / 24f, z / 48f, _seedCaveB, 3);
         return MathF.Abs(b) < threshold;
+    }
+
+    /// <summary>How far a cavern's edge fades over, in blocks, at each end of the hollows.</summary>
+    private const int CavernFade = 24;
+
+    /// <summary>
+    /// The hollows' own carver: rooms, not tunnels.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ <b>This is what makes the hollows a place rather than a label.</b> The band table
+    /// has promised "big caverns" since the world went deep, and until this the hollows were the
+    /// same 48-wavelength spaghetti as everywhere else with a higher lava table — the F8 class of
+    /// hole, designed and never built. One low-frequency field carved on a threshold gives rooms
+    /// tens of blocks wide with the tunnels threading into them, and where the floor lies under
+    /// the lava table the room is a lava lake with a shore — which is most of what the descent
+    /// is for.</para>
+    /// <para>⛔ <b>The band's edges are fades, not lines.</b> The threshold rises away from the
+    /// band's middle over <see cref="CavernFade"/> blocks, so a cavern pinches out against the
+    /// deep above and the Emberdeep below instead of every ceiling stopping at one flat y — the
+    /// snow line's own lesson, applied vertically. Above and below the fade the gate is a pair of
+    /// integer compares, so the whole carver costs nothing outside its own band.</para>
+    /// <para>The wavelengths (90 across, 40 down) are the tunnels' own 48/24 scaled roughly
+    /// double, which keeps a cavern's proportions — wider than tall — while the third octave puts
+    /// pillars and bays in the walls rather than leaving polished ellipsoids.</para>
+    /// </remarks>
+    private bool IsCavern(int x, int y, int z)
+    {
+        if (y >= HollowsTop || y <= EmberdeepTop) return false;
+
+        // 0 at either edge of the band, 1 a fade's depth inside it.
+        var intoTop = (HollowsTop - y) / (float)CavernFade;
+        var intoBottom = (y - EmberdeepTop) / (float)CavernFade;
+        var envelope = MathF.Min(1f, MathF.Min(intoTop, intoBottom));
+
+        // From unreachable at the edges (fBm at three octaves peaks near ±0.4) down to the open
+        // line mid-band. Calibrated against the census, the ore thresholds' discipline: at a
+        // floor of 0.18 the hollows carved to 14.8% against the tunnels' 7.6% — roomier, but not
+        // the DOUBLE the claim wants; 0.15 is where the band reads as somewhere else.
+        var threshold = 0.55f - 0.40f * envelope;
+        return Noise.Fbm3(x / 90f, y / 40f, z / 90f, _seedCavern, 3) > threshold;
     }
 
     /// <remarks>
