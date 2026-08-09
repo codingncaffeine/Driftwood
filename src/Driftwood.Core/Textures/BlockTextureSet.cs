@@ -524,6 +524,10 @@ public static class BlockTextureSet
         // block to an entity there, so there is no file to name.
         new("blastcask_lit_top", "", false),
         new("blastcask_bottom", "textures/block/tnt_bottom.png", false, "textures/blocks/tnt_bottom.png"),
+
+        // ⚠ Modern path only: the block postdates the flattening, so no legacy name exists.
+        new("smithing_table_top", "textures/block/smithing_table_top.png", false),
+        new("smithing_table_side", "textures/block/smithing_table_side.png", false),
     ];
 
     /// <summary>
@@ -1518,6 +1522,12 @@ public static class BlockTextureSet
             StarterBlocks.LayerBlastcaskTop => TileGen.BlastcaskTop(1378, lit: false),
             StarterBlocks.LayerBlastcaskLitTop => TileGen.BlastcaskTop(1378, lit: true),
             StarterBlocks.LayerBlastcaskBottom => TileGen.Planks(1379, 108, 56, 40),
+
+            // The smithing table: a scored iron worktop on a banded timber body — the anvil's
+            // face on the bench's build, which is what the station is.
+            StarterBlocks.LayerSmithingTop => TileGen.Scored(
+                1380, TileGen.Speckle(1381, 70, 70, 76, 8, 0.35f)),
+            StarterBlocks.LayerSmithingSide => TileGen.Panel(TileGen.Planks(1382, 118, 88, 56), 2, 24),
 
             _ when layer >= StarterBlocks.LayerGateFirst
                    && layer < StarterBlocks.LayerGateFirst + 10 =>

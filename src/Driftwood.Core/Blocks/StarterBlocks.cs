@@ -613,7 +613,11 @@ public static class StarterBlocks
     public const ushort LayerBlastcaskLitTop = LayerCobweb + 42;
     public const ushort LayerBlastcaskBottom = LayerCobweb + 43;
 
-    public const int LayerCount = LayerBlastcaskBottom + 1;
+    // #58's last group-A station: the smithing table's worked-iron top and banded side.
+    public const ushort LayerSmithingTop = LayerCobweb + 44;
+    public const ushort LayerSmithingSide = LayerCobweb + 45;
+
+    public const int LayerCount = LayerSmithingSide + 1;
 
     /// <summary>One anvil's name, by how worn it is and which way it lies.</summary>
     /// <remarks>
@@ -934,6 +938,18 @@ public static class StarterBlocks
             Opaque = false, Translucent = true, Bouncy = true,
             Sounds = SoundMaterial.Cloth,
             Model = BlockModel.Cube(LayerSlimeBlock, LayerSlimeBlock, LayerSlimeBlock),
+        });
+
+        // ⛳ THE SMITHING TABLE — #58's last group-A station, and the tools' own consumer (#97).
+        // The anvil's shape: no screen, a worn tool in hand, one of the NEXT rung's material from
+        // the pockets, and the same tool comes back a tier up at the same wear fraction. The
+        // ladder and its gold-shaped exception are Items/Smithing.cs's to say.
+        registry.Register(new BlockType
+        {
+            Name = "smithing_table", Hardness = 2.5f, Crafted = true,
+            Sounds = SoundMaterial.Wood, Use = BlockUse.Smithing,
+            TopLayer = LayerSmithingTop, SideLayer = LayerSmithingSide,
+            BottomLayer = LayerSmithingSide,
         });
 
         // ⛳ THE BLASTCASK — five measures of the crawler's powder packed in sand, and a third way

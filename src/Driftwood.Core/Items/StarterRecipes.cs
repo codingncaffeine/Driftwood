@@ -466,6 +466,11 @@ public static class StarterRecipes
         Shaped("blastcask", "blastcask", 1, ["MEM", "EME", "MEM"], "gunpowder",
             station: CraftStation.Bench);
 
+        // ⛳ Two iron over four planks: the smithing table, whose whole job is a bespoke act no
+        // pattern can express — see Items/Smithing.cs. This row only builds the furniture.
+        Shaped("smithing table", "smithing_table", 1, ["II", "PP", "PP"],
+            station: CraftStation.Bench);
+
         // Every tool, off the two tables. The material is a tag for the tiers that have more than
         // one source — any plank, any rough stone — and a plain item for the metals.
         foreach (var tier in StarterItems.Tiers)
@@ -607,6 +612,12 @@ public static class StarterRecipes
                 [.. StarterBlocks.Colours.Select(c => $"wool_{c.Name}")]),
         };
     }
+
+    /// <summary>
+    /// One tag's members for a caller outside the book — the smithing table's cost line wants
+    /// "#rough_stone" to mean what the recipes mean by it, never a second list.
+    /// </summary>
+    public static Ingredient TagIngredient(ItemRegistry items, string tag) => Tags(items)[tag];
 
     /// <summary>Which ingredient a letter in a pattern stands for.</summary>
     private static string KeyOf(char key, string recipe, string? material) => key switch

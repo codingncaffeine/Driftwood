@@ -683,6 +683,9 @@ public static class StarterItems
         Loose(items, "gunpowder", "gunpowder", StarterBlocks.LayerGunpowder);
         Block(items, blocks, "blastcask", "blastcask", StarterBlocks.LayerBlastcaskSide);
 
+        // #58's last group-A station: where a worn tool becomes the same tool a tier up.
+        Block(items, blocks, Smithing.Table, "smithing table", StarterBlocks.LayerSmithingSide);
+
         // The farwalker's pearl — the teleport reagent M1's summons are written against.
         Loose(items, "farpearl", "farpearl", StarterBlocks.LayerFarpearl);
 

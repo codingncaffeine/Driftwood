@@ -221,20 +221,21 @@ public static class RecipeReport
             if (type.Places is not null) continue;   // a block you put down is its own purpose
             if (Buckets.IsCarrier(type.Name)) continue;   // a carrier is used, never consumed
 
-            // ⚠ Counted rather than listed, and it is a real gap in a way the others are not: the
-            // smithing table is meant to take a tool and a material and hand back the tool a tier
-            // up, which is the one recipe in the plan that consumes one. See #58.
+            // ⚠ Counted rather than listed. The smithing table is their transformer: a worn tool
+            // and the next rung's material become the same tool a tier up, wear carried — which
+            // is consumption in the only sense a tool has. The finding below fires only if the
+            // table is ever lost from the registry.
             if (type.IsTool) { tools++; continue; }
 
             findings.Add(new Finding(
                 "nothing-consumes-it", type.Name, "no recipe, smelt or composter takes it"));
         }
 
-        if (tools > 0)
+        if (tools > 0 && !items.TryByName(Smithing.Table, out _))
             findings.Add(new Finding(
                 "nothing-consumes-it", $"{tools} tools",
                 "used rather than consumed, which is right — but the smithing table is supposed to "
-                + "take one and hand back the next tier, and it is the last of #58's group A"));
+                + "take one and hand back the next tier, and it is gone from the registry"));
 
         // ── ⚠ ITEMS NOTHING PRODUCES ───────────────────────────────────────────────────────────
         var produced = new HashSet<ItemId>();

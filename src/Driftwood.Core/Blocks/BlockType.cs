@@ -38,6 +38,15 @@ public enum BlockUse
     Anvil,
 
     /// <summary>
+    /// Works the smithing table: a worn tool in hand becomes the same tool a tier up.
+    /// </summary>
+    /// <remarks>
+    /// The anvil's shape for the anvil's reason — wear carried through an upgrade is a bespoke
+    /// result no recipe pattern can express, so it is an act on the held stack, not a grid.
+    /// </remarks>
+    Smithing,
+
+    /// <summary>
     /// Puts food on a lit campfire, or takes it off again.
     /// </summary>
     /// <remarks>

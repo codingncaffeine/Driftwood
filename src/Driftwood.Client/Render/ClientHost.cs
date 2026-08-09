@@ -7076,6 +7076,67 @@ public sealed class ClientHost : IDisposable
         Notice($"mended for {spent} {_items[material].Label}", type);
     }
 
+    /// <summary>
+    /// Works the smithing table: the held worn tool becomes the same tool a tier up, paying one
+    /// of the next rung's material. The anvil's own manner — no screen, every refusal worded.
+    /// </summary>
+    private void UseSmithing(int x, int y, int z)
+    {
+        var here = new Vector3(x + 0.5f, y + 0.5f, z + 0.5f);
+        var held = _inventory.Held;
+
+        if (held.IsEmpty || !_items[held.Item].IsTool)
+        {
+            Notice("only a tool can be taken up a tier", held.IsEmpty ? null : _items[held.Item]);
+            return;
+        }
+
+        var type = _items[held.Item];
+
+        if (Smithing.BesideLadder(type))
+        {
+            Notice("gold sits beside the ladder, not on it", type);
+            return;
+        }
+
+        var next = Smithing.NextOf(type);
+        if (next is null)
+        {
+            Notice(Smithing.RungOf(type) is null
+                ? "not a laddered tool" : "already the top of the ladder", type);
+            return;
+        }
+
+        // The cost: one of the next rung's own material, where a tag means any member — the
+        // wood-to-stone hop takes whichever rough rock is carried, exactly as its recipes would.
+        var material = next.Value.Material;
+        var members = material.StartsWith('#')
+            ? StarterRecipes.TagIngredient(_items, material).Members
+            : [_items.ByName(material).Id];
+
+        var paidWith = ItemId.None;
+        foreach (var member in members)
+            if (_inventory.CountOf(member) > 0) { paidWith = member; break; }
+
+        if (paidWith.IsNone)
+        {
+            var wanted = material.StartsWith('#')
+                ? StarterRecipes.TagIngredient(_items, material).Name
+                : _items.ByName(material).Label;
+            Notice($"wants one {wanted}", type);
+            return;
+        }
+
+        var upgraded = Smithing.Upgraded(_items, held);
+        if (upgraded.IsEmpty) return;
+
+        _inventory.Take(paidWith, 1);
+        _inventory.SetHeld(upgraded);
+
+        _audio?.Play(Pick(ActionSounds.AnvilUse), here, 0.9f, Wobble());
+        Notice($"forged up for one {_items[paidWith].Label}", _items[upgraded.Item]);
+    }
+
     /// <summary>Puts a short line on screen with a picture beside it.</summary>
     /// <remarks>
     /// ⚠ Through the toast strip rather than a new mechanism, so it wears the same style, obeys the
@@ -7164,6 +7225,10 @@ public sealed class ClientHost : IDisposable
 
             case BlockUse.Anvil:
                 UseAnvil(hit.X, hit.Y, hit.Z);
+                return true;
+
+            case BlockUse.Smithing:
+                UseSmithing(hit.X, hit.Y, hit.Z);
                 return true;
 
             case BlockUse.Composter:

@@ -1179,6 +1179,10 @@ public static class WorldAudit
         Check("a cask fuse burns down once, defuses when mined, and never unlights", caskFaults.Count == 0,
             caskFaults.Count == 0 ? caskDetail : $"{caskFaults.Count} faults: {caskFaults[0]}");
 
+        var smithFaults = SmithingSelfTest(out var smithDetail);
+        Check("the smithing table carries wear up the ladder and refuses gold", smithFaults.Count == 0,
+            smithFaults.Count == 0 ? smithDetail : $"{smithFaults.Count} faults: {smithFaults[0]}");
+
         var herdSaveFaults = HerdSaveSelfTest(out var herdSaveDetail);
         Check("a herd survives the trip through a save", herdSaveFaults.Count == 0,
             herdSaveFaults.Count == 0 ? herdSaveDetail : $"{herdSaveFaults.Count} faults: {herdSaveFaults[0]}");
@@ -4889,6 +4893,78 @@ public static class WorldAudit
     }
 
     /// <summary>
+    /// Works the smithing ladder headlessly: the rung order as a literal, the wear fraction
+    /// carried exactly, gold refused both ways, and the top refusing politely.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ The wear claim is asserted with the arithmetic WRITTEN OUT — half of 60 becomes 66 of
+    /// 132 — never recomputed from the same fraction the code uses, which would restate it.
+    /// </remarks>
+    private static List<string> SmithingSelfTest(out string detail)
+    {
+        var faults = new List<string>();
+
+        var blocks = new BlockRegistry();
+        StarterBlocks.Register(blocks);
+        var items = StarterItems.Register(blocks);
+
+        // The ladder, pinned as a literal — gold absent is the claim, not a consequence.
+        var ladder = string.Join(" ", Smithing.Ladder.Select(t => t.Name));
+        if (ladder != "wood stone copper iron stormglass diamond")
+            faults.Add($"the ladder reads '{ladder}'");
+
+        // Half-worn wood pickaxe: 30 of 60 up to stone must be exactly 66 of 132.
+        var wood = items.ByName("wood_pickaxe");
+        var stone = items.ByName("stone_pickaxe");
+        var up = Smithing.Upgraded(items, new ItemStack(wood.Id, 1, 30));
+
+        if (up.Item != stone.Id)
+            faults.Add($"a wood pickaxe forged up into '{(up.IsEmpty ? "nothing" : items[up.Item].Name)}'");
+        else if (up.Damage != 66)
+            faults.Add($"30 of {wood.Durability} carried up to {up.Damage} of {stone.Durability}, not 66");
+
+        // A tool one swing from death arrives with at least one swing left, never dead.
+        var nearly = Smithing.Upgraded(items, new ItemStack(wood.Id, 1, wood.Durability - 1));
+        if (nearly.IsEmpty || nearly.Damage >= stone.Durability)
+            faults.Add("a nearly-dead tool arrived dead on the next rung");
+
+        // Gold: beside the ladder both ways. Nothing upgrades into it, and it refuses.
+        var gold = items.ByName("gold_pickaxe");
+        if (Smithing.NextOf(gold) is not null)
+            faults.Add("a gold tool was offered a next rung");
+        if (!Smithing.BesideLadder(gold))
+            faults.Add("gold does not know it is beside the ladder");
+        if (Smithing.Ladder.Any(t => t.Name == "gold"))
+            faults.Add("gold is on the ladder");
+
+        // The top refuses; a non-tool answers nothing at all.
+        if (Smithing.NextOf(items.ByName("diamond_pickaxe")) is not null)
+            faults.Add("the top of the ladder was offered a next rung");
+        if (Smithing.RungOf(items.ByName("stick")) is not null)
+            faults.Add("a stick stands on a tool rung");
+
+        // Every rung's material resolves — an item by name, or a tag the recipes know.
+        foreach (var rung in Smithing.Ladder)
+        {
+            if (rung.Material.StartsWith('#'))
+            {
+                if (StarterRecipes.TagIngredient(items, rung.Material).Members.Length == 0)
+                    faults.Add($"{rung.Name}'s material tag {rung.Material} has no members");
+            }
+            else if (!items.TryByName(rung.Material, out _))
+            {
+                faults.Add($"{rung.Name}'s material '{rung.Material}' is not an item");
+            }
+        }
+
+        detail = "wood stone copper iron stormglass diamond; 30 of 60 carries to 66 of 132, a "
+               + "nearly-dead tool keeps a swing, gold is refused both ways, and every rung's "
+               + "material resolves";
+
+        return faults;
+    }
+
+    /// <summary>
     /// Checks that the light a player can build gets brighter, and that smokeglass stops it.
     /// </summary>
     /// <remarks>
@@ -7094,12 +7170,16 @@ public static class WorldAudit
         (StarterBlocks.LayerFriedEgg, "fried_egg"),
         (StarterBlocks.LayerSlimeBlock, "slime_block"),
 
-        // The moving pin: the LAST layer, by name. It has now caught EIGHT appends in the act —
+        // The cask's bottom by its own constant now the smithing table went on after it.
+        (StarterBlocks.LayerBlastcaskBottom, "blastcask_bottom"),
+
+        // The moving pin: the LAST layer, by name. It has now caught NINE appends in the act —
         // fifteen crop rows landing after "the last layer is bonemeal", the composter's four
         // landing after black glass, the berry bush's three after compost-ready, seagrass after
         // mossy rubble, the signal kit after seagrass, the track after the gates, the fried egg
-        // after the cart, and the cask after the slime block. Keep it pointed at the true end.
-        ((ushort)(StarterBlocks.LayerCount - 1), "blastcask_bottom"),
+        // after the cart, the cask after the slime block, and the smithing table after the cask.
+        // Keep it pointed at the true end.
+        ((ushort)(StarterBlocks.LayerCount - 1), "smithing_table_side"),
     ];
 
     /// <summary>
