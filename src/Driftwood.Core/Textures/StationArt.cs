@@ -525,6 +525,214 @@ public static class StationArt
         "VVVVVVVVVVVVVVVV",
     ], null, DoorPalette);
 
+    // ─────────────────── Beds, the blastcask, the composter, rails ───────────────────
+
+    private static readonly (char, byte, byte, byte)[] BedPalette =
+    [
+        ('D', 34, 24, 14),      // frame seam
+        ('w', 134, 100, 58),    // frame wood
+        ('W', 160, 122, 70),    // frame wood, lit
+        ('R', 172, 54, 46),     // blanket
+        ('r', 138, 40, 36),     // blanket, shadow
+        ('F', 196, 76, 62),     // blanket, fold light
+        ('P', 240, 238, 230),   // pillow
+        ('p', 210, 208, 198),   // pillow, shadow
+    ];
+
+    public static byte[] BedHeadTopTile() => Grid(
+    [
+        "DWWWWWWWWWWWWWWD",
+        "DwPPPPPPPPPPPPwD",
+        "DwPPPPPPPPPPPpwD",
+        "DwPPPPPPPPPPPpwD",
+        "DwPPPPPPPPPPPpwD",
+        "DwppppppppppppwD",
+        "DwRRRRRRRRRRRRwD",
+        "DwFFFFFFFFFFFFwD",
+        "DwRRRRRRRRRRRRwD",
+        "DwRRRRRRRRRRRRwD",
+        "DwRRRRRRRRRRRRwD",
+        "DwrRRRRRRRRRRrwD",
+        "DwrrRRRRRRRRrrwD",
+        "DwrrrrrrrrrrrrwD",
+        "DwrrrrrrrrrrrrwD",
+        "DwwwwwwwwwwwwwwD",
+    ], null, BedPalette);
+
+    public static byte[] BedFootTopTile() => Grid(
+    [
+        "DwRRRRRRRRRRRRwD",
+        "DwRRRRRRRRRRRRwD",
+        "DwRRRRRRRRRRRRwD",
+        "DwRRRRRRRRRRRRwD",
+        "DwFFFFFFFFFFFFwD",
+        "DwRRRRRRRRRRRRwD",
+        "DwRRRRRRRRRRRRwD",
+        "DwRRRRRRRRRRRRwD",
+        "DwRRRRRRRRRRRRwD",
+        "DwrRRRRRRRRRRrwD",
+        "DwrrRRRRRRRRrrwD",
+        "DwrrrrrrrrrrrrwD",
+        "DwrrrrrrrrrrrrwD",
+        "DwwwwwwwwwwwwwwD",
+        "DWWWWWWWWWWWWWWD",
+        "DDDDDDDDDDDDDDDD",
+    ], null, BedPalette);
+
+    public static byte[] BedSideTile() => Grid(
+    [
+        "RRRRRRRRRRRRRRRR",
+        "rrrrrrrrrrrrrrrr",
+        "PPPppPPPPPPppPPP",
+        "DDDDDDDDDDDDDDDD",
+        "WwwwwwwwwwwwwwwW",
+        "WwwwwwwwwwwwwwwW",
+        "wDDDDDDDDDDDDDDw",
+        "wDwwDDDDDDDDwwDw",
+        "wDwwDDDDDDDDwwDw",
+        "wDwwDDDDDDDDwwDw",
+        "wDwwDDDDDDDDwwDw",
+        "wDwwDDDDDDDDwwDw",
+        "wDwwDDDDDDDDwwDw",
+        "wDwwDDDDDDDDwwDw",
+        "wDwwDDDDDDDDwwDw",
+        "DDDDDDDDDDDDDDDD",
+    ], null, BedPalette);
+
+    private static readonly (char, byte, byte, byte)[] CaskPalette =
+    [
+        ('D', 26, 16, 10),      // seam
+        ('a', 104, 44, 32),     // stave
+        ('c', 122, 54, 38),     // stave, mid
+        ('e', 140, 64, 44),     // stave, lit
+        ('h', 190, 154, 96),    // rope band
+        ('H', 210, 176, 112),   // rope band, lit
+        ('M', 42, 40, 42),      // powder
+        ('m', 58, 56, 58),      // powder, lit
+        ('F', 252, 170, 60),    // fuse spark
+        ('Y', 255, 226, 120),   // fuse spark, bright
+        ('f', 90, 74, 48),      // fuse cord
+    ];
+
+    public static byte[] BlastcaskSideTile() => Grid(
+    [
+        "aeeaeeaeeaeeaeea",
+        "caecaecaecaecaec",
+        "hHhhHhhHhhHhhHhh",
+        "hhhhhhhhhhhhhhhh",
+        "caecaecaecaecaec",
+        "caecaecaecaecaec",
+        "caecMMMMMMMMcaec",
+        "caecMmMMMMmMcaec",
+        "caecMMMMMMMMcaec",
+        "caecaecaecaecaec",
+        "caecaecaecaecaec",
+        "hHhhHhhHhhHhhHhh",
+        "hhhhhhhhhhhhhhhh",
+        "caecaecaecaecaec",
+        "caecaecaecaecaec",
+        "aeeaeeaeeaeeaeea",
+    ], null, CaskPalette);
+
+    public static byte[] BlastcaskTopTile(bool lit) => Grid(
+    [
+        "DaaaaaaaaaaaaaaD",
+        "aeeeeeeeeeeeeeea",
+        "aeccccccccccccea",
+        "aecMMMMMMMMMMcea",
+        "aecMmmmmmmmmMcea",
+        "aecMmMMMMMMmMcea",
+        "aecMmMMffMMmMcea",
+        lit ? "aecMmMfYFfMmMcea" : "aecMmMMffMMmMcea",
+        lit ? "aecMmMFYYFMmMcea" : "aecMmMMffMMmMcea",
+        "aecMmMMMMMMmMcea",
+        "aecMmmmmmmmmMcea",
+        "aecMMMMMMMMMMcea",
+        "aeccccccccccccea",
+        "aeeeeeeeeeeeeeea",
+        "DaaaaaaaaaaaaaaD",
+        "DDDDDDDDDDDDDDDD",
+    ], null, CaskPalette);
+
+    /// <summary>The composter's flank: vertical slats with shadowed gaps, banded top and foot.</summary>
+    public static byte[] ComposterSideTile() => Grid(
+    [
+        "DDDDDDDDDDDDDDDD",
+        "WWWWWWWWWWWWWWWW",
+        "wwVwwVwwVwwVwwVw",
+        "wwVwwVwwVwwVwwVw",
+        "WwVWwVWwVWwVWwVw",
+        "wwVwwVwwVwwVwwVw",
+        "wwVwwVwwVwwVwwVw",
+        "wwVwwVwwVwwVwwVw",
+        "WwVWwVWwVWwVWwVw",
+        "wwVwwVwwVwwVwwVw",
+        "wwVwwVwwVwwVwwVw",
+        "wwVwwVwwVwwVwwVw",
+        "wwVwwVwwVwwVwwVw",
+        "vvVvvVvvVvvVvvVv",
+        "vvvvvvvvvvvvvvvv",
+        "DDDDDDDDDDDDDDDD",
+    ], null, DoorPalette);
+
+    private static readonly (char, byte, byte, byte)[] RailPalette =
+    [
+        ('t', 122, 88, 50),     // tie
+        ('T', 146, 108, 62),    // tie, lit
+        ('i', 148, 150, 158),   // iron rail
+        ('I', 192, 194, 202),   // iron rail, lit
+        ('e', 96, 98, 106),     // iron rail, shadow
+        ('G', 252, 200, 80),    // booster strip, powered
+        ('g', 122, 96, 52),     // booster strip, dark
+    ];
+
+    public static byte[] RailStraightTile(bool boosted = false, bool lit = false)
+    {
+        var mid = boosted ? (lit ? 'G' : 'g') : '.';
+        var rows = new string[16];
+
+        for (var y = 0; y < 16; y++)
+        {
+            var tie = (y & 3) == 1 || (y & 3) == 2;
+            var line = new char[16];
+
+            for (var x = 0; x < 16; x++)
+            {
+                var c = '.';
+                if (tie && x is >= 1 and <= 14) c = (y & 3) == 1 ? 'T' : 't';
+                if (x is 3 or 12) c = (y & 3) == 1 ? 'I' : 'i';
+                else if (x is 4 or 13) c = 'e';
+                else if (boosted && x is 7 or 8) c = mid;    // the strip runs like the rails do
+                line[x] = c;
+            }
+
+            rows[y] = new string(line);
+        }
+
+        return Grid(rows, null, RailPalette);
+    }
+
+    /// <summary>The quarter-turn: rails swinging from the bottom edge out through the right.</summary>
+    public static byte[] RailBendTile() => Grid(
+    [
+        "................",
+        "................",
+        "................",
+        "..........ttTt..",
+        "........tttTtt..",
+        "......ttTttt....",
+        ".....tTttiIettt.",
+        "....ttiIeettTtt.",
+        "...tTtIettttt...",
+        "...ttIettTtt....",
+        "..ttiIetttt.....",
+        "..tTiett........",
+        ".ttiIett........",
+        ".ttiett.........",
+        ".tiIet..........",
+        ".tiet...........",
+    ], null, RailPalette);
+
     /// <summary>Two rails, a rung every fourth row, and nothing else — a ladder is mostly air.</summary>
     public static byte[] LadderTile() => Grid(
     [
@@ -739,6 +947,82 @@ public static class StationArt
         "iIiiiiiiiiiiiiIi",
         "DiiiiiiiiiiiiiiD",
     ], null, StonePalette);
+
+    // ──────────────────────────── The chest ────────────────────────────
+    // Warm boards in a dark frame with a silver clasp — read off the reference's entity
+    // sheet for style only, since ours is a block-face trio on our own hinged model.
+
+    private static readonly (char, byte, byte, byte)[] ChestPalette =
+    [
+        ('D', 32, 21, 11),      // frame
+        ('q', 96, 62, 32),      // board seam
+        ('u', 124, 84, 42),     // shadow wood
+        ('w', 152, 106, 52),    // wood
+        ('W', 178, 128, 64),    // lit wood
+        ('L', 192, 194, 200),   // clasp, lit
+        ('l', 142, 144, 152),   // clasp
+        ('k', 74, 76, 84),      // clasp, shadow
+    ];
+
+    public static byte[] ChestTopTile() => Grid(
+    [
+        "DDDDDDDDDDDDDDDD",
+        "DWWWWWWWWWWWWWWD",
+        "DWwwwwwwwwwwwwuD",
+        "DWwwwwwwwwwwwwuD",
+        "DqqqqqqqqqqqqqqD",
+        "DWwwwwwwwwwwwwuD",
+        "DWwwwWwwwwwwwwuD",
+        "DWwwwwwwwwwwwwuD",
+        "DqqqqqqqqqqqqqqD",
+        "DWwwwwwwwwWwwwuD",
+        "DWwwwwwwwwwwwwuD",
+        "DqqqqqqqqqqqqqqD",
+        "DWwwwwwwwwwwwwuD",
+        "DWwwwwwlLwwwwwuD",
+        "DuuuuuukluuuuuuD",
+        "DDDDDDDDDDDDDDDD",
+    ], null, ChestPalette);
+
+    public static byte[] ChestSideTile() => Grid(
+    [
+        "DDDDDDDDDDDDDDDD",
+        "DWWWWWWWWWWWWWWD",
+        "DwwwwwwwwwwwwwwD",
+        "DuuuuuuuuuuuuuuD",
+        "DDDDDDDDDDDDDDDD",
+        "DWWWWWWWWWWWWWWD",
+        "DwwwwWwwwwwwwwwD",
+        "DwwwwwwwwwwWwwwD",
+        "DqqqqqqqqqqqqqqD",
+        "DwwwwwwwwwwwwwwD",
+        "DwWwwwwwwwwwwwwD",
+        "DwwwwwwwwWwwwwwD",
+        "DuuuuuuuuuuuuuuD",
+        "DuuuuuuuuuuuuuuD",
+        "DuDDuuuuuuuuDDuD",
+        "DDDDDDDDDDDDDDDD",
+    ], null, ChestPalette);
+
+    public static byte[] ChestFrontTile() => Grid(
+    [
+        "DDDDDDDDDDDDDDDD",
+        "DWWWWWWWWWWWWWWD",
+        "DwwwwwwkkwwwwwwD",
+        "DuuuuuukLuuuuuuD",
+        "DDDDDDDklDDDDDDD",
+        "DWWWWWWklWWWWWWD",
+        "DwwwwWwkkwwwwwwD",
+        "DwwwwwwwwwwWwwwD",
+        "DqqqqqqqqqqqqqqD",
+        "DwwwwwwwwwwwwwwD",
+        "DwWwwwwwwwwwwwwD",
+        "DwwwwwwwwWwwwwwD",
+        "DuuuuuuuuuuuuuuD",
+        "DuuuuuuuuuuuuuuD",
+        "DuDDuuuuuuuuDDuD",
+        "DDDDDDDDDDDDDDDD",
+    ], null, ChestPalette);
 
     /// <summary>Flat worn iron — the anvil's SHAPE is its model's boxes, so the tile stays a
     /// surface: lit crown edge, dents, and a riveted line along the foot.</summary>

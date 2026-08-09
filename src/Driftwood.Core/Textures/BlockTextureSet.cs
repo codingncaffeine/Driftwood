@@ -1312,9 +1312,9 @@ public static class BlockTextureSet
             StarterBlocks.LayerDoorUpper => StationArt.DoorUpper(),
             StarterBlocks.LayerTrapdoor => StationArt.TrapdoorTile(),
 
-            StarterBlocks.LayerChestTop => TileGen.ChestFace(1063, 158, 118, 68, front: false, lid: true),
-            StarterBlocks.LayerChestSide => TileGen.ChestFace(1063, 158, 118, 68, front: false, lid: false),
-            StarterBlocks.LayerChestFront => TileGen.ChestFace(1063, 158, 118, 68, front: true, lid: false),
+            StarterBlocks.LayerChestTop => StationArt.ChestTopTile(),
+            StarterBlocks.LayerChestSide => StationArt.ChestSideTile(),
+            StarterBlocks.LayerChestFront => StationArt.ChestFrontTile(),
 
             // Stations wear StationArt from here: hand-drawn grids, studied off the reference
             // packs [user directive 2026-08-09] — a workbench is a drawing, not a texture.
@@ -1456,8 +1456,7 @@ public static class BlockTextureSet
             // marked opaque and the audit refuses an opaque layer with clear pixels in it. The
             // floor is darker planks; the fill is humus, and the ready fill is the same humus
             // flecked pale with the bone meal in it.
-            StarterBlocks.LayerComposterSide =>
-                TileGen.Panel(TileGen.Planks(1310, 148, 116, 74), 2, 22),
+            StarterBlocks.LayerComposterSide => StationArt.ComposterSideTile(),
             StarterBlocks.LayerComposterBottom => TileGen.Planks(1311, 122, 96, 60),
             StarterBlocks.LayerCompost => TileGen.Speckle(1312, 82, 64, 40, 22, 0.55f),
             StarterBlocks.LayerCompostReady =>
@@ -1530,16 +1529,16 @@ public static class BlockTextureSet
             StarterBlocks.LayerTidelamp => TileGen.Lamp(1371, 46, 66, 70),
             StarterBlocks.LayerTidelampLit => TileGen.Lamp(1371, 118, 226, 236),
 
-            StarterBlocks.LayerRail => TileGen.RailStraight(1373),
-            StarterBlocks.LayerRailBend => TileGen.RailBend(1373),
-            StarterBlocks.LayerRailBoost => TileGen.RailStraight(1373, boosted: true),
-            StarterBlocks.LayerRailBoostOn => TileGen.RailStraight(1373, boosted: true, lit: true),
+            StarterBlocks.LayerRail => StationArt.RailStraightTile(),
+            StarterBlocks.LayerRailBend => StationArt.RailBendTile(),
+            StarterBlocks.LayerRailBoost => StationArt.RailStraightTile(boosted: true),
+            StarterBlocks.LayerRailBoostOn => StationArt.RailStraightTile(boosted: true, lit: true),
             StarterBlocks.LayerCartIcon => TileGen.IconCart(1374),
             StarterBlocks.LayerFriedEgg => TileGen.IconFriedEgg(1375),
             StarterBlocks.LayerSlimeBlock => TileGen.SlimeBlock(1376),
-            StarterBlocks.LayerBlastcaskSide => TileGen.BlastcaskSide(1377),
-            StarterBlocks.LayerBlastcaskTop => TileGen.BlastcaskTop(1378, lit: false),
-            StarterBlocks.LayerBlastcaskLitTop => TileGen.BlastcaskTop(1378, lit: true),
+            StarterBlocks.LayerBlastcaskSide => StationArt.BlastcaskSideTile(),
+            StarterBlocks.LayerBlastcaskTop => StationArt.BlastcaskTopTile(lit: false),
+            StarterBlocks.LayerBlastcaskLitTop => StationArt.BlastcaskTopTile(lit: true),
             StarterBlocks.LayerBlastcaskBottom => TileGen.Planks(1379, 108, 56, 40),
 
             // The smithing table: a scored iron worktop on a banded timber body — the anvil's
@@ -1563,9 +1562,9 @@ public static class BlockTextureSet
             StarterBlocks.LayerCherryLeaves => TileGen.Leaves(1393, 236, 172, 198, 0.22f),
 
             // The bed (#99): quilt, pillow end, and the frame's hung side.
-            StarterBlocks.LayerBedFootTop => TileGen.BedBlanket(1394),
-            StarterBlocks.LayerBedHeadTop => TileGen.BedPillow(1394),
-            StarterBlocks.LayerBedSide => TileGen.BedSide(1395),
+            StarterBlocks.LayerBedFootTop => StationArt.BedFootTopTile(),
+            StarterBlocks.LayerBedHeadTop => StationArt.BedHeadTopTile(),
+            StarterBlocks.LayerBedSide => StationArt.BedSideTile(),
 
             _ when layer >= StarterBlocks.LayerGateFirst
                    && layer < StarterBlocks.LayerGateFirst + 10 =>
