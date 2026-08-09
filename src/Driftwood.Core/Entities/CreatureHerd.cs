@@ -117,6 +117,16 @@ public sealed class Creature
     /// <summary>Set for the one step on which it did. Read and cleared by whoever spawns drops.</summary>
     public bool Shed { get; set; }
 
+    /// <summary>True when this one owes itself a teleport step at the next chance.</summary>
+    /// <remarks>
+    /// ⚠ A flag rather than the act, because the act needs the world and <c>Hurt</c> does not
+    /// have it — the blow books the step and the next update, which holds <c>solid</c>, takes it.
+    /// </remarks>
+    public bool BlinkPending { get; set; }
+
+    /// <summary>Seconds until a blinking kind may step again. Stops a crowded one strobing.</summary>
+    public float BlinkRest { get; set; }
+
     /// <summary>Seconds this one's fuse has been burning. Zero for anything unlit.</summary>
     public float FuseFor { get; set; }
 
@@ -170,6 +180,9 @@ public readonly record struct CreatureBirth(string Kind, Vector3 Position);
 
 /// <summary>One fuse that has burned down, for whoever carves the world and hurts the standing.</summary>
 public readonly record struct CreatureBlast(string Kind, Vector3 Position);
+
+/// <summary>One teleport step taken, both ends of it, for whoever draws the departure.</summary>
+public readonly record struct CreatureBlink(string Kind, Vector3 From, Vector3 To);
 
 /// <summary>
 /// What each creature sounds like: our name for it against a clip's name.
@@ -267,6 +280,9 @@ public static class CreatureSounds
 
     public static readonly string[] Explosions = Run("random/explode", 4);
 
+    /// <summary>The soft pop of a blink — the pack's own pearl-throw, repurposed.</summary>
+    public static readonly string[] Blinks = ["item/throwables/throw_enderpearl"];
+
     /// <summary>What the last blow sounds like.</summary>
     public static readonly string[] Deaths = Run("damage/gore/bleed", 3);
 
@@ -314,7 +330,8 @@ public static class CreatureSounds
             .Concat(Shears)
             .Concat(Meals)
             .Concat(Fuses)
-            .Concat(Explosions);
+            .Concat(Explosions)
+            .Concat(Blinks);
 }
 
 /// <summary>
@@ -391,6 +408,17 @@ public sealed class CreatureHerd
     /// <summary>Half-hearts a second the sun costs one that burns in it.</summary>
     public const float ScorchRate = 1.6f;
 
+    /// <summary>The two ends of a blink's reach, in blocks. Far enough to break a corner.</summary>
+    public const float BlinkNear = 4f;
+
+    public const float BlinkFar = 8f;
+
+    /// <summary>Blocks within which an unprovoked blinker feels crowded and steps away.</summary>
+    public const float BlinkCrowdRange = 3.5f;
+
+    /// <summary>Seconds between steps. A cornered one is hard to pin, not impossible.</summary>
+    public const float BlinkRestSeconds = 2.5f;
+
     /// <summary>Seconds a fuse burns before the blast.</summary>
     /// <remarks>
     /// A second and a half is the whole fight: long enough to land one swing or to get clear if
@@ -455,6 +483,7 @@ public sealed class CreatureHerd
     private readonly List<CreatureAttack> _attacks = [];
     private readonly List<CreatureBirth> _births = [];
     private readonly List<CreatureBlast> _blasts = [];
+    private readonly List<CreatureBlink> _blinks = [];
     private readonly List<Creature> _newborn = [];
     private readonly Random _random;
 
@@ -593,6 +622,10 @@ public sealed class CreatureHerd
         if (CreatureVitals.Retaliates(creature.Kind))
         {
             creature.Provoked = true;
+
+            // A struck blinker is somewhere else before the second swing — the blow books the
+            // step here and the next update, which holds the world, takes it.
+            if (CreatureVitals.Blinks(creature.Kind)) creature.BlinkPending = true;
 
             foreach (var packmate in _creatures)
             {
@@ -995,6 +1028,26 @@ public sealed class CreatureHerd
                 continue;
             }
 
+            // The teleport step, taken here because this is where the world is in hand. A struck
+            // one owes itself the step; an unprovoked one that is being crowded books its own.
+            if (CreatureVitals.Blinks(creature.Kind))
+            {
+                creature.BlinkRest = MathF.Max(0f, creature.BlinkRest - dt);
+
+                if (!creature.BlinkPending && !creature.Provoked && creature.BlinkRest <= 0f
+                    && player is { } near
+                    && Vector3.DistanceSquared(near, creature.Position) < BlinkCrowdRange * BlinkCrowdRange)
+                {
+                    creature.BlinkPending = true;
+                }
+
+                if (creature.BlinkPending)
+                {
+                    Blink(creature, solid);
+                    creature.BlinkPending = false;
+                }
+            }
+
             Scorch(creature, dt, sunlit);
             var hunting = Hunt(creature, dt, player);
             var courting = !hunting && Court(creature, dt);
@@ -1235,6 +1288,53 @@ public sealed class CreatureHerd
         return taken;
     }
 
+    /// <summary>Every teleport step taken since last asked, drained like the attacks are.</summary>
+    public List<CreatureBlink> TakeBlinks()
+    {
+        if (_blinks.Count == 0) return [];
+        var taken = new List<CreatureBlink>(_blinks);
+        _blinks.Clear();
+        return taken;
+    }
+
+    /// <summary>
+    /// Steps one somewhere else nearby: a ring out at blink reach, on ground, or nowhere.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ <b>Failing to find a spot is answered by staying, not by trying harder.</b> Eight tries
+    /// over a ring of four to eight blocks covers anything that is not a sealed cell, and a sealed
+    /// cell is exactly where a blink that loops forever would hang the update.
+    /// </remarks>
+    private bool Blink(Creature creature, Func<int, int, int, bool> solid)
+    {
+        for (var attempt = 0; attempt < 8; attempt++)
+        {
+            var angle = (float)(_random.NextDouble() * Math.Tau);
+            var reach = BlinkNear + (float)_random.NextDouble() * (BlinkFar - BlinkNear);
+
+            var x = (int)MathF.Floor(creature.Position.X + MathF.Cos(angle) * reach);
+            var z = (int)MathF.Floor(creature.Position.Z + MathF.Sin(angle) * reach);
+
+            if (!TryGround(solid, x, z, (int)creature.Position.Y + 6, out var y)) continue;
+
+            // A step, not a journey: a ledge six blocks up or a pit six down is not "beside".
+            if (MathF.Abs(y - creature.Position.Y) > 6f) continue;
+
+            var to = new Vector3(x + 0.5f, y, z + 0.5f);
+            _blinks.Add(new CreatureBlink(creature.Kind, creature.Position, to));
+
+            creature.Position = to;
+            creature.BlinkRest = BlinkRestSeconds;
+
+            // Whatever fall it was owed stays where it left it — arriving is not landing.
+            creature.FallSpeed = 0f;
+            creature.FellFor = 0f;
+            return true;
+        }
+
+        return false;
+    }
+
     /// <summary>
     /// Drops one with nothing under it, and says whether it spent this step falling.
     /// </summary>
@@ -1377,6 +1477,98 @@ public sealed class CreatureHerd
         faults.AddRange(ValidateRetaliation());
         faults.AddRange(ValidateHopping());
         faults.AddRange(ValidateFusing());
+        faults.AddRange(ValidateBlinking());
+
+        return faults;
+    }
+
+    /// <summary>
+    /// Checks a struck blinker is somewhere else on the next step, that crowding one moves it
+    /// without a blow, and that the step is a step — landed on ground, inside the ring.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>The wolf is the control.</b> It shares the whole retaliation path — struck, provoked,
+    /// pack-angry — and must NOT teleport, or "it moved when hit" is true of the flinch and the
+    /// chase too. Half a second is the window: a blink is instant and a walk covers under a block.
+    /// </remarks>
+    private static List<string> ValidateBlinking()
+    {
+        var faults = new List<string>();
+
+        static bool Flat(int x, int y, int z) => y < 64;
+
+        var walker = new SpawnKind("farwalker", new Vector3(0.6f, 3.1f, 0.6f), Hostile: false);
+        var player = new Vector3(0.5f, 64f, -6.5f);
+
+        var herd = new CreatureHerd(59);
+        herd.Spawn(Flat, [walker], new Vector3(0f, 64f, 0f), 1);
+        if (herd.Count != 1) return ["no farwalker stood up for the blink check"];
+
+        var struck = herd.All[0];
+        struck.Position = new Vector3(0.5f, 64f, 0.5f);
+        var stood = struck.Position;
+
+        herd.Hurt(struck, 3, player);
+        if (!struck.Provoked) faults.Add("a struck farwalker did not take it personally");
+
+        for (var i = 0; i < 30; i++) herd.Update(1f / 60f, Flat);
+
+        // ⚠ The blink is judged from its own record, not from where the body stands half a
+        // second later — a provoked one WALKS after arriving, honestly, and measuring the sum
+        // of a blink and a walk-back read a working step as a failure. The position assert
+        // below only says it is genuinely elsewhere.
+        var blinks = herd.TakeBlinks();
+        if (blinks.Count != 1) faults.Add($"one blow booked {blinks.Count} blinks");
+        foreach (var blink in blinks)
+        {
+            var step = Vector3.Distance(blink.From, blink.To);
+
+            // Landing on a cell's own middle can shave most of a diagonal off the rolled reach.
+            if (step < BlinkNear - 1.5f)
+                faults.Add($"a blink stepped {step:F1} blocks, under its own ring of {BlinkNear}");
+            if (step > BlinkFar + 1.5f)
+                faults.Add($"a blink stepped {step:F1} blocks, past its own ring of {BlinkFar}");
+            if (MathF.Abs(blink.To.Y - 64f) > 0.01f)
+                faults.Add($"a blink landed at y {blink.To.Y:F2} rather than on the floor");
+        }
+
+        if (Vector3.Distance(struck.Position, stood) < 1.5f)
+            faults.Add("a struck farwalker is still where the blow found it");
+
+        // ⛔ The control: a struck wolf, same blow, same window, must still be where the flinch
+        // and half a second of legs put it — under a block, not a ring away.
+        var wolves = new CreatureHerd(61);
+        wolves.Spawn(Flat, [new SpawnKind("wolf", new Vector3(0.9f, 1.1f, 1.4f))], new Vector3(0f, 64f, 0f), 1);
+        if (wolves.Count == 1)
+        {
+            var wolf = wolves.All[0];
+            wolf.Position = new Vector3(0.5f, 64f, 0.5f);
+            var was = wolf.Position;
+
+            wolves.Hurt(wolf, 3, player);
+            for (var i = 0; i < 30; i++) wolves.Update(1f / 60f, Flat);
+
+            if (Vector3.Distance(wolf.Position, was) > 1.2f)
+                faults.Add("a struck wolf crossed more ground in half a second than legs allow");
+            if (wolves.TakeBlinks().Count != 0) faults.Add("a wolf teleported");
+        }
+
+        // And the crowd step: stood over, an unprovoked one leaves on its own within a second.
+        var shy = new CreatureHerd(67);
+        shy.Spawn(Flat, [walker], new Vector3(0f, 64f, 0f), 1);
+        if (shy.Count == 1)
+        {
+            var crowded = shy.All[0];
+            crowded.Position = new Vector3(0.5f, 64f, 0.5f);
+            var near = new Vector3(0.5f, 64f, 2.5f);
+
+            for (var i = 0; i < 60; i++) shy.Update(1f / 60f, Flat, near);
+
+            // The record again, for the walk-back reason above: the claim is that crowding
+            // produced a step with no blow anywhere in it.
+            if (shy.TakeBlinks().Count == 0)
+                faults.Add("a crowded farwalker stood its ground rather than stepping away");
+        }
 
         return faults;
     }

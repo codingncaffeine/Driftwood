@@ -552,6 +552,9 @@ public static class StarterItems
         // blasting; nothing is promised). It is the crawler's tell in a pocket.
         Loose(items, "gunpowder", "gunpowder", StarterBlocks.LayerGunpowder);
 
+        // The farwalker's pearl — the teleport reagent M1's summons are written against.
+        Loose(items, "farpearl", "farpearl", StarterBlocks.LayerFarpearl);
+
         items.Register(new ItemType
         {
             Name = "rotten_flesh", Label = "rotten flesh",
@@ -789,7 +792,11 @@ public static class StarterItems
 
         // ⚠ Only for a crawler KILLED before it pops. The blast is not a death — it hands out a
         // crater, not components — so getting the powder means winning the sprint the fuse starts.
-        new CreatureDrops.Rule("crawler", DropTrigger.Killed, "gunpowder", 1, 2));
+        new CreatureDrops.Rule("crawler", DropTrigger.Killed, "gunpowder", 1, 2),
+
+        // Sometimes. A farwalker is the hardest fight on the roster — 80 health, hits for 7,
+        // cannot be cornered — and the pearl is why anybody picks that fight.
+        new CreatureDrops.Rule("farwalker", DropTrigger.Killed, "farpearl", 0, 1));
 
     /// <summary>What every stage of every root crop leaves when it is pulled up.</summary>
     /// <remarks>

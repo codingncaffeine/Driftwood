@@ -109,6 +109,12 @@ public static class CreatureArt
         // measurement), and its face is the grim one: dark pits over a mouth fallen open.
         ["crawler"] = new(
             (140, 144, 102), (94, 106, 72), (40, 46, 38), (64, 84, 60), 0.40f, 0.13f, FaceKind.Grim),
+
+        // Night-violet black, and the one face drawn LIGHTER than its coat: a long pale pair of
+        // eyes (Horn is the eye colour on this face), which at forty blocks in the dark is the
+        // whole of what a farwalker looks like. Purple-shifted so it does not read as the spider.
+        ["farwalker"] = new(
+            (30, 28, 40), (44, 38, 58), (20, 18, 28), (198, 182, 224), 0.14f, 0.09f, FaceKind.Eyes),
     };
 
     /// <summary>True when we have colours for this creature.</summary>

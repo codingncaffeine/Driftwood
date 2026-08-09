@@ -444,6 +444,9 @@ public static class BlockTextureSet
         new("slimeball", "textures/item/slime_ball.png", true, "textures/items/slimeball.png"),
 
         new("gunpowder", "textures/item/gunpowder.png", true, "textures/items/gunpowder.png"),
+
+        // Ours is the farwalker's pearl; the pack paints it under the reference's coined name.
+        new("farpearl", "textures/item/ender_pearl.png", true, "textures/items/ender_pearl.png"),
     ];
 
     /// <summary>
@@ -1372,6 +1375,10 @@ public static class BlockTextureSet
             // Gunpowder is a pile the grey of ash — bonemeal's own drawing in the opposite tone,
             // which is the same pairing the meats make between raw and cooked.
             StarterBlocks.LayerGunpowder => TileGen.IconPile(1351, 92, 90, 88),
+
+            // The farpearl is a lump in the farwalker's own eye-violet — the drop wearing the one
+            // colour anybody has ever seen of the thing it came off.
+            StarterBlocks.LayerFarpearl => TileGen.IconLump(1352, 148, 132, 178),
 
             _ => Wheat(layer) ?? Crop(layer) ?? CropIcon(layer) ?? StainedGlass(layer)
                  ?? MetalBlock(layer) ?? Wool(layer) ?? Meat(layer) ?? Dye(layer)

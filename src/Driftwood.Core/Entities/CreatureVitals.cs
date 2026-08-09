@@ -110,7 +110,18 @@ public static class CreatureVitals
     /// player's own doing. Its packmates take it as personally as it does, which is what makes
     /// swinging at one of four a different decision from swinging at a stray.
     /// </remarks>
-    private static readonly HashSet<string> Retaliators = new(StringComparer.Ordinal) { "wolf" };
+    private static readonly HashSet<string> Retaliators = new(StringComparer.Ordinal)
+    {
+        "wolf",
+
+        // ⛳ The farwalker is the dark's wolf: it stands in the night harming nobody, and striking
+        // one buys a fight with something that hits for 7 and does not forget. Spawned through the
+        // hostile door but never born angry — see the client's spawn rule.
+        "farwalker",
+    };
+
+    /// <summary>Kinds that answer trouble by being somewhere else — a teleport step.</summary>
+    private static readonly HashSet<string> Blinkers = new(StringComparer.Ordinal) { "farwalker" };
 
     /// <summary>
     /// The kinds the sun does not agree with.
@@ -140,6 +151,9 @@ public static class CreatureVitals
 
     /// <summary>True when this kind's attack is a fuse and a blast rather than a swing.</summary>
     public static bool Explodes(string kind) => Exploders.Contains(kind);
+
+    /// <summary>True when this kind steps through space rather than being cornered.</summary>
+    public static bool Blinks(string kind) => Blinkers.Contains(kind);
 
     /// <summary>True when full daylight sets this one alight.</summary>
     public static bool BurnsInDaylight(string kind) => Burns.Contains(kind);

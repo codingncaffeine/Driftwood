@@ -1305,8 +1305,11 @@ public sealed class ClientHost : IDisposable
 
         _hostileTry = SpawnRules.NextAttempt(_spawnRoll.NextDouble());
 
+        // ⚠ By FAMILY, not by the Hostile flag: a farwalker is born calm (see Fierce) and still
+        // takes a bed in the night's own count, or the dark would fill with them unboundedly.
         var hostiles = 0;
-        foreach (var creature in _herd.All) if (creature.Hostile) hostiles++;
+        foreach (var creature in _herd.All)
+            if (FamilyOf(creature.Kind) == CreatureFamily.Hostile) hostiles++;
         if (hostiles >= SpawnRules.HostileCap) return;
 
         // And an attempt that fires does not always place anything. The chance falls to nothing as
@@ -1396,12 +1399,24 @@ public sealed class ClientHost : IDisposable
         {
             if (kind.Family != family) continue;
             if (!_creatureRenderer.TryMeasure(kind.Name, out var size)) continue;
-            kinds.Add(new SpawnKind(
-                kind.Name, size, family == CreatureFamily.Hostile, CreatureSet.MoveFor(kind.Name)));
+            kinds.Add(new SpawnKind(kind.Name, size, Fierce(kind.Name), CreatureSet.MoveFor(kind.Name)));
         }
 
         return kinds;
     }
+
+    /// <summary>
+    /// Whether one of this kind comes at people from the moment it stands.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>A retaliator is never born angry, whatever door it came through.</b> The farwalker
+    /// spawns with the night's own — it is a thing of the dark — and stands there harming nobody
+    /// until struck, which is the wolf's contract wearing a taller body. The night cap counts it
+    /// all the same (see <see cref="TopUpHostiles"/>), or the dark would fill with them past any
+    /// bound.
+    /// </remarks>
+    private static bool Fierce(string kind) =>
+        FamilyOf(kind) == CreatureFamily.Hostile && !CreatureVitals.Retaliates(kind);
 
     /// <summary>One saved kind stood back up, or null for one this build has no mesh for.</summary>
     private SpawnKind? KindFor(string kind)
@@ -1409,8 +1424,7 @@ public sealed class ClientHost : IDisposable
         if (_creatureRenderer is null || !_creatureRenderer.TryMeasure(kind, out var size))
             return null;
 
-        return new SpawnKind(
-            kind, size, FamilyOf(kind) == CreatureFamily.Hostile, CreatureSet.MoveFor(kind));
+        return new SpawnKind(kind, size, Fierce(kind), CreatureSet.MoveFor(kind));
     }
 
     private void BuildWorld()
@@ -4923,6 +4937,15 @@ public sealed class ClientHost : IDisposable
 
         foreach (var blast in _herd.TakeBlasts()) Detonate(blast.Position);
 
+        // A blink is a soft pop and a wisp at both ends — the departure matters as much as the
+        // arrival, because "where did it go" starts from where it was.
+        foreach (var blink in _herd.TakeBlinks())
+        {
+            _audio?.Play(Pick(CreatureSounds.Blinks), blink.To, 0.6f, Wobble());
+            _particles.DeathPuff(blink.From + new Vector3(0f, 1.4f, 0f), 1.1f, StarterBlocks.LayerSmoke, 6);
+            _particles.DeathPuff(blink.To + new Vector3(0f, 1.4f, 0f), 1.1f, StarterBlocks.LayerSmoke, 6);
+        }
+
         // A birth is its parents' voice pitched small, and a flutter where the calf stands.
         foreach (var birth in _herd.TakeBirths())
         {
@@ -4938,6 +4961,25 @@ public sealed class ClientHost : IDisposable
             // the fuse itself, which is the right way round: the blast interrupts it.
             if (creature.FuseLit)
                 _audio?.Play(Pick(CreatureSounds.Fuses), creature.Middle, 0.9f, 1f);
+
+            // ⛳ The sun's work made visible: one that has stood in daylight past most of its
+            // grace is alight, flame licking over the whole of its box with a wisp of smoke —
+            // which is how a player reads why the thing chasing them is losing health. Lit a
+            // shade before the first tick lands, the way anything catches before it chars.
+            if (creature.Alive && creature.Burning >= CreatureHerd.ScorchSeconds * 0.6f
+                && Random.Shared.NextDouble() < 9.0 * dt)
+            {
+                var (low, high) = creature.Bounds();
+                var lick = new Vector3(
+                    low.X + (float)Random.Shared.NextDouble() * (high.X - low.X),
+                    low.Y + (float)Random.Shared.NextDouble() * (high.Y - low.Y) * 0.9f,
+                    low.Z + (float)Random.Shared.NextDouble() * (high.Z - low.Z));
+
+                _particles.Flame(lick, 0.55f, StarterBlocks.LayerFlame);
+
+                if (Random.Shared.NextDouble() < 0.3)
+                    _particles.Smoke(lick + new Vector3(0f, 0.25f, 0f), 0.4f, StarterBlocks.LayerSmoke);
+            }
 
             if (creature.Shed)
             {

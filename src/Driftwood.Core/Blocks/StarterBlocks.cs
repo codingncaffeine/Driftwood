@@ -558,8 +558,9 @@ public static class StarterBlocks
     /// </remarks>
     public const ushort LayerSlimeball = LayerCobweb + 1;
     public const ushort LayerGunpowder = LayerCobweb + 2;
+    public const ushort LayerFarpearl = LayerCobweb + 3;
 
-    public const int LayerCount = LayerGunpowder + 1;
+    public const int LayerCount = LayerFarpearl + 1;
 
     /// <summary>One anvil's name, by how worn it is and which way it lies.</summary>
     /// <remarks>

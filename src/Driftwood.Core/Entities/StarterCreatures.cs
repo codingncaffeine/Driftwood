@@ -385,10 +385,45 @@ public static class StarterCreatures
                 Box(0f, 0f, -6f, 4f, 6f, 4f, 0, 16)),
         ]);
 
+    /// <summary>
+    /// The tall one: a head and a trunk on limbs thirty units long, all four off one patch.
+    /// </summary>
+    /// <remarks>
+    /// <para>⚠ <b>The reference authors this creature around engine-side offsets</b> — its legs run
+    /// four units below its own zero and the whole model is shifted at render time. Ours is rebuilt
+    /// standing on 0 with every box the same SIZE at the same uv, which is the part a pack's sheet
+    /// cares about; where a box sits in space is a 3D fact the sheet never sees.</para>
+    /// <para>⚠ The jaw layer at uv(0,16) is deliberately not carried: the reference draws it
+    /// half a unit INSIDE the head, invisible until a scream animation drops it, and we have
+    /// neither the animation nor a blending shader to layer it with. The face is
+    /// <see cref="Textures.CreatureArt"/>'s pale-eyed one.</para>
+    /// </remarks>
+    public static CreatureModel Farwalker() => new(
+        "farwalker", 64, 32,
+        [
+            Bone("body", "", new Vector3(0f, 42f, 0f),
+                Box(-4f, 30f, -2f, 8f, 12f, 4f, 32, 16)),
+
+            Bone("head", "body", new Vector3(0f, 42f, 0f),
+                Box(-4f, 42f, -4f, 8f, 8f, 8f, 0, 0)),
+
+            Bone("arm0", "body", new Vector3(-3f, 40f, 0f),
+                Box(-4f, 12f, -1f, 2f, 30f, 2f, 56, 0)),
+
+            Bone("arm1", "body", new Vector3(3f, 40f, 0f),
+                Box(2f, 12f, -1f, 2f, 30f, 2f, 56, 0, mirror: true)),
+
+            Bone("leg0", "body", new Vector3(-2f, 30f, 0f),
+                Box(-3f, 0f, -1f, 2f, 30f, 2f, 56, 0)),
+
+            Bone("leg1", "body", new Vector3(2f, 30f, 0f),
+                Box(1f, 0f, -1f, 2f, 30f, 2f, 56, 0, mirror: true)),
+        ]);
+
     /// <summary>Every creature that ships with the game, by our name for it.</summary>
     public static IReadOnlyList<CreatureModel> All { get; } =
         [Cow(), Pig(), Sheep(), Chicken(), Wolf(), Zombie(), Drowned(), Husk(), Skeleton(), Spider(),
-         Slime(), Crawler()];
+         Slime(), Crawler(), Farwalker()];
 
     /// <summary>Ours for this creature, or null when we have not drawn one yet.</summary>
     public static CreatureModel? ByName(string name)
@@ -427,8 +462,9 @@ public static class StarterCreatures
                 faults.Add($"{model.Name} stands with its lowest point at {min.Y / CreatureMesh.Unit:F1} rather than 0");
 
             // And it has to be an animal-sized thing. Four units or four hundred is a transposed
-            // digit, which is the failure a table of numbers actually has.
-            if (size.Y is < 6f or > 48f)
+            // digit, which is the failure a table of numbers actually has. ⚠ The ceiling is the
+            // farwalker's 50 with a little headroom — it is the tallest thing we ship on purpose.
+            if (size.Y is < 6f or > 56f)
                 faults.Add($"{model.Name} is {size.Y:F0} units tall, which is not an animal");
         }
 
