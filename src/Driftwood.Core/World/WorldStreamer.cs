@@ -98,6 +98,15 @@ public sealed class WorldStreamer : IDisposable
     /// </remarks>
     public FluidEngine? Fluids { get; set; }
 
+    /// <summary>The signal pass, when anybody has handed one over. Null costs nothing.</summary>
+    public Blocks.SignalPass? Signals { get; set; }
+
+    /// <summary>
+    /// Sinks the signal pass switched — a door swung by a wire rather than a hand — for the
+    /// client to voice and then clear. Only ever touched on the main thread.
+    /// </summary>
+    public List<(int X, int Y, int Z, BlockId Now)> SignalSwitched { get; } = [];
+
     private readonly VoxelWorld _world;
 
     /// <summary>Positions whose terrain is complete and safe for a neighbour to sample.</summary>
@@ -244,7 +253,37 @@ public sealed class WorldStreamer : IDisposable
         Fluids?.Touch(wx, wy, wz, urgent: true);
 
         Rewire(wx, wy, wz);
+
+        // The wiring hears about it last, once the world holds whatever the edit and the rewire
+        // made of it. The pass writes through its own door below, so it cannot re-enter here.
+        Signals?.Update(_world, wx, wy, wz, WriteSignal, SignalSwitched);
     }
+
+    /// <summary>
+    /// How the signal pass reaches the world: block, light, mesh and fluid, but never back into
+    /// <see cref="EditBlock"/> — the pass settles its own component and re-entering would run it
+    /// once per cell it writes.
+    /// </summary>
+    /// <remarks>
+    /// Through <see cref="VoxelWorld.SetBlock"/> deliberately, unlike the fluid: a wire's strength
+    /// is keyed on its cell in the edit dictionary, so re-strengthing overwrites one entry rather
+    /// than growing the save, and a lever thrown IS a change worth an autosave.
+    /// </remarks>
+    public void WriteSignal(int x, int y, int z, BlockId id)
+    {
+        if (!TerrainGenerator.InWorld(y)) return;
+        if (!_world.TryGetChunk(ChunkPos.FromWorld(x, y, z), out _)) return;
+
+        _world.SetBlock(x, y, z, id);
+        _editQueue.Enqueue((x, y, z));
+        _lightWork.Release();
+        Fluids?.Touch(x, y, z, urgent: true);
+    }
+
+    /// <summary>Lets the gates think, at whatever cadence the caller owns.</summary>
+    /// <returns>How many gates changed state.</returns>
+    public int TickSignals() =>
+        Signals is { } pass ? pass.Tick(_world, WriteSignal, SignalSwitched) : 0;
 
     /// <summary>
     /// Advances the flow and books the light and mesh work every cell it moved needs.

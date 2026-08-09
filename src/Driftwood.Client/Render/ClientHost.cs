@@ -1484,6 +1484,12 @@ public sealed class ClientHost : IDisposable
         foreach (var (from, to) in StarterBlocks.Toggles(registry)) _toggle[from.Value] = to;
         foreach (var (lower, upper) in StarterBlocks.TallPairs(registry)) _tallUpper[lower.Value] = upper;
         _supports = new SupportTable(registry);
+
+        // Each pressed button's idle form, for the spring back — the press itself rides the
+        // toggle table, which deliberately has no return row for a momentary thing.
+        _buttonIdle = new ushort[registry.Count];
+        foreach (var form in StarterBlocks.AttachedForms("button"))
+            _buttonIdle[registry.ByName(form + "_pressed").Id.Value] = registry.ByName(form).Id.Value;
         _startup.Mark("items and recipes");
 
         // ⛳ Here, and not a line earlier: the silhouette has to be cut from the picture that will
@@ -1522,7 +1528,13 @@ public sealed class ClientHost : IDisposable
             // streamer contributes is the two moments the flow cannot see for itself — a chunk
             // arriving, which is where a stalled fall resumes, and a block being edited.
             Fluids = new FluidEngine(registry),
+
+            // And what makes a lever mean something. Every block edit runs the wiring pass; the
+            // gates think on their own tick below, at a rate that is a game decision too.
+            Signals = new SignalPass(registry),
         };
+
+        _signalTable = _streamer.Signals!.Table;
 
         var reach = viewRadius * Chunk.Size;
         _fogEnd = MathF.Min(reach * 0.90f, 700f);
@@ -1920,6 +1932,121 @@ public sealed class ClientHost : IDisposable
 
     /// <summary>Reused between ticks, so a settling river allocates nothing.</summary>
     private readonly List<(int X, int Y, int Z)> _fluidMoved = [];
+
+    private SignalTable _signalTable = null!;
+    private float _signalClock;
+
+    /// <summary>A plain accumulating clock for the button springs. Never wraps in a session.</summary>
+    private double _signalNow;
+
+    /// <summary>Pressed buttons and when each springs back.</summary>
+    private readonly List<(int X, int Y, int Z, double When)> _buttonReleases = [];
+
+    /// <summary>Plates something is standing on, re-checked every signal tick.</summary>
+    private readonly HashSet<(int X, int Y, int Z)> _platesDown = [];
+
+    private readonly HashSet<(int X, int Y, int Z)> _platesNow = [];
+
+    /// <summary>
+    /// The signal tick: gates think, buttons spring back, and plates follow the feet on them.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ Ten a second, and gates ONLY here — an inverter feeding itself is a contradiction as
+    /// an equation and a clock as a machine, and the tick is what makes it the second one. The
+    /// wire pass itself already ran inside whatever edit caused it.</para>
+    /// <para>⚠ The plate scan asks where bodies ARE rather than keeping a list of plates, so a
+    /// world loaded with somebody saved standing on one works itself out: the body is still there,
+    /// the scan finds it, and stepping off releases it.</para>
+    /// </remarks>
+    private void StepSignals(double now, float dt)
+    {
+        if (!_walking || !_spawned) return;
+
+        _signalClock += dt;
+        if (_signalClock < 0.1f) return;
+        _signalClock = MathF.Min(_signalClock - 0.1f, 0.1f);
+
+        _streamer.TickSignals();
+
+        // Buttons spring back — unless what is there stopped being a pressed button meanwhile.
+        for (var i = _buttonReleases.Count - 1; i >= 0; i--)
+        {
+            var (x, y, z, when) = _buttonReleases[i];
+            if (now < when) continue;
+
+            _buttonReleases.RemoveAt(i);
+
+            // Mined, or replaced, since it was pressed: nothing to spring back.
+            var id = _streamer.World.GetBlock(x, y, z);
+            if (!_signalTable.IsPressedButton(id.Value)) continue;
+
+            _streamer.EditBlock(x, y, z, new BlockId(_buttonIdle[id.Value]));
+            PlaySound(_registry[id], SoundEvent.Place, new Vector3(x + 0.5f, y + 0.5f, z + 0.5f), 0.5f);
+        }
+
+        // Plates: the cells feet stand in, the player's and every creature's.
+        _platesNow.Clear();
+        NoteFoot(_player.Position);
+        if (_herd is { } herd)
+            foreach (var creature in herd.All)
+                NoteFoot(creature.Position);
+
+        foreach (var cell in _platesNow)
+        {
+            if (_platesDown.Contains(cell)) continue;
+
+            var id = _streamer.World.GetBlock(cell.X, cell.Y, cell.Z).Value;
+            if (_registry[id].Name != "pressure_plate") continue;
+
+            _streamer.EditBlock(cell.X, cell.Y, cell.Z, _registry.ByName("pressure_plate_on").Id);
+            PlaySound(
+                _registry[id], SoundEvent.Place,
+                new Vector3(cell.X + 0.5f, cell.Y + 0.5f, cell.Z + 0.5f), 0.5f);
+        }
+
+        _platesDown.RemoveWhere(cell =>
+        {
+            if (_platesNow.Contains(cell)) return false;
+
+            var id = _streamer.World.GetBlock(cell.X, cell.Y, cell.Z).Value;
+            if (_registry[id].Name == "pressure_plate_on")
+                _streamer.EditBlock(cell.X, cell.Y, cell.Z, _registry.ByName("pressure_plate").Id);
+            return true;
+        });
+
+        foreach (var cell in _platesNow)
+            if (_registry[_streamer.World.GetBlock(cell.X, cell.Y, cell.Z)].Name == "pressure_plate_on")
+                _platesDown.Add(cell);
+
+        // What the wiring switched on its own — a door swung by a wire — gets its voice here.
+        foreach (var (x, y, z, id) in _streamer.SignalSwitched)
+        {
+            var swung = _registry[_waterlogging.DryOf(id)].Name;
+            var at = new Vector3(x + 0.5f, y + 0.5f, z + 0.5f);
+
+            if (swung.Contains("door", StringComparison.Ordinal))
+                _audio?.Play(
+                    Pick(swung.EndsWith("_open", StringComparison.Ordinal)
+                        ? ActionSounds.DoorOpen
+                        : ActionSounds.DoorClose),
+                    at, 0.8f, Wobble());
+            else
+                PlaySound(_registry[id], SoundEvent.Place, at, 0.6f);
+        }
+        _streamer.SignalSwitched.Clear();
+
+        void NoteFoot(Vector3 position)
+        {
+            var cell = (
+                X: (int)MathF.Floor(position.X),
+                Y: (int)MathF.Floor(position.Y),
+                Z: (int)MathF.Floor(position.Z));
+            _platesNow.Add(cell);
+        }
+    }
+
+    /// <summary>Each pressed button's idle form, for the spring back.</summary>
+    private ushort[] _buttonIdle = null!;
 
     private void StepAutosave(double dt)
     {
@@ -5641,6 +5768,8 @@ public sealed class ClientHost : IDisposable
         StepFootfall((float)dt);
         StepVitals((float)dt);
         StepFluid((float)dt);
+        _signalNow += dt;
+        StepSignals(_signalNow, (float)dt);
         StepLeaffall((float)dt);
         StepFurnaces((float)dt);
         StepCreatures((float)dt);
@@ -6891,6 +7020,11 @@ public sealed class ClientHost : IDisposable
 
             case BlockUse.Toggle when _toggle.TryGetValue(struck.Id.Value, out var other):
                 _streamer.EditBlock(hit.X, hit.Y, hit.Z, other);
+
+                // A button is momentary: the press books its own spring back, and the signal tick
+                // is what honours it.
+                if (_signalTable.IsPressedButton(other.Value))
+                    _buttonReleases.Add((hit.X, hit.Y, hit.Z, _signalNow + 1.0));
 
                 // Both halves or neither. A door whose top stays shut is not a half-open door, and
                 // whichever half was struck has to open the whole thing — which is why the block

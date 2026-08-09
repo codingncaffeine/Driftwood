@@ -30,6 +30,16 @@ public enum PlacementKind
     /// <summary>Four forms: one per cardinal, turned so its face meets the player.</summary>
     Facing,
 
+    /// <summary>
+    /// Four forms: one per cardinal, pointed the way the player is looking.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="Facing"/> turned round, for the things with a direction of travel rather than a
+    /// front to stand at: a gate's output runs away from whoever places it, so a chain of them laid
+    /// walking forward reads in the order it was built.
+    /// </remarks>
+    Pointing,
+
     /// <summary>One form, and only on top of something.</summary>
     Standing,
 
@@ -154,6 +164,10 @@ public sealed class Placeable
                 // The face turns back toward whoever put it down. A furnace you have to walk round
                 // to use is a furnace placed by a rule written from the block's point of view.
                 id = Variants[Array.IndexOf(Facings, Cardinal(-forward))];
+                return true;
+
+            case PlacementKind.Pointing:
+                id = Variants[Array.IndexOf(Facings, Cardinal(forward))];
                 return true;
 
             case PlacementKind.Standing:

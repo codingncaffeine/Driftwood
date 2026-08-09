@@ -352,6 +352,10 @@ public static class WorldAudit
         Check("a block can stand in the sea and keep it", wetFaults.Count == 0,
             wetFaults.Count == 0 ? wetDetail : string.Join("; ", wetFaults));
 
+        var signalFaults = SignalFaults(registry, ids, out var signalDetail);
+        Check("a lever means something at the far end of a wire", signalFaults.Count == 0,
+            signalFaults.Count == 0 ? signalDetail : string.Join("; ", signalFaults));
+
         var spawnFaults = SpawnBandFaults(out var spawnDetail);
         Check("where a thing lives takes two questions", spawnFaults.Count == 0,
             spawnFaults.Count == 0 ? spawnDetail : string.Join("; ", spawnFaults));
@@ -4769,6 +4773,16 @@ public static class WorldAudit
         {
             toggles++;
 
+            // ⳸ A pressed button is one-way BY DESIGN — momentary means the spring back is a
+            // timer, never a click, and a return row here would let a player pin it. So the
+            // asymmetric assert: the pressed form must have NO toggle of its own.
+            if (registry[to].Name.EndsWith("_pressed", StringComparison.Ordinal))
+            {
+                if (pairs.ContainsKey(to.Value))
+                    faults.Add($"{registry[to].Name} can be clicked back off, so the button is not momentary");
+                continue;
+            }
+
             if (!pairs.TryGetValue(to.Value, out var back) || back.Value != from)
                 faults.Add($"{registry[from].Name} toggles to {registry[to].Name} and not back again");
 
@@ -6379,6 +6393,7 @@ public static class WorldAudit
     private static List<string> PlacementSelfTest(BlockRegistry registry, ItemRegistry items)
     {
         var faults = new List<string>();
+        var signals = new SignalTable(registry);
 
         (Vector3 Look, int Facing)[] looks =
         [
@@ -6532,6 +6547,18 @@ public static class WorldAudit
                     var front = FrontFace(model);
                     if (front != Opposite(wantFacing))
                         faults.Add($"{where}: face ended up pointing {front}, wanted {Opposite(wantFacing)}");
+                    continue;
+                }
+
+                // A pointing block runs WITH the look. Its direction is not in its geometry — a
+                // gate is a near-cube whose arrow is a texture rotation — so the fact asserted is
+                // the one the signal pass actually reads: which way the resolved id says its
+                // output leaves. Wrong variant order in the item table is exactly what this trips.
+                if (entry.Kind == PlacementKind.Pointing)
+                {
+                    var says = signals.GateFacing(id.Value);
+                    if (says != wantFacing)
+                        faults.Add($"{where}: points face {says}, wanted {wantFacing}");
                     continue;
                 }
 
@@ -6821,11 +6848,16 @@ public static class WorldAudit
         // its ground to a fixed one on the way past, as every run before it has.
         (StarterBlocks.LayerMossyRubble, "mossy_rubble"),
 
-        // The moving pin: the LAST layer, by name. It has now caught FOUR appends in the act —
+        // And seagrass by its own the same session, the signal kit landing after it.
+        (StarterBlocks.LayerSeagrass, "seagrass"),
+        (StarterBlocks.LayerTidewireOff, "tidewire_off"),
+        (StarterBlocks.LayerTidelampLit, "tidelamp_lit"),
+
+        // The moving pin: the LAST layer, by name. It has now caught FIVE appends in the act —
         // fifteen crop rows landing after "the last layer is bonemeal", the composter's four
-        // landing after black glass, the berry bush's three after compost-ready, and seagrass
-        // after mossy rubble — which is exactly what it is for. Keep it pointed at the true end.
-        ((ushort)(StarterBlocks.LayerCount - 1), "seagrass"),
+        // landing after black glass, the berry bush's three after compost-ready, seagrass after
+        // mossy rubble, and the signal kit after seagrass. Keep it pointed at the true end.
+        ((ushort)(StarterBlocks.LayerCount - 1), "gate_latch_top_on"),
     ];
 
     /// <summary>
@@ -9019,6 +9051,196 @@ public static class WorldAudit
     }
 
     /// <summary>A bare world of empty chunks, with a stone floor laid across it.</summary>
+    /// <summary>
+    /// Everything the signal kit claims (#27), each claim with the arm that stops it passing broken.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛔ The card's own falsifying case leads: a run of wire from a lever, measured at every
+    /// cell for the strength it should carry, then BROKEN in the middle — the far half must die
+    /// while the near half holds, or the pass only ever powers things and never un-powers them.
+    /// </para>
+    /// <para>The gates are truth tables plus the latch's three-step memory, each driven through the
+    /// pass and the tick exactly as the game drives them. What no table here can see: whether the
+    /// symbols read at a glance and the lever's lean reads across a room — eyes' work.</para>
+    /// </remarks>
+    private static List<string> SignalFaults(
+        BlockRegistry registry, StarterBlocks.Ids ids, out string detail)
+    {
+        var faults = new List<string>();
+        var table = new SignalTable(registry);
+        var switched = new List<(int X, int Y, int Z, BlockId Now)>();
+
+        // 66 as a literal: 32 door forms, 16 trapdoors, their 16 wet twins, and the lamp pair.
+        var (wires, sources, gates, sinks) = table.Census();
+        if (wires != 16 || sources != 11 || gates != 20 || sinks != 66)
+            faults.Add($"the table reads {wires} wire strengths, {sources} live sources, {gates} "
+                     + $"lit gates and {sinks} sinks — wanted 16, 11, 20, 66");
+
+        var leverOff = registry.ByName("lever_floor").Id;
+        var leverOn = registry.ByName("lever_floor_on").Id;
+        var bare = registry.ByName("tidewire_0").Id;
+
+        VoxelWorld Box() => FluidBox(registry, ids, 0, 0, 0);
+
+        // ── A lever feeds a run, cell for cell, and a break kills only the far half ──────────────
+        {
+            var world = Box();
+            var pass = new SignalPass(table);
+            void W(int x, int y, int z, BlockId id) => world.SetBlock(x, y, z, id);
+
+            for (var x = 1; x <= 16; x++) Put(world, x, 1, 0, bare);
+            Put(world, 0, 1, 0, leverOn);
+            pass.Update(world, 0, 1, 0, W);
+
+            // 15 at the first cell, one lost per step, dead past the fifteenth.
+            for (var x = 1; x <= 16; x++)
+            {
+                var want = Math.Max(0, 16 - x);
+                var got = table.WireStrength(At(world, x, 1, 0).Value);
+                if (got != want)
+                    faults.Add($"cell {x} of a lever's run carries {got}, wanted {want}");
+            }
+
+            // Break the middle: the near half holds, the far half dies. BOTH halves asserted, or
+            // this only measures the run that was already there.
+            world.SetBlock(8, 1, 0, BlockId.Air);
+            pass.Update(world, 8, 1, 0, W);
+
+            if (table.WireStrength(At(world, 4, 1, 0).Value) != 12)
+                faults.Add("breaking the middle of a run disturbed the half still connected");
+            if (table.WireStrength(At(world, 12, 1, 0).Value) != 0)
+                faults.Add("the far side of a broken run still carries power");
+
+            // And the lever off: the whole line dies.
+            world.SetBlock(0, 1, 0, leverOff);
+            pass.Update(world, 0, 1, 0, W);
+            if (table.WireStrength(At(world, 4, 1, 0).Value) != 0)
+                faults.Add("a lever turned off left its wire live");
+        }
+
+        // ── The lamp follows the level, and a door swings with it ────────────────────────────────
+        {
+            var world = Box();
+            var pass = new SignalPass(table);
+            void W(int x, int y, int z, BlockId id) => world.SetBlock(x, y, z, id);
+
+            Put(world, 0, 1, 0, leverOn);
+            Put(world, 1, 1, 0, bare);
+            Put(world, 2, 1, 0, registry.ByName("tidelamp").Id);
+            pass.Update(world, 0, 1, 0, W, switched);
+
+            if (registry[At(world, 2, 1, 0)].Name != "tidelamp_lit")
+                faults.Add("a fed tidelamp stayed dark");
+            if (switched.Count == 0)
+                faults.Add("the pass reported nothing switched, so a wired door would swing silently");
+
+            Put(world, 0, 1, 0, leverOff);
+            pass.Update(world, 0, 1, 0, W);
+            if (registry[At(world, 2, 1, 0)].Name != "tidelamp")
+                faults.Add("an unfed tidelamp stayed lit, so the pass powers and never un-powers");
+
+            // A door straight against a lever, no wire at all — and BOTH halves swing.
+            var door = Box();
+            Put(door, 0, 1, 0, registry.ByName("door_east_south_lower").Id);
+            Put(door, 0, 2, 0, registry.ByName("door_east_south_upper").Id);
+            Put(door, 1, 1, 0, leverOn);
+            pass.Update(door, 1, 1, 0, W2);
+            void W2(int x, int y, int z, BlockId id) => door.SetBlock(x, y, z, id);
+
+            if (!registry[At(door, 0, 1, 0)].Name.Contains("_open")
+                || !registry[At(door, 0, 2, 0)].Name.Contains("_open"))
+                faults.Add("a powered door did not open both halves");
+        }
+
+        // ── The gates: truth tables through the tick, and the latch remembers ────────────────────
+        {
+            foreach (var (kind, a, b, want) in (ValueTuple<string, bool, bool, bool>[])
+            [
+                ("and", false, false, false), ("and", true, false, false), ("and", true, true, true),
+                ("or", false, false, false), ("or", true, false, true), ("or", true, true, true),
+                ("xor", false, false, false), ("xor", true, false, true), ("xor", true, true, false),
+            ])
+            {
+                var world = Box();
+                var pass = new SignalPass(table);
+                void W(int x, int y, int z, BlockId id) => world.SetBlock(x, y, z, id);
+
+                // Gate pointing east at the origin cell; its arms are the two z sides.
+                Put(world, 5, 1, 5, registry.ByName($"gate_{kind}_east").Id);
+                if (a) Put(world, 5, 1, 6, leverOn);
+                if (b) Put(world, 5, 1, 4, leverOn);
+                Put(world, 6, 1, 5, bare);
+
+                pass.Update(world, 5, 1, 6, W);
+                pass.Update(world, 5, 1, 4, W);
+                pass.Tick(world, W);
+
+                var lit = table.GateOn(At(world, 5, 1, 5).Value);
+                if (lit != want)
+                    faults.Add($"{kind}({(a ? 1 : 0)},{(b ? 1 : 0)}) answered {(lit ? 1 : 0)}");
+
+                // And the answer reaches the wire in front, at full strength — a gate re-emits the
+                // way a lever does, which is exactly what makes two inverters a repeater.
+                var outStrength = table.WireStrength(At(world, 6, 1, 5).Value);
+                if (want && outStrength != SignalTable.Max)
+                    faults.Add($"{kind}'s out wire carries {outStrength}, wanted {SignalTable.Max}");
+                if (!want && outStrength != 0)
+                    faults.Add($"{kind}'s out wire carries {outStrength} while the gate is dark");
+            }
+
+            // NOT: quiet in, out; loud in, quiet out.
+            {
+                var world = Box();
+                var pass = new SignalPass(table);
+                void W(int x, int y, int z, BlockId id) => world.SetBlock(x, y, z, id);
+
+                Put(world, 5, 1, 5, registry.ByName("gate_not_east").Id);
+                pass.Tick(world, W);   // nothing dirty yet: nobody has edited near it
+
+                pass.Update(world, 5, 1, 5, W);
+                pass.Tick(world, W);
+                if (!table.GateOn(At(world, 5, 1, 5).Value))
+                    faults.Add("NOT with a quiet back stayed dark");
+
+                Put(world, 4, 1, 5, leverOn);
+                pass.Update(world, 4, 1, 5, W);
+                pass.Tick(world, W);
+                if (table.GateOn(At(world, 5, 1, 5).Value))
+                    faults.Add("NOT with a loud back stayed lit");
+            }
+
+            // The latch: set, hold through the set arm falling, reset.
+            {
+                var world = Box();
+                var pass = new SignalPass(table);
+                void W(int x, int y, int z, BlockId id) => world.SetBlock(x, y, z, id);
+
+                Put(world, 5, 1, 5, registry.ByName("gate_latch_east").Id);
+
+                Put(world, 5, 1, 6, leverOn);            // set
+                pass.Update(world, 5, 1, 6, W);
+                pass.Tick(world, W);
+                if (!table.GateOn(At(world, 5, 1, 5).Value)) faults.Add("the latch did not set");
+
+                world.SetBlock(5, 1, 6, BlockId.Air);    // the set arm falls away
+                pass.Update(world, 5, 1, 6, W);
+                pass.Tick(world, W);
+                if (!table.GateOn(At(world, 5, 1, 5).Value))
+                    faults.Add("the latch forgot the moment its set arm fell, which is no memory at all");
+
+                Put(world, 5, 1, 4, leverOn);            // reset
+                pass.Update(world, 5, 1, 4, W);
+                pass.Tick(world, W);
+                if (table.GateOn(At(world, 5, 1, 5).Value)) faults.Add("the latch did not reset");
+            }
+        }
+
+        detail = "a lever's run measured at all 16 cells, broken in the middle and killed at the "
+               + "switch; the lamp and a wireless door follow the level both ways; nine truth-table "
+               + "rows, the inverter both ways, and the latch set, held and reset through the tick";
+        return faults;
+    }
+
     /// <summary>
     /// Everything waterlogging claims (#96), each claim with the arm that stops it passing broken.
     /// </summary>

@@ -131,6 +131,84 @@ public static class StarterItems
 
         // Sheared off the sea floor, replanted in any water source over solid ground (#96).
         Block(items, blocks, "seagrass", "seagrass", StarterBlocks.LayerSeagrass);
+
+        // ── The signal kit (#27) ──────────────────────────────────────────────────────────────
+        // Wire lies on the floor; the lever and button stand or hang off any face the torch can;
+        // the plate is floor-only; the lamp is a plain block; and a gate points the way it is
+        // placed, so a chain laid walking forward reads in the order it was built.
+        items.Register(new ItemType
+        {
+            Name = "tidewire", Label = "tidewire", IconLayer = StarterBlocks.LayerTidewireHigh,
+            DrawsAsBlock = true,
+            Places = new Placeable
+            {
+                Label = "tidewire",
+                Kind = PlacementKind.Standing,
+                Variants = [blocks.ByName("tidewire_0").Id],
+            },
+        });
+
+        items.Register(new ItemType
+        {
+            Name = "lever", Label = "lever", IconLayer = StarterBlocks.LayerRubble,
+            DrawsAsBlock = true,
+            Places = new Placeable
+            {
+                Label = "lever",
+                Kind = PlacementKind.Attached,
+                Variants = [.. StarterBlocks.AttachedForms("lever").Select(f => blocks.ByName(f).Id)],
+            },
+        });
+
+        items.Register(new ItemType
+        {
+            Name = "button", Label = "button", IconLayer = StarterBlocks.LayerStone,
+            DrawsAsBlock = true,
+            Places = new Placeable
+            {
+                Label = "button",
+                Kind = PlacementKind.Attached,
+                Variants = [.. StarterBlocks.AttachedForms("button").Select(f => blocks.ByName(f).Id)],
+            },
+        });
+
+        items.Register(new ItemType
+        {
+            Name = "pressure_plate", Label = "pressure plate", IconLayer = StarterBlocks.LayerSmoothStone,
+            DrawsAsBlock = true,
+            Places = new Placeable
+            {
+                Label = "pressure plate",
+                Kind = PlacementKind.Standing,
+                Variants = [blocks.ByName("pressure_plate").Id],
+            },
+        });
+
+        Block(items, blocks, "tidelamp", "tidelamp", StarterBlocks.LayerTidelampLit);
+
+        for (var kind = 0; kind < StarterBlocks.GateKinds.Length; kind++)
+        {
+            var stem = StarterBlocks.GateKinds[kind];
+            items.Register(new ItemType
+            {
+                Name = $"gate_{stem}",
+                Label = $"{stem} gate",
+                IconLayer = StarterBlocks.GateLayer(kind, on: false),
+                DrawsAsBlock = true,
+                Places = new Placeable
+                {
+                    Label = $"{stem} gate",
+                    Kind = PlacementKind.Pointing,
+                    Variants =
+                    [
+                        blocks.ByName($"gate_{stem}_east").Id,
+                        blocks.ByName($"gate_{stem}_west").Id,
+                        blocks.ByName($"gate_{stem}_south").Id,
+                        blocks.ByName($"gate_{stem}_north").Id,
+                    ],
+                },
+            });
+        }
         Block(items, blocks, "moss", "moss", StarterBlocks.LayerMoss);
         Block(items, blocks, "mossy_rubble", "mossy rubble", StarterBlocks.LayerMossyRubble);
         Block(items, blocks, "deepstone", "deepstone", StarterBlocks.LayerDeepstone);

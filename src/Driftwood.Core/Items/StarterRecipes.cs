@@ -276,6 +276,27 @@ public static class StarterRecipes
         Shaped("door", "door", 1, ["PP", "PP", "PP"], mirrored: false);
         Shaped("trapdoor", "trapdoor", 2, ["PPP", "PPP"], mirrored: false);
 
+        // ── The signal kit (#27), and the first thing copper is FOR. ─────────────────────────────
+        // Wire is drawn from the ingot; the hands are a stick on stone and a worked stone; the
+        // tidelamp is the stormglass lamp taught to listen. Each gate is its two inputs over a
+        // stone base with its own heart between them: nothing for AND, copper for OR, copper
+        // between the inputs for XOR, one input alone for NOT, and iron — the thing that holds —
+        // for the latch that remembers.
+        LooseAt("tidewire", "tidewire", 4, CraftStation.Bench, "copper_ingot");
+        Shaped("lever", "lever", 1, ["S", "R"], station: CraftStation.Bench);
+
+        // The button is one stone worked into a form, which is a stonecutter's sentence — and a
+        // one-stone bench recipe would collide with every worked stone the cutter already offers.
+        Cut("button", "stone", "button");
+        Shaped("pressure plate", "pressure_plate", 1, ["OO"], station: CraftStation.Bench);
+        LooseAt("tidelamp", "tidelamp", 1, CraftStation.Bench,
+            "stormglass_lamp", "tidewire", "tidewire");
+        Shaped("and gate", "gate_and", 1, ["D D", "OOO"], station: CraftStation.Bench);
+        Shaped("or gate", "gate_or", 1, ["DUD", "OOO"], station: CraftStation.Bench);
+        Shaped("xor gate", "gate_xor", 1, ["D D", "OUO"], station: CraftStation.Bench);
+        Shaped("not gate", "gate_not", 1, [" D ", "OOO"], station: CraftStation.Bench);
+        Shaped("latch gate", "gate_latch", 1, ["D D", "OIO"], station: CraftStation.Bench);
+
         // ⚠ The first thing azurite has ever been for. Six ores come up out of the ground and this
         // was the one with no recipe anywhere in the tree — a mineral a player mines four of and
         // can do nothing whatever with, which is a hole rather than a decision. Set round a
@@ -581,6 +602,9 @@ public static class StarterRecipes
         'A' => "azurite",
         'Z' => "stormglass",
         'N' => "iron_block",
+        'D' => "tidewire",
+        'U' => "copper_ingot",
+        'O' => "stone",
         _ => throw new InvalidOperationException($"recipe '{recipe}' uses unknown key '{key}'"),
     };
 }

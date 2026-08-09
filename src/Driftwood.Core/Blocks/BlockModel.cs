@@ -498,6 +498,141 @@ public sealed class BlockModel
         new([Box(Vector3.Zero, new Vector3(16f, height, 16f), top, side, bottom)]);
 
     /// <summary>
+    /// A lever: a plate, and a stick that leans one way or the other — which is the whole reading.
+    /// </summary>
+    /// <param name="facing">The way it leans out of a wall, or -1 for one standing on the floor.</param>
+    /// <remarks>
+    /// The state is the LEAN, not a repaint: an off lever tips one way and a thrown one the other,
+    /// which reads across a room the way a tile swap never would. The wall forms lean the stick up
+    /// or down against the wall instead, on the torch's own one-rotation-per-facing arithmetic.
+    /// </remarks>
+    public static BlockModel Lever(ushort baseLayer, ushort stickLayer, int facing, bool on)
+    {
+        if (facing < 0)
+        {
+            return new BlockModel(
+            [
+                Box(new Vector3(5f, 0f, 4f), new Vector3(11f, 2f, 12f), baseLayer, baseLayer, baseLayer),
+                RotatedBox(
+                    new Vector3(7f, 2f, 7f), new Vector3(9f, 10f, 9f), stickLayer,
+                    axis: 0, new Vector3(8f, 2f, 8f), on ? 35f : -35f),
+            ]);
+        }
+
+        // Against a wall: the plate stands on it, and the stick tips up (on) or down (off) in the
+        // plane the wall allows — about z for the two leaning along x, about x for the other two.
+        // The sign that reads as "up" flips with which side of the cell the wall is on.
+        var (plateFrom, plateTo, stickFrom, stickTo, pivot, axis) = facing switch
+        {
+            Faces.PosX => (new Vector3(0f, 4f, 5f), new Vector3(2f, 12f, 11f),
+                new Vector3(2f, 7f, 7f), new Vector3(10f, 9f, 9f), new Vector3(2f, 8f, 8f), 2),
+            Faces.NegX => (new Vector3(14f, 4f, 5f), new Vector3(16f, 12f, 11f),
+                new Vector3(6f, 7f, 7f), new Vector3(14f, 9f, 9f), new Vector3(14f, 8f, 8f), 2),
+            Faces.PosZ => (new Vector3(5f, 4f, 0f), new Vector3(11f, 12f, 2f),
+                new Vector3(7f, 7f, 2f), new Vector3(9f, 9f, 10f), new Vector3(8f, 8f, 2f), 0),
+            _ => (new Vector3(5f, 4f, 14f), new Vector3(11f, 12f, 16f),
+                new Vector3(7f, 7f, 6f), new Vector3(9f, 9f, 14f), new Vector3(8f, 8f, 14f), 0),
+        };
+
+        var outward = facing is Faces.PosX or Faces.PosZ ? 1f : -1f;
+
+        return new BlockModel(
+        [
+            Box(plateFrom, plateTo, baseLayer, baseLayer, baseLayer),
+            RotatedBox(stickFrom, stickTo, stickLayer, axis, pivot, (on ? 30f : -30f) * outward),
+        ]);
+    }
+
+    /// <summary>A box turned about one axis, for the parts whose state is a lean.</summary>
+    private static ModelElement RotatedBox(
+        Vector3 from, Vector3 to, ushort layer, int axis, Vector3 pivot, float angle)
+    {
+        var faces = new ModelFace?[Faces.Count];
+        for (var face = 0; face < Faces.Count; face++)
+            faces[face] = new ModelFace { Layer = layer };
+
+        return new ModelElement
+        {
+            From = from,
+            To = to,
+            Faces = faces,
+            RotationAxis = axis,
+            RotationOrigin = pivot,
+            RotationAngle = angle,
+        };
+    }
+
+    /// <summary>A button: a small block proud of its surface, and nearly flush while pressed.</summary>
+    /// <param name="facing">The wall face it stands out of, or -1 for one on the floor.</param>
+    public static BlockModel Button(ushort layer, int facing, bool pressed)
+    {
+        var depth = pressed ? 1f : 2f;
+
+        var (from, to) = facing switch
+        {
+            Faces.PosX => (new Vector3(0f, 6f, 5f), new Vector3(depth, 10f, 11f)),
+            Faces.NegX => (new Vector3(16f - depth, 6f, 5f), new Vector3(16f, 10f, 11f)),
+            Faces.PosZ => (new Vector3(5f, 6f, 0f), new Vector3(11f, 10f, depth)),
+            Faces.NegZ => (new Vector3(5f, 6f, 16f - depth), new Vector3(11f, 10f, 16f)),
+            _ => (new Vector3(5f, 0f, 5f), new Vector3(11f, depth, 11f)),
+        };
+
+        return new BlockModel([Box(from, to, layer, layer, layer)]);
+    }
+
+    /// <summary>
+    /// A logic gate: a slab-topped block one unit shy of full, its working face on top.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>One unit short on purpose, and it is not a style choice.</b> A full cube goes down the
+    /// greedy path, where texture coordinates are derived from world position and every facing
+    /// wears its tile the same way up — an arrow on top would lie for three facings out of four.
+    /// One unit shy keeps it on the model path, where the top face carries its own rotation, and
+    /// the shortfall reads as a working surface the way an anvil's silhouette reads as an anvil.
+    /// </remarks>
+    public static BlockModel Gate(ushort top, ushort side, int facing)
+    {
+        var faces = new ModelFace?[Blocks.Faces.Count];
+        for (var face = 0; face < Blocks.Faces.Count; face++)
+        {
+            if (face == Blocks.Faces.PosY)
+            {
+                faces[face] = new ModelFace
+                {
+                    Layer = top,
+
+                    // The tile is drawn pointing +z; the rotation turns it to the output.
+                    Rotation = facing switch
+                    {
+                        Blocks.Faces.PosZ => 0,
+                        Blocks.Faces.NegX => 90,
+                        Blocks.Faces.NegZ => 180,
+                        _ => 270,
+                    },
+                };
+                continue;
+            }
+
+            // The bottom and the four sides run to the cell's own bounds, so each is culled by
+            // its neighbour; the top sits a unit inside and nothing above can hide it.
+            faces[face] = new ModelFace
+            {
+                Layer = side,
+                CullFace = face,
+            };
+        }
+
+        var element = new ModelElement
+        {
+            From = Vector3.Zero,
+            To = new Vector3(16f, 15f, 16f),
+            Faces = faces,
+        };
+
+        return new BlockModel([element]);
+    }
+
+    /// <summary>
     /// An anvil: a broad foot, a narrow waist, and a wide face to strike on.
     /// </summary>
     /// <param name="alongX">True when the face runs east-west rather than north-south.</param>

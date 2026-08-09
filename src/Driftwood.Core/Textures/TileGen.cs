@@ -2535,6 +2535,132 @@ public static class TileGen
         return t;
     }
 
+    /// <summary>
+    /// Tidewire: a cross of channel running cell to cell, its glow saying how much it carries.
+    /// </summary>
+    /// <remarks>
+    /// Full-width arms on purpose — the block connects on all four sides whatever its neighbours
+    /// are (the first slice's fixed cross), so the tile must reach every edge or adjacent runs
+    /// show seams. Four brightnesses stand in for sixteen strengths; the audit reads the real
+    /// number off the id, and eyes only need dim-versus-bright.
+    /// </remarks>
+    public static byte[] Tidewire(int seed, int tier)
+    {
+        var t = new byte[BytesPerTile];
+
+        // Dark channel stone under the filament, then the filament's own colour by tier.
+        var (fr, fg, fb) = tier switch
+        {
+            0 => (52, 66, 70),
+            1 => (36, 128, 138),
+            2 => (52, 184, 196),
+            _ => (88, 238, 248),
+        };
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var alongX = y is >= 6 and <= 9;
+            var alongZ = x is >= 6 and <= 9;
+            if (!alongX && !alongZ) continue;
+
+            var grain = (int)((Noise(x, y, seed) * 2f - 1f) * 10f);
+
+            // The rim of the channel is bed; the middle two texels are the filament.
+            var core = (alongX && y is 7 or 8) || (alongZ && x is 7 or 8);
+            if (core)
+                Put(t, x, y, Clamp(fr + grain), Clamp(fg + grain), Clamp(fb + grain), 255);
+            else
+                Put(t, x, y, Clamp(44 + grain), Clamp(50 + grain), Clamp(54 + grain), 255);
+        }
+
+        return t;
+    }
+
+    /// <summary>
+    /// A gate's working face: a slate top, an arrow out the output side, and the kind's own mark.
+    /// </summary>
+    /// <remarks>
+    /// The marks are geometry rather than letters — a triangle for AND, a chevron for OR, a chevron
+    /// barred for XOR, the inverter's circle for NOT, a square for the latch — because five glyphs
+    /// at sixteen pixels is a font, and shapes read at a glance from above. The arrow points +z on
+    /// the tile; the model's face rotation turns it with the block. Lit teal when the gate is on.
+    /// </remarks>
+    public static byte[] GateTop(int seed, int kind, bool on)
+    {
+        var t = new byte[BytesPerTile];
+
+        var (mr, mg, mb) = on ? (88, 230, 240) : (96, 104, 110);
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var grain = (int)((Noise(x, y, seed + kind) * 2f - 1f) * 8f);
+
+            // The slate face, rimmed a shade darker so a field of gates still reads as cells.
+            var rim = x is 0 or 15 || y is 0 or 15;
+            Put(t, x, y,
+                Clamp((rim ? 58 : 74) + grain),
+                Clamp((rim ? 60 : 78) + grain),
+                Clamp((rim ? 64 : 84) + grain), 255);
+        }
+
+        // The output arrow at the +z edge: a three-row wedge pointing the way out.
+        for (var row = 0; row < 3; row++)
+        for (var x = 7 - row; x <= 8 + row; x++)
+            Put(t, x, 13 + row, Clamp(mr - 20), Clamp(mg - 20), Clamp(mb - 20), 255);
+
+        void Mark(int x, int y) => Put(t, x, y, (byte)mr, (byte)mg, (byte)mb, 255);
+
+        switch (kind)
+        {
+            case 0:   // AND — a solid triangle: everything gathered to one point.
+                for (var row = 0; row < 4; row++)
+                for (var x = 7 - row; x <= 8 + row; x++)
+                    Mark(x, 4 + row);
+                break;
+
+            case 1:   // OR — an open chevron: either arm arrives.
+                for (var step = 0; step < 4; step++)
+                {
+                    Mark(4 + step, 8 - step);
+                    Mark(5 + step, 8 - step);
+                    Mark(11 - step, 8 - step);
+                    Mark(10 - step, 8 - step);
+                }
+                break;
+
+            case 2:   // XOR — the chevron with the bar under it that says "but not both".
+                for (var step = 0; step < 4; step++)
+                {
+                    Mark(4 + step, 7 - step);
+                    Mark(11 - step, 7 - step);
+                }
+                for (var x = 4; x <= 11; x++) Mark(x, 9);
+                break;
+
+            case 3:   // NOT — the inverter's own circle.
+                for (var y = 3; y <= 9; y++)
+                for (var x = 5; x <= 10; x++)
+                {
+                    var dx = x - 7.5f;
+                    var dy = y - 6f;
+                    var d = dx * dx / 6.5f + dy * dy / 8.5f;
+                    if (d is > 0.45f and <= 1f) Mark(x, y);
+                }
+                break;
+
+            default:  // LATCH — a held square: the one that remembers.
+                for (var y = 3; y <= 9; y++)
+                for (var x = 5; x <= 10; x++)
+                    if (x is 5 or 10 || y is 3 or 9)
+                        Mark(x, y);
+                break;
+        }
+
+        return t;
+    }
+
     /// <summary>A sheet of flame, transparent around it — what stands in a campfire.</summary>
     /// <remarks>
     /// Tapering as it rises and eaten into at the edges, so the two crossed planes it is drawn on

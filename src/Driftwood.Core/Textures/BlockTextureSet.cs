@@ -478,6 +478,27 @@ public static class BlockTextureSet
         // ⛳ #96, waterlogging's first plant. Cutout like every crossed plant; modern packs ship
         // the file animated as a tall frame strip, and the importer's size probe takes frame 0.
         new("seagrass", "textures/block/seagrass.png", true),
+
+        // ⛳ #27, the signal kit. The wire and the gates are coined — the genre's wire is a
+        // multi-part dust model no single cross can honestly wear, so those tiles stay ours; the
+        // lamp pair lands on the genre's own two files, off and on.
+        new("tidewire_off", "", true),
+        new("tidewire_low", "", true),
+        new("tidewire_mid", "", true),
+        new("tidewire_high", "", true),
+        new("tidelamp", "textures/block/redstone_lamp.png", false, "textures/blocks/redstoneLight.png"),
+        new("tidelamp_lit", "textures/block/redstone_lamp_on.png", false,
+            "textures/blocks/redstoneLight_lit.png"),
+        new("gate_and_top", "", false),
+        new("gate_and_top_on", "", false),
+        new("gate_or_top", "", false),
+        new("gate_or_top_on", "", false),
+        new("gate_xor_top", "", false),
+        new("gate_xor_top_on", "", false),
+        new("gate_not_top", "", false),
+        new("gate_not_top_on", "", false),
+        new("gate_latch_top", "", false),
+        new("gate_latch_top_on", "", false),
     ];
 
     /// <summary>
@@ -1451,6 +1472,22 @@ public static class BlockTextureSet
                 1367, TileGen.Cobble(1034, 126, 126, 130), 96, 134, 80, 11),
 
             StarterBlocks.LayerSeagrass => TileGen.Seagrass(1368),
+
+            StarterBlocks.LayerTidewireOff => TileGen.Tidewire(1370, 0),
+            StarterBlocks.LayerTidewireLow => TileGen.Tidewire(1370, 1),
+            StarterBlocks.LayerTidewireMid => TileGen.Tidewire(1370, 2),
+            StarterBlocks.LayerTidewireHigh => TileGen.Tidewire(1370, 3),
+
+            // The tidelamp on the stormglass lamp's own drawing: cold and dark, then cold and lit.
+            StarterBlocks.LayerTidelamp => TileGen.Lamp(1371, 46, 66, 70),
+            StarterBlocks.LayerTidelampLit => TileGen.Lamp(1371, 118, 226, 236),
+
+            _ when layer >= StarterBlocks.LayerGateFirst
+                   && layer < StarterBlocks.LayerGateFirst + 10 =>
+                TileGen.GateTop(
+                    1372,
+                    (layer - StarterBlocks.LayerGateFirst) / 2,
+                    ((layer - StarterBlocks.LayerGateFirst) & 1) == 1),
 
             _ => Wheat(layer) ?? Crop(layer) ?? CropIcon(layer) ?? StainedGlass(layer)
                  ?? MetalBlock(layer) ?? Wool(layer) ?? Meat(layer) ?? Dye(layer)

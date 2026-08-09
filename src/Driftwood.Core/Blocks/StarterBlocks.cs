@@ -586,7 +586,16 @@ public static class StarterBlocks
     public const ushort LayerMossyRubble = LayerCobweb + 15;
     public const ushort LayerSeagrass = LayerCobweb + 16;
 
-    public const int LayerCount = LayerSeagrass + 1;
+    // #27, the signal kit: four wire brightnesses, the lamp pair, and a symbol per gate and state.
+    public const ushort LayerTidewireOff = LayerCobweb + 17;
+    public const ushort LayerTidewireLow = LayerCobweb + 18;
+    public const ushort LayerTidewireMid = LayerCobweb + 19;
+    public const ushort LayerTidewireHigh = LayerCobweb + 20;
+    public const ushort LayerTidelamp = LayerCobweb + 21;
+    public const ushort LayerTidelampLit = LayerCobweb + 22;
+    public const ushort LayerGateFirst = LayerCobweb + 23;   // and, or, xor, not, latch; off then on
+
+    public const int LayerCount = LayerGateFirst + 10;
 
     /// <summary>One anvil's name, by how worn it is and which way it lies.</summary>
     /// <remarks>
@@ -1668,6 +1677,7 @@ public static class StarterBlocks
                     stage >= ComposterStages ? LayerCompostReady : LayerCompost, stage),
             });
 
+        RegisterSignals(registry);
         RegisterWaterlogged(registry);
 
         return new Ids(
@@ -1678,6 +1688,130 @@ public static class StarterBlocks
             rubble, glass, bricks, bench, furnace, furnaceLit, lava, wildCrops, berryBushRipe,
             mushroomBrown, mushroomRed, pumpkin, cobweb, ice, cactus, deadBush, glowcap, marshReed,
             moss, seagrass);
+    }
+
+    /// <summary>The five gate kinds, in the order their tiles sit from <see cref="LayerGateFirst"/>.</summary>
+    public static readonly string[] GateKinds = ["and", "or", "xor", "not", "latch"];
+
+    /// <summary>The top tile for one gate kind and state.</summary>
+    public static ushort GateLayer(int kind, bool on) =>
+        (ushort)(LayerGateFirst + kind * 2 + (on ? 1 : 0));
+
+    /// <summary>The five lever or button forms, floor first, in <see cref="Placeable.Facings"/> order.</summary>
+    public static string[] AttachedForms(string stem) =>
+        [$"{stem}_floor", $"{stem}_east", $"{stem}_west", $"{stem}_south", $"{stem}_north"];
+
+    /// <summary>
+    /// The signal kit (#27): tidewire, the hands that feed it, the lamp and doors that follow it,
+    /// and the five gates that think about it.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ <b>Wire strength is the id</b> — sixteen registered blocks, mapped onto four tiles so
+    /// the brightness reads without sixteen drawings. ⛳ <b>The lever's state is a lean, not a
+    /// repaint</b>: the stick tips the other way, which reads across a room. ⳸ <b>The tidelamp is
+    /// its own pair rather than a driven stormglass lamp</b>, because that lamp is always-on and
+    /// placed all over existing worlds; a pass that darkened the unpowered ones would put out every
+    /// light anybody has built.</para>
+    /// <para>The gates carry their symbol on a rotated top face, which is why their model is one
+    /// unit shy of a cube — the greedy path derives its texture coordinates from world position and
+    /// cannot turn an arrow with its block. Native gates are the whole point of #27: the reference
+    /// ships four primitives and fifteen years of players discovering the inverter by accident;
+    /// shipping AND, OR, XOR, NOT and a latch as real blocks is what makes machines buildable
+    /// rather than a puzzle about torches.</para>
+    /// </remarks>
+    private static void RegisterSignals(BlockRegistry registry)
+    {
+        // The carrier: sixteen strengths, a flat film on the floor, never a wall or a ceiling.
+        for (var strength = 0; strength <= 15; strength++)
+        {
+            var tile = strength == 0 ? LayerTidewireOff
+                : strength <= 5 ? LayerTidewireLow
+                : strength <= 10 ? LayerTidewireMid
+                : LayerTidewireHigh;
+
+            registry.Register(new BlockType
+            {
+                Name = $"tidewire_{strength}",
+                Hardness = 0.05f, Solid = false, Opaque = false, Crafted = true,
+                Derived = strength > 0,
+                Sounds = SoundMaterial.Stone,
+                SupportFace = Faces.NegY,
+                Model = BlockModel.Layer(tile, tile, tile, 1f),
+            });
+        }
+
+        // The hands: a lever that stays, a button that springs back, a plate that is stood on.
+        // All five forms of each, floor first — the torch's own Attached shape.
+        var attachedFaces = new[] { -1, Placeable.Facings[0], Placeable.Facings[1], Placeable.Facings[2], Placeable.Facings[3] };
+
+        for (var form = 0; form < 5; form++)
+        foreach (var on in (bool[])[false, true])
+        {
+            registry.Register(new BlockType
+            {
+                Name = AttachedForms("lever")[form] + (on ? "_on" : ""),
+                Hardness = 0.4f, Solid = false, Opaque = false, Crafted = true,
+                Derived = on,
+                Sounds = SoundMaterial.Stone, Use = BlockUse.Toggle,
+                SupportFace = form == 0 ? Faces.NegY : Placeable.Opposite(attachedFaces[form]),
+                Model = BlockModel.Lever(LayerRubble, LayerPlanks, attachedFaces[form], on),
+            });
+
+            registry.Register(new BlockType
+            {
+                Name = AttachedForms("button")[form] + (on ? "_pressed" : ""),
+                Hardness = 0.4f, Solid = false, Opaque = false, Crafted = true,
+                Derived = on,
+                Sounds = SoundMaterial.Stone, Use = BlockUse.Toggle,
+                SupportFace = form == 0 ? Faces.NegY : Placeable.Opposite(attachedFaces[form]),
+                Model = BlockModel.Button(LayerStone, attachedFaces[form], on),
+            });
+        }
+
+        foreach (var on in (bool[])[false, true])
+        {
+            registry.Register(new BlockType
+            {
+                Name = "pressure_plate" + (on ? "_on" : ""),
+                Hardness = 0.4f, Solid = false, Opaque = false, Crafted = true,
+                Derived = on,
+                Sounds = SoundMaterial.Stone,
+                SupportFace = Faces.NegY,
+                Model = BlockModel.Layer(LayerSmoothStone, LayerSmoothStone, LayerSmoothStone, on ? 0.5f : 1f),
+            });
+        }
+
+        // The lamp that answers: dark until fed, and the stormglass lamp's own light when lit.
+        registry.Register(new BlockType
+        {
+            Name = "tidelamp",
+            Hardness = 0.6f, Crafted = true, Sounds = SoundMaterial.Glass,
+            TopLayer = LayerTidelamp, SideLayer = LayerTidelamp, BottomLayer = LayerTidelamp,
+        });
+        registry.Register(new BlockType
+        {
+            Name = "tidelamp_lit",
+            Hardness = 0.6f, Crafted = true, Derived = true, Sounds = SoundMaterial.Glass,
+            LightEmission = LightValue.PackBlock(12, 15, 15),
+            TopLayer = LayerTidelampLit, SideLayer = LayerTidelampLit, BottomLayer = LayerTidelampLit,
+        });
+
+        // The thinkers: five kinds, four facings, off and on.
+        for (var kind = 0; kind < GateKinds.Length; kind++)
+        for (var i = 0; i < Placeable.Facings.Length; i++)
+        foreach (var on in (bool[])[false, true])
+        {
+            registry.Register(new BlockType
+            {
+                Name = $"gate_{GateKinds[kind]}_{FacingNames[i]}" + (on ? "_on" : ""),
+                Hardness = 1.5f, Opaque = false, Crafted = true,
+                Derived = on,
+                Sounds = SoundMaterial.Stone,
+                HarvestClass = ToolClass.Pickaxe,
+                Model = BlockModel.Gate(
+                    GateLayer(kind, on), LayerDeepstonePolished, Placeable.Facings[i]),
+            });
+        }
     }
 
     /// <summary>
@@ -2120,6 +2254,20 @@ public static class StarterBlocks
             yield return (outFire, lit);
             yield return (lit, outFire);
         }
+
+        // A lever clicks over and back; a button presses in, and the CLIENT books its spring back
+        // rather than a return toggle — a momentary source that could be clicked off would not be
+        // momentary. The signal pass hears both through the same edit any toggle makes.
+        foreach (var form in AttachedForms("lever"))
+        {
+            var off = registry.ByName(form).Id;
+            var on = registry.ByName(form + "_on").Id;
+            yield return (off, on);
+            yield return (on, off);
+        }
+
+        foreach (var form in AttachedForms("button"))
+            yield return (registry.ByName(form).Id, registry.ByName(form + "_pressed").Id);
 
         for (var i = 0; i < Placeable.Facings.Length; i++)
         {
