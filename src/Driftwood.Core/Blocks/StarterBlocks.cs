@@ -617,7 +617,11 @@ public static class StarterBlocks
     public const ushort LayerSmithingTop = LayerCobweb + 44;
     public const ushort LayerSmithingSide = LayerCobweb + 45;
 
-    public const int LayerCount = LayerSmithingSide + 1;
+    // And the loom (#98). Carpets and banners add NO layers: they wear the wool's own tiles.
+    public const ushort LayerLoomTop = LayerCobweb + 46;
+    public const ushort LayerLoomSide = LayerCobweb + 47;
+
+    public const int LayerCount = LayerLoomSide + 1;
 
     /// <summary>One anvil's name, by how worn it is and which way it lies.</summary>
     /// <remarks>
@@ -951,6 +955,29 @@ public static class StarterBlocks
             TopLayer = LayerSmithingTop, SideLayer = LayerSmithingSide,
             BottomLayer = LayerSmithingSide,
         });
+
+        // ⛳ THE LOOM (#98) — the cloth station, and a CHOOSING one: wool in, that colour's
+        // carpet and banner offered, the stonecutter's own manner.
+        registry.Register(new BlockType
+        {
+            Name = "loom", Hardness = 2.5f, Crafted = true,
+            Sounds = SoundMaterial.Wood, Use = BlockUse.Loom,
+            TopLayer = LayerLoomTop, SideLayer = LayerLoomSide, BottomLayer = LayerLoomSide,
+        });
+
+        // ⛳ BANNERS — sixteen colours by four facings: the pole up the middle, the cloth wearing
+        // the wool it was woven from. Walk-through, like every standing decoration.
+        for (var i = 0; i < Colours.Length; i++)
+        for (var f = 0; f < Placeable.Facings.Length; f++)
+        {
+            registry.Register(new BlockType
+            {
+                Name = $"banner_{Colours[i].Name}_{FacingNames[f]}", Hardness = 0.3f, Crafted = true,
+                Solid = false, Opaque = false, Sounds = SoundMaterial.Cloth,
+                Model = BlockModel.Banner(
+                    (ushort)(LayerFirstWool + i), LayerPlanks, Placeable.Facings[f]),
+            });
+        }
 
         // ⛳ THE BLASTCASK — five measures of the crawler's powder packed in sand, and a third way
         // to the blast the crawler already proved. A right click lights it (the button's own
@@ -2275,6 +2302,15 @@ public static class StarterBlocks
     {
         var ids = new BlockId[Placeable.Facings.Length];
         for (var i = 0; i < ids.Length; i++) ids[i] = registry.ByName($"chest_{FacingNames[i]}").Id;
+        return ids;
+    }
+
+    /// <summary>One colour's four banners, in <see cref="Placeable.Facings"/> order.</summary>
+    public static BlockId[] Banners(BlockRegistry registry, string colour)
+    {
+        var ids = new BlockId[Placeable.Facings.Length];
+        for (var i = 0; i < ids.Length; i++)
+            ids[i] = registry.ByName($"banner_{colour}_{FacingNames[i]}").Id;
         return ids;
     }
 

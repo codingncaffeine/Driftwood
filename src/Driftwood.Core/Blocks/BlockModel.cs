@@ -325,6 +325,43 @@ public sealed class BlockModel
         return new BlockModel([WholeBlock(faces)]);
     }
 
+    /// <summary>
+    /// A standing banner: the pole up the middle of the cell, and a hanging cloth on the side
+    /// it faces.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ The reference hangs its banner art off an entity sheet no block texture can express —
+    /// #56's own problem — so the cloth simply wears the wool it was woven from: the colour IS
+    /// the banner, exactly as the colour is the dye.
+    /// </remarks>
+    public static BlockModel Banner(ushort cloth, ushort pole, int facing)
+    {
+        var poleFaces = new ModelFace?[Blocks.Faces.Count];
+        for (var face = 0; face < Blocks.Faces.Count; face++)
+            poleFaces[face] = new ModelFace { Layer = pole, Uv = new Vector4(7f, 0f, 9f, 16f) };
+
+        var clothFaces = new ModelFace?[Blocks.Faces.Count];
+        for (var face = 0; face < Blocks.Faces.Count; face++)
+            clothFaces[face] = new ModelFace { Layer = cloth, Uv = new Vector4(1f, 1f, 15f, 15f) };
+
+        var (from, to) = facing switch
+        {
+            Blocks.Faces.PosX => (new Vector3(9.5f, 1f, 1f), new Vector3(10.5f, 15f, 15f)),
+            Blocks.Faces.NegX => (new Vector3(5.5f, 1f, 1f), new Vector3(6.5f, 15f, 15f)),
+            Blocks.Faces.PosZ => (new Vector3(1f, 1f, 9.5f), new Vector3(15f, 15f, 10.5f)),
+            _ => (new Vector3(1f, 1f, 5.5f), new Vector3(15f, 15f, 6.5f)),
+        };
+
+        return new BlockModel(
+        [
+            new ModelElement
+            {
+                From = new Vector3(7f, 0f, 7f), To = new Vector3(9f, 16f, 9f), Faces = poleFaces,
+            },
+            new ModelElement { From = from, To = to, Faces = clothFaces },
+        ]);
+    }
+
     /// <summary>A cube with one side different from the other three — a machine with a face.</summary>
     /// <remarks>
     /// Still a full cube, so it still merges: the greedy pass keys on the block id and every facing

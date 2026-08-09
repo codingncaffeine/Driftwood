@@ -46,6 +46,10 @@ public enum BlockUse
     /// </remarks>
     Smithing,
 
+    /// <summary>Opens the loom: wool on the bed, and that colour's cloth offered.</summary>
+    /// <remarks>The stonecutter's screen with a different station asked — one chooser, two trades.</remarks>
+    Loom,
+
     /// <summary>
     /// Puts food on a lit campfire, or takes it off again.
     /// </summary>

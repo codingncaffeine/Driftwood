@@ -1183,6 +1183,10 @@ public static class WorldAudit
         Check("the smithing table carries wear up the ladder and refuses gold", smithFaults.Count == 0,
             smithFaults.Count == 0 ? smithDetail : $"{smithFaults.Count} faults: {smithFaults[0]}");
 
+        var loomFaults = LoomSelfTest(out var loomDetail);
+        Check("the loom offers every colour its carpet and banner", loomFaults.Count == 0,
+            loomFaults.Count == 0 ? loomDetail : $"{loomFaults.Count} faults: {loomFaults[0]}");
+
         var herdSaveFaults = HerdSaveSelfTest(out var herdSaveDetail);
         Check("a herd survives the trip through a save", herdSaveFaults.Count == 0,
             herdSaveFaults.Count == 0 ? herdSaveDetail : $"{herdSaveFaults.Count} faults: {herdSaveFaults[0]}");
@@ -4965,6 +4969,48 @@ public static class WorldAudit
     }
 
     /// <summary>
+    /// Asks the loom what every colour's wool offers, the way the screen will: both trades, the
+    /// right colour, and nothing for something no loom can weave.
+    /// </summary>
+    private static List<string> LoomSelfTest(out string detail)
+    {
+        var faults = new List<string>();
+
+        var blocks = new BlockRegistry();
+        StarterBlocks.Register(blocks);
+        var items = StarterItems.Register(blocks);
+        var book = StarterRecipes.Build(items);
+
+        foreach (var colour in StarterBlocks.Colours)
+        {
+            var wool = items.ByName($"wool_{colour.Name}").Id;
+            var offers = book.Offers(CraftStation.Loom, wool).ToList();
+
+            var results = offers.Select(o => items[o.Result.Item].Name).OrderBy(n => n).ToList();
+            var wanted = new[] { $"banner_{colour.Name}", $"carpet_{colour.Name}" };
+
+            if (!results.SequenceEqual(wanted))
+                faults.Add($"wool_{colour.Name} on the loom offers [{string.Join(", ", results)}]");
+
+            // The carpet trade pays double — half a wool a carpet is the whole economy line.
+            var carpet = offers.FirstOrDefault(o => items[o.Result.Item].Name.StartsWith("carpet", StringComparison.Ordinal));
+            if (carpet is not null && carpet.Result.Count != 2)
+                faults.Add($"a wool weaves {carpet.Result.Count} {colour.Name} carpets, not 2");
+        }
+
+        // The control half: a thing no loom can weave is offered nothing at all.
+        if (book.Offers(CraftStation.Loom, items.ByName("stone").Id).Any())
+            faults.Add("a stone on the loom is offered something");
+        if (book.Offers(CraftStation.Loom, items.ByName("string").Id).Any())
+            faults.Add("raw string on the loom is offered something — the loom takes wool, not thread");
+
+        detail = "sixteen wools each offer their own carpet (paying 2) and banner, and stone or "
+               + "string on the bed offer nothing";
+
+        return faults;
+    }
+
+    /// <summary>
     /// Checks that the light a player can build gets brighter, and that smokeglass stops it.
     /// </summary>
     /// <remarks>
@@ -5100,6 +5146,15 @@ public static class WorldAudit
                + $"{LightValue.Max} while neither is opaque; {toggles} states swap both ways";
 
         return faults;
+    }
+
+    /// <summary>The facing a block's own name ends in, or -1 when it names none.</summary>
+    private static int NamedFacing(string name)
+    {
+        foreach (var face in Placeable.Facings)
+            if (name.EndsWith("_" + FacingName(face), StringComparison.Ordinal))
+                return face;
+        return -1;
     }
 
     /// <summary>The name a facing is registered under, in <see cref="Placeable.Facings"/> terms.</summary>
@@ -6851,6 +6906,12 @@ public static class WorldAudit
                 if (entry.Kind == PlacementKind.Facing)
                 {
                     var front = FrontFace(model);
+
+                    // ⚠ A shaped facing block's boxes answer -1 — a banner's facing lives in its
+                    // NAME, the way a rail's axis lives in its form table. The name is which
+                    // block placement actually chose, and that choice is the claim under test.
+                    if (front < 0) front = NamedFacing(registry[id].Name);
+
                     if (front != Opposite(wantFacing))
                         faults.Add($"{where}: face ended up pointing {front}, wanted {Opposite(wantFacing)}");
                     continue;
@@ -7170,16 +7231,18 @@ public static class WorldAudit
         (StarterBlocks.LayerFriedEgg, "fried_egg"),
         (StarterBlocks.LayerSlimeBlock, "slime_block"),
 
-        // The cask's bottom by its own constant now the smithing table went on after it.
+        // The cask's bottom and the smithing side by their own constants now more went on after
+        // them — the moving pin handing its ground to fixed ones, as every run before it has.
         (StarterBlocks.LayerBlastcaskBottom, "blastcask_bottom"),
+        (StarterBlocks.LayerSmithingSide, "smithing_table_side"),
 
-        // The moving pin: the LAST layer, by name. It has now caught NINE appends in the act —
+        // The moving pin: the LAST layer, by name. It has caught NINE appends in the act —
         // fifteen crop rows landing after "the last layer is bonemeal", the composter's four
         // landing after black glass, the berry bush's three after compost-ready, seagrass after
         // mossy rubble, the signal kit after seagrass, the track after the gates, the fried egg
-        // after the cart, the cask after the slime block, and the smithing table after the cask.
+        // after the cart, the cask after the slime block, and the stations after the cask.
         // Keep it pointed at the true end.
-        ((ushort)(StarterBlocks.LayerCount - 1), "smithing_table_side"),
+        ((ushort)(StarterBlocks.LayerCount - 1), "loom_side"),
     ];
 
     /// <summary>

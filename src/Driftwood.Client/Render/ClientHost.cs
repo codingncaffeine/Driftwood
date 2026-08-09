@@ -2950,7 +2950,7 @@ public sealed class ClientHost : IDisposable
     private ItemStack PutCutting(ItemStack carried)
     {
         if (carried.IsEmpty) return carried;
-        if (!_book.Offers(CraftStation.Stonecutter, carried.Item).Any()) return carried;
+        if (!_book.Offers(_hudScreen.Choosing, carried.Item).Any()) return carried;
 
         var there = _hudScreen.Cutting;
 
@@ -3430,9 +3430,17 @@ public sealed class ClientHost : IDisposable
     }
 
     /// <summary>A stonecutter: a rock on the bed, and everything that rock can be cut into.</summary>
-    private void OpenStonecutter(int x, int y, int z)
+    private void OpenStonecutter(int x, int y, int z) =>
+        OpenChooser(x, y, z, CraftStation.Stonecutter);
+
+    /// <summary>
+    /// A choosing station's screen — the stonecutter's or the loom's. One screen, one input
+    /// slot, many offers; which trades appear is the station's, not the screen's.
+    /// </summary>
+    private void OpenChooser(int x, int y, int z, CraftStation station)
     {
         _hudScreen.Kind = HudScreenKind.Stonecutter;
+        _hudScreen.Choosing = station;
         _hudScreen.TabNames = [];
         _hudScreen.Tab = 0;
         _hudScreen.Grid = null;
@@ -3461,7 +3469,7 @@ public sealed class ClientHost : IDisposable
             : null;
 
         _hudScreen.Cuts.Clear();
-        foreach (var offer in _book.Offers(CraftStation.Stonecutter, _hudScreen.Cutting.Item))
+        foreach (var offer in _book.Offers(_hudScreen.Choosing, _hudScreen.Cutting.Item))
         {
             if (_hudScreen.Cuts.Count >= ScreenLayout.CutOffers) break;
             _hudScreen.Cuts.Add(offer);
@@ -7221,6 +7229,10 @@ public sealed class ClientHost : IDisposable
 
             case BlockUse.Stonecutter:
                 OpenStonecutter(hit.X, hit.Y, hit.Z);
+                return true;
+
+            case BlockUse.Loom:
+                OpenChooser(hit.X, hit.Y, hit.Z, CraftStation.Loom);
                 return true;
 
             case BlockUse.Anvil:

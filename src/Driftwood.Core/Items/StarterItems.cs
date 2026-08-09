@@ -686,6 +686,30 @@ public static class StarterItems
         // #58's last group-A station: where a worn tool becomes the same tool a tier up.
         Block(items, blocks, Smithing.Table, "smithing table", StarterBlocks.LayerSmithingSide);
 
+        // ⛳ The loom and the banners it weaves (#98). The carpets already exist — the wool axis
+        // shipped them — so the banner is the new cloth: sixteen standing colours whose cloth IS
+        // the wool, because no pack can reskin a banner yet (#56, the packed-sheet problem).
+        Block(items, blocks, "loom", "loom", StarterBlocks.LayerLoomSide);
+
+        foreach (var colour in StarterBlocks.Colours)
+        {
+            var plain = colour.Name.Replace('_', ' ');
+            var wool = (ushort)(StarterBlocks.LayerFirstWool
+                + Array.IndexOf(StarterBlocks.Colours, colour));
+
+            items.Register(new ItemType
+            {
+                Name = $"banner_{colour.Name}", Label = $"{plain} banner",
+                IconLayer = wool, DrawsAsBlock = true,
+                Places = new Placeable
+                {
+                    Label = $"{plain} banner",
+                    Kind = PlacementKind.Facing,
+                    Variants = StarterBlocks.Banners(blocks, colour.Name),
+                },
+            });
+        }
+
         // The farwalker's pearl — the teleport reagent M1's summons are written against.
         Loose(items, "farpearl", "farpearl", StarterBlocks.LayerFarpearl);
 

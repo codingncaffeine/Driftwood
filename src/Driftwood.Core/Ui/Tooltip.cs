@@ -179,8 +179,8 @@ public static class Tooltip
         SlotRole.Smelting => new TooltipText("to smelt", "ore, food, sand, clay"),
         SlotRole.Fuel => new TooltipText("fuel", "coal, charcoal, anything wooden"),
         SlotRole.Smelted => new TooltipText("what came out", ""),
-        SlotRole.Cutting => new TooltipText("to cut", "any worked stone"),
-        SlotRole.Cut => new TooltipText("what it cuts into", ""),
+        SlotRole.Cutting => new TooltipText("to work", "stone at a cutter, wool at a loom"),
+        SlotRole.Cut => new TooltipText("what it becomes", ""),
         _ => TooltipText.None,
     };
 

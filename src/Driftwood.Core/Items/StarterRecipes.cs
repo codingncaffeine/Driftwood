@@ -471,6 +471,20 @@ public static class StarterRecipes
         Shaped("smithing table", "smithing_table", 1, ["II", "PP", "PP"],
             station: CraftStation.Bench);
 
+        // ⛳ The loom and its list (#98): a choosing station like the stonecutter, so one wool on
+        // the bed offers both trades — the carpet at a BETTER rate than the bench's own row
+        // (one wool weaves two where the bench cuts three from a pair), which is the
+        // stonecutter's argument for existing, and the banner on the loom's own pole.
+        Shaped("loom", "loom", 1, ["JJ", "PP"], station: CraftStation.Bench);
+
+        foreach (var colour in StarterBlocks.Colours)
+        {
+            Shaped($"{colour.Name} carpet woven", $"carpet_{colour.Name}", 2, ["M"],
+                $"wool_{colour.Name}", station: CraftStation.Loom);
+            Shaped($"{colour.Name} banner", $"banner_{colour.Name}", 1, ["M"],
+                $"wool_{colour.Name}", station: CraftStation.Loom);
+        }
+
         // Every tool, off the two tables. The material is a tag for the tiers that have more than
         // one source — any plank, any rough stone — and a plain item for the metals.
         foreach (var tier in StarterItems.Tiers)
@@ -642,6 +656,7 @@ public static class StarterRecipes
         'O' => "stone",
         'Y' => "gold_ingot",
         'E' => "sand",
+        'J' => "string",
         _ => throw new InvalidOperationException($"recipe '{recipe}' uses unknown key '{key}'"),
     };
 }

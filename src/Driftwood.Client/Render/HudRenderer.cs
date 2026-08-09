@@ -264,6 +264,12 @@ public sealed class HudScreen
 
     public int Cut;
 
+    /// <summary>
+    /// Which choosing station the chooser screen is asking for — the stonecutter's or the
+    /// loom's. One screen, one field, two stations; the panel and every slot are shared.
+    /// </summary>
+    public CraftStation Choosing = CraftStation.Stonecutter;
+
     /// <summary>What is in the chest this screen is a screen of, or null when it is not one.</summary>
     /// <remarks>
     /// Held on the screen rather than looked up from the world every frame, for the same reason the

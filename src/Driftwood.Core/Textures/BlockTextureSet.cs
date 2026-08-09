@@ -528,6 +528,9 @@ public static class BlockTextureSet
         // ⚠ Modern path only: the block postdates the flattening, so no legacy name exists.
         new("smithing_table_top", "textures/block/smithing_table_top.png", false),
         new("smithing_table_side", "textures/block/smithing_table_side.png", false),
+
+        new("loom_top", "textures/block/loom_top.png", false),
+        new("loom_side", "textures/block/loom_side.png", false),
     ];
 
     /// <summary>
@@ -1528,6 +1531,11 @@ public static class BlockTextureSet
             StarterBlocks.LayerSmithingTop => TileGen.Scored(
                 1380, TileGen.Speckle(1381, 70, 70, 76, 8, 0.35f)),
             StarterBlocks.LayerSmithingSide => TileGen.Panel(TileGen.Planks(1382, 118, 88, 56), 2, 24),
+
+            // The loom: warp threads combed across the top — the tilled field's own drawing in
+            // thread's colours — over a paler timber frame than the bench's.
+            StarterBlocks.LayerLoomTop => TileGen.Tilled(1383, 214, 206, 188),
+            StarterBlocks.LayerLoomSide => TileGen.Panel(TileGen.Planks(1384, 168, 132, 92), 2, 28),
 
             _ when layer >= StarterBlocks.LayerGateFirst
                    && layer < StarterBlocks.LayerGateFirst + 10 =>
