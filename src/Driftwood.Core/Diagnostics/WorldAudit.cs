@@ -530,6 +530,86 @@ public static class WorldAudit
             + (seamCentresMissed == 0
                 ? $"{seamCentresExcused:N0} excused, none missed"
                 : $"{seamCentresMissed:N0} MISSED, first {firstSeamMiss}"));
+
+        // ⛳ STRUCTURES, the seams' two arms again: the tables counted over the fixed span, and
+        // every structure wholly inside the volume replayed cell for cell through the same
+        // walkers the painter used. A structure cell still AIR is the writer having skipped it —
+        // a tree part standing in it is the honest excuse, because trees win their cells.
+        var wideBoulders = 0;
+        var wideLogs = 0;
+        var wideRuins = 0;
+        for (var cz = DivFloor(-ReliefProbeSpan / 2, 24); cz <= DivFloor(ReliefProbeSpan / 2 - 1, 24); cz++)
+        for (var cx = DivFloor(-ReliefProbeSpan / 2, 24); cx <= DivFloor(ReliefProbeSpan / 2 - 1, 24); cx++)
+            if (generator.TryBoulderAt(cx, cz, out _)) wideBoulders++;
+        for (var cz = DivFloor(-ReliefProbeSpan / 2, 16); cz <= DivFloor(ReliefProbeSpan / 2 - 1, 16); cz++)
+        for (var cx = DivFloor(-ReliefProbeSpan / 2, 16); cx <= DivFloor(ReliefProbeSpan / 2 - 1, 16); cx++)
+            if (generator.TryFallenLogAt(cx, cz, out _)) wideLogs++;
+        for (var cz = DivFloor(-ReliefProbeSpan / 2, 96); cz <= DivFloor(ReliefProbeSpan / 2 - 1, 96); cz++)
+        for (var cx = DivFloor(-ReliefProbeSpan / 2, 96); cx <= DivFloor(ReliefProbeSpan / 2 - 1, 96); cx++)
+            if (generator.TryRuinAt(cx, cz, out _)) wideRuins++;
+
+        var structuresContained = 0;
+        var structCellsPlaced = 0L;
+        var structCellsOccupied = 0L;
+        var structCellsMissed = 0L;
+        string? firstStructMiss = null;
+        var probingKind = "";
+
+        void ProbeCell(int x, int y, int z, BlockId id)
+        {
+            var cell = world.GetBlock(x, y, z);
+            if (cell == id) structCellsPlaced++;
+            else if (cell.IsAir)
+            {
+                structCellsMissed++;
+                firstStructMiss ??= $"{probingKind} cell air at {x},{y},{z}";
+            }
+            else structCellsOccupied++;
+        }
+
+        const int StructMargin = TerrainGenerator.DecorReach;
+        bool StructInside(int x, int z) =>
+            x >= minBlock + StructMargin && x <= maxBlock - StructMargin
+            && z >= minBlock + StructMargin && z <= maxBlock - StructMargin;
+
+        probingKind = "boulder";
+        for (var cz = DivFloor(minBlock, 24); cz <= DivFloor(maxBlock, 24); cz++)
+        for (var cx = DivFloor(minBlock, 24); cx <= DivFloor(maxBlock, 24); cx++)
+        {
+            if (!generator.TryBoulderAt(cx, cz, out var boulder) || !StructInside(boulder.X, boulder.Z)) continue;
+            structuresContained++;
+            generator.WalkBoulder(in boulder, ProbeCell);
+        }
+
+        probingKind = "fallen log";
+        for (var cz = DivFloor(minBlock, 16); cz <= DivFloor(maxBlock, 16); cz++)
+        for (var cx = DivFloor(minBlock, 16); cx <= DivFloor(maxBlock, 16); cx++)
+        {
+            if (!generator.TryFallenLogAt(cx, cz, out var log) || !StructInside(log.X, log.Z)) continue;
+            structuresContained++;
+            generator.WalkFallenLog(in log, ProbeCell);
+        }
+
+        probingKind = "ruin";
+        for (var cz = DivFloor(minBlock, 96); cz <= DivFloor(maxBlock, 96); cz++)
+        for (var cx = DivFloor(minBlock, 96); cx <= DivFloor(maxBlock, 96); cx++)
+        {
+            if (!generator.TryRuinAt(cx, cz, out var ruin) || !StructInside(ruin.X, ruin.Z)) continue;
+            structuresContained++;
+            generator.WalkRuin(in ruin, ProbeCell);
+        }
+
+        // Bands from the five-seed sweep: boulders 386-437, logs 633-787, ruins 29-52. The ruin
+        // band is the widest relatively because its grid gives the span only ~1,800 rolls.
+        Check("structures stand where their rolls say",
+            wideBoulders is > 300 and < 560 && wideLogs is > 480 and < 980 && wideRuins is > 18 and < 75
+            && structCellsMissed == 0 && (structuresContained == 0 || structCellsPlaced > 0),
+            $"seed-wide {wideBoulders} boulders (want 300-560), {wideLogs} fallen logs (want 480-980), "
+            + $"{wideRuins} ruins (want 18-75); {structuresContained} in this volume, "
+            + $"{structCellsPlaced:N0} cells standing, "
+            + (structCellsMissed == 0
+                ? $"{structCellsOccupied:N0} ceded to trees, none missed"
+                : $"{structCellsMissed:N0} MISSED, first {firstStructMiss}"));
         Check("geometry produced", tris > 0, $"{tris:N0} tris");
 
         // Relief and mix gates. A world can pass every "does this block exist" check above and

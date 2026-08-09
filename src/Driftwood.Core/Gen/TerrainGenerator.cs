@@ -109,7 +109,8 @@ public sealed class TerrainGenerator
 
     /// <summary>
     /// How far anything a tree grows can reach sideways from its cell's trunk position. Chunk
-    /// decoration widens its search by this much, so it must stay well under <see cref="Chunk.Size"/>
+    /// decoration searches at least this far (<see cref="DecorReach"/> is the widest of every
+    /// structure kind and covers it), and any reach must stay well under <see cref="Chunk.Size"/>
     /// — a structure wider than a chunk would need a search radius bigger than one neighbour.
     /// </summary>
     /// <remarks>
@@ -164,6 +165,9 @@ public sealed class TerrainGenerator
     private readonly int _seedLavaTable;
     private readonly int _seedLavaPools;
     private readonly int _seedSeam;
+    private readonly int _seedBoulder;
+    private readonly int _seedFallenLog;
+    private readonly int _seedRuin;
 
     /// <summary>
     /// Climate, for the one thing terrain reads out of it: where snow lies.
@@ -227,6 +231,9 @@ public sealed class TerrainGenerator
         _seedLavaTable = seed.Derive("deep.lava_table");
         _seedLavaPools = seed.Derive("deep.lava_pools");
         _seedSeam = seed.Derive("ore.seams");
+        _seedBoulder = seed.Derive("decor.boulders");
+        _seedFallenLog = seed.Derive("decor.fallen_logs");
+        _seedRuin = seed.Derive("decor.ruins");
 
         _climate = new ClimateField(seed);
 
@@ -1137,7 +1144,7 @@ public sealed class TerrainGenerator
     /// <see cref="SeaLevel"/>, so "is it grass with air above" is exactly "is the surface above
     /// sea level plus two".</para>
     /// </remarks>
-    public void DecorateChunk(Chunk chunk) => DecorateChunk(chunk, CanopyRadius);
+    public void DecorateChunk(Chunk chunk) => DecorateChunk(chunk, DecorReach);
 
     /// <summary>
     /// Decoration with an explicit search reach, so a test can widen it and prove the production
@@ -1184,6 +1191,8 @@ public sealed class TerrainGenerator
 
             PlantOakInto(chunk, ox, oy, oz, tree);
         }
+
+        PlaceStructures(chunk, ox, oy, oz, reach);
 
         ScatterGroundCover(chunk, ox, oy, oz);
     }
@@ -1435,6 +1444,251 @@ public sealed class TerrainGenerator
             }
 
             PlaceIntoAir(chunk, ox, oy, oz, wx, surface + 1, wz, _ids.Meadowgrass);
+        }
+    }
+
+    /// <summary>The structure grids: one existence roll per cell, the trees' pattern coarser.</summary>
+    private const int BoulderGrid = 24;
+
+    private const int FallenLogGrid = 16;
+
+    private const int RuinGrid = 96;
+
+    /// <summary>
+    /// How far decoration must search for structure origins. The widest structure is the ruin —
+    /// two arms of up to five plus the corner — so this covers every kind with margin, and the
+    /// audit's 2x-reach pass is what proves it stays big enough.
+    /// </summary>
+    public const int DecorReach = 8;
+
+    /// <summary>Everything about one boulder: a proud cluster of rock conforming to its ground.</summary>
+    public readonly record struct BoulderSpec(int X, int Z, int Size, int Seed);
+
+    /// <summary>Everything about one fallen log: a level run of trunk lying on the ground.</summary>
+    public readonly record struct FallenLogSpec(int X, int Y, int Z, int Length, int Axis, bool Cherry);
+
+    /// <summary>Everything about one ruin: two low broken walls meeting at a corner.</summary>
+    public readonly record struct RuinSpec(int X, int Z, int ArmX, int ArmZ, int SignX, int SignZ, bool Mossy, int Seed);
+
+    /// <summary>
+    /// P4's structures beyond the tree — the traces of weather and of whoever was here first.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ <b>Placement reads the biome, which is what the named regions are FOR</b>: boulders
+    /// strew the open and high ground, fallen logs lie where the trees actually stand, and ruins
+    /// keep to the grassland where a wall could ever have been raised. Villages are deliberately
+    /// NOT here — a hamlet without inhabitants reads as unfinished rather than as a find, so the
+    /// built-and-lived-in tier of structures waits for the people (P10's era), and the ruin is
+    /// the honest version: complete BECAUSE broken.</para>
+    /// <para>⛔ Every structure writes only into air above an untouched surface cell, so the biome
+    /// agreement check keeps holding by construction — the ground under a boulder is still the
+    /// meadow's own grass. Where a tree already stands, the tree wins cell by cell, which reads
+    /// as growth through the stones rather than as damage.</para>
+    /// </remarks>
+    public bool TryBoulderAt(int cellX, int cellZ, out BoulderSpec spec)
+    {
+        spec = default;
+
+        var jx = (int)(Noise.Value2(cellX, cellZ, _seedBoulder + 17) * BoulderGrid);
+        var jz = (int)(Noise.Value2(cellX, cellZ, _seedBoulder + 31) * BoulderGrid);
+        var x = cellX * BoulderGrid + jx;
+        var z = cellZ * BoulderGrid + jz;
+
+        var surface = SurfaceHeight(x, z);
+        if (surface <= SeaLevel + 2) return false;
+
+        // The high ground is strewn; the open ground gets the odd erratic.
+        var odds = BiomeAt(x, z, surface) switch
+        {
+            Biome.Highlands => 0.30f,
+            Biome.Meadow or Biome.Woodland or Biome.Tundra => 0.05f,
+            _ => 0f,
+        };
+        if (Noise.Value2(cellX, cellZ, _seedBoulder) >= odds) return false;
+
+        spec = new BoulderSpec(
+            X: x, Z: z,
+            Size: 2 + (int)(Noise.Value2(cellX, cellZ, _seedBoulder + 43) * 3f),
+            Seed: Noise.Hash2(cellX, cellZ, _seedBoulder));
+        return true;
+    }
+
+    /// <summary>
+    /// The boulder's cells, one statement — the painter lays them and the audit replays them.
+    /// </summary>
+    /// <remarks>
+    /// The core stands at its own column's surface and each neighbouring stone at ITS column's,
+    /// so a boulder on a slope steps with the ground instead of burying one flank and floating
+    /// the other. Offsets walk a fixed ring so size N is always the same N cells of the roll.
+    /// </remarks>
+    public void WalkBoulder(in BoulderSpec boulder, Action<int, int, int, BlockId> cell)
+    {
+        cell(boulder.X, SurfaceHeight(boulder.X, boulder.Z) + 1, boulder.Z, _ids.Stone);
+
+        Span<(int Dx, int Dz)> ring = [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (-1, -1)];
+        var placed = 1;
+        for (var i = 0; i < ring.Length && placed < boulder.Size; i++)
+        {
+            if (Noise.Value3(i, 0, 0, boulder.Seed) > 0.55f) continue;
+            var (dx, dz) = ring[i];
+            var bx = boulder.X + dx;
+            var bz = boulder.Z + dz;
+            cell(bx, SurfaceHeight(bx, bz) + 1, bz, _ids.Stone);
+            placed++;
+        }
+
+        // A second stone on the core where the roll grants it, so big boulders read as boulders
+        // rather than as pavement.
+        if (boulder.Size >= 3 && Noise.Value3(9, 0, 0, boulder.Seed) < 0.5f)
+            cell(boulder.X, SurfaceHeight(boulder.X, boulder.Z) + 2, boulder.Z, _ids.Stone);
+    }
+
+    public bool TryFallenLogAt(int cellX, int cellZ, out FallenLogSpec spec)
+    {
+        spec = default;
+
+        var jx = (int)(Noise.Value2(cellX, cellZ, _seedFallenLog + 17) * FallenLogGrid);
+        var jz = (int)(Noise.Value2(cellX, cellZ, _seedFallenLog + 31) * FallenLogGrid);
+        var x = cellX * FallenLogGrid + jx;
+        var z = cellZ * FallenLogGrid + jz;
+
+        var surface = SurfaceHeight(x, z);
+        if (surface <= SeaLevel + 2) return false;
+
+        var biome = BiomeAt(x, z, surface);
+        var odds = biome switch
+        {
+            Biome.Woods or Biome.CherryGrove => 0.06f,
+            Biome.Woodland => 0.025f,
+            _ => 0f,
+        };
+        if (Noise.Value2(cellX, cellZ, _seedFallenLog) >= odds) return false;
+
+        var length = 3 + (int)(Noise.Value2(cellX, cellZ, _seedFallenLog + 43) * 3f);
+        var axis = Noise.Value2(cellX, cellZ, _seedFallenLog + 53) < 0.5f ? 0 : 1;
+
+        // A log is rigid: it lies level at its root's height, so ground that steps more than one
+        // block over the run is no site — a trunk cannot fall through a hillside, and an end
+        // floating over a dip is debris, not a deadfall.
+        var endX = axis == 0 ? x + length - 1 : x;
+        var endZ = axis == 0 ? z : z + length - 1;
+        if (Math.Abs(SurfaceHeight(endX, endZ) - surface) > 1) return false;
+
+        spec = new FallenLogSpec(
+            X: x, Y: surface + 1, Z: z,
+            Length: length,
+            Axis: axis,
+            Cherry: CherryGround(x, z));
+        return true;
+    }
+
+    /// <summary>The fallen log's cells, one statement — painter and audit both walk it.</summary>
+    public void WalkFallenLog(in FallenLogSpec log, Action<int, int, int, BlockId> cell)
+    {
+        var wood = log.Cherry ? _ids.CherryLog : _ids.Log;
+        for (var i = 0; i < log.Length; i++)
+            cell(log.Axis == 0 ? log.X + i : log.X, log.Y, log.Axis == 0 ? log.Z : log.Z + i, wood);
+    }
+
+    public bool TryRuinAt(int cellX, int cellZ, out RuinSpec spec)
+    {
+        spec = default;
+
+        var jx = (int)(Noise.Value2(cellX, cellZ, _seedRuin + 17) * RuinGrid);
+        var jz = (int)(Noise.Value2(cellX, cellZ, _seedRuin + 31) * RuinGrid);
+        var x = cellX * RuinGrid + jx;
+        var z = cellZ * RuinGrid + jz;
+
+        var surface = SurfaceHeight(x, z);
+        if (surface <= SeaLevel + 2) return false;
+
+        var biome = BiomeAt(x, z, surface);
+        if (biome is not (Biome.Meadow or Biome.Woodland or Biome.Woods)) return false;
+        if (Noise.Value2(cellX, cellZ, _seedRuin) >= 0.07f) return false;
+
+        spec = new RuinSpec(
+            X: x, Z: z,
+            ArmX: 3 + (int)(Noise.Value2(cellX, cellZ, _seedRuin + 43) * 3f),
+            ArmZ: 3 + (int)(Noise.Value2(cellX, cellZ, _seedRuin + 47) * 3f),
+            SignX: Noise.Value2(cellX, cellZ, _seedRuin + 53) < 0.5f ? 1 : -1,
+            SignZ: Noise.Value2(cellX, cellZ, _seedRuin + 59) < 0.5f ? 1 : -1,
+            Mossy: WetShore(x, z),
+            Seed: Noise.Hash2(cellX, cellZ, _seedRuin));
+        return true;
+    }
+
+    /// <summary>
+    /// The ruin's cells, one statement: two arms from the corner, each column its own broken
+    /// height on its own ground, moss through the rubble where the climate is wet.
+    /// </summary>
+    /// <remarks>
+    /// Rubble on purpose — it is what a pickaxe leaves, so a fallen wall being made of it says
+    /// somebody worked this stone. A fifth of the columns are gaps, which is what keeps a wall
+    /// a RUIN: the eye completes the line, and completing it is the find.
+    /// </remarks>
+    public void WalkRuin(in RuinSpec ruin, Action<int, int, int, BlockId> cell)
+    {
+        WalkArm(ruin, alongX: true, cell);
+        WalkArm(ruin, alongX: false, cell);
+
+        void WalkArm(RuinSpec r, bool alongX, Action<int, int, int, BlockId> emit)
+        {
+            var length = alongX ? r.ArmX : r.ArmZ;
+
+            // The corner column belongs to the X arm alone, so no cell is emitted twice.
+            for (var i = alongX ? 0 : 1; i < length; i++)
+            {
+                var wx = alongX ? r.X + i * r.SignX : r.X;
+                var wz = alongX ? r.Z : r.Z + i * r.SignZ;
+
+                var height = Noise.Value3(wx, 0, wz, r.Seed) switch
+                {
+                    < 0.20f => 0,   // the gap that keeps it a ruin
+                    < 0.60f => 1,
+                    < 0.90f => 2,
+                    _ => 3,
+                };
+
+                var baseY = SurfaceHeight(wx, wz) + 1;
+                for (var k = 0; k < height; k++)
+                {
+                    var mossy = r.Mossy && Noise.Value3(wx, k + 1, wz, r.Seed) < 0.30f;
+                    emit(wx, baseY + k, wz, mossy ? _ids.Moss : _ids.Rubble);
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Writes every structure that reaches into this chunk — each kind on its own grid, every
+    /// chunk keeping its own share, the trees' pattern.
+    /// </summary>
+    /// <remarks>
+    /// After the trees so a trunk wins its cell — stones part around growth — and before the
+    /// ground cover so a dusting or a tuft never lands where a structure stands. Everything goes
+    /// through <see cref="PlaceIntoAir"/>: no structure ever eats terrain, which is also what
+    /// keeps every biome's surface cell telling the truth.
+    /// </remarks>
+    private void PlaceStructures(Chunk chunk, int ox, int oy, int oz, int reach)
+    {
+        void PaintInto(int wx, int wy, int wz, BlockId id) => PlaceIntoAir(chunk, ox, oy, oz, wx, wy, wz, id);
+
+        for (var cz = FloorDiv(oz - reach, BoulderGrid); cz <= FloorDiv(oz + Chunk.Size - 1 + reach, BoulderGrid); cz++)
+        for (var cx = FloorDiv(ox - reach, BoulderGrid); cx <= FloorDiv(ox + Chunk.Size - 1 + reach, BoulderGrid); cx++)
+        {
+            if (TryBoulderAt(cx, cz, out var boulder)) WalkBoulder(in boulder, PaintInto);
+        }
+
+        for (var cz = FloorDiv(oz - reach, FallenLogGrid); cz <= FloorDiv(oz + Chunk.Size - 1 + reach, FallenLogGrid); cz++)
+        for (var cx = FloorDiv(ox - reach, FallenLogGrid); cx <= FloorDiv(ox + Chunk.Size - 1 + reach, FallenLogGrid); cx++)
+        {
+            if (TryFallenLogAt(cx, cz, out var log)) WalkFallenLog(in log, PaintInto);
+        }
+
+        for (var cz = FloorDiv(oz - reach, RuinGrid); cz <= FloorDiv(oz + Chunk.Size - 1 + reach, RuinGrid); cz++)
+        for (var cx = FloorDiv(ox - reach, RuinGrid); cx <= FloorDiv(ox + Chunk.Size - 1 + reach, RuinGrid); cx++)
+        {
+            if (TryRuinAt(cx, cz, out var ruin)) WalkRuin(in ruin, PaintInto);
         }
     }
 
