@@ -1521,39 +1521,59 @@ public static class TileGen
     public static byte[] Wheat(int seed, int height, byte r, byte g, byte b, bool eared)
     {
         var t = new byte[BytesPerTile];
+        var ramp = Ramp(r, g, b, 6, 0.30f);
 
         // Five stalks across the tile, none of them on the border — the ink rule every held thing
-        // here follows, and a crop is picked up and carried like anything else.
+        // here follows, and a crop is picked up and carried like anything else. Each stalk leans
+        // its own way and carries one flat tone, so a field is a stand of plants, not a barcode.
         for (var stalk = 0; stalk < 5; stalk++)
         {
             var x = 2 + stalk * 3;
             var tall = height - (int)(Noise(stalk, 0, seed) * 3f);
+            var lean = Noise(stalk, 1, seed + 17) * 2f - 1f;
+            var tone = 2 + (int)(Noise(stalk, 2, seed + 5) * 1.999f);
 
+            var prevX = x;
             for (var up = 0; up < tall; up++)
             {
                 var y = Size - 1 - up;
                 if (y < 1) break;
 
-                var d = (int)((Noise(x, y, seed) * 2f - 1f) * 14f);
+                var bx = Math.Clamp(x + (int)MathF.Round(lean * up * 0.2f), 1, Size - 2);
 
-                // Darker at the foot, where a stand of anything is in its own shadow.
-                var shade = up < 2 ? -26 : 0;
-                Put(t, x, y, Clamp(r + d + shade), Clamp(g + d + shade), Clamp(b + d + shade), 255);
+                // Darker at the foot, where a stand of anything is in its own shadow; the tip
+                // catches the light.
+                var k = up < 2 ? Math.Max(1, tone - 2) : up >= tall - 2 ? Math.Min(4, tone + 1) : tone;
+                var (cr, cg, cb) = ramp[k];
+                Put(t, bx, y, cr, cg, cb, 255);
+
+                // The elbow: where the lean steps a column, paint the old column too, so the
+                // stalk stays one piece of ink — a diagonal step is two islands to the audit,
+                // and the audit is right: it is two islands to the eye at a distance as well.
+                if (bx != prevX) Put(t, prevX, y, cr, cg, cb, 255);
+                prevX = bx;
             }
 
             if (!eared) continue;
 
-            // The grain, on the top third of each stalk and to one side of it, so a ripe field reads
-            // as heavy rather than as a taller green one.
+            // The grain: paired nubs down the top third and a drooping tip, so a ripe field
+            // reads as HEAVY rather than as a taller green one.
+            var head = Size - tall;
             for (var ear = 0; ear < 3; ear++)
             {
-                var y = Size - tall + ear * 2;
+                var y = head + ear * 2;
                 if (y < 1 || y > Size - 2) continue;
 
+                var bx = Math.Clamp(x + (int)MathF.Round(lean * (tall - 1 - (y - (Size - tall))) * 0.2f), 1, Size - 2);
                 var side = (stalk + ear) % 2 == 0 ? -1 : 1;
-                var ex = Math.Clamp(x + side, 1, Size - 2);
+                var ex = Math.Clamp(bx + side, 1, Size - 2);
 
-                Put(t, ex, y, Clamp(r + 22), Clamp(g + 12), Clamp(b - 10), 255);
+                var (er, eg, eb) = ramp[ear == 0 ? 5 : 4];
+                Put(t, ex, y, er, eg, eb, 255);
+
+                // The tip of the head, straight above its own ear so the grain stays attached.
+                if (ear == 0 && y > 1)
+                    Put(t, ex, y - 1, er, eg, eb, 255);
             }
         }
 
@@ -2154,24 +2174,44 @@ public static class TileGen
             Put(t, Centre + lean + 1, y, stemR, stemG, stemB, 255);
         }
 
-        // The bloom: a rough disc over the top of the stem with a different colour at its middle.
+        // The bloom: PETALS around a core, not a disc — four lobes on the diagonals with the
+        // orthogonal ring left thinner, which is what reads as a flower rather than a lollipop.
+        // Quantised like everything since the redraw: the lit petal is the top-left one.
+        var petals = Ramp(r, g, b, 6, 0.28f);
         var top = Size - height;
+
         for (var dy = -2; dy <= 2; dy++)
         for (var dx = -2; dx <= 2; dx++)
         {
-            if (dx * dx + dy * dy > 5) continue;
+            var reach = dx * dx + dy * dy;
+            if (reach > 5) continue;
 
             var x = Centre + dx;
             var y = top + dy;
             if ((uint)x >= Size || (uint)y >= Size) continue;
 
-            var core = dx * dx + dy * dy <= 1;
-            var d = (int)((Noise(x, y, seed + 29) * 2f - 1f) * 14f);
-            Put(t, x, y,
-                Clamp((core ? coreR : r) + d),
-                Clamp((core ? coreG : g) + d),
-                Clamp((core ? coreB : b) + d),
-                255);
+            if (reach <= 1 && !(dx == 0 && dy == 0))
+            {
+                // The ring the core sits in stays petal-coloured but shaded.
+                var (sr, sg, sb) = petals[2];
+                Put(t, x, y, sr, sg, sb, 255);
+                continue;
+            }
+
+            if (dx == 0 && dy == 0)
+            {
+                Put(t, x, y, coreR, coreG, coreB, 255);
+                continue;
+            }
+
+            // Corners are the four petal lobes; the straight ring is left to air where it is
+            // furthest out, so the silhouette scallops.
+            var lobe = dx != 0 && dy != 0;
+            if (!lobe && reach > 4) continue;
+
+            var k = dx < 0 && dy < 0 ? 4 : dx > 0 && dy > 0 ? 1 : 3;
+            var (cr, cg, cb) = petals[k];
+            Put(t, x, y, cr, cg, cb, 255);
         }
 
         return t;
