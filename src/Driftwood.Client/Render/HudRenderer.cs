@@ -19,6 +19,9 @@ public enum HudScreenKind
     /// <summary>This installation: keys, picture, sound, and the testing dials.</summary>
     Game,
 
+    /// <summary>Dead, and told what by. One row out: waking where the bed says (#100).</summary>
+    Death,
+
     /// <summary>
     /// Before anybody is playing: the world flies past underneath and a short menu sits on it.
     /// </summary>

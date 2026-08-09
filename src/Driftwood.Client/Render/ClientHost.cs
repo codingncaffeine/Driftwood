@@ -3576,7 +3576,9 @@ public sealed class ClientHost : IDisposable
         // does nothing, and escape on the options opened from it comes back to it rather than
         // dropping somebody into a world they have not said they want to play — which would be a
         // player standing in the world with no idea how they got there.
-        if (_hudScreen.Kind == HudScreenKind.Start) return;
+        // The death screen refuses for its own reason: there is no escaping being dead — the one
+        // way out is the row, and WakeUp clears the kind itself before coming through here.
+        if (_hudScreen.Kind is HudScreenKind.Start or HudScreenKind.Death) return;
 
         if (_atStartScreen && _hudScreen.Kind == HudScreenKind.Game)
         {
@@ -3901,6 +3903,16 @@ public sealed class ClientHost : IDisposable
         if (_hudScreen.Kind == HudScreenKind.Start)
         {
             BuildStartRows();
+            return;
+        }
+
+        if (_hudScreen.Kind == HudScreenKind.Death)
+        {
+            _hudScreen.Rows.Add(new MenuRow(DeathWords(_diedOf), Heading: true));
+            _hudScreen.Rows.Add(new MenuRow(
+                "wake up",
+                _bedSpawn is not null ? "at your bed" : "at the world spawn",
+                Note: "what you carried lies where you fell"));
             return;
         }
 
@@ -4535,6 +4547,12 @@ public sealed class ClientHost : IDisposable
         if (_hudScreen.Kind == HudScreenKind.Start)
         {
             ChooseOnStartScreen();
+            return;
+        }
+
+        if (_hudScreen.Kind == HudScreenKind.Death)
+        {
+            WakeUp();
             return;
         }
 
@@ -6420,12 +6438,70 @@ public sealed class ClientHost : IDisposable
 
         if (!what.Died) return;
 
+        // ⛳ DEATH COSTS THE RUN BACK (#100): everything carried spills where the body fell —
+        // pockets, the other hand, the worn plate — and stays there for whoever comes back.
+        // ⚠ Dropped items do not ride the save, so a death drop is the session's to recover.
+        var fell = _player.Position + new Vector3(0f, 0.9f, 0f);
+
+        foreach (var stack in _inventory.All)
+            if (!stack.IsEmpty) _drops.Drop(stack, fell);
+        _inventory.Clear();
+
+        for (var slot = 0; slot < Equipment.Slots; slot++)
+        {
+            var worn = _equipment.At(slot);
+            if (!worn.IsEmpty) _drops.Drop(worn, fell);
+        }
+        _equipment.Clear();
+
+        OpenDeathScreen(what.Cause);
+    }
+
+    /// <summary>What killed them, for the screen's heading.</summary>
+    private VitalsCause _diedOf;
+
+    /// <summary>
+    /// The death screen: the cause as a heading, one row out. The body stops being stepped while
+    /// it is up — a dead body simulating is how a death loops.
+    /// </summary>
+    private void OpenDeathScreen(VitalsCause cause)
+    {
+        _diedOf = cause;
+        _walking = false;
+
+        _hudScreen.Kind = HudScreenKind.Death;
+        _hudScreen.TabNames = [];
+        _hudScreen.Tab = 0;
+        _hudScreen.Selected = 1;
+        _hudScreen.Scroll = 0;
+
+        TakeThePointer();
+        RefreshScreen();
+    }
+
+    private static string DeathWords(VitalsCause cause) => cause switch
+    {
+        VitalsCause.Drown => "you drowned",
+        VitalsCause.Burn => "you burned",
+        VitalsCause.Fall => "the fall killed you",
+        VitalsCause.Starve => "you starved",
+        VitalsCause.Prick => "the thorns had you",
+        _ => "you were slain",
+    };
+
+    /// <summary>Back on their feet: at the bed if it stands, and the death is written down.</summary>
+    private void WakeUp()
+    {
         _player.Teleport(RespawnPoint());
         _vitals.Restore();
+        _walking = true;
 
-        // ⛳ Dying is the one moment a player most wants the last few minutes to have been kept, and
-        // the least likely to have thought about it. The copy taken alongside is the step before the
-        // death, which is the only thing that makes it recoverable.
+        // Cleared here so CloseScreen's no-escaping-death refusal does not refuse the one door.
+        _hudScreen.Kind = HudScreenKind.None;
+        CloseScreen();
+
+        // ⛳ Dying is the one moment a player most wants the last few minutes to have been kept,
+        // and the least likely to have thought about it.
         SaveWorld("after dying");
     }
 
