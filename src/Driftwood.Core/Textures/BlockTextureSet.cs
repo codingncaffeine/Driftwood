@@ -1439,7 +1439,7 @@ public static class BlockTextureSet
             // ⚠ The hoe borrows IconTool's shovel shape — a blade on a haft is the same silhouette
             // at sixteen pixels, and drawing a fifth tool shape to be told apart from a shovel it is
             // never held beside would be a drawing nobody can read either way.
-            StarterBlocks.LayerHoe => TileGen.IconTool(1150, 2, 196, 196, 202),
+            StarterBlocks.LayerHoe => TileGen.IconHoe(1150, 196, 196, 202),
 
             StarterBlocks.LayerSeeds => TileGen.IconGrains(1151, 150, 176, 96),
             StarterBlocks.LayerWheatItem => TileGen.Wheat(1152, 14, 214, 186, 74, eared: true),

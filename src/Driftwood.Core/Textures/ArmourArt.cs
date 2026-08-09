@@ -55,7 +55,10 @@ public static class ArmourArt
         var two = new byte[Width * Height * 4];
 
         // Layer one: the helmet, the chestplate and its sleeves, and the boots.
-        Plate(one, PlayerPart.Head, 8, 8, 8, material, 0f, 1f);
+        // ⛳ The helmet leaves the FACE OPEN — the reference's own read, and the single change
+        // that turns "a player painted iron" into "a player wearing a helmet": the wearer's
+        // eyes look out of a hole with cheek pieces either side of it.
+        Plate(one, PlayerPart.Head, 8, 8, 8, material, 0f, 1f, faceOpen: true);
         Plate(one, PlayerPart.Body, 8, 12, 4, material, 0f, 1f);
         Plate(one, PlayerPart.RightArm, ArmWidth, 12, 4, material, 0f, 1f);
 
@@ -91,7 +94,7 @@ public static class ArmourArt
     /// <param name="to">And where it stops. Everything outside is left clear.</param>
     private static void Plate(
         byte[] sheet, PlayerPart part, int w, int h, int d, in Armour.Material material,
-        float from, float to)
+        float from, float to, bool faceOpen = false)
     {
         var (u, v) = NetOf(part);
 
@@ -99,6 +102,10 @@ public static class ArmourArt
         {
             var rect = PlayerModel.FaceRect(u, v, w, h, d, mirror: false, face);
             var lid = face is 4 or 5;
+
+            // The plate's own span in rows, so the trim can find its first and last painted row.
+            var rowFirst = lid ? 0 : (int)MathF.Ceiling(from * rect.H - 0.5f);
+            var rowLast = lid ? rect.H - 1 : (int)MathF.Floor(to * rect.H - 0.5f);
 
             for (var y = 0; y < rect.H; y++)
             for (var x = 0; x < rect.W; x++)
@@ -109,15 +116,28 @@ public static class ArmourArt
                 var down = lid ? (face == 4 ? 0f : 1f) : (y + 0.5f) / rect.H;
                 if (down < from || down > to) continue;
 
+                // ⛳ The face window: on the head's front, the middle stays OPEN between the brow
+                // and the chin, with a cheek piece's width either side. Skipped before anything is
+                // painted, so the trim below wraps the opening exactly as it wraps the outside.
+                if (faceOpen && face == 0 && y >= 3 && x >= 2 && x <= rect.W - 3) continue;
+
                 // Lit from above, the same direction everything else in this game is.
                 var shade = lid ? (face == 4 ? 26 : -30) : (int)((0.5f - down) * 26f);
 
-                // The bands that make a plate read as beaten metal rather than as a painted box,
-                // plus a stud line down each side.
-                if (!lid && ((y + 1) % 4 == 0)) shade -= 16;
-                if ((x + 1) % 5 == 0 && (y + 2) % 4 == 0) shade += 24;
+                // ⛳ TRIM, the reference's read: every plate wears a dark line along its own edges
+                // and a bright line just inside its top — it is what separates armour from a
+                // recoloured skin at any distance. The window's rim counts as an edge too.
+                var atWindow = faceOpen && face == 0 &&
+                               (y >= 2 && x >= 1 && x <= rect.W - 2) && !(y >= 3 && x >= 2 && x <= rect.W - 3);
+                var edge = x == 0 || x == rect.W - 1 || y == rowFirst || y == rowLast || atWindow;
 
-                shade += (int)((TileGen.Noise(rect.X + x, rect.Y + y, 90210) * 2f - 1f) * 7f);
+                if (edge) shade -= 46;
+                else if (y == rowFirst + 1) shade += 30;
+                else if ((y + 1) % 4 == 0) shade -= 14;      // the beaten bands between trims
+
+                if (!edge && (x + 1) % 5 == 0 && (y + 2) % 4 == 0) shade += 24;
+
+                shade += (int)((TileGen.Noise(rect.X + x, rect.Y + y, 90210) * 2f - 1f) * 6f);
 
                 var at = ((rect.Y + y) * Width + rect.X + x) * 4;
                 sheet[at] = TileGen.Clamp(material.R + shade);
@@ -184,9 +204,14 @@ public static class ArmourArt
                     faults.Add($"{material.Name} layer two paints the {part}, which the leggings do not cover");
             }
 
+            // A helmet is a brow with an OPEN face under it — both halves asserted, because
+            // "something on the head" is also true of a head painted solid, which is exactly
+            // the recoloured-skin look this art moved away from.
             var head = PlayerModel.FaceRect(0, 0, 8, 8, 8, mirror: false, face: 0);
-            if (!Painted(sheets[0], head.X + 4, head.Y + 4))
-                faults.Add($"{material.Name} has no helmet on it");
+            if (!Painted(sheets[0], head.X + 4, head.Y + 1))
+                faults.Add($"{material.Name} has no helmet brow on it");
+            if (Painted(sheets[0], head.X + 4, head.Y + 5))
+                faults.Add($"{material.Name} helmet plates the face over — the window is the helmet");
         }
 
         return faults;

@@ -4700,103 +4700,136 @@ public static class TileGen
     /// </remarks>
     public static readonly string[][] ToolShapes =
     [
-        // ⛳ SAMPLED FROM THE PROJECT'S OWN REFERENCE SHEET, not drawn here. Six hand-drawn passes
-        // traded one fault for another — a pickaxe that read as a bent pipe, an axe as a lollipop, a
-        // shovel as a stub — because 16-pixel art is a skill and guessing at it in a text file is
-        // not one. The sheet is ours, so the shapes come straight off it: the metal-headed variant
-        // of each tool, so head and haft separate by colour rather than by my judgement, downsampled
-        // to sixteen squares and classified by brightness into the letters below.
+        // ⛳ RE-EXTRACTED 2026-08-09 FROM THE USER'S OWN SHEET (art exmaples.png) — their words:
+        // do those precisely, because they are ours. The sheet's icons are ~16px art drawn at
+        // 5.4x, so sampling each slot's bounding box at region centres recovers the pixels
+        // nearly losslessly (extract-cell.ps1); the grids below are those recoveries, denoised
+        // and given consistent two-pixel hafts. The first pass of this task changed only the
+        // palette and rim around the OLD drawings and the user rightly called it no change at
+        // all — the drawing is the look.
         //
-        // ⚠ Regenerate with the same method if the sheet changes — the extraction reads the STONE
-        // pickaxe, the IRON axe, the IRON shovel and the STONE sword, because on a wooden tool the
-        // head and the haft are the same timber and nothing can tell them apart.
+        // ⚠ Regenerate with the same method if the sheet changes; read shapes off cells whose
+        // head and haft differ in colour (stone pickaxe, iron axe, iron shovel, diamond sword).
 
-        // Pickaxe: a bar across the top, its right end turning down, the haft off its middle.
+        // Pickaxe: a swept bar riding high, its long right horn curving down, the haft off it.
         [
             "................",
-            "......mmmmm.....",
-            ".....Mmmmmmm.HH.",
-            ".........MmmHH..",
-            "..........mmmM..",
-            ".........h..mmm.",
-            "........Hh...mm.",
-            ".......MH.....m.",
-            ".......H......m.",
-            ".....HhM......m.",
-            "....HH..........",
-            "...HH...........",
-            "...H............",
-            ".m..............",
-            ".m..............",
-            "................",
-        ],
-
-        // Axe: a broad blade with its edge on the left, the haft passing behind it.
-        [
-            "................",
-            "........mllm....",
-            "......Mmlllm....",
-            "......mlllll....",
-            ".....mllllllh...",
-            "......mlllllm...",
-            ".......M.mlmllM.",
-            "........hH.lllM.",
-            ".......hh..lll..",
-            "......hh...MM...",
-            ".....h..........",
-            "...Hhh..........",
-            "...h............",
-            ".hh.............",
-            ".hh.............",
-            "................",
-        ],
-
-        // Shovel: a spade blade, wide and angular, on a long shaft.
-        [
-            "................",
-            "...........Mmmm.",
-            "..........mmlml.",
-            ".........Mlmmml.",
-            "........mmmmmml.",
-            ".........mmmmlm.",
-            ".........H.mlm..",
-            "........hH.ml...",
-            ".......Hh.......",
-            "......Hh........",
-            ".....Hh.........",
-            "....HH..........",
+            ".....lmmmmmm....",
+            "......MMMmmmm...",
+            "...........mmm..",
+            "............mm..",
+            ".........hH..mm.",
+            "........hH...mm.",
+            ".......hH.....m.",
+            "......hH......M.",
+            ".....hH.........",
+            "....hH..........",
             "...hH...........",
-            ".Hh.............",
-            "..h.............",
+            "..hH............",
+            ".hH.............",
+            "................",
             "................",
         ],
 
-        // Sword: a blade the whole diagonal, a cross-guard over it, a short grip and a pommel.
+        // Axe: a tall broad blade, edge to the left, hanging off the haft's shoulder.
         [
             "................",
-            "............mlm.",
-            "...........mlmm.",
-            "..........mmmmm.",
-            ".........mmmmm..",
-            "........mmmmm...",
-            "........mmmm....",
-            "...m..mmmmm.....",
-            "...MmmmmmM......",
-            "....MmmmM.......",
-            "....MMM.........",
-            "....MMMM........",
-            "..mM............",
-            ".MMM............",
-            ".m..............",
+            ".......mll......",
+            "......Mllll.....",
+            ".....Mlllll.hh..",
+            ".....llllllhH...",
+            ".....mllllHh....",
+            "......mmmhH.....",
+            ".........hH.....",
+            "........hH......",
+            ".......hH.......",
+            "......hH........",
+            ".....hH.........",
+            "....hH..........",
+            "...hH...........",
+            "..hH............",
+            "................",
+        ],
+
+        // Shovel: a big rounded scoop pointing up the diagonal, on the longest shaft of the four.
+        [
+            "................",
+            "...........mmml.",
+            "..........mllll.",
+            ".........mmmmll.",
+            ".........mmmmll.",
+            ".........Mmmml..",
+            "........hH.mm...",
+            ".......hH.......",
+            "......hH........",
+            ".....hH.........",
+            "....hH..........",
+            "...hH...........",
+            "..hH............",
+            ".hH.............",
+            "................",
+            "................",
+        ],
+
+        // Sword: a thick blade the whole diagonal, an angled guard, a short grip and a pommel.
+        [
+            "................",
+            ".............ml.",
+            "............mll.",
+            "...........mll..",
+            "..........mll...",
+            ".........mll....",
+            "........mll.....",
+            ".......mll......",
+            "....m.mll.......",
+            "....MmmlM.......",
+            ".....hHM........",
+            "....hH..........",
+            "...MhH..........",
+            "...MM...........",
+            "................",
             "................",
         ],
     ];
 
+    /// <summary>The hoe: its own drawing, not the shovel's — a bar with the blade hooking down
+    /// off its left end, recovered from the user's sheet like the four tier shapes. Its own
+    /// painter rather than a fifth ToolShapes row because ToolShapeCount is load-bearing: the
+    /// layer numbering after the tools is built on it, and a hoe is one layer, not a tier axis.</summary>
+    public static byte[] IconHoe(int seed, byte r, byte g, byte b)
+    {
+        var rows = new[]
+        {
+            "................",
+            ".......mlllm....",
+            "......Mm...hH...",
+            "......Mm..hH....",
+            "......MM.hH.....",
+            "........hH......",
+            ".......hH.......",
+            "......hH........",
+            ".....hH.........",
+            "....hH..........",
+            "...hH...........",
+            "..hH............",
+            ".hH.............",
+            "................",
+            "................",
+            "................",
+        };
+
+        return PaintShape(rows, seed, r, g, b);
+    }
+
     /// <summary>One tool: a silhouette from <see cref="ToolShapes"/> in a tier's colours.</summary>
-    public static byte[] IconTool(int seed, int shape, byte r, byte g, byte b)
+    public static byte[] IconTool(int seed, int shape, byte r, byte g, byte b) =>
+        PaintShape(ToolShapes[shape], seed, r, g, b);
+
+    /// <summary>Paints a lettered silhouette in a tier's colours — the one painter every
+    /// tool-shaped drawing goes through, so a hoe and a pickaxe cannot drift in style.</summary>
+    private static byte[] PaintShape(string[] rows, int seed, byte r, byte g, byte b)
     {
         var t = new byte[BytesPerTile];
-        var rows = ToolShapes[shape];
 
         // The haft is the same timber on every tier. Only the head changes, which is what makes a
         // row of tools read as one family at five materials rather than as five unrelated pictures.
@@ -4890,80 +4923,88 @@ public static class TileGen
     /// </remarks>
     public static readonly string[][] ArmourShapes =
     [
-        // Helmet: a domed cap, cheek pieces either side of the face.
+        // ⛳ RESHAPED 2026-08-09 against the reference pack's own armour icons, read out as
+        // lettered grids first: what ours lacked was not shading, it was STRUCTURE — a brow
+        // over an open face, shoulders notched away from the chest, a belt over the legs,
+        // toes on the boots. The interior openings are '.' on purpose: the grown edge
+        // outlines them exactly as it outlines the outside, which is where the reference's
+        // dark interior lines come from.
+
+        // Helmet: a domed cap with a brow line, cheek pieces either side of the open face.
         [
             "................",
             "................",
-            "....llllllll....",
-            "...lmmmmmmmml...",
-            "..lmmmmmmmmmml..",
-            "..mmmmmmmmmmmm..",
-            "..mmmmmmmmmmmm..",
-            "..mmmmmmmmmmmm..",
-            "..mmm......mmm..",
-            "..mmM......Mmm..",
-            "..mMM......MMm..",
-            "...MM......MM...",
+            "................",
+            ".....llllll.....",
+            "....llllllmm....",
+            "...llmmmmmmmM...",
+            "...lmmmmmmmmM...",
+            "...lml....MmM...",
+            "...lml....MmM...",
+            "...Mml....MmM...",
+            "....mm....mM....",
+            "................",
             "................",
             "................",
             "................",
             "................",
         ],
 
-        // Chestplate: shoulders, a neck cut out between them, a waist narrower than the chest.
+        // Chestplate: two shoulder caps, the neck open between them, the arms notched away,
+        // and the breastplate tapering to its waist.
         [
             "................",
-            ".mmm..llll..mmm.",
-            ".mmmmllllllmmmm.",
-            ".mmmmmllllmmmmm.",
-            ".mmmmmmmmmmmmmm.",
-            ".mmmmmmmmmmmmmm.",
-            "..mmmmmmmmmmmm..",
-            "..mmmmmmmmmmmm..",
-            "..mmmmmmmmmmmm..",
-            "..Mmmmmmmmmmmm..",
-            "..Mmmmmmmmmmmm..",
-            "..MMmmmmmmmmMM..",
-            "...MMMMMMMMMM...",
+            "................",
+            "..lllll..lllll..",
+            ".llllmm..Mmmmm..",
+            ".llmmm....MmmM..",
+            ".lmm........mM..",
+            ".mm..........M..",
+            "..mllmmmmmmmM...",
+            "...lmllmmmmM....",
+            "...lmmmmmmmM....",
+            "...lmmmmmmmM....",
+            "...mmmmmmmmM....",
+            "...MmmmmmmMM....",
+            "....MMMMMMM.....",
+            "................",
+            "................",
+        ],
+
+        // Leggings: a belt, then two legs either side of the gap.
+        [
+            "................",
+            "................",
+            "................",
+            "...lllllllllll..",
+            "...lmmmmmmmmmM..",
+            "...lmmm...mmmM..",
+            "...lmm.....mmM..",
+            "...lmm.....mmM..",
+            "...lmm.....mmM..",
+            "...lmm.....mmM..",
+            "...mmm.....mmM..",
+            "...MmM.....MmM..",
+            "...MMM.....MMM..",
             "................",
             "................",
             "................",
         ],
 
-        // Leggings: a waistband with two legs hanging off it.
-        [
-            "................",
-            "................",
-            "..llllllllllll..",
-            "..mmmmmmmmmmmm..",
-            "..mmmmmmmmmmmm..",
-            "..mmmmmmmmmmmm..",
-            "..mmmm....mmmm..",
-            "..mmmm....mmmm..",
-            "..mmmm....mmmm..",
-            "..mmmm....mmmm..",
-            "..MmmM....MmmM..",
-            "..MMMM....MMMM..",
-            "................",
-            "................",
-            "................",
-            "................",
-        ],
-
-        // Boots: a pair, seen from the side, toes outward.
+        // Boots: a pair, shafts down into toes turned outward.
         [
             "................",
             "................",
             "................",
             "................",
             "................",
-            "................",
-            "..llll....llll..",
-            "..mmmm....mmmm..",
-            "..mmmm....mmmm..",
-            "..mmmm....mmmm..",
-            ".mmmmm...mmmmm..",
-            ".mmmmmm..mmmmmm.",
+            "...llll..llll...",
+            "...lmmM..lmmM...",
+            "...lmmM..lmmM...",
+            "...lmmM..lmmM...",
+            "..llmmM..lmmMM..",
+            ".llmmmM..lmmmMM.",
+            ".lmmmmM..lmmmmM.",
             ".MMMMMM..MMMMMM.",
             "................",
             "................",
