@@ -631,7 +631,10 @@ public static class WorldAudit
         // the moment the generator stops freezing a cold coast), so the census skipping it here
         // gives up nothing.
         var climatic = new HashSet<ushort>
-            { ids.Ice.Value, ids.Cactus.Value, ids.DeadBush.Value, ids.MarshReed.Value };
+        {
+            ids.Ice.Value, ids.Cactus.Value, ids.DeadBush.Value, ids.MarshReed.Value,
+            ids.Moss.Value,
+        };
 
         var missing = new List<string>();
         var crafted = 0;
@@ -1010,6 +1013,15 @@ public static class WorldAudit
                 && registry[ids.Glowcap].LightEmission == LightValue.PackBlock(5, 10, 9),
             $"{glowcaps:N0} glowcaps (want 40-1,200), topmost at y {maxY[ids.Glowcap.Value]} "
             + $"(want under {TerrainGenerator.GlowFloor}), emitting 5/10/9");
+
+        // ⛳ Moss is the glow floor's opposite number: rain only seeps so far, so nothing mossy
+        // below the moss floor — the depth as the rule, the count banded from the five seeds.
+        var mossCells = counts[ids.Moss.Value];
+        Check(
+            "the wet shallows wear moss",
+            mossCells is > 100 and < 30_000 && minY[ids.Moss.Value] > TerrainGenerator.MossFloor,
+            $"{mossCells:N0} moss cells (want 100-30,000), lowest at y {minY[ids.Moss.Value]} "
+            + $"(want above {TerrainGenerator.MossFloor})");
 
         // The dusting has to be a fringe on the snowfield rather than a second one. Measured as its
         // share of all the white ground: with no band the edge either vanishes (a snow line drawn
@@ -6785,12 +6797,13 @@ public static class WorldAudit
         (StarterBlocks.LayerDeadBush, "dead_bush"),
 
         (StarterBlocks.LayerGlowcap, "glowcap"),
+        (StarterBlocks.LayerMarshReed, "marsh_reed"),
 
         // The moving pin: the LAST layer, by name. It has now caught three appends in the act —
         // fifteen crop rows landing after "the last layer is bonemeal", the composter's four
         // landing after black glass, and the berry bush's three after compost-ready — which is
         // exactly what it is for. Keep it pointed at whatever is genuinely last.
-        ((ushort)(StarterBlocks.LayerCount - 1), "marsh_reed"),
+        ((ushort)(StarterBlocks.LayerCount - 1), "mossy_rubble"),
     ];
 
     /// <summary>

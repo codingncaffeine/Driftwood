@@ -510,6 +510,10 @@ public static class StarterRecipes
         // beside M0's path and replacing nothing.
         Shaped("paper from reeds", "paper", 3, ["M", "M", "M"], "marsh_reed");
 
+        // Grown, not cut: moss pressed against rubble is the first worked stone whose look came
+        // off a cave floor, and the decor vocabulary's door into "old".
+        LooseAt("mossy rubble", "mossy_rubble", 1, CraftStation.Hand, "moss", "rubble");
+
         // ⛳ A torch shut inside a carved pumpkin. The carve itself is the shears' act on the
         // standing block, not a recipe — so this is the one bench step in the pumpkin's whole run.
         LooseAt("jack o'lantern", "jack_o_lantern", 1, CraftStation.Bench, "carved_pumpkin", "torch");

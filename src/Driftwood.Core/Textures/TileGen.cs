@@ -2406,6 +2406,22 @@ public static class TileGen
         return t;
     }
 
+    /// <summary>Moss: a dense soft green, deeper-toned in the dents, no two texels flat.</summary>
+    public static byte[] Moss(int seed)
+    {
+        var t = new byte[BytesPerTile];
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var lump = Noise(x / 3, y / 3, seed) * 2f - 1f;
+            var grain = (int)((Noise(x, y, seed + 5) * 2f - 1f) * 12f + lump * 14f);
+            Put(t, x, y, Clamp(86 + grain), Clamp(124 + grain), Clamp(72 + grain), 255);
+        }
+
+        return t;
+    }
+
     /// <summary>Marsh reed: three canes leaning together, jointed, in wet greens.</summary>
     public static byte[] MarshReed(int seed)
     {

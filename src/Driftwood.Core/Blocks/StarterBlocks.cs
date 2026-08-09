@@ -582,8 +582,10 @@ public static class StarterBlocks
     public const ushort LayerDeadBush = LayerCobweb + 11;
     public const ushort LayerGlowcap = LayerCobweb + 12;
     public const ushort LayerMarshReed = LayerCobweb + 13;
+    public const ushort LayerMoss = LayerCobweb + 14;
+    public const ushort LayerMossyRubble = LayerCobweb + 15;
 
-    public const int LayerCount = LayerMarshReed + 1;
+    public const int LayerCount = LayerMossyRubble + 1;
 
     /// <summary>One anvil's name, by how worn it is and which way it lies.</summary>
     /// <remarks>
@@ -780,7 +782,10 @@ public static class StarterBlocks
         BlockId Glowcap,
 
         /// <summary>The wet shoreline's cane, standing where ground meets the waterline.</summary>
-        BlockId MarshReed)
+        BlockId MarshReed,
+
+        /// <summary>The wet shallow caves' floor covering.</summary>
+        BlockId Moss)
     {
         /// <summary>Every rock an ore can form in. Ore replaces rock, whichever rock it is.</summary>
         public BlockId[] Rock => [Stone, Deepstone, Coralstone, Driftstone, Saltstone];
@@ -1095,6 +1100,23 @@ public static class StarterBlocks
             Sounds = SoundMaterial.Grass,
             SupportFace = Faces.NegY,
             Model = BlockModel.Cross(LayerDeadBush, tinted: false),
+        });
+
+        // ⛳ Moss: the wet shallow caves' floor, a soft green block where rain seeps down into
+        // stone. Pressed against rubble it makes the mossy form — the first worked stone whose
+        // look is GROWN rather than cut, and the decor vocabulary's door into "old".
+        var moss = registry.Register(new BlockType
+        {
+            Name = "moss", Hardness = 0.4f, Sounds = SoundMaterial.Grass,
+            TopLayer = LayerMoss, SideLayer = LayerMoss, BottomLayer = LayerMoss,
+        });
+
+        registry.Register(new BlockType
+        {
+            Name = "mossy_rubble", Hardness = 2f, Crafted = true,
+            HarvestClass = ToolClass.Pickaxe, HarvestTier = 1,
+            Sounds = SoundMaterial.Stone,
+            TopLayer = LayerMossyRubble, SideLayer = LayerMossyRubble, BottomLayer = LayerMossyRubble,
         });
 
         // ⛳ The marsh reed: the wet shoreline's tell, two or three joints of cane standing where
@@ -1631,7 +1653,8 @@ public static class StarterBlocks
             diamond, azurite, clay, sandstone, snow, snowLayer, meadowgrass, seaflax, marshlily,
             emberbloom, sunwort,
             rubble, glass, bricks, bench, furnace, furnaceLit, lava, wildCrops, berryBushRipe,
-            mushroomBrown, mushroomRed, pumpkin, cobweb, ice, cactus, deadBush, glowcap, marshReed);
+            mushroomBrown, mushroomRed, pumpkin, cobweb, ice, cactus, deadBush, glowcap, marshReed,
+            moss);
     }
 
     /// <summary>

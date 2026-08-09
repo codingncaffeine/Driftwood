@@ -140,6 +140,11 @@ public sealed class TerrainGenerator
     private readonly int _seedDune;
     private readonly int _seedGlowcap;
     private readonly int _seedReed;
+    private readonly int _seedMoss;
+
+    /// <summary>Depth below which no moss grows — rain only seeps so far. The glow floor's
+    /// opposite number: moss owns the wet shallows, the glowcap the dry deep.</summary>
+    public const int MossFloor = -40;
 
     /// <summary>Depth above which no glowcap grows. The deep earns its own light; the shallows
     /// have torches and daylight down their shafts, and a glow that grows everywhere means
@@ -203,6 +208,7 @@ public sealed class TerrainGenerator
         _seedDune = seed.Derive("decor.dunes");
         _seedGlowcap = seed.Derive("decor.glowcap");
         _seedReed = seed.Derive("decor.reeds");
+        _seedMoss = seed.Derive("decor.moss");
         _seedFlora = seed.Derive("decor.cave_flora");
         _seedLavaTable = seed.Derive("deep.lava_table");
         _seedLavaPools = seed.Derive("deep.lava_pools");
@@ -893,6 +899,21 @@ public sealed class TerrainGenerator
                 if (floor != _ids.Stone && floor != _ids.Deepstone) continue;
 
                 var wy = oy + y;
+
+                // ⛳ Moss first, and it DRESSES THE FLOOR rather than standing on it: wet climate
+                // seeping into shallow stone turns the cell UNDER this air green. Its own seed,
+                // its own pockets, only above the moss floor — the glowcap's depth logic run the
+                // other way up — and the floor cell is in-chunk by the loop's own y >= 1.
+                // ⚠ wy − 1, because the RULE is about where the moss lies and the moss dresses
+                // the floor below this air cell — gated on the air, the lowest moss lands exactly
+                // AT the floor line, and a check on its own boundary agrees with anything.
+                if (wy - 1 > MossFloor && WetShore(wx, wz)
+                    && Noise.Fbm3(wx / 20f, wy / 20f, wz / 20f, _seedMoss, 2) > 0.26f
+                    && Noise.Value3(wx, wy, wz, _seedMoss + 7) < 0.35f)
+                {
+                    chunk.Set(x, y - 1, z, _ids.Moss);
+                    continue;
+                }
 
                 // Webs before mushrooms: a webbed pocket is somebody's lair, not a garden. Its
                 // field is tighter and rarer than the mushrooms', and denser inside — walking

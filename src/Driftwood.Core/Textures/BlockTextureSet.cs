@@ -470,6 +470,10 @@ public static class BlockTextureSet
 
         // Ours is the marsh reed; the pack paints it as its own shoreline cane.
         new("marsh_reed", "textures/block/sugar_cane.png", true, "textures/blocks/reeds.png"),
+
+        new("moss", "textures/block/moss_block.png", false),
+        new("mossy_rubble", "textures/block/mossy_cobblestone.png", false,
+            "textures/blocks/cobblestone_mossy.png"),
     ];
 
     /// <summary>
@@ -1435,6 +1439,12 @@ public static class BlockTextureSet
             StarterBlocks.LayerDeadBush => TileGen.DeadBush(1363),
             StarterBlocks.LayerGlowcap => TileGen.Glowcap(1364),
             StarterBlocks.LayerMarshReed => TileGen.MarshReed(1365),
+            StarterBlocks.LayerMoss => TileGen.Moss(1366),
+
+            // Mossy rubble is rubble with moss grown into its cracks — the Ore overlay's own
+            // trick, seeding green into the rubble's exact tile rather than a second drawing.
+            StarterBlocks.LayerMossyRubble => TileGen.Ore(
+                1367, TileGen.Cobble(1034, 126, 126, 130), 96, 134, 80, 11),
 
             _ => Wheat(layer) ?? Crop(layer) ?? CropIcon(layer) ?? StainedGlass(layer)
                  ?? MetalBlock(layer) ?? Wool(layer) ?? Meat(layer) ?? Dye(layer)

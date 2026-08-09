@@ -128,6 +128,8 @@ public static class StarterItems
         Block(items, blocks, "glowcap", "glowcap", StarterBlocks.LayerGlowcap);
 
         Block(items, blocks, "marsh_reed", "marsh reed", StarterBlocks.LayerMarshReed);
+        Block(items, blocks, "moss", "moss", StarterBlocks.LayerMoss);
+        Block(items, blocks, "mossy_rubble", "mossy rubble", StarterBlocks.LayerMossyRubble);
         Block(items, blocks, "deepstone", "deepstone", StarterBlocks.LayerDeepstone);
         Block(items, blocks, "coralstone", "coralstone", StarterBlocks.LayerCoralstone);
         Block(items, blocks, "driftstone", "driftstone", StarterBlocks.LayerDriftstone);
