@@ -122,6 +122,7 @@ public static class StarterItems
         Block(items, blocks, "clay", "clay", StarterBlocks.LayerClay);
         Block(items, blocks, "sandstone", "sandstone", StarterBlocks.LayerSandstone);
         Block(items, blocks, "snow", "snow", StarterBlocks.LayerSnow);
+        Block(items, blocks, "cactus", "cactus", StarterBlocks.LayerCactusSide);
         Block(items, blocks, "deepstone", "deepstone", StarterBlocks.LayerDeepstone);
         Block(items, blocks, "coralstone", "coralstone", StarterBlocks.LayerCoralstone);
         Block(items, blocks, "driftstone", "driftstone", StarterBlocks.LayerDriftstone);
@@ -873,6 +874,10 @@ public static class StarterItems
         // Winter cannot be carried home yet: broken ice is simply gone. An ice ITEM would need a
         // way to keep it frozen in a pocket, which is a mechanic, not a row.
         new BlockDrops.Rule("ice", null),
+
+        // Dry wood off a dry land: the one place sticks grow unforested. The bush itself is not
+        // carried — a dead thing comes apart in the hand.
+        new BlockDrops.Rule("dead_bush", "stick", 2),
 
         // ⚠ Grass still leaves nothing and the flowers no longer do. The difference is that one of
         // them is now a material: every colour in the game starts as something picked out of a

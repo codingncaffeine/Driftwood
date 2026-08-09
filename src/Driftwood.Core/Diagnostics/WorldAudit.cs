@@ -630,7 +630,7 @@ public static class WorldAudit
         // is owned by each block's own equivalence check instead ("cold water wears ice" goes red
         // the moment the generator stops freezing a cold coast), so the census skipping it here
         // gives up nothing.
-        var climatic = new HashSet<ushort> { ids.Ice.Value };
+        var climatic = new HashSet<ushort> { ids.Ice.Value, ids.Cactus.Value, ids.DeadBush.Value };
 
         var missing = new List<string>();
         var crafted = 0;
@@ -848,6 +848,46 @@ public static class WorldAudit
                 && maxY[ids.Ice.Value] <= TerrainGenerator.SeaLevel,
             $"{frozenSeen:N0} frozen and {liquidSeen:N0} open cells at sea level, {warmIce} frozen "
             + $"in the warm, {coldWater} liquid in the cold, nothing above y {TerrainGenerator.SeaLevel}");
+
+        // ⛳ The desert kit, in the ice's own equivalence shape: every cactus stands on sand or
+        // its own kind and every dead bush on sand, all in columns the generator itself calls
+        // arid — and the arid column count is reported, so a soaked or cool run says "nothing to
+        // grow on" out loud rather than passing on nothing.
+        var cactusSeen = 0;
+        var bushSeen = 0;
+        var missited = 0;
+        var aridColumns = 0;
+
+        for (var z = minBlock; z <= maxBlock; z += 2)
+        for (var x = minBlock; x <= maxBlock; x += 2)
+        {
+            if (generator.AridSurface(x, z)) aridColumns++;
+
+            for (var y = TerrainGenerator.SeaLevel + 1; y <= TerrainGenerator.SeaLevel + 30; y++)
+            {
+                var cell = world.GetBlock(x, y, z);
+
+                if (cell == ids.Cactus.Value)
+                {
+                    cactusSeen++;
+                    var under = world.GetBlock(x, y - 1, z);
+                    if ((under != ids.Sand.Value && under != ids.Cactus.Value)
+                        || !generator.AridSurface(x, z))
+                        missited++;
+                }
+                else if (cell == ids.DeadBush.Value)
+                {
+                    bushSeen++;
+                    if (world.GetBlock(x, y - 1, z) != ids.Sand.Value
+                        || !generator.AridSurface(x, z))
+                        missited++;
+                }
+            }
+        }
+
+        Check("the arid fringe grows the desert kit", missited == 0,
+            $"{cactusSeen:N0} cactus and {bushSeen:N0} dead bush cells, {missited} anywhere but "
+            + $"arid sand, {aridColumns:N0} arid columns in the sample");
 
         Check(
             "sandstone lies under the sand",
@@ -5472,6 +5512,40 @@ public static class WorldAudit
         if (dived < 4f || dived < drifted + 1.2f)
             faults.Add($"two seconds of swimming down covered {dived:F1} blocks against {drifted:F1} "
                      + "drifting flat — the stroke is not following the eyes");
+
+        // ⛳ The prick: a body pressed against a cactus pays about a half-heart a second, and the
+        // CONTROL stands two blocks clear in the same world and pays nothing — without it, "it
+        // lost health" is also true of a vitals that hurts everyone everywhere. Pressed, not
+        // inside: the block is solid, which is the whole reason the scan is an expanded box.
+        var pricked = new VoxelWorld(registry);
+        for (var z = -3; z <= 3; z++)
+        for (var x = -3; x <= 3; x++)
+        for (var y = 0; y <= 10; y++)
+            pricked.SetBlock(x, y, z, ids.Stone);
+        pricked.SetBlock(2, 11, 0, ids.Cactus);
+
+        // Flush against the cactus face BY CONSTRUCTION — half a body width back from the cell
+        // wall, less a hair — rather than at a number that happened to be close. The first draft
+        // stood at 1.6 flat, which is outside the scan's own margin for any body width at all.
+        var leaner = new PlayerBody(registry);
+        var stung = new PlayerVitals(registry);
+        leaner.Teleport(new Vector3(2f - PlayerBody.Width * 0.5f - 0.01f, 11f, 0.5f));
+
+        var bystander = new PlayerBody(registry);
+        var calm = new PlayerVitals(registry);
+        bystander.Teleport(new Vector3(-1.5f, 11f, 0.5f));
+
+        for (var i = 0; i < 60 * 3; i++)
+        {
+            stung.Update(pricked, leaner, Step);
+            calm.Update(pricked, bystander, Step);
+        }
+
+        var stungCost = PlayerVitals.MaxHealth - stung.Health;
+        if (stungCost is < 2 or > 4)
+            faults.Add($"three seconds against a cactus cost {stungCost} half-hearts, wanted about 3");
+        if (calm.Health != PlayerVitals.MaxHealth)
+            faults.Add("a body standing clear of the cactus was pricked by it");
         else if (refilled >= toEmpty) faults.Add($"breath took {refilled / 60f:F1}s to return, longer than it lasted");
 
         // Rest heals, and not before it should.
@@ -6611,12 +6685,13 @@ public static class WorldAudit
         (StarterBlocks.LayerRabbitHide, "rabbit_hide"),
 
         (StarterBlocks.LayerInkSac, "ink_sac"),
+        (StarterBlocks.LayerIce, "ice"),
 
         // The moving pin: the LAST layer, by name. It has now caught three appends in the act —
         // fifteen crop rows landing after "the last layer is bonemeal", the composter's four
         // landing after black glass, and the berry bush's three after compost-ready — which is
         // exactly what it is for. Keep it pointed at whatever is genuinely last.
-        ((ushort)(StarterBlocks.LayerCount - 1), "ice"),
+        ((ushort)(StarterBlocks.LayerCount - 1), "dead_bush"),
     ];
 
     /// <summary>

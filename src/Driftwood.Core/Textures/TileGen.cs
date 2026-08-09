@@ -2306,6 +2306,92 @@ public static class TileGen
         return t;
     }
 
+    /// <summary>Cactus flank: ribbed desert green, a spine down each ridge line.</summary>
+    /// <remarks>
+    /// The ribs are vertical bands of two greens — what reads as a cactus at forty paces is the
+    /// striping, not the spines — and the spines are single pale texels on the rib crests, filled
+    /// per pixel by remainder rather than walked.
+    /// </remarks>
+    public static byte[] CactusSide(int seed)
+    {
+        var t = new byte[BytesPerTile];
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            // The clear margin every pack cuts this art with — see the block's own note.
+            if (x is 0 or Size - 1) continue;
+
+            var grain = (int)((Noise(x, y, seed) * 2f - 1f) * 8f);
+
+            // Four ribs across the face: crest, flank, trough, flank.
+            var rib = x % 4;
+            var (r, g, b) = rib switch
+            {
+                0 => (96, 138, 70),
+                2 => (66, 102, 50),
+                _ => (80, 120, 60),
+            };
+
+            // A spine on every crest, every fourth row, offset per column so they stagger.
+            if (rib == 0 && (y + x / 4 * 2) % 4 == 0) (r, g, b) = (214, 214, 188);
+
+            Put(t, x, y, Clamp(r + grain), Clamp(g + grain), Clamp(b + grain), 255);
+        }
+
+        return t;
+    }
+
+    /// <summary>Cactus top: the same ribs run to a middle, with the pale heart a cut one shows.</summary>
+    public static byte[] CactusTop(int seed)
+    {
+        var t = new byte[BytesPerTile];
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            // The same clear margin as the flank, all the way round.
+            if (x is 0 or Size - 1 || y is 0 or Size - 1) continue;
+
+            var grain = (int)((Noise(x, y, seed + 3) * 2f - 1f) * 8f);
+            var dx = MathF.Abs(x - 7.5f);
+            var dy = MathF.Abs(y - 7.5f);
+            var ring = MathF.Max(dx, dy);
+
+            var (r, g, b) = ring < 3f
+                ? (150, 176, 122)                      // the pale flesh of the crown
+                : ((int)ring % 2 == 0 ? (94, 136, 68) : (70, 106, 52));
+
+            Put(t, x, y, Clamp(r + grain), Clamp(g + grain), Clamp(b + grain), 255);
+        }
+
+        return t;
+    }
+
+    /// <summary>The dead bush: a dry fork of twigs on nothing, in old-rope browns.</summary>
+    public static byte[] DeadBush(int seed)
+    {
+        var t = new byte[BytesPerTile];
+
+        // A trunk up the middle of the lower half, then three forks drawn per pixel against
+        // segment distance — ToSegment is what cannot skip cells on a diagonal.
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var trunk = x is 7 or 8 && y >= 9;
+            var left = ToSegment(x, y, 7f, 10f, 3f, 4f) < 0.7f;
+            var right = ToSegment(x, y, 8f, 10f, 12f, 3f) < 0.7f;
+            var middle = ToSegment(x, y, 7.5f, 9f, 7f, 2f) < 0.6f;
+
+            if (!trunk && !left && !right && !middle) continue;
+
+            var grain = (int)((Noise(x, y, seed) * 2f - 1f) * 14f);
+            Put(t, x, y, Clamp(122 + grain), Clamp(92 + grain), Clamp(58 + grain), 255);
+        }
+
+        return t;
+    }
+
     /// <summary>A sheet of flame, transparent around it — what stands in a campfire.</summary>
     /// <remarks>
     /// Tapering as it rises and eaten into at the edges, so the two crossed planes it is drawn on

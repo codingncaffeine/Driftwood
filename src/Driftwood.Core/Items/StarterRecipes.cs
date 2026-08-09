@@ -499,6 +499,10 @@ public static class StarterRecipes
         Smelt("mushroom_brown", "roasted_mushroom", work: SmeltWork.Food);
         Smelt("mushroom_red", "roasted_mushroom", work: SmeltWork.Food);
 
+        // The desert's dye: a cactus cooks down to green, the second door into a colour that
+        // otherwise only comes out of mixing. The genre's own recipe, worth keeping real.
+        Smelt("cactus", "dye_green");
+
         // ⛳ A torch shut inside a carved pumpkin. The carve itself is the shears' act on the
         // standing block, not a recipe — so this is the one bench step in the pumpkin's whole run.
         LooseAt("jack o'lantern", "jack_o_lantern", 1, CraftStation.Bench, "carved_pumpkin", "torch");

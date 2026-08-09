@@ -242,6 +242,15 @@ public sealed class BlockType
     /// </remarks>
     public bool Snares { get; init; }
 
+    /// <summary>True for a block that hurts a body touching it — the cactus's whole argument.</summary>
+    /// <remarks>
+    /// ⛳ Named on the block for <see cref="Snares"/>'s own reason: the vitals ask what the body is
+    /// against, never what the thing is called. How much and how often is <c>PlayerVitals</c>'s to
+    /// say — and a solid pricking block has to be felt through an EXPANDED body box, because a
+    /// body can never overlap the solid thing that is hurting it.
+    /// </remarks>
+    public bool Hurts { get; init; }
+
     /// <summary>
     /// How big a live fire this block shows, and how far up its own cell it sits. Zero for none.
     /// </summary>

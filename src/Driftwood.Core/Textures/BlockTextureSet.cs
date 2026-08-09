@@ -458,6 +458,10 @@ public static class BlockTextureSet
         // ⛳ #95, the seed's missing nature. Cutout because every pack paints ice with alpha in
         // it, and a translucent texel survives the cutout rule at better than half solid.
         new("ice", "textures/block/ice.png", true),
+
+        new("cactus_side", "textures/block/cactus_side.png", true),
+        new("cactus_top", "textures/block/cactus_top.png", true),
+        new("dead_bush", "textures/block/dead_bush.png", true, "textures/blocks/deadbush.png"),
     ];
 
     /// <summary>
@@ -1418,6 +1422,9 @@ public static class BlockTextureSet
             StarterBlocks.LayerInkSac => TileGen.IconLump(1356, 38, 42, 56),
 
             StarterBlocks.LayerIce => TileGen.Ice(1360),
+            StarterBlocks.LayerCactusSide => TileGen.CactusSide(1361),
+            StarterBlocks.LayerCactusTop => TileGen.CactusTop(1361),
+            StarterBlocks.LayerDeadBush => TileGen.DeadBush(1363),
 
             _ => Wheat(layer) ?? Crop(layer) ?? CropIcon(layer) ?? StainedGlass(layer)
                  ?? MetalBlock(layer) ?? Wool(layer) ?? Meat(layer) ?? Dye(layer)

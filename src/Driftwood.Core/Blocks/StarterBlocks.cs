@@ -577,8 +577,11 @@ public static class StarterBlocks
     /// <see cref="Textures.BlockTextureSet"/>'s array order IS this numbering.
     /// </remarks>
     public const ushort LayerIce = LayerCobweb + 8;
+    public const ushort LayerCactusSide = LayerCobweb + 9;
+    public const ushort LayerCactusTop = LayerCobweb + 10;
+    public const ushort LayerDeadBush = LayerCobweb + 11;
 
-    public const int LayerCount = LayerIce + 1;
+    public const int LayerCount = LayerDeadBush + 1;
 
     /// <summary>One anvil's name, by how worn it is and which way it lies.</summary>
     /// <remarks>
@@ -765,7 +768,11 @@ public static class StarterBlocks
         BlockId Cobweb,
 
         /// <summary>The frozen lid cold water wears, by the snow's own rule.</summary>
-        BlockId Ice)
+        BlockId Ice,
+
+        /// <summary>The arid fringe's two tells, stood on hot dry sand.</summary>
+        BlockId Cactus,
+        BlockId DeadBush)
     {
         /// <summary>Every rock an ore can form in. Ore replaces rock, whichever rock it is.</summary>
         public BlockId[] Rock => [Stone, Deepstone, Coralstone, Driftstone, Saltstone];
@@ -1055,6 +1062,31 @@ public static class StarterBlocks
             Name = "ice", Hardness = 0.5f, Opaque = false,
             Sounds = SoundMaterial.Glass,
             Model = BlockModel.Cube(LayerIce, LayerIce, LayerIce),
+        });
+
+        // ⛳ The desert kit, standing on the hot dry sand. The cactus HURTS — lean on one, stand
+        // on one, press into one and it costs, which is the whole difference between a plant and
+        // an obstacle — and it is the first block whose harm is a fact about touching it rather
+        // than about being inside it. The dead bush is the other tell of the arid fringe, and
+        // what it leaves is sticks: dry wood off a dry land, the one place wood grows unforested.
+        // ⚠ Opaque = false and a clear margin down each side of the tile, which is one decision:
+        // every pack cuts its cactus art for the inset model, margins transparent — art that
+        // cannot land on an opaque cube — and the same margins on ours are what make a full cube
+        // READ as the genre's inset cactus without carrying a second model shape.
+        var cactus = registry.Register(new BlockType
+        {
+            Name = "cactus", Hardness = 0.5f, Hurts = true, Opaque = false,
+            Sounds = SoundMaterial.Grass,
+            SupportFace = Faces.NegY,
+            TopLayer = LayerCactusTop, SideLayer = LayerCactusSide, BottomLayer = LayerCactusTop,
+        });
+
+        var deadBush = registry.Register(new BlockType
+        {
+            Name = "dead_bush", Hardness = 0.05f, Solid = false, Opaque = false,
+            Sounds = SoundMaterial.Grass,
+            SupportFace = Faces.NegY,
+            Model = BlockModel.Cross(LayerDeadBush, tinted: false),
         });
         var log = registry.Register(new BlockType
         {
@@ -1566,7 +1598,7 @@ public static class StarterBlocks
             diamond, azurite, clay, sandstone, snow, snowLayer, meadowgrass, seaflax, marshlily,
             emberbloom, sunwort,
             rubble, glass, bricks, bench, furnace, furnaceLit, lava, wildCrops, berryBushRipe,
-            mushroomBrown, mushroomRed, pumpkin, cobweb, ice);
+            mushroomBrown, mushroomRed, pumpkin, cobweb, ice, cactus, deadBush);
     }
 
     /// <summary>

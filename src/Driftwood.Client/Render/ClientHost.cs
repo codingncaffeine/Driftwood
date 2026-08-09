@@ -6067,6 +6067,11 @@ public sealed class ClientHost : IDisposable
                     _audio?.Play(Pick(ActionSounds.BurnHurt), _viewPosition, 0.85f, Wobble());
                     break;
 
+                // A sting, not a wound: the ordinary impact set, quiet and pitched up.
+                case VitalsCause.Prick:
+                    _audio?.Play(Pick(CreatureSounds.Blows), _viewPosition, 0.5f, 1.15f);
+                    break;
+
                 case VitalsCause.Fall:
                 {
                     var under = _streamer.World.GetBlock(

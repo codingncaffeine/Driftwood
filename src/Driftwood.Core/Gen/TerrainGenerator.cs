@@ -137,6 +137,7 @@ public sealed class TerrainGenerator
     private readonly int _seedDeep;
     private readonly int _seedClay;
     private readonly int _seedMeadow;
+    private readonly int _seedDune;
     private readonly int _seedFlora;
     private readonly int _seedLavaTable;
     private readonly int _seedLavaPools;
@@ -192,6 +193,7 @@ public sealed class TerrainGenerator
         _seedDeep = seed.Derive("rock.deepstone");
         _seedClay = seed.Derive("deposit.clay");
         _seedMeadow = seed.Derive("decor.meadowgrass");
+        _seedDune = seed.Derive("decor.dunes");
         _seedFlora = seed.Derive("decor.cave_flora");
         _seedLavaTable = seed.Derive("deep.lava_table");
         _seedLavaPools = seed.Derive("deep.lava_pools");
@@ -699,6 +701,21 @@ public sealed class TerrainGenerator
     /// </remarks>
     public bool FrozenSurface(int x, int z) => _climate.Temperature(x, z) < IceLine;
 
+    /// <summary>Warmth above which, and rainfall below which, sand counts as the arid fringe.</summary>
+    /// <remarks>
+    /// Both inside their fields' real range (each runs about 0.31 to 0.69), the ice line's own
+    /// discipline: the fringe is a fringe, most beaches grow nothing, and a soaking or cool seed
+    /// legitimately has none at all.
+    /// </remarks>
+    public const float HotLine = 0.55f;
+
+    public const float DryLine = 0.44f;
+
+    /// <summary>Whether this column's sand is hot and dry enough to grow the desert kit.</summary>
+    /// <remarks>Public for the audit, <see cref="FrozenSurface"/>'s own reason.</remarks>
+    public bool AridSurface(int x, int z) =>
+        _climate.Temperature(x, z) > HotLine && _climate.Downfall(x, z) < DryLine;
+
     /// <summary>
     /// How far short of the snow line a column may sit and still carry a dusting of it.
     /// </summary>
@@ -879,11 +896,41 @@ public sealed class TerrainGenerator
             var wz = oz + z;
 
             var surface = SurfaceHeight(wx, wz);
+            var beach = surface <= SeaLevel + 2;
+            var top = TopOf(wx, wz, surface, beach);
+
+            // ⛳ The arid fringe: hot dry sand grows the desert kit, on the dunes' OWN derived
+            // seed so every meadow field keeps the very rolls it had. The column is considered
+            // by every chunk in its stack and each keeps its own share of cells — the trees'
+            // purity strategy, because a three-tall cactus can straddle a vertical seam — which
+            // is why this runs before the single-cell height gate below.
+            if (top == _ids.Sand.Value)
+            {
+                if (surface > SeaLevel && AridSurface(wx, wz)
+                    && Noise.Fbm2(wx / 56f, wz / 56f, _seedDune, 2) > 0.02f)
+                {
+                    var dune = Noise.Value2(wx, wz, _seedDune + 7);
+
+                    if (dune < 0.02f)
+                    {
+                        // One, two, or rarely three high — a tall one is a landmark, not a lawn.
+                        var tall = dune < 0.004f ? 3 : dune < 0.011f ? 2 : 1;
+                        for (var up = 1; up <= tall; up++)
+                            PlaceIntoAir(chunk, ox, oy, oz, wx, surface + up, wz, _ids.Cactus);
+                    }
+                    else if (dune < 0.05f)
+                    {
+                        PlaceIntoAir(chunk, ox, oy, oz, wx, surface + 1, wz, _ids.DeadBush);
+                    }
+                }
+
+                continue;   // sand grows nothing else
+            }
+
             var y = surface + 1 - oy;
             if ((uint)y >= Chunk.Size) continue;
 
-            var beach = surface <= SeaLevel + 2;
-            if (TopOf(wx, wz, surface, beach) != _ids.Grass.Value) continue;
+            if (top != _ids.Grass.Value) continue;
 
             // Cold enough to hold a dusting but not to hold a snowfield. Nothing grows through it.
             if (SnowDepth(wx, wz, surface) > -SnowDusting)

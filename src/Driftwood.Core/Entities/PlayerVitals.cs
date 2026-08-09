@@ -26,6 +26,9 @@ public enum VitalsCause
     Burn,
     Drown,
     Starve,
+
+    /// <summary>Leaning on something that pricks — a cactus, mostly.</summary>
+    Prick,
 }
 
 public readonly record struct VitalsEvent(
@@ -313,13 +316,55 @@ public sealed class PlayerVitals
     {
         _drownsIn = new bool[registry.Count];
         _burnsIn = new bool[registry.Count];
+        _pricks = new bool[registry.Count];
 
         for (var id = 1; id < registry.Count; id++)
         {
             var type = registry[(ushort)id];
             _drownsIn[id] = type.Fluid == FluidKind.Water;
             _burnsIn[id] = type.Fluid == FluidKind.Lava;
+            _pricks[id] = type.Hurts;
         }
+    }
+
+    /// <summary>Which blocks hurt a body against them, read off <see cref="BlockType.Hurts"/>.</summary>
+    private readonly bool[] _pricks;
+
+    /// <summary>Half-hearts a second of leaning on something that pricks. Annoying, not lethal.</summary>
+    private const float PrickRate = 1f;
+
+    private float _prickTick;
+
+    /// <summary>
+    /// True when the body is against anything that pricks.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>The box is EXPANDED a hand's width, and that is the whole method.</b> A pricking block
+    /// is solid, so the body can never be inside one — the lava scan's exact shape reads only the
+    /// cells the body overlaps and would never fire. Brushing a side, standing on top and pressing
+    /// into one are all "within a few centimetres", which is what the margin measures.
+    /// </remarks>
+    private bool TouchesPricking(VoxelWorld world, PlayerBody body)
+    {
+        const float margin = 0.08f;
+
+        var feet = body.Position;
+        var half = PlayerBody.Width * 0.5f + margin;
+        var top = feet.Y + body.CurrentHeight;
+
+        var minX = (int)MathF.Floor(feet.X - half);
+        var maxX = (int)MathF.Floor(feet.X + half);
+        var minZ = (int)MathF.Floor(feet.Z - half);
+        var maxZ = (int)MathF.Floor(feet.Z + half);
+        var minY = (int)MathF.Floor(feet.Y - margin);
+        var maxY = (int)MathF.Floor(top);
+
+        for (var y = minY; y <= maxY; y++)
+        for (var z = minZ; z <= maxZ; z++)
+        for (var x = minX; x <= maxX; x++)
+            if (_pricks[world.GetBlock(x, y, z).Value]) return true;
+
+        return false;
     }
 
     /// <summary>True when the given block would burn something standing in it.</summary>
@@ -579,6 +624,22 @@ public sealed class PlayerVitals
             {
                 _burnTick = 0f;
             }
+        }
+
+        // The prick, on the lava's own accumulate-don't-round clock: a body against a cactus
+        // pays one half-heart a second whether it stood there for one frame or five thousand.
+        if (TouchesPricking(world, body))
+        {
+            _prickTick += dt;
+            while (_prickTick >= 1f / PrickRate)
+            {
+                _prickTick -= 1f / PrickRate;
+                Hurt(1, cause: VitalsCause.Prick);
+            }
+        }
+        else
+        {
+            _prickTick = 0f;
         }
 
         if (Submerged)
