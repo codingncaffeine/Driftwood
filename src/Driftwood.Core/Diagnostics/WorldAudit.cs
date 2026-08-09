@@ -4777,7 +4777,7 @@ public static class WorldAudit
         {
             toggles++;
 
-            // ⳸ A pressed button is one-way BY DESIGN — momentary means the spring back is a
+            // ⛳ A pressed button is one-way BY DESIGN — momentary means the spring back is a
             // timer, never a click, and a return row here would let a player pin it. So the
             // asymmetric assert: the pressed form must have NO toggle of its own.
             if (registry[to].Name.EndsWith("_pressed", StringComparison.Ordinal))

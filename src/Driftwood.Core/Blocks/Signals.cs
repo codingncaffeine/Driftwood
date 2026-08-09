@@ -131,7 +131,7 @@ public sealed class SignalTable
                 continue;
             }
 
-            // ⳸ The booster answers the wire exactly as a lamp does: a sink pair by name. Rails
+            // ⛳ The booster answers the wire exactly as a lamp does: a sink pair by name. Rails
             // land after signals so a station is a lever, a wire and two boosters, with nothing
             // new taught to either side.
             if (name.StartsWith("powered_rail", StringComparison.Ordinal))

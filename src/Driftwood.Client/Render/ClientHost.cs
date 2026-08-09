@@ -1132,7 +1132,7 @@ public sealed class ClientHost : IDisposable
 
             var resolved = CreatureLibrary.Resolve(models, pack);
 
-            // ⳸ The cart rides the same pipeline without being a creature: its own net, its own
+            // ⛳ The cart rides the same pipeline without being a creature: its own net, its own
             // palette row, drawn through the entity shader like everything that moves. Appended
             // here so CreatureSet.All — and every census that walks it — never hears about it.
             resolved.Add(new CreatureSet.Resolved(
@@ -7058,7 +7058,7 @@ public sealed class ClientHost : IDisposable
 
     private bool PlaceOnTarget()
     {
-        // ⳸ The cart, before everything: using one is boarding it, whatever is in hand, and a
+        // ⛳ The cart, before everything: using one is boarding it, whatever is in hand, and a
         // cart in hand aimed at a rail becomes a cart on it. Both reach past the crosshair the
         // way the bucket does, because neither a cart nor the rail under water is a full block.
         if (TryCartUse()) return true;
@@ -7360,7 +7360,7 @@ public sealed class ClientHost : IDisposable
             return;
         }
 
-        // ⳸ Riding: the cart owns the body's position and the keys mean the cart. Forward pushes
+        // ⛳ Riding: the cart owns the body's position and the keys mean the cart. Forward pushes
         // along wherever the player is LOOKING projected on the track — so "press toward where I
         // want to go" is the whole of driving — back brakes, and sneak steps off beside the rail.
         if (_ridingCart is { } riding)

@@ -1717,7 +1717,7 @@ public static class StarterBlocks
     /// <remarks>
     /// <para>⛳ <b>Wire strength is the id</b> — sixteen registered blocks, mapped onto four tiles so
     /// the brightness reads without sixteen drawings. ⛳ <b>The lever's state is a lean, not a
-    /// repaint</b>: the stick tips the other way, which reads across a room. ⳸ <b>The tidelamp is
+    /// repaint</b>: the stick tips the other way, which reads across a room. ⛳ <b>The tidelamp is
     /// its own pair rather than a driven stormglass lamp</b>, because that lamp is always-on and
     /// placed all over existing worlds; a pass that darkened the unpowered ones would put out every
     /// light anybody has built.</para>

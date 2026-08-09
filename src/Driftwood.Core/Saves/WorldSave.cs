@@ -52,7 +52,7 @@ public sealed record WorldState(
 
     /// <summary>The animals standing in the world, both ways through a save.</summary>
     /// <remarks>
-    /// ⳳ A list rather than the herd itself, because the herd does not exist until the world has
+    /// ⛳ A list rather than the herd itself, because the herd does not exist until the world has
     /// been stood up — loading stashes these and the herd takes them the moment it is built.
     /// </remarks>
     public List<Entities.CreatureHerd.SavedCreature> Creatures { get; } = [];
