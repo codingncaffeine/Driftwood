@@ -60,6 +60,355 @@ public static class TileGen
         return t;
     }
 
+    // ───────────────────────── The pixel-artist's kit ─────────────────────────
+    // The reference packs read as AUTHORED because nothing in them is continuous: a tile is
+    // four to seven flat tones, the tones sit on shapes — stones, clods, boards — and the
+    // light comes from the top-left. Measured off the user's own packs (2026-08-09): their
+    // stone is 6 colours, dirt 7, snow 4; every material is its quantised ramp on a shape.
+    // These helpers are that grammar, so every material below draws with the same hand.
+
+    /// <summary>A quantised tone ramp around one base colour — the palette an artist would mix.</summary>
+    /// <remarks>
+    /// Shadows cool and desaturate slightly, highlights warm: a ramp that only scales
+    /// brightness reads as one colour lit by a lamp, not as paint. Index 0 is the deepest
+    /// shadow; the last entry is the accent highlight and should stay rare on the tile.
+    /// </remarks>
+    internal static (byte R, byte G, byte B)[] Ramp(byte r, byte g, byte b, int tones = 6, float spread = 0.40f)
+    {
+        var ramp = new (byte, byte, byte)[tones];
+
+        for (var i = 0; i < tones; i++)
+        {
+            var lift = (tones == 1 ? 0f : i / (float)(tones - 1) * 2f - 1f) * spread;
+
+            // The hue shift is deliberately faint: on a coloured base it keeps shadow from
+            // being mud, and on a neutral grey it must be nearly nothing — a visible blue
+            // cast on stone was exactly how the first pass of this went wrong.
+            var (tr, tg, tb) = lift < 0f ? (0.975f, 0.988f, 1.02f) : (1.02f, 1f, 0.975f);
+            var m = 1f + lift;
+            ramp[i] = (Clamp((int)(r * m * tr)), Clamp((int)(g * m * tg)), Clamp((int)(b * m * tb)));
+        }
+
+        return ramp;
+    }
+
+    /// <summary>0..1 → ramp index, mid-heavy: most of any material is its middle tones.</summary>
+    private static int MidTone(float roll) =>
+        roll < 0.07f ? 0 : roll < 0.26f ? 1 : roll < 0.62f ? 2 : roll < 0.87f ? 3 : roll < 0.975f ? 4 : 5;
+
+    /// <summary>Scatters cell centres over the tile's torus — the partition under stones, clods and pebbles.</summary>
+    private static void Scatter(int seed, Span<int> cx, Span<int> cy)
+    {
+        for (var i = 0; i < cx.Length; i++)
+        {
+            cx[i] = (int)(Noise(i, 1, seed) * Size) % Size;
+            cy[i] = (int)(Noise(2, i, seed + 47) * Size) % Size;
+        }
+    }
+
+    /// <summary>
+    /// Nearest and second-nearest centre by wrapped distance. The diamond metric squares the
+    /// cells off into angular patches; euclidean keeps them round.
+    /// </summary>
+    private static (int Best, int D1, int D2) Nearest(int x, int y, ReadOnlySpan<int> cx, ReadOnlySpan<int> cy, bool diamond)
+    {
+        var best = 0;
+        var d1 = int.MaxValue;
+        var d2 = int.MaxValue;
+
+        for (var i = 0; i < cx.Length; i++)
+        {
+            var dx = Math.Abs(x - cx[i]);
+            var dy = Math.Abs(y - cy[i]);
+            dx = Math.Min(dx, Size - dx);
+            dy = Math.Min(dy, Size - dy);
+
+            var d = diamond ? (dx + dy) * (dx + dy) : dx * dx + dy * dy;
+            if (d < d1) { d2 = d1; d1 = d; best = i; }
+            else if (d < d2) d2 = d;
+        }
+
+        return (best, d1, d2);
+    }
+
+    /// <summary>Raw rock: interlocking angular patches, a crevice where they meet, lit from the top-left.</summary>
+    /// <remarks>
+    /// The reference's stone is not grain, it is SHAPES — a dozen flat patches whose meeting
+    /// lines are a tone darker and whose top-left edges catch the light. The speckle this
+    /// replaces had the right colours and no shapes at all, which is why it read as static.
+    /// </remarks>
+    public static byte[] Rock(int seed, byte r, byte g, byte b, int cells = 12, float spread = 0.30f)
+    {
+        var t = new byte[BytesPerTile];
+        var ramp = Ramp(r, g, b, 6, spread);
+
+        Span<int> cx = stackalloc int[24];
+        Span<int> cy = stackalloc int[24];
+        cx = cx[..cells];
+        cy = cy[..cells];
+        Scatter(seed, cx, cy);
+
+        // Patch tones stay in the mid band — the crevice and the lit edge provide the ends.
+        Span<int> tone = stackalloc int[24];
+        for (var i = 0; i < cells; i++) tone[i] = 1 + (int)(Noise(i, 9, seed + 5) * 2.999f);
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var (best, d1, d2) = Nearest(x, y, cx, cy, diamond: true);
+            var k = tone[best];
+
+            if (d2 - d1 <= 2)
+            {
+                k = Math.Max(0, k - 2);                     // the crevice between two patches
+            }
+            else
+            {
+                // A patch edge whose crevice lies below-right catches the light instead.
+                var (nb, n1, n2) = Nearest((x + 1) % Size, (y + 1) % Size, cx, cy, diamond: true);
+                if (nb != best || n2 - n1 <= 2) k = Math.Min(4, k + 1);
+            }
+
+            if (Noise(x, y, seed + 131) > 0.985f) k = Math.Min(5, k + 1);   // a mineral fleck
+
+            var (cr, cg, cb) = ramp[k];
+            Put(t, x, y, cr, cg, cb, 255);
+        }
+
+        return t;
+    }
+
+    /// <summary>Soil: rounded clods with dark seams, matte, with the odd small stone in it.</summary>
+    public static byte[] Soil(int seed, byte r, byte g, byte b)
+    {
+        var t = new byte[BytesPerTile];
+        var ramp = Ramp(r, g, b, 6, 0.34f);
+
+        Span<int> cx = stackalloc int[9];
+        Span<int> cy = stackalloc int[9];
+        Scatter(seed, cx, cy);
+
+        Span<int> tone = stackalloc int[9];
+        for (var i = 0; i < 9; i++) tone[i] = 1 + (int)(Noise(i, 3, seed + 11) * 3.499f);
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var (best, d1, d2) = Nearest(x, y, cx, cy, diamond: false);
+            var k = tone[best];
+
+            if (d2 - d1 <= 1)
+            {
+                k = Math.Max(0, k - 2);                     // the seam between clods
+            }
+            else
+            {
+                // Light catches the top of a clod: the pixel whose seam is directly above.
+                var (nb, n1, n2) = Nearest(x, (y + Size - 1) % Size, cx, cy, diamond: false);
+                if (nb != best || n2 - n1 <= 1) k = Math.Min(4, k + 1);
+            }
+
+            var (cr, cg, cb) = ramp[k];
+
+            // A few small stones — soil that is only soil reads as cocoa powder.
+            if (Noise(x, y, seed + 173) > 0.982f)
+            {
+                var grey = (byte)((cr + cg + cb) / 3);
+                (cr, cg, cb) = (Clamp(grey + 34), Clamp(grey + 32), Clamp(grey + 30));
+            }
+
+            Put(t, x, y, cr, cg, cb, 255);
+        }
+
+        return t;
+    }
+
+    /// <summary>Gravel: round pebbles over the full tone range, packed edge to edge.</summary>
+    public static byte[] GravelTile(int seed, byte r, byte g, byte b)
+    {
+        var t = new byte[BytesPerTile];
+        var ramp = Ramp(r, g, b, 6, 0.30f);
+
+        Span<int> cx = stackalloc int[16];
+        Span<int> cy = stackalloc int[16];
+        Scatter(seed, cx, cy);
+
+        // Pebble tones sit in the mid band with the occasional odd one out — a shore's stones
+        // vary, but a full-range scatter reads as a mosaic floor rather than as loose stone.
+        Span<int> tone = stackalloc int[16];
+        for (var i = 0; i < 16; i++)
+            tone[i] = Noise(i, 7, seed + 29) > 0.85f ? 4 : 1 + (int)(Noise(i, 8, seed + 37) * 2.499f);
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var (best, d1, d2) = Nearest(x, y, cx, cy, diamond: false);
+            var k = tone[best];
+
+            if (d2 - d1 <= 1)
+            {
+                k = Math.Max(0, k - 1);
+            }
+            else
+            {
+                var (nb, n1, n2) = Nearest((x + 1) % Size, (y + 1) % Size, cx, cy, diamond: false);
+                if (nb != best || n2 - n1 <= 1) k = Math.Min(5, k + 1);
+            }
+
+            var (cr, cg, cb) = ramp[k];
+            Put(t, x, y, cr, cg, cb, 255);
+        }
+
+        return t;
+    }
+
+    /// <summary>Sand: low-contrast dune ripples with drifts of brighter grain.</summary>
+    /// <remarks>
+    /// The band pitch divides the tile and the warp is one whole wave across it, so the
+    /// ripples carry over every edge. Contrast stays low on purpose: sand is the reference
+    /// packs' quietest tile, and a loud one turns a desert into stripes.
+    /// </remarks>
+    public static byte[] SandTile(int seed, byte r, byte g, byte b)
+    {
+        var t = new byte[BytesPerTile];
+        var ramp = Ramp(r, g, b, 6, 0.10f);
+        var drift = Noise(0, 3, seed) * Size;
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var warp = MathF.Sin((x + drift) * (MathF.Tau / Size)) * 1.6f;
+            var row = ((y + (int)MathF.Round(warp)) % 4 + 4) % 4;
+
+            // Trough shadowed, crest lit — but only where the wind left a ripple at all. The
+            // fade mask is what keeps a beach from turning into corduroy.
+            var rippled = Noise((x >> 2) + 5, (y >> 2) + 9, seed + 17) > 0.42f;
+            var k = rippled ? row switch { 0 => 1, 1 => 3, _ => 2 } : 2;
+
+            var grain = Noise(x, y, seed + 61);
+            if (grain > 0.96f) k = Math.Min(4, k + 1);
+            else if (grain < 0.035f) k = Math.Max(1, k - 1);
+
+            var (cr, cg, cb) = ramp[k];
+            Put(t, x, y, cr, cg, cb, 255);
+        }
+
+        return t;
+    }
+
+    /// <summary>Snow: white in broad soft patches, shadows going faintly cyan, a few dimples.</summary>
+    /// <remarks>The shadows lean blue-green because the reference's do — snow shaded with
+    /// grey reads as ash the moment it stands next to anything warm.</remarks>
+    public static byte[] SnowTile(int seed)
+    {
+        var t = new byte[BytesPerTile];
+        Span<(byte R, byte G, byte B)> tones =
+        [
+            (222, 236, 242),    // dimple
+            (233, 243, 248),    // shadowed patch
+            (244, 250, 253),    // soft patch
+            (255, 255, 255),    // lying snow
+        ];
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var patch = Noise(x >> 2, y >> 2, seed) * 0.7f + Noise(x >> 1, y >> 1, seed + 7) * 0.3f;
+            var k = patch < 0.18f ? 1 : patch < 0.45f ? 2 : 3;
+
+            if (Noise(x, y, seed + 91) > 0.985f) k = 0;
+
+            Put(t, x, y, tones[k].R, tones[k].G, tones[k].B, 255);
+        }
+
+        return t;
+    }
+
+    /// <summary>Clay: smooth blue-grey with slow horizontal swirls, barely any grain.</summary>
+    public static byte[] ClayTile(int seed, byte r, byte g, byte b)
+    {
+        var t = new byte[BytesPerTile];
+        var ramp = Ramp(r, g, b, 6, 0.09f);
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            // One wave of warp across the tile, two swirl bands down it — both whole, so it
+            // tiles — and most of the face stays its middle tone: clay is the quiet block.
+            var swirl = MathF.Sin((y * 2f + MathF.Sin(x * (MathF.Tau / Size) + seed) * 2.4f) * (MathF.Tau / Size));
+            var k = swirl < -0.62f ? 1 : swirl < 0.66f ? 2 : 3;
+
+            if (Noise(x, y, seed + 41) > 0.985f) k = Math.Min(4, k + 1);
+
+            var (cr, cg, cb) = ramp[k];
+            Put(t, x, y, cr, cg, cb, 255);
+        }
+
+        return t;
+    }
+
+    /// <summary>Bedrock: streaky high-contrast chaos — the floor of the world, unmistakably.</summary>
+    /// <remarks>
+    /// The one tile where the cell partition was WRONG: patches read as masonry, as if
+    /// somebody had laid the bottom of the world in flagstones. Both references draw it as
+    /// hard-quantised noise with a horizontal grain, and they are right — chaos is the point.
+    /// </remarks>
+    public static byte[] BedrockTile(int seed)
+    {
+        var t = new byte[BytesPerTile];
+        var ramp = Ramp(66, 66, 72, 6, 0.58f);
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            // A coarse field stretched twice as far along x as down y, plus a fine one.
+            var coarse = Noise(x >> 2, y >> 1, seed);
+            var fine = Noise(x, y, seed + 7);
+            var k = Math.Min(4, MidTone(coarse * 0.6f + fine * 0.4f));
+
+            var (cr, cg, cb) = ramp[k];
+            Put(t, x, y, cr, cg, cb, 255);
+        }
+
+        return t;
+    }
+
+    /// <summary>
+    /// The grass crown, drawn near-colourless in mottled clumps — the climate multiply makes it green.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>The baked-green crown this replaces was being tinted TWICE.</b> The mesher multiplies
+    /// the climate colour over every face wearing <c>TintSource.Grass</c>, art-agnostic — that is
+    /// how an imported pack's near-grey grass works, and ours went through the same multiply with
+    /// green already in it. Every pack paints this tile grey for exactly that reason; now ours does
+    /// too, with the faintest green cast so the icon sheet still says which tile it is.
+    /// </remarks>
+    public static byte[] GrassTopTile(int seed)
+    {
+        var t = new byte[BytesPerTile];
+        Span<(byte R, byte G, byte B)> tones =
+        [
+            (112, 118, 106),
+            (129, 135, 122),
+            (140, 146, 132),
+            (150, 156, 141),
+            (163, 169, 153),
+            (182, 188, 171),
+        ];
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var clump = Noise(x >> 1, y >> 1, seed + 3) * 0.8f + Noise(x, y, seed) * 0.2f;
+            var k = MidTone(clump);
+
+            var c = tones[k];
+            Put(t, x, y, c.R, c.G, c.B, 255);
+        }
+
+        return t;
+    }
+
     /// <summary>
     /// Water, as a loop of frames: two swells crossing each other and travelling.
     /// </summary>
@@ -78,6 +427,7 @@ public static class TileGen
     public static byte[][] WaterFrames(int seed, int count, byte r, byte g, byte b)
     {
         var frames = new byte[count][];
+        var ramp = Ramp(r, g, b, 6, 0.13f);
 
         for (var f = 0; f < count; f++)
         {
@@ -91,11 +441,17 @@ public static class TileGen
                 var a = MathF.Sin((x + y) / (float)Size * MathF.Tau * 2f - phase);
                 var c = MathF.Sin((x * 2f - y) / (float)Size * MathF.Tau - phase * 2f);
 
-                var swell = (a * 0.6f + c * 0.4f) * 9f;
-                var grain = (Noise(x, y, seed) * 2f - 1f) * 5f;
+                var swell = a * 0.6f + c * 0.4f;
+                var grain = Noise(x, y, seed) * 2f - 1f;
 
-                var d = (int)(swell + grain);
-                Put(t, x, y, Clamp(r + d), Clamp(g + d), Clamp(b + (int)(d * 1.3f)), 255);
+                // Quantised onto the ramp rather than added to the channels: flat bands with
+                // real edges are what read as a surface; continuous shading reads as plastic.
+                // The factors reach the ramp's ends — a swell with no dark trough or bright
+                // crest is what the audit rightly calls flat.
+                var k = MidTone(Math.Clamp(swell * 0.44f + 0.5f + grain * 0.12f, 0f, 1f));
+
+                var (cr, cg, cb) = ramp[k];
+                Put(t, x, y, cr, cg, cb, 255);
             }
 
             frames[f] = t;
@@ -126,6 +482,8 @@ public static class TileGen
             var t = new byte[BytesPerTile];
             var phase = f / (float)count * MathF.Tau;
 
+            var ramp = Ramp(r, g, b, 6, Math.Clamp(contrast / 96f, 0.12f, 0.5f));
+
             for (var y = 0; y < Size; y++)
             for (var x = 0; x < Size; x++)
             {
@@ -134,11 +492,13 @@ public static class TileGen
                 var a = MathF.Sin(y / (float)Size * MathF.Tau * 2f - phase * 2f);
                 var c = MathF.Sin((y * 3f + x) / (float)Size * MathF.Tau - phase * 3f);
 
-                var band = (a * 0.65f + c * 0.35f) * contrast;
-                var grain = (Noise(x, y, seed) * 2f - 1f) * (contrast * 0.35f);
+                var band = a * 0.65f + c * 0.35f;
+                var grain = Noise(x, y, seed) * 2f - 1f;
 
-                var d = (int)(band + grain);
-                Put(t, x, y, Clamp(r + d), Clamp(g + d), Clamp(b + d), 255);
+                var k = MidTone(Math.Clamp(band * 0.32f + 0.5f + grain * 0.08f, 0f, 1f));
+
+                var (cr, cg, cb) = ramp[k];
+                Put(t, x, y, cr, cg, cb, 255);
             }
 
             frames[f] = t;
@@ -177,6 +537,10 @@ public static class TileGen
 
                 var grain = Noise(x, y, seed) * 2f - 1f;
                 var heat = Math.Clamp(swell * 0.5f + 0.5f + grain * 0.18f, 0f, 1f);
+
+                // Stepped, not smooth: the crust and the glow are bands with edges, the same
+                // quantised language as every other tile since the reference-pack redraw.
+                heat = MathF.Floor(heat * 6f) / 6f;
 
                 // Crust through ember to the brightest core, so the ramp has three colours in it
                 // rather than one fading — molten rock is never a single hue.
@@ -1313,71 +1677,155 @@ public static class TileGen
         return t;
     }
 
-    /// <summary>Vertical grain with a few darker knots — bark.</summary>
-    public static byte[] Bark(int seed, byte r, byte g, byte b)
+    /// <summary>Bark: ridges of two-pixel strips running the trunk, grooved between, broken by knots.</summary>
+    /// <remarks>
+    /// The reference's bark is STRIPS, not columns of noise: each ridge is a flat tone two or
+    /// three pixels wide, the groove between two ridges is the dark line, and the strips
+    /// wander a little as they run so the trunk is not pinstriped. Knots stay — a horizontal
+    /// break every so often is what says wood rather than corduroy.
+    /// </remarks>
+    public static byte[] Bark(int seed, byte r, byte g, byte b, bool lenticels = false)
     {
         var t = new byte[BytesPerTile];
+        var ramp = Ramp(r, g, b, 6, 0.30f);
 
+        // Ridges of unequal width — two to four columns each — walked out once so every
+        // ridge is continuous the full height of the tile. The groove is the boundary column.
+        Span<int> ridge = stackalloc int[Size];    // column → ridge index
+        Span<bool> groove = stackalloc bool[Size];
+        var id = 0;
+        var left = 2 + (int)(Noise(0, 60, seed) * 2.999f);
         for (var x = 0; x < Size; x++)
         {
-            // One shade per column, so the grain runs the length of the trunk rather than
-            // dissolving into noise.
-            var columnShade = (int)((Noise(x, 0, seed) * 2f - 1f) * 22f);
-
-            for (var y = 0; y < Size; y++)
+            if (left-- <= 0)
             {
-                var d = columnShade + (int)((Noise(x, y, seed + 13) * 2f - 1f) * 7f);
-                if (Noise(x >> 1, y >> 2, seed + 53) > 0.93f) d -= 30;   // knot
-                Put(t, x, y, Clamp(r + d), Clamp(g + d), Clamp(b + d), 255);
+                id++;
+                left = 1 + (int)(Noise(id, 60, seed) * 2.999f);
+                groove[x] = true;
             }
+            ridge[x] = id;
         }
-
-        return t;
-    }
-
-    /// <summary>Concentric rings — the cut end of a log.</summary>
-    public static byte[] Rings(int seed, byte r, byte g, byte b)
-    {
-        var t = new byte[BytesPerTile];
-        const float centre = (Size - 1) / 2f;
 
         for (var y = 0; y < Size; y++)
         for (var x = 0; x < Size; x++)
         {
-            var dx = x - centre;
-            var dy = y - centre;
-            var radius = MathF.Sqrt(dx * dx + dy * dy);
+            var k = 1 + (int)(Noise(ridge[x], 4, seed) * 2.499f);
 
-            var ring = MathF.Sin(radius * 2.1f) * 12f;
-            var grain = (Noise(x, y, seed) * 2f - 1f) * 6f;
-            var d = (int)(ring + grain);
+            if (groove[x]) k = 0;
+            else if (x > 0 && groove[x - 1]) k = Math.Min(4, k + 1);   // lit edge beside the groove
 
-            Put(t, x, y, Clamp(r + d), Clamp(g + d), Clamp(b + d), 255);
+            // A kink: each ridge darkens for a couple of rows at its own height, so the
+            // ridges read as bark plates rather than as machined flutes.
+            if (!groove[x] && ((y + (int)(Noise(ridge[x], 61, seed) * Size)) % Size) < 2)
+                k = Math.Max(1, k - 1);
+
+            // Cherry's signature: short pale horizontal lenticel dashes.
+            if (lenticels && Noise(x >> 1, y, seed + 77) > 0.96f && !groove[x]) k = 5;
+
+            // A knot: a short horizontal scar with a lit rim above it.
+            var knot = Noise(x >> 2, y >> 2, seed + 53);
+            if (knot > 0.96f) k = 0;
+            else if (Noise(x >> 2, (y + 1) >> 2, seed + 53) > 0.96f) k = Math.Min(4, k + 1);
+
+            var (cr, cg, cb) = ramp[k];
+            Put(t, x, y, cr, cg, cb, 255);
         }
 
         return t;
     }
 
-    /// <summary>Horizontal boards with dark seams between them.</summary>
+    /// <summary>The cut end of a log: SQUARE growth rings inside a rim of bark.</summary>
+    /// <remarks>
+    /// Square, not round, and that is the genre's own convention — the reference draws the
+    /// end grain as concentric squares following the block, with two pixels of bark all the
+    /// way round. Circles inside a square block read as a target painted on a crate. The
+    /// bark rim shares the side's palette by construction (its colours are derived the same
+    /// way), so the top face meets the side face without a seam in the material.
+    /// </remarks>
+    public static byte[] Rings(int seed, byte r, byte g, byte b)
+    {
+        var t = new byte[BytesPerTile];
+        var wood = Ramp(r, g, b, 6, 0.24f);
+        var bark = Ramp((byte)(r * 62 / 100), (byte)(g * 58 / 100), (byte)(b * 55 / 100), 6, 0.30f);
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var edge = Math.Min(Math.Min(x, y), Math.Min(Size - 1 - x, Size - 1 - y));
+
+            if (edge < 2)
+            {
+                // The bark collar, with its own faint ridging so it reads as the side seen end-on.
+                var k = 1 + (int)(Noise((x + y) >> 1, 4, seed) * 2.499f);
+                if (edge == 0 && ((x + y) & 3) == 0) k = Math.Max(0, k - 1);
+
+                var (br2, bg2, bb2) = bark[k];
+                Put(t, x, y, br2, bg2, bb2, 255);
+                continue;
+            }
+
+            // Concentric squares two pixels to a ring — one-pixel rings read as a painted
+            // target — with a pale heart and a dark pith dot at the middle.
+            var ring = (edge - 2) >> 1;
+            var k2 = (ring & 1) == 0 ? 3 : 2;
+            if (edge >= 6) k2 = 4;                            // the pale heart of the log
+
+            var mid = Size / 2;
+            if ((x == mid || x == mid - 1) && (y == mid || y == mid - 1)) k2 = 1;   // the pith
+
+            if (Noise(x, y, seed + 17) > 0.965f) k2 = Math.Max(1, k2 - 1);   // a season's scar
+
+            var (cr, cg, cb) = wood[k2];
+            Put(t, x, y, cr, cg, cb, 255);
+        }
+
+        return t;
+    }
+
+    /// <summary>Four boards with dark seams, long grain streaks, and staggered butt joints.</summary>
+    /// <remarks>
+    /// Each board is one flat tone with its top edge catching the light; the grain is a few
+    /// LONG darker runs per board rather than per-pixel roughness — grain has direction, and
+    /// direction is the first thing noise throws away.
+    /// </remarks>
     public static byte[] Planks(int seed, byte r, byte g, byte b)
     {
         var t = new byte[BytesPerTile];
+        var ramp = Ramp(r, g, b, 6, 0.26f);
 
         for (var y = 0; y < Size; y++)
         {
             var board = y >> 2;
-            var boardShade = (int)((Noise(board, 0, seed) * 2f - 1f) * 14f);
             var seam = (y & 3) == 0;
+            var boardTone = 2 + (int)(Noise(board, 0, seed) * 1.999f);
 
             for (var x = 0; x < Size; x++)
             {
-                var d = boardShade + (int)((Noise(x, y, seed + 17) * 2f - 1f) * 8f);
-                if (seam) d -= 34;
+                int k;
+
+                if (seam)
+                {
+                    k = 0;
+                }
+                else
+                {
+                    k = boardTone;
+
+                    // The row under the seam is the board's lit top edge.
+                    if ((y & 3) == 1) k = Math.Min(4, k + 1);
+
+                    // Grain: a darker run that persists along x — the streak's presence is
+                    // decided at a coarse step so it comes out three to six pixels long.
+                    if (Noise(x >> 2, y, seed + 17) > 0.62f && (y & 3) == 3) k = Math.Max(1, k - 1);
+                    if (Noise((x + 2) >> 3, y, seed + 23) > 0.7f && (y & 3) == 2) k = Math.Max(1, k - 1);
+                }
 
                 // Staggered butt joints, so the boards do not read as one long plank.
-                if ((x + board * 5) % 16 == 0) d -= 26;
+                if ((x + board * 5) % 16 == 0) k = 0;
+                else if ((x + board * 5) % 16 == 1 && !seam) k = Math.Min(4, boardTone + 1);
 
-                Put(t, x, y, Clamp(r + d), Clamp(g + d), Clamp(b + d), 255);
+                var (cr, cg, cb) = ramp[k];
+                Put(t, x, y, cr, cg, cb, 255);
             }
         }
 
@@ -1393,21 +1841,40 @@ public static class TileGen
     public static byte[] Strata(int seed, byte r, byte g, byte b)
     {
         var t = new byte[BytesPerTile];
+        var ramp = Ramp(r, g, b, 6, 0.22f);
+
+        // Bands of unequal thickness, and a dark line ONLY where two different tones meet —
+        // a boundary every fourth row regardless reads as pinstripes, not as strata.
+        Span<int> rowTone = stackalloc int[Size];
+        var band = 0;
+        var run = 0;
+        var height = 3 + (int)(Noise(0, 40, seed) * 2.999f);
+        for (var y = 0; y < Size; y++)
+        {
+            if (run++ >= height)
+            {
+                run = 1;
+                band++;
+                height = 3 + (int)(Noise(0, 40 + band, seed) * 2.999f);
+            }
+            rowTone[y] = 2 + (int)(Noise(0, band, seed) * 1.999f);
+        }
 
         for (var y = 0; y < Size; y++)
         {
-            // A band every few rows, each its own tone, with the boundary between two of them
-            // darker than either — that line is what the eye reads as a layer.
-            var band = y / 3;
-            var tone = (int)((Noise(0, band, seed) * 2f - 1f) * 16f);
-            var boundary = y % 3 == 0;
+            var above = rowTone[(y + Size - 1) % Size];
+            var boundary = rowTone[y] != above;
 
             for (var x = 0; x < Size; x++)
             {
-                var d = tone + (int)((Noise(x, y, seed + 23) * 2f - 1f) * 6f);
-                if (boundary) d -= 18;
+                var k = boundary ? 1 : rowTone[y];
 
-                Put(t, x, y, Clamp(r + d), Clamp(g + d), Clamp(b + d), 255);
+                // Short cracks wander along the layers, never across them.
+                if (!boundary && Noise(x >> 1, y, seed + 23) > 0.95f) k = Math.Max(1, k - 2);
+                else if (Noise(x, y, seed + 67) > 0.975f) k = Math.Min(4, k + 1);
+
+                var (cr, cg, cb) = ramp[k];
+                Put(t, x, y, cr, cg, cb, 255);
             }
         }
 
@@ -1423,36 +1890,71 @@ public static class TileGen
     public static byte[] Leaves(int seed, byte r, byte g, byte b, float holeChance)
     {
         var t = new byte[BytesPerTile];
+        var ramp = Ramp(r, g, b, 6, 0.36f);
 
         for (var y = 0; y < Size; y++)
         for (var x = 0; x < Size; x++)
         {
-            var clump = Noise(x >> 1, y >> 1, seed + 3) * 2f - 1f;
-            var fine = Noise(x, y, seed) * 2f - 1f;
-            var d = (int)(clump * 26f + fine * 12f);
+            // Holes come in clusters of leaf-sized gaps, not single-pixel static — the >>1 is
+            // what groups them — and the foliage next to a hole falls into its shadow, which
+            // is what gives a canopy depth the moment light comes through it.
+            var gap = Noise((x >> 1) + 7, (y >> 1) + 3, seed + 211);
+            if (gap < holeChance && Noise(x, y, seed + 219) < 0.72f)
+            {
+                Put(t, x, y, 0, 0, 0, 0);
+                continue;
+            }
 
-            var transparent = Noise(x, y, seed + 211) < holeChance;
-            Put(t, x, y, Clamp(r + d), Clamp(g + d), Clamp(b + d), transparent ? (byte)0 : (byte)255);
+            var clump = Noise(x >> 1, y >> 1, seed + 3) * 0.7f + Noise(x, y, seed) * 0.3f;
+            var k = MidTone(clump);
+
+            var nearGap = Noise(((x + 1) >> 1) + 7, ((y + 1) >> 1) + 3, seed + 211) < holeChance
+                       || Noise((x >> 1) + 7, ((y + 1) >> 1) + 3, seed + 211) < holeChance;
+            if (nearGap) k = Math.Max(0, k - 2);
+
+            if (Noise(x, y, seed + 227) > 0.985f) k = 5;    // a leaf catching the sun
+
+            var (cr, cg, cb) = ramp[k];
+            Put(t, x, y, cr, cg, cb, 255);
         }
 
         return t;
     }
 
-    /// <summary>Hanging strands, mostly empty.</summary>
+    /// <summary>Hanging strands with small leaves along them, mostly empty.</summary>
+    /// <remarks>Bare wires read as scratches: every few rows a strand grows a two-pixel leaf
+    /// to one side, which is the whole difference between vines and static.</remarks>
     public static byte[] Vine(int seed, byte r, byte g, byte b)
     {
         var t = new byte[BytesPerTile];
+        var ramp = Ramp(r, g, b, 6, 0.34f);
 
         for (var x = 0; x < Size; x++)
         {
             var hasStrand = Noise(x, 0, seed) > 0.55f;
+            if (!hasStrand) continue;
+
             for (var y = 0; y < Size; y++)
             {
-                var on = hasStrand && Noise(x, y >> 1, seed + 5) > 0.22f;
-                if (!on) { Put(t, x, y, 0, 0, 0, 0); continue; }
+                var on = Noise(x, y >> 1, seed + 5) > 0.22f;
+                if (!on) continue;
 
-                var d = (int)((Noise(x, y, seed + 11) * 2f - 1f) * 20f);
-                Put(t, x, y, Clamp(r + d), Clamp(g + d), Clamp(b + d), 255);
+                var k = 1 + MidTone(Noise(x, y, seed + 11)) / 2;    // stems stay in the low-mids
+
+                var (cr, cg, cb) = ramp[k];
+                Put(t, x, y, cr, cg, cb, 255);
+
+                // A leaf every few links, on alternating sides, a tone lighter than its stem.
+                if (Noise(x, y, seed + 23) > 0.72f)
+                {
+                    var side = ((x + y) & 1) == 0 ? 1 : -1;
+                    var lx = x + side;
+                    if ((uint)lx < Size)
+                    {
+                        var (lr, lg, lb) = ramp[Math.Min(4, k + 2)];
+                        Put(t, lx, y, lr, lg, lb, 255);
+                    }
+                }
             }
         }
 
@@ -1473,10 +1975,28 @@ public static class TileGen
         var t = (byte[])dirt.Clone();
 
         for (var x = 0; x < Size; x++)
-        for (var y = 0; y < FringeDepth(x, seed); y++)
         {
-            var d = (int)((Noise(x, y, seed + 29) * 2f - 1f) * 18f);
-            Put(t, x, y, Clamp(level + d), Clamp(level + d), Clamp(level + d), 255);
+            var depth = FringeDepth(x, seed);
+
+            for (var y = 0; y < depth; y++)
+            {
+                // Two flat tones off the fringe's own level, quantised like everything else.
+                var deep = Noise(x, y, seed + 29) < 0.4f;
+                var v = Clamp(level + (deep ? -14 : 6));
+                Put(t, x, y, v, v, v, 255);
+            }
+
+            // ⛳ The row under the fringe falls into its shadow — the reference packs bake a
+            // dark line of soil exactly here, and it is what seats the crown ON the dirt
+            // rather than leaving it floating in front of it. Darkening the dirt's own pixel
+            // keeps the soil's hue, so it reads as shade rather than as a grey rim.
+            if (depth < Size)
+            {
+                var i = depth * Stride + x * 4;
+                t[i] = (byte)(t[i] * 45 / 100);
+                t[i + 1] = (byte)(t[i + 1] * 45 / 100);
+                t[i + 2] = (byte)(t[i + 2] * 45 / 100);
+            }
         }
 
         return t;
@@ -1495,8 +2015,11 @@ public static class TileGen
         for (var x = 0; x < Size; x++)
         for (var y = 0; y < FringeDepth(x, seed); y++)
         {
-            var d = (int)((Noise(x, y, seed + 29) * 2f - 1f) * 18f);
-            Put(t, x, y, Clamp(level + d), Clamp(level + d), Clamp(level + d), 255);
+            // The same two flat tones as the grey band underneath, darker toward the tips so
+            // the fringe reads as blades hanging over the edge rather than as a torn strip.
+            var deep = Noise(x, y, seed + 29) < 0.4f;
+            var v = Clamp(level + (deep ? -14 : 6) - y * 4);
+            Put(t, x, y, v, v, v, 255);
         }
 
         return t;
@@ -1516,6 +2039,8 @@ public static class TileGen
     {
         var t = new byte[BytesPerTile];
 
+        var ramp = Ramp(r, g, b, 6, 0.30f);
+
         for (var x = 0; x < Size; x++)
         {
             if (Noise(x, 0, seed) < 0.42f) continue;
@@ -1523,6 +2048,7 @@ public static class TileGen
             // Height from the bottom, and a slow lean so the blades are not a picket fence.
             var height = 4 + (int)(Noise(x, 1, seed + 19) * 8f);
             var lean = Noise(x, 2, seed + 37) * 2f - 1f;
+            var shade = 1 + (int)(Noise(x, 3, seed + 71) * 1.999f);     // each blade its own tone
 
             for (var i = 0; i < height; i++)
             {
@@ -1531,8 +2057,10 @@ public static class TileGen
                 if ((uint)bx >= Size) continue;
 
                 // Paler toward the tip, which is what stops a blade reading as a wire.
-                var d = (int)(i / (float)height * 26f) + (int)((Noise(bx, y, seed + 53) * 2f - 1f) * 10f);
-                Put(t, bx, y, Clamp(r + d), Clamp(g + d), Clamp(b + d), 255);
+                var k = Math.Min(4, shade + (i >= height - 2 ? 2 : i >= height / 2 ? 1 : 0));
+
+                var (cr, cg, cb) = ramp[k];
+                Put(t, bx, y, cr, cg, cb, 255);
             }
         }
 
@@ -2152,48 +2680,82 @@ public static class TileGen
     public static byte[] Cobble(int seed, byte r, byte g, byte b)
     {
         var t = new byte[BytesPerTile];
+        var ramp = Ramp(r, g, b, 6, 0.36f);
 
-        // Each pixel belongs to whichever scattered stone centre is nearest, which gives blocky
-        // irregular cells; the seams between them become the mortar.
+        // Each pixel belongs to whichever scattered stone centre is nearest — blocky irregular
+        // cells whose seams become the mortar. Seven centres on a sixteen tile is what makes
+        // the stones read as STONES: the reference's cobble is six to eight big rounded ones,
+        // and doubling the count turns the same code into gravel.
         Span<int> cx = stackalloc int[7];
         Span<int> cy = stackalloc int[7];
-        Span<int> shade = stackalloc int[7];
-        for (var i = 0; i < 7; i++)
-        {
-            cx[i] = (int)(Noise(i, 0, seed) * Size);
-            cy[i] = (int)(Noise(0, i, seed + 41) * Size);
-            shade[i] = (int)((Noise(i, i, seed + 83) * 2f - 1f) * 26f);
-        }
+        Scatter(seed, cx, cy);
+
+        Span<int> tone = stackalloc int[7];
+        for (var i = 0; i < 7; i++) tone[i] = 1 + (int)(Noise(i, i, seed + 83) * 2.499f);
 
         for (var y = 0; y < Size; y++)
         for (var x = 0; x < Size; x++)
         {
-            var best = 0;
-            var bestD = int.MaxValue;
-            var secondD = int.MaxValue;
+            var (best, d1, d2) = Nearest(x, y, cx, cy, diamond: false);
 
-            for (var i = 0; i < 7; i++)
+            // One flat dark mortar everywhere, not a per-stone darkening: shared mortar is
+            // what binds seven different stones into one wall.
+            if (d2 - d1 <= 2)
             {
-                // Wrapped distance, so the stones carry across the tile edge and the block does not
-                // show a grid where two of its faces meet.
-                var dx = Math.Abs(x - cx[i]);
-                var dy = Math.Abs(y - cy[i]);
-                dx = Math.Min(dx, Size - dx);
-                dy = Math.Min(dy, Size - dy);
-
-                var d = dx * dx + dy * dy;
-                if (d < bestD) { secondD = bestD; bestD = d; best = i; }
-                else if (d < secondD) secondD = d;
+                var (mr, mg, mb) = ramp[0];
+                Put(t, x, y, mr, mg, mb, 255);
+                continue;
             }
 
-            var grain = (int)((Noise(x, y, seed + 17) * 2f - 1f) * 9f);
-            var mortar = secondD - bestD <= 2;
+            var k = tone[best];
 
-            Put(t, x, y,
-                Clamp(r + shade[best] + grain - (mortar ? 46 : 0)),
-                Clamp(g + shade[best] + grain - (mortar ? 46 : 0)),
-                Clamp(b + shade[best] + grain - (mortar ? 46 : 0)),
-                255);
+            // The top-left of each stone catches the light, the bottom-right sits in mortar
+            // shadow — round shading in two flat steps.
+            var (nb, n1, n2) = Nearest((x + 1) % Size, (y + 1) % Size, cx, cy, diamond: false);
+            var (pb, p1, p2) = Nearest((x + Size - 1) % Size, (y + Size - 1) % Size, cx, cy, diamond: false);
+            if (nb != best || n2 - n1 <= 2) k = Math.Min(5, k + 1);
+            else if (pb != best || p2 - p1 <= 2) k = Math.Max(1, k - 1);
+
+            var (cr, cg, cb) = ramp[k];
+            Put(t, x, y, cr, cg, cb, 255);
+        }
+
+        return t;
+    }
+
+    /// <summary>Cobble with the moss growing where moss grows: in the mortar, spilling onto a stone.</summary>
+    /// <remarks>
+    /// Grown over the SAME stones as the clean tile — same seed in, same partition out — so a
+    /// mossy face beside a clean one reads as one wall weathering, not as two different walls.
+    /// The old version scattered green blobs anywhere, which read as paint splatter: damp
+    /// follows the joints, so the green has to follow them too.
+    /// </remarks>
+    public static byte[] MossyCobble(int seed, byte r, byte g, byte b)
+    {
+        var t = Cobble(seed, r, g, b);
+        var moss = Ramp(97, 112, 50, 6, 0.34f);
+        var mortar = Ramp(r, g, b, 6, 0.36f)[0];
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var i = y * Stride + x * 4;
+            var inMortar = t[i] == mortar.R && t[i + 1] == mortar.G && t[i + 2] == mortar.B;
+
+            // Damp patches, not damp everywhere: about half the joints green over, and the
+            // growth spills one pixel onto the stone beside a greened joint here and there.
+            var damp = Noise((x >> 1) + 3, (y >> 1) + 5, seed + 191) > 0.45f;
+
+            if (inMortar && damp)
+            {
+                var (mr2, mg2, mb2) = moss[1 + (int)(Noise(x, y, seed + 197) * 2.999f)];
+                Put(t, x, y, mr2, mg2, mb2, 255);
+            }
+            else if (!inMortar && damp && Noise(x, y, seed + 199) > 0.86f)
+            {
+                var (mr2, mg2, mb2) = moss[2 + (int)(Noise(x, y, seed + 211) * 1.999f)];
+                Put(t, x, y, mr2, mg2, mb2, 255);
+            }
         }
 
         return t;
@@ -2212,18 +2774,27 @@ public static class TileGen
     public static byte[] Polished(int seed, byte r, byte g, byte b)
     {
         var t = new byte[BytesPerTile];
+        var ramp = Ramp(r, g, b, 6, 0.18f);
 
         for (var y = 0; y < Size; y++)
         for (var x = 0; x < Size; x++)
         {
-            // A third of the roughness the raw rock carries, so the material still reads through.
-            var grain = (int)((Noise(x, y, seed) * 2f - 1f) * 6f);
+            // Almost flat — a worked face is quiet — with sparse flecks of the rock it was,
+            // so the material still reads through. The diagonal sheen this used to carry was
+            // the single most computer-looking stripe in the whole set; a cut face in the
+            // reference is FLAT, and its bevel does all the talking.
+            var k = 2;
 
-            // And a broad diagonal sheen, which is what a cut face does to light.
-            var sheen = (int)(MathF.Sin((x + y) * 0.24f) * 4f);
+            var fleck = Noise(x, y, seed + 9);
+            if (fleck > 0.965f) k = 3;
+            else if (fleck < 0.035f) k = 1;
 
-            var d = grain + sheen;
-            Put(t, x, y, Clamp(r + d), Clamp(g + d), Clamp(b + d), 255);
+            // The bevel: lit along the top and left edges, shadowed along the bottom and right.
+            if (x == 0 || y == 0) k = Math.Min(4, k + 2);
+            else if (x == Size - 1 || y == Size - 1) k = Math.Max(0, k - 2);
+
+            var (cr, cg, cb) = ramp[k];
+            Put(t, x, y, cr, cg, cb, 255);
         }
 
         return t;
@@ -2279,6 +2850,7 @@ public static class TileGen
     public static byte[] Bricks(int seed, byte r, byte g, byte b, byte mortar)
     {
         var t = new byte[BytesPerTile];
+        var ramp = Ramp(r, g, b, 6, 0.26f);
         const int CourseHeight = 4;
         const int BrickWidth = 8;
 
@@ -2291,15 +2863,23 @@ public static class TileGen
 
             if (joint)
             {
-                var m = (int)((Noise(x, y, seed + 7) * 2f - 1f) * 6f);
-                Put(t, x, y, Clamp(mortar + m), Clamp(mortar + m), Clamp(mortar + m), 255);
+                Put(t, x, y, mortar, mortar, mortar, 255);
                 continue;
             }
 
-            // One shade per brick, so a course reads as bricks rather than as a striped wall.
-            var brick = (int)((Noise((x + offset) / BrickWidth, course, seed) * 2f - 1f) * 18f);
-            var d = brick + (int)((Noise(x, y, seed + 31) * 2f - 1f) * 7f);
-            Put(t, x, y, Clamp(r + d), Clamp(g + d), Clamp(b + d), 255);
+            // One flat tone per brick, its top row lit and its bottom row shaded — a course
+            // of small bevelled faces rather than a striped wall.
+            var k = 2 + (int)(Noise((x + offset) / BrickWidth, course, seed) * 1.999f);
+
+            var inBrickY = y % CourseHeight;
+            var inBrickX = (x + offset) % BrickWidth;
+            if (inBrickY == 1 || inBrickX == 1) k = Math.Min(4, k + 1);
+            else if (inBrickY == CourseHeight - 1) k = Math.Max(1, k - 1);
+
+            if (Noise(x, y, seed + 31) > 0.97f) k = Math.Max(1, k - 1);  // a chipped fleck
+
+            var (cr, cg, cb) = ramp[k];
+            Put(t, x, y, cr, cg, cb, 255);
         }
 
         return t;
@@ -2577,12 +3157,18 @@ public static class TileGen
     {
         var t = new byte[BytesPerTile];
 
+        // The reference's moss leans yellow-olive, not leaf-green, and it is CUSHIONS: soft
+        // lumps a tone apart with darker seams wandering between them.
+        var ramp = Ramp(97, 112, 50, 6, 0.34f);
+
         for (var y = 0; y < Size; y++)
         for (var x = 0; x < Size; x++)
         {
-            var lump = Noise(x / 3, y / 3, seed) * 2f - 1f;
-            var grain = (int)((Noise(x, y, seed + 5) * 2f - 1f) * 12f + lump * 14f);
-            Put(t, x, y, Clamp(86 + grain), Clamp(124 + grain), Clamp(72 + grain), 255);
+            var lump = Noise(x / 3, y / 3, seed) * 0.7f + Noise(x, y, seed + 5) * 0.3f;
+            var k = MidTone(lump);
+
+            var (cr, cg, cb) = ramp[k];
+            Put(t, x, y, cr, cg, cb, 255);
         }
 
         return t;

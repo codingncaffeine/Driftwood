@@ -997,8 +997,10 @@ public static class BlockTextureSet
         var slow = new float[Frames];
         Array.Fill(slow, Seconds * 5f);
 
-        Add(StarterBlocks.LayerWater, TileGen.WaterFrames(1006, Frames, 41, 92, 158), times);
-        Add(StarterBlocks.LayerWaterFlow, TileGen.FlowFrames(1090, Frames, 41, 92, 158, 11f), times);
+        // Near-colourless, like the still tile: TintSource.Water supplies the blue, exactly as
+        // it does for a pack's grey-painted water.
+        Add(StarterBlocks.LayerWater, TileGen.WaterFrames(1006, Frames, 198, 204, 214), times);
+        Add(StarterBlocks.LayerWaterFlow, TileGen.FlowFrames(1090, Frames, 198, 204, 214, 13f), times);
         Add(StarterBlocks.LayerLava, TileGen.LavaFrames(1091, Frames), slow);
         Add(StarterBlocks.LayerLavaFlow, TileGen.FlowFrames(1092, Frames, 176, 74, 22, 46f), slow);
 
@@ -1225,47 +1227,53 @@ public static class BlockTextureSet
 
     private static byte[] Draw(int layer)
     {
-        var stone = TileGen.Speckle(1001, 128, 128, 133, 16, 0.45f);
-        var dirt = TileGen.Speckle(1002, 118, 85, 57, 18, 0.5f);
-        var deepstone = TileGen.Speckle(1018, 62, 62, 68, 14, 0.55f);
+        var stone = TileGen.Rock(1001, 127, 127, 130, spread: 0.27f);
+        var dirt = TileGen.Soil(1002, 124, 89, 58);
+        var deepstone = TileGen.Rock(1018, 64, 64, 70, spread: 0.26f);
 
         return layer switch
         {
             StarterBlocks.LayerStone => stone,
             StarterBlocks.LayerDirt => dirt,
-            StarterBlocks.LayerGrassTop => TileGen.Speckle(1003, 92, 153, 66, 20, 0.55f),
+
+            // ⛔ Near-colourless ON PURPOSE, like every tinted layer below: the mesher multiplies
+            // the climate colour over any face wearing a TintSource, art-agnostic, exactly as it
+            // does for an imported pack. The baked-green these carried was being tinted twice.
+            StarterBlocks.LayerGrassTop => TileGen.GrassTopTile(1003),
 
             // Grey, with the green arriving through the overlay below it. See TileGen.GrassSide.
             StarterBlocks.LayerGrassSide => TileGen.GrassSide(1004, dirt, 138),
             StarterBlocks.LayerGrassSideOverlay => TileGen.GrassSideOverlay(1004, 138),
-            StarterBlocks.LayerSand => TileGen.Speckle(1005, 212, 199, 148, 12, 0.3f),
-            StarterBlocks.LayerWater => TileGen.Speckle(1006, 41, 92, 158, 14, 0.6f),
-            StarterBlocks.LayerGravel => TileGen.Speckle(1007, 128, 122, 118, 26, 0.7f),
+            StarterBlocks.LayerSand => TileGen.SandTile(1005, 214, 201, 150),
+            StarterBlocks.LayerWater => TileGen.WaterFrames(1006, 1, 198, 204, 214)[0],
+            StarterBlocks.LayerGravel => TileGen.GravelTile(1007, 127, 121, 117),
             StarterBlocks.LayerLogSide => TileGen.Bark(1008, 105, 79, 48),
             StarterBlocks.LayerLogTop => TileGen.Rings(1009, 148, 118, 76),
-            StarterBlocks.LayerLeaves => TileGen.Leaves(1010, 61, 120, 51, 0.22f),
+            StarterBlocks.LayerLeaves => TileGen.Leaves(1010, 148, 148, 148, 0.22f),
             StarterBlocks.LayerPlanks => TileGen.Planks(1011, 179, 143, 87),
             StarterBlocks.LayerCoalOre => TileGen.Ore(1012, stone, 38, 38, 40, 5),
             StarterBlocks.LayerIronOre => TileGen.Ore(1013, stone, 176, 142, 112, 5),
-            StarterBlocks.LayerBedrock => TileGen.Speckle(1014, 40, 40, 44, 30, 0.8f),
+            StarterBlocks.LayerBedrock => TileGen.BedrockTile(1014),
             StarterBlocks.LayerEmberstone => TileGen.Ember(1015, TileGen.Speckle(1016, 74, 60, 54, 14, 0.5f), 255, 158, 76),
-            StarterBlocks.LayerVine => TileGen.Vine(1017, 62, 112, 48),
+            StarterBlocks.LayerVine => TileGen.Vine(1017, 132, 132, 132),
             StarterBlocks.LayerDeepstone => deepstone,
 
             // The three intrusions are the same rock at three temperatures of grey, which is close
-            // to what tells them apart in life. Diorite is the pale one, granite the pink.
-            StarterBlocks.LayerCoralstone => TileGen.Speckle(1019, 154, 111, 97, 20, 0.5f),
-            StarterBlocks.LayerDriftstone => TileGen.Speckle(1020, 134, 136, 132, 18, 0.5f),
-            StarterBlocks.LayerSaltstone => TileGen.Speckle(1021, 202, 202, 205, 22, 0.6f),
+            // to what tells them apart in life. Diorite is the pale one, granite the pink — and
+            // all three are FINER-grained than stone (more cells, tighter ramp), which is exactly
+            // how the reference tells an intrusion from the country rock around it.
+            StarterBlocks.LayerCoralstone => TileGen.Rock(1019, 156, 112, 98, cells: 18, spread: 0.24f),
+            StarterBlocks.LayerDriftstone => TileGen.Rock(1020, 135, 137, 133, cells: 18, spread: 0.22f),
+            StarterBlocks.LayerSaltstone => TileGen.Rock(1021, 203, 203, 206, cells: 18, spread: 0.20f),
             StarterBlocks.LayerCopperOre => TileGen.Ore(1022, stone, 196, 112, 62, 5),
             StarterBlocks.LayerGoldOre => TileGen.Ore(1023, stone, 232, 196, 82, 4),
             StarterBlocks.LayerStormglassOre => TileGen.Ore(1024, stone, 118, 224, 220, 4),
             StarterBlocks.LayerAzuriteOre => TileGen.Ore(1025, stone, 54, 82, 190, 5),
-            StarterBlocks.LayerClay => TileGen.Speckle(1026, 160, 166, 176, 8, 0.35f),
+            StarterBlocks.LayerClay => TileGen.ClayTile(1026, 160, 166, 176),
             StarterBlocks.LayerSandstone => TileGen.Strata(1027, 214, 199, 152),
             StarterBlocks.LayerSandstoneTop => TileGen.Speckle(1028, 219, 205, 160, 10, 0.4f),
-            StarterBlocks.LayerSnow => TileGen.Speckle(1029, 243, 246, 250, 7, 0.3f),
-            StarterBlocks.LayerMeadowgrass => TileGen.Tuft(1030, 96, 148, 62),
+            StarterBlocks.LayerSnow => TileGen.SnowTile(1029),
+            StarterBlocks.LayerMeadowgrass => TileGen.Tuft(1030, 148, 152, 140),
             StarterBlocks.LayerSeaflax => TileGen.Flower(1031, 74, 118, 58, 78, 116, 208, 226, 232, 118),
             StarterBlocks.LayerMarshlily => TileGen.Flower(1032, 82, 126, 62, 236, 238, 232, 236, 196, 84),
             StarterBlocks.LayerTorch => TileGen.Torch(1033),
@@ -1279,10 +1287,10 @@ public static class BlockTextureSet
             // worked rather than as a new rock somebody happened to draw in the same palette. That
             // relationship is the whole point of the axis and it is one a generator can hold and a
             // hand-drawn set cannot.
-            StarterBlocks.LayerStoneBricks => TileGen.Bricks(1051, 122, 122, 126, 104),
+            StarterBlocks.LayerStoneBricks => TileGen.Bricks(1051, 124, 124, 128, 74),
             StarterBlocks.LayerSmoothStone => TileGen.Polished(1052, 132, 132, 136),
             StarterBlocks.LayerDeepstonePolished => TileGen.Polished(1053, 74, 74, 80),
-            StarterBlocks.LayerDeepstoneBricks => TileGen.Bricks(1054, 74, 74, 80, 60),
+            StarterBlocks.LayerDeepstoneBricks => TileGen.Bricks(1054, 74, 74, 80, 44),
             StarterBlocks.LayerCoralstonePolished => TileGen.Polished(1019, 154, 111, 97),
             StarterBlocks.LayerDriftstonePolished => TileGen.Polished(1020, 134, 136, 132),
             StarterBlocks.LayerSaltstonePolished => TileGen.Polished(1021, 202, 202, 205),
@@ -1370,7 +1378,7 @@ public static class BlockTextureSet
             // The fluids' first frames. OwnAnimations writes these back over the top with frame 0 of
             // the real strip, so these are what a build that never ticks a clock draws — a still
             // answer for every layer rather than a hole where the moving ones should be.
-            StarterBlocks.LayerWaterFlow => TileGen.FlowFrames(1090, 1, 41, 92, 158, 11f)[0],
+            StarterBlocks.LayerWaterFlow => TileGen.FlowFrames(1090, 1, 198, 204, 214, 13f)[0],
             StarterBlocks.LayerLava => TileGen.LavaFrames(1091, 1)[0],
             StarterBlocks.LayerLavaFlow => TileGen.FlowFrames(1092, 1, 176, 74, 22, 46f)[0],
 
@@ -1515,8 +1523,7 @@ public static class BlockTextureSet
 
             // Mossy rubble is rubble with moss grown into its cracks — the Ore overlay's own
             // trick, seeding green into the rubble's exact tile rather than a second drawing.
-            StarterBlocks.LayerMossyRubble => TileGen.Ore(
-                1367, TileGen.Cobble(1034, 126, 126, 130), 96, 134, 80, 11),
+            StarterBlocks.LayerMossyRubble => TileGen.MossyCobble(1034, 126, 126, 130),
 
             StarterBlocks.LayerSeagrass => TileGen.Seagrass(1368),
 
@@ -1556,7 +1563,7 @@ public static class BlockTextureSet
 
             // Cherry (#94): dark red-brown bark round pale pink heartwood, rose planks, and the
             // blossom — which is NOT climate-tinted, because pink IS the species.
-            StarterBlocks.LayerCherryLogSide => TileGen.Bark(1390, 92, 58, 54),
+            StarterBlocks.LayerCherryLogSide => TileGen.Bark(1390, 102, 62, 58, lenticels: true),
             StarterBlocks.LayerCherryLogTop => TileGen.Rings(1391, 214, 168, 158),
             StarterBlocks.LayerCherryPlanks => TileGen.Planks(1392, 222, 168, 158),
             StarterBlocks.LayerCherryLeaves => TileGen.Leaves(1393, 236, 172, 198, 0.22f),
