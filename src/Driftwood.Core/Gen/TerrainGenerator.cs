@@ -139,6 +139,7 @@ public sealed class TerrainGenerator
     private readonly int _seedMeadow;
     private readonly int _seedDune;
     private readonly int _seedGlowcap;
+    private readonly int _seedReed;
 
     /// <summary>Depth above which no glowcap grows. The deep earns its own light; the shallows
     /// have torches and daylight down their shafts, and a glow that grows everywhere means
@@ -201,6 +202,7 @@ public sealed class TerrainGenerator
         _seedMeadow = seed.Derive("decor.meadowgrass");
         _seedDune = seed.Derive("decor.dunes");
         _seedGlowcap = seed.Derive("decor.glowcap");
+        _seedReed = seed.Derive("decor.reeds");
         _seedFlora = seed.Derive("decor.cave_flora");
         _seedLavaTable = seed.Derive("deep.lava_table");
         _seedLavaPools = seed.Derive("deep.lava_pools");
@@ -723,6 +725,37 @@ public sealed class TerrainGenerator
     public bool AridSurface(int x, int z) =>
         _climate.Temperature(x, z) > HotLine && _climate.Downfall(x, z) < DryLine;
 
+    /// <summary>Rainfall above which a shoreline is wet enough to stand reeds.</summary>
+    public const float WetLine = 0.56f;
+
+    /// <summary>Whether this column's shore is soaked enough for reeds. Public for the audit.</summary>
+    public bool WetShore(int x, int z) => _climate.Downfall(x, z) > WetLine;
+
+    /// <summary>
+    /// The reed rule WHOLE — ground at the waterline or one bank up, sand or grass, soaked, and
+    /// one fast roll. The decorator places where this says and the audit counts what this says,
+    /// so the two can never drift apart.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>No slow patch field, and that is a measured decision, not an omission.</b> Eligible
+    /// ground is a thin shoreline contour — 85 columns in a whole gate sample, lying in one or
+    /// two contiguous strips — and a coherent field goes negative over an entire strip at once:
+    /// the staged probe read 82 of 85 columns dying at the patch gate on a correct seed. The
+    /// meadow's two-field discipline exists to cut PATCHES out of broad ground; a shoreline is
+    /// already a strip, so the per-column roll alone gives stands with gaps in them, which is
+    /// what a reedy shore is.
+    /// </remarks>
+    public bool ReedSite(int wx, int wz)
+    {
+        var surface = SurfaceHeight(wx, wz);
+        if (surface < SeaLevel || surface > SeaLevel + 1) return false;
+
+        var top = TopOf(wx, wz, surface, surface <= SeaLevel + 2);
+        if (top != _ids.Sand.Value && top != _ids.Grass.Value) return false;
+
+        return WetShore(wx, wz) && Noise.Value2(wx, wz, _seedReed + 7) < 0.5f;
+    }
+
     /// <summary>
     /// How far short of the snow line a column may sit and still carry a dusting of it.
     /// </summary>
@@ -918,6 +951,22 @@ public sealed class TerrainGenerator
             var surface = SurfaceHeight(wx, wz);
             var beach = surface <= SeaLevel + 2;
             var top = TopOf(wx, wz, surface, beach);
+
+            // ⛳ The marsh reed first: ground sitting exactly at the waterline, soaked climate,
+            // sand or grass underfoot — two or three joints of cane on the reeds' own derived
+            // seed, every chunk in the stack keeping its own share of cells (a reed straddles
+            // vertical seams exactly as a cactus does). Before the sand branch, or a sea-level
+            // sand column would fall into the dunes' continue and never stand one.
+            // ⚠ At the waterline or one bank above it — the exact-contour first draft found ZERO
+            // eligible columns across a whole gate sample, which the reed census said out loud.
+            if (ReedSite(wx, wz))
+            {
+                var joints = Noise.Value2(wx, wz, _seedReed + 11) < 0.35f ? 3 : 2;
+                for (var up = 1; up <= joints; up++)
+                    PlaceIntoAir(chunk, ox, oy, oz, wx, surface + up, wz, _ids.MarshReed);
+
+                continue;
+            }
 
             // ⛳ The arid fringe: hot dry sand grows the desert kit, on the dunes' OWN derived
             // seed so every meadow field keeps the very rolls it had. The column is considered

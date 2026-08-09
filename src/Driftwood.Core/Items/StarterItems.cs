@@ -126,6 +126,8 @@ public static class StarterItems
 
         // The farmable light: pick one in the deep, plant it at home, and the lamp grows back.
         Block(items, blocks, "glowcap", "glowcap", StarterBlocks.LayerGlowcap);
+
+        Block(items, blocks, "marsh_reed", "marsh reed", StarterBlocks.LayerMarshReed);
         Block(items, blocks, "deepstone", "deepstone", StarterBlocks.LayerDeepstone);
         Block(items, blocks, "coralstone", "coralstone", StarterBlocks.LayerCoralstone);
         Block(items, blocks, "driftstone", "driftstone", StarterBlocks.LayerDriftstone);

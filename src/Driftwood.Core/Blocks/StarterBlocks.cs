@@ -581,8 +581,9 @@ public static class StarterBlocks
     public const ushort LayerCactusTop = LayerCobweb + 10;
     public const ushort LayerDeadBush = LayerCobweb + 11;
     public const ushort LayerGlowcap = LayerCobweb + 12;
+    public const ushort LayerMarshReed = LayerCobweb + 13;
 
-    public const int LayerCount = LayerGlowcap + 1;
+    public const int LayerCount = LayerMarshReed + 1;
 
     /// <summary>One anvil's name, by how worn it is and which way it lies.</summary>
     /// <remarks>
@@ -776,7 +777,10 @@ public static class StarterBlocks
         BlockId DeadBush,
 
         /// <summary>The deep's own light, growing only below the glow floor.</summary>
-        BlockId Glowcap)
+        BlockId Glowcap,
+
+        /// <summary>The wet shoreline's cane, standing where ground meets the waterline.</summary>
+        BlockId MarshReed)
     {
         /// <summary>Every rock an ore can form in. Ore replaces rock, whichever rock it is.</summary>
         public BlockId[] Rock => [Stone, Deepstone, Coralstone, Driftstone, Saltstone];
@@ -1091,6 +1095,18 @@ public static class StarterBlocks
             Sounds = SoundMaterial.Grass,
             SupportFace = Faces.NegY,
             Model = BlockModel.Cross(LayerDeadBush, tinted: false),
+        });
+
+        // ⛳ The marsh reed: the wet shoreline's tell, two or three joints of cane standing where
+        // the ground sits exactly at the waterline. It stacks on itself the cactus's way — one
+        // id, no tall-pair machinery — and three of its joints press into paper, the wetland's
+        // own door into M0's recipe beside the planks path, replacing nothing.
+        var marshReed = registry.Register(new BlockType
+        {
+            Name = "marsh_reed", Hardness = 0.05f, Solid = false, Opaque = false,
+            Sounds = SoundMaterial.Grass,
+            SupportFace = Faces.NegY,
+            Model = BlockModel.Cross(LayerMarshReed, tinted: false),
         });
 
         // ⛳ The glowcap — ours, in the coined register beside driftoak and stormglass. The deep's
@@ -1615,7 +1631,7 @@ public static class StarterBlocks
             diamond, azurite, clay, sandstone, snow, snowLayer, meadowgrass, seaflax, marshlily,
             emberbloom, sunwort,
             rubble, glass, bricks, bench, furnace, furnaceLit, lava, wildCrops, berryBushRipe,
-            mushroomBrown, mushroomRed, pumpkin, cobweb, ice, cactus, deadBush, glowcap);
+            mushroomBrown, mushroomRed, pumpkin, cobweb, ice, cactus, deadBush, glowcap, marshReed);
     }
 
     /// <summary>

@@ -467,6 +467,9 @@ public static class BlockTextureSet
         // genre's luminous flora are a solid block and a wall lichen — neither is a cross-plant
         // net, so there is no honest file for a pack to land on.
         new("glowcap", "", true),
+
+        // Ours is the marsh reed; the pack paints it as its own shoreline cane.
+        new("marsh_reed", "textures/block/sugar_cane.png", true, "textures/blocks/reeds.png"),
     ];
 
     /// <summary>
@@ -1431,6 +1434,7 @@ public static class BlockTextureSet
             StarterBlocks.LayerCactusTop => TileGen.CactusTop(1361),
             StarterBlocks.LayerDeadBush => TileGen.DeadBush(1363),
             StarterBlocks.LayerGlowcap => TileGen.Glowcap(1364),
+            StarterBlocks.LayerMarshReed => TileGen.MarshReed(1365),
 
             _ => Wheat(layer) ?? Crop(layer) ?? CropIcon(layer) ?? StainedGlass(layer)
                  ?? MetalBlock(layer) ?? Wool(layer) ?? Meat(layer) ?? Dye(layer)

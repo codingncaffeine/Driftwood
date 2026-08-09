@@ -2406,6 +2406,36 @@ public static class TileGen
         return t;
     }
 
+    /// <summary>Marsh reed: three canes leaning together, jointed, in wet greens.</summary>
+    public static byte[] MarshReed(int seed)
+    {
+        var t = new byte[BytesPerTile];
+
+        // Three stalks at fixed roots with a slight lean each, drawn per pixel by column so a
+        // one-texel cane never skips a row.
+        (float Root, float Lean)[] canes = [(4f, 0.10f), (8f, -0.06f), (12f, 0.04f)];
+
+        for (var y = 0; y < Size; y++)
+        {
+            foreach (var (root, lean) in canes)
+            {
+                var x = (int)MathF.Round(root + (Size - 1 - y) * lean);
+                if ((uint)x >= Size) continue;
+
+                var grain = (int)((Noise(x, y, seed) * 2f - 1f) * 10f);
+
+                // A paler joint every fifth row — the node that says cane rather than blade.
+                var joint = y % 5 == 0;
+                Put(t, x, y,
+                    Clamp((joint ? 150 : 108) + grain),
+                    Clamp((joint ? 180 : 150) + grain),
+                    Clamp((joint ? 120 : 88) + grain), 255);
+            }
+        }
+
+        return t;
+    }
+
     /// <summary>The dead bush: a dry fork of twigs on nothing, in old-rope browns.</summary>
     public static byte[] DeadBush(int seed)
     {

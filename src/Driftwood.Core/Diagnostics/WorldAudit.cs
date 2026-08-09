@@ -630,7 +630,8 @@ public static class WorldAudit
         // is owned by each block's own equivalence check instead ("cold water wears ice" goes red
         // the moment the generator stops freezing a cold coast), so the census skipping it here
         // gives up nothing.
-        var climatic = new HashSet<ushort> { ids.Ice.Value, ids.Cactus.Value, ids.DeadBush.Value };
+        var climatic = new HashSet<ushort>
+            { ids.Ice.Value, ids.Cactus.Value, ids.DeadBush.Value, ids.MarshReed.Value };
 
         var missing = new List<string>();
         var crafted = 0;
@@ -857,11 +858,33 @@ public static class WorldAudit
         var bushSeen = 0;
         var missited = 0;
         var aridColumns = 0;
+        var reedSeen = 0;
+        var reedMissited = 0;
+        var wetShoreColumns = 0;
+        var reedEligible = 0;
+        var reedSites = 0;
 
         for (var z = minBlock; z <= maxBlock; z += 2)
         for (var x = minBlock; x <= maxBlock; x += 2)
         {
             if (generator.AridSurface(x, z)) aridColumns++;
+
+            if (generator.WetShore(x, z))
+            {
+                wetShoreColumns++;
+
+                // A wet column only counts as somewhere a reed COULD stand when its ground sits
+                // at the waterline — which is the number the vacuity question actually needs:
+                // "no reeds over 14,000 wet columns" and "no reeds over 12 eligible ones" are
+                // different findings, and the first draft could not tell them apart.
+                var shore = generator.SurfaceHeight(x, z);
+                if (shore >= TerrainGenerator.SeaLevel && shore <= TerrainGenerator.SeaLevel + 1)
+                    reedEligible++;
+
+                // And the generator's own whole answer, so a site that never grew its reed is a
+                // WRITE fault and names itself apart from a condition that never fired.
+                if (generator.ReedSite(x, z)) reedSites++;
+            }
 
             for (var y = TerrainGenerator.SeaLevel + 1; y <= TerrainGenerator.SeaLevel + 30; y++)
             {
@@ -882,12 +905,31 @@ public static class WorldAudit
                         || !generator.AridSurface(x, z))
                         missited++;
                 }
+                else if (cell == ids.MarshReed.Value)
+                {
+                    reedSeen++;
+
+                    // Three joints off ground at the waterline or one bank above it, soaked, on
+                    // sand or grass or its own lower joint — each clause the placement rule.
+                    var under = world.GetBlock(x, y - 1, z);
+                    if (y > TerrainGenerator.SeaLevel + 4
+                        || (under != ids.Sand.Value && under != ids.Grass.Value
+                            && under != ids.MarshReed.Value)
+                        || !generator.WetShore(x, z))
+                        reedMissited++;
+                }
             }
         }
 
         Check("the arid fringe grows the desert kit", missited == 0,
             $"{cactusSeen:N0} cactus and {bushSeen:N0} dead bush cells, {missited} anywhere but "
             + $"arid sand, {aridColumns:N0} arid columns in the sample");
+
+        Check("reeds stand on the wet shoreline",
+            reedMissited == 0 && (reedSites == 0 || reedSeen > 0),
+            $"{reedSeen:N0} reed joints over {reedSites:N0} sites the rule names, {reedMissited} "
+            + $"off the soaked waterline, {reedEligible:N0} eligible shoreline columns of "
+            + $"{wetShoreColumns:N0} wet");
 
         Check(
             "sandstone lies under the sand",
@@ -2409,14 +2451,38 @@ public static class WorldAudit
         if (rounds >= 64) faults.Add("the reachability walk never settled, so something is cyclic");
 
         var unreachable = new List<string>();
+        var withheld = 0;
+
         foreach (var type in items.All)
         {
             if (type.Id.IsNone || Held(type.Id)) continue;
+
+            // ⛳ An item whose only source is a NATURAL block this world never grew is not a
+            // dead end, it is a climate: tidefall grows no cactus, and its cactus item is
+            // honestly unobtainable there. Whether a natural block ought to generate at all is
+            // the census's question, with its own named climatic set; this walk answers for
+            // recipe chains, and a chain broken by weather is not a broken chain. ⛔ A CRAFTED
+            // source is never excused — those are exactly the dead ends this walk exists for.
+            var block = type.PlainBlock;
+            if (block != BlockId.Air && !registry[block].Crafted && counts[block.Value] == 0)
+            {
+                withheld++;
+                continue;
+            }
+
             unreachable.Add(type.Name);
         }
 
         foreach (var name in unreachable)
             faults.Add($"'{name}' cannot be obtained by anyone starting with nothing");
+
+        // The same weather rule for the two ingredient sweeps below: a slot is only dead when
+        // some member is missing for a reason that is not this world's climate.
+        bool ClimateWithheld(ItemId member)
+        {
+            var source = items[member].PlainBlock;
+            return source != BlockId.Air && !registry[source].Crafted && counts[source.Value] == 0;
+        }
 
         // A recipe nobody can pay for is a row in a table that never runs. Reported separately from
         // an unreachable item because the cause is different — the result may well be reachable
@@ -2425,15 +2491,29 @@ public static class WorldAudit
         foreach (var slot in recipe.Ingredients)
         {
             var any = false;
-            foreach (var member in slot.Members) any |= Held(member);
-            if (!any) faults.Add($"'{recipe.Name}' needs {slot.Name}, which nobody can get");
+            var allWeather = true;
+            foreach (var member in slot.Members)
+            {
+                any |= Held(member);
+                allWeather &= ClimateWithheld(member);
+            }
+
+            if (!any && !allWeather)
+                faults.Add($"'{recipe.Name}' needs {slot.Name}, which nobody can get");
         }
 
         foreach (var recipe in book.Smelting)
         {
             var any = false;
-            foreach (var member in recipe.Input.Members) any |= Held(member);
-            if (!any) faults.Add($"'{recipe.Name}' takes {recipe.Input.Name}, which nobody can get");
+            var allWeather = true;
+            foreach (var member in recipe.Input.Members)
+            {
+                any |= Held(member);
+                allWeather &= ClimateWithheld(member);
+            }
+
+            if (!any && !allWeather)
+                faults.Add($"'{recipe.Name}' takes {recipe.Input.Name}, which nobody can get");
         }
 
         // The positive control. A walk that starts with everything would report everything reachable
@@ -2454,7 +2534,8 @@ public static class WorldAudit
         foreach (var tier in reach) if (tier > 0) toolSteps++;
 
         detail = $"{have.Count} of {items.Count - 1} items in {rounds} rounds from {byHand} blocks "
-               + $"a hand can take, past {gated} it cannot, over {toolSteps} tool classes";
+               + $"a hand can take, past {gated} it cannot, over {toolSteps} tool classes"
+               + (withheld > 0 ? $"; {withheld} withheld by this world's climate" : "");
 
         return faults;
     }
@@ -6703,11 +6784,13 @@ public static class WorldAudit
 
         (StarterBlocks.LayerDeadBush, "dead_bush"),
 
+        (StarterBlocks.LayerGlowcap, "glowcap"),
+
         // The moving pin: the LAST layer, by name. It has now caught three appends in the act —
         // fifteen crop rows landing after "the last layer is bonemeal", the composter's four
         // landing after black glass, and the berry bush's three after compost-ready — which is
         // exactly what it is for. Keep it pointed at whatever is genuinely last.
-        ((ushort)(StarterBlocks.LayerCount - 1), "glowcap"),
+        ((ushort)(StarterBlocks.LayerCount - 1), "marsh_reed"),
     ];
 
     /// <summary>
