@@ -93,6 +93,15 @@ public static class CreatureVitals
     };
 
     /// <summary>
+    /// The kinds whose blow is a blast: they never swing, they light a fuse.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ A set for the same reason <see cref="Retaliators"/> is one — it is a fact about a kind,
+    /// asked on the hunt path, and a bool on every creature would be a second copy of it.
+    /// </remarks>
+    private static readonly HashSet<string> Exploders = new(StringComparer.Ordinal) { "crawler" };
+
+    /// <summary>
     /// Kinds that answer a blow instead of running from it.
     /// </summary>
     /// <remarks>
@@ -128,6 +137,9 @@ public static class CreatureVitals
 
     /// <summary>True when a blow makes this kind come back at whoever struck it.</summary>
     public static bool Retaliates(string kind) => Retaliators.Contains(kind);
+
+    /// <summary>True when this kind's attack is a fuse and a blast rather than a swing.</summary>
+    public static bool Explodes(string kind) => Exploders.Contains(kind);
 
     /// <summary>True when full daylight sets this one alight.</summary>
     public static bool BurnsInDaylight(string kind) => Burns.Contains(kind);

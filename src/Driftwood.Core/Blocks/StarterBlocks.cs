@@ -557,8 +557,9 @@ public static class StarterBlocks
     /// <see cref="Textures.BlockTextureSet"/>'s array order IS this numbering.
     /// </remarks>
     public const ushort LayerSlimeball = LayerCobweb + 1;
+    public const ushort LayerGunpowder = LayerCobweb + 2;
 
-    public const int LayerCount = LayerSlimeball + 1;
+    public const int LayerCount = LayerGunpowder + 1;
 
     /// <summary>One anvil's name, by how worn it is and which way it lies.</summary>
     /// <remarks>

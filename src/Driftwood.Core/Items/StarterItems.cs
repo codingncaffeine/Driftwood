@@ -548,6 +548,10 @@ public static class StarterItems
         // reagents are what it is for, and being obtainable is this phase's whole claim.
         Loose(items, "slimeball", "slimeball", StarterBlocks.LayerSlimeball);
 
+        // Same posture: what will eventually want it is its own work (#27's signals arc talks of
+        // blasting; nothing is promised). It is the crawler's tell in a pocket.
+        Loose(items, "gunpowder", "gunpowder", StarterBlocks.LayerGunpowder);
+
         items.Register(new ItemType
         {
             Name = "rotten_flesh", Label = "rotten flesh",
@@ -781,7 +785,11 @@ public static class StarterItems
 
         // ⛳ #93's first new drop. A component the magic arc (M1) is waiting on, obtainable the
         // day the slime is — the string-and-bone posture exactly.
-        new CreatureDrops.Rule("slime", DropTrigger.Killed, "slimeball", 1, 2));
+        new CreatureDrops.Rule("slime", DropTrigger.Killed, "slimeball", 1, 2),
+
+        // ⚠ Only for a crawler KILLED before it pops. The blast is not a death — it hands out a
+        // crater, not components — so getting the powder means winning the sprint the fuse starts.
+        new CreatureDrops.Rule("crawler", DropTrigger.Killed, "gunpowder", 1, 2));
 
     /// <summary>What every stage of every root crop leaves when it is pulled up.</summary>
     /// <remarks>

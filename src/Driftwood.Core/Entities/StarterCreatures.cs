@@ -352,10 +352,43 @@ public static class StarterCreatures
                 Box(-4f, 0f, -4f, 8f, 8f, 8f, 0, 0)),
         ]);
 
+    /// <summary>
+    /// The one that comes close and lights itself: an upright trunk on four stub legs.
+    /// </summary>
+    /// <remarks>
+    /// <para>⚠ <b>The trunk stands on end</b> — 8 wide, 12 tall, 4 deep — unlike every quadruped
+    /// here, so there is no <c>LaidDown</c> anywhere on it: the reference authors it standing and
+    /// so do we. All four legs read one patch and none is mirrored, exactly as the reference's
+    /// file has it, so a pack's sheet lands face for face.</para>
+    /// <para>Its face is <see cref="Textures.CreatureArt"/>'s grim one — our own drawing on the
+    /// reference's net, the same split as everywhere else.</para>
+    /// </remarks>
+    public static CreatureModel Crawler() => new(
+        "crawler", 64, 32,
+        [
+            Bone("body", "", new Vector3(0f, 6f, 0f),
+                Box(-4f, 6f, -2f, 8f, 12f, 4f, 16, 16)),
+
+            Bone("head", "body", new Vector3(0f, 18f, 0f),
+                Box(-4f, 18f, -4f, 8f, 8f, 8f, 0, 0)),
+
+            Bone("leg0", "body", new Vector3(-2f, 6f, 4f),
+                Box(-4f, 0f, 2f, 4f, 6f, 4f, 0, 16)),
+
+            Bone("leg1", "body", new Vector3(2f, 6f, 4f),
+                Box(0f, 0f, 2f, 4f, 6f, 4f, 0, 16)),
+
+            Bone("leg2", "body", new Vector3(-2f, 6f, -4f),
+                Box(-4f, 0f, -6f, 4f, 6f, 4f, 0, 16)),
+
+            Bone("leg3", "body", new Vector3(2f, 6f, -4f),
+                Box(0f, 0f, -6f, 4f, 6f, 4f, 0, 16)),
+        ]);
+
     /// <summary>Every creature that ships with the game, by our name for it.</summary>
     public static IReadOnlyList<CreatureModel> All { get; } =
         [Cow(), Pig(), Sheep(), Chicken(), Wolf(), Zombie(), Drowned(), Husk(), Skeleton(), Spider(),
-         Slime()];
+         Slime(), Crawler()];
 
     /// <summary>Ours for this creature, or null when we have not drawn one yet.</summary>
     public static CreatureModel? ByName(string name)

@@ -117,6 +117,15 @@ public sealed class Creature
     /// <summary>Set for the one step on which it did. Read and cleared by whoever spawns drops.</summary>
     public bool Shed { get; set; }
 
+    /// <summary>Seconds this one's fuse has been burning. Zero for anything unlit.</summary>
+    public float FuseFor { get; set; }
+
+    /// <summary>How far through its fuse it is, 0 unlit to 1 at the blast. What the swell draws.</summary>
+    public float FuseFraction => Math.Clamp(FuseFor / CreatureHerd.FuseSeconds, 0f, 1f);
+
+    /// <summary>Set for the one step on which the fuse caught. Read by whoever plays the hiss.</summary>
+    public bool FuseLit { get; set; }
+
     /// <summary>Seconds left of falling over. Counts down from <see cref="CreatureHerd.DyingSeconds"/>.</summary>
     /// <remarks>
     /// ⛳ <b>A death is a moment, not an event.</b> Taken out of the world on the frame its health
@@ -158,6 +167,9 @@ public readonly record struct CreatureDeath(string Kind, Vector3 Position, bool 
 
 /// <summary>One animal that has just been born, for whoever plays the moment.</summary>
 public readonly record struct CreatureBirth(string Kind, Vector3 Position);
+
+/// <summary>One fuse that has burned down, for whoever carves the world and hurts the standing.</summary>
+public readonly record struct CreatureBlast(string Kind, Vector3 Position);
 
 /// <summary>
 /// What each creature sounds like: our name for it against a clip's name.
@@ -246,6 +258,15 @@ public static class CreatureSounds
     /// </remarks>
     public static readonly string[] Blows = Run("damage/hit", 3);
 
+    /// <summary>The hiss of a fuse catching, and the blast at the end of it.</summary>
+    /// <remarks>
+    /// ⚠ Named here rather than at the call site, because <see cref="All"/> is what the audio
+    /// check walks — the Meals rule. The pack ships both; the crawler is why they are wired.
+    /// </remarks>
+    public static readonly string[] Fuses = ["random/fuse"];
+
+    public static readonly string[] Explosions = Run("random/explode", 4);
+
     /// <summary>What the last blow sounds like.</summary>
     public static readonly string[] Deaths = Run("damage/gore/bleed", 3);
 
@@ -291,7 +312,9 @@ public static class CreatureSounds
             .Concat(Blows)
             .Concat(Deaths)
             .Concat(Shears)
-            .Concat(Meals);
+            .Concat(Meals)
+            .Concat(Fuses)
+            .Concat(Explosions);
 }
 
 /// <summary>
@@ -368,6 +391,19 @@ public sealed class CreatureHerd
     /// <summary>Half-hearts a second the sun costs one that burns in it.</summary>
     public const float ScorchRate = 1.6f;
 
+    /// <summary>Seconds a fuse burns before the blast.</summary>
+    /// <remarks>
+    /// A second and a half is the whole fight: long enough to land one swing or to get clear if
+    /// you leave NOW, short enough that dithering is fatal. The hiss is the tell.
+    /// </remarks>
+    public const float FuseSeconds = 1.5f;
+
+    /// <summary>Blocks within which an exploder stops walking and lights itself.</summary>
+    public const float FuseRange = 3f;
+
+    /// <summary>Blocks past which a burning fuse goes out. Running works; backing up does not.</summary>
+    public const float FuseAbortRange = 7f;
+
     /// <summary>Blocks a second straight up, the moment a hopping kind launches.</summary>
     /// <remarks>
     /// Eight against a gravity of 26 is a hop of about one and a quarter blocks — enough to clear a
@@ -418,6 +454,7 @@ public sealed class CreatureHerd
     private readonly List<CreatureDeath> _dead = [];
     private readonly List<CreatureAttack> _attacks = [];
     private readonly List<CreatureBirth> _births = [];
+    private readonly List<CreatureBlast> _blasts = [];
     private readonly List<Creature> _newborn = [];
     private readonly Random _random;
 
@@ -913,6 +950,7 @@ public sealed class CreatureHerd
 
             creature.Spoke = false;
             creature.Shed = false;
+            creature.FuseLit = false;
 
             creature.HurtFor = MathF.Max(0f, creature.HurtFor - dt);
             creature.FleeFor = MathF.Max(0f, creature.FleeFor - dt);
@@ -1071,13 +1109,23 @@ public sealed class CreatureHerd
     {
         creature.Swings = MathF.Max(0f, creature.Swings - dt);
 
-        if ((!creature.Hostile && !creature.Provoked) || player is not { } target) return false;
+        if ((!creature.Hostile && !creature.Provoked) || player is not { } target)
+        {
+            // Nobody to burn for. A fuse with no player in the world goes out rather than
+            // carrying a blast into the next time somebody logs in beside it.
+            if (creature.FuseFor > 0f) creature.FuseFor = 0f;
+            return false;
+        }
 
         var toward = target - creature.Position;
         toward.Y = 0f;
 
         var range = toward.Length();
-        if (range > SightRange || range < 1e-4f) return false;
+        if (range > SightRange || range < 1e-4f)
+        {
+            if (creature.FuseFor > 0f) creature.FuseFor = 0f;
+            return false;
+        }
 
         creature.WantsYaw = float.RadiansToDegrees(MathF.Atan2(toward.Z, toward.X));
         creature.Moving = true;
@@ -1090,6 +1138,40 @@ public sealed class CreatureHerd
         // ⛔ Vertically as well as horizontally. Measured flat, a hostile at the bottom of a shaft
         // is "next to" a player standing at the top of it and hits them through the floor.
         var height = MathF.Abs(target.Y - creature.Position.Y);
+
+        // ⛳ The exploder's whole difference. Close enough, it stops walking and lights itself; a
+        // lit fuse keeps burning unless real distance is put between you — backing off a pace
+        // changes nothing, which is what makes the hiss a decision and not a nudge.
+        if (CreatureVitals.Explodes(creature.Kind))
+        {
+            var burning = creature.FuseFor > 0f
+                ? range <= FuseAbortRange
+                : range <= FuseRange && height <= 2f;
+
+            if (burning)
+            {
+                if (creature.FuseFor == 0f) creature.FuseLit = true;
+
+                creature.Moving = false;
+                creature.FuseFor += dt;
+
+                if (creature.FuseFor >= FuseSeconds)
+                {
+                    // Gone in the flash: no dying fall, no death event, no drops — the blast is
+                    // the event, and whoever drains it owns what it does to the world. Health
+                    // zero with no DyingFor puts it out of the list on the next sweep.
+                    creature.Health = 0;
+                    _blasts.Add(new CreatureBlast(creature.Kind, creature.Middle));
+                }
+            }
+            else
+            {
+                creature.FuseFor = 0f;
+            }
+
+            // An exploder never swings; the fuse is its blow.
+            return true;
+        }
 
         if (range <= StrikeRange && height <= 2f && creature.Swings <= 0f)
         {
@@ -1141,6 +1223,15 @@ public sealed class CreatureHerd
         if (_attacks.Count == 0) return [];
         var taken = new List<CreatureAttack>(_attacks);
         _attacks.Clear();
+        return taken;
+    }
+
+    /// <summary>Every fuse that burned down since last asked, drained like the attacks are.</summary>
+    public List<CreatureBlast> TakeBlasts()
+    {
+        if (_blasts.Count == 0) return [];
+        var taken = new List<CreatureBlast>(_blasts);
+        _blasts.Clear();
         return taken;
     }
 
@@ -1285,6 +1376,107 @@ public sealed class CreatureHerd
         faults.AddRange(ValidateHunting());
         faults.AddRange(ValidateRetaliation());
         faults.AddRange(ValidateHopping());
+        faults.AddRange(ValidateFusing());
+
+        return faults;
+    }
+
+    /// <summary>
+    /// Checks an exploder lights at arm's length, blasts on schedule, never swings, and that its
+    /// fuse goes out when real distance is put in — and that nothing else in the game blasts.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>Three controls, one per false pass.</b> A zombie at the same range must swing and
+    /// never blast, or "it blasted" is true of every hostile; a crawler out at ten blocks must
+    /// chase and never blast, or range means nothing; and a player who RUNS mid-fuse must be
+    /// answered with silence, or the abort is a comment.
+    /// </remarks>
+    private static List<string> ValidateFusing()
+    {
+        var faults = new List<string>();
+
+        static bool Flat(int x, int y, int z) => y < 64;
+
+        var crawler = new SpawnKind("crawler", new Vector3(0.5f, 1.63f, 0.5f), Hostile: true);
+        var player = new Vector3(0.5f, 64f, 0.5f);
+
+        var herd = new CreatureHerd(41);
+        herd.Spawn(Flat, [crawler], new Vector3(0f, 64f, 0f), 1);
+        if (herd.Count != 1) return ["no crawler stood up for the fuse check"];
+
+        var one = herd.All[0];
+        one.Position = new Vector3(0.5f, 64f, 2.5f);
+
+        // Two blocks away: it lights, and one and a half seconds later there is a blast, the
+        // crawler is gone, and at no point did it swing.
+        var lit = false;
+        for (var i = 0; i < 150; i++)
+        {
+            herd.Update(1f / 60f, Flat, player);
+            lit |= one.FuseLit;
+        }
+
+        if (!lit) faults.Add("a crawler two blocks from somebody never lit its fuse");
+
+        var blasts = herd.TakeBlasts();
+        if (blasts.Count != 1) faults.Add($"{blasts.Count} blasts came off one fuse");
+        if (herd.TakeAttacks().Count != 0) faults.Add("an exploder landed an ordinary swing");
+        if (herd.All.Any(c => c.Alive)) faults.Add("a crawler survived its own blast");
+
+        // ⛔ Control one: a zombie at the same range swings and never blasts.
+        var swinger = new CreatureHerd(43);
+        swinger.Spawn(Flat, [new SpawnKind("zombie", new Vector3(0.63f, 2f, 0.63f), Hostile: true)],
+            new Vector3(0f, 64f, 0f), 1);
+        if (swinger.Count == 1)
+        {
+            swinger.All[0].Position = new Vector3(0.5f, 64f, 2.5f);
+            for (var i = 0; i < 150; i++) swinger.Update(1f / 60f, Flat, player);
+
+            if (swinger.TakeBlasts().Count != 0) faults.Add("a zombie exploded");
+            if (swinger.TakeAttacks().Count == 0) faults.Add("a zombie two blocks off landed nothing");
+        }
+
+        // ⛔ Control two: ten blocks off it closes and holds its fire.
+        var far = new CreatureHerd(47);
+        far.Spawn(Flat, [crawler], new Vector3(0f, 64f, 0f), 1);
+        if (far.Count == 1)
+        {
+            var distant = far.All[0];
+            distant.Position = new Vector3(0.5f, 64f, 10.5f);
+            var was = Vector3.Distance(distant.Position, player);
+
+            for (var i = 0; i < 60; i++) far.Update(1f / 60f, Flat, player);
+
+            if (far.TakeBlasts().Count != 0) faults.Add("a crawler ten blocks away blasted");
+            if (Vector3.Distance(distant.Position, player) > was - 1f)
+                faults.Add("a far crawler did not close on its target");
+        }
+
+        // ⛔ Control three: the fuse catches, the player runs past the abort range, and the world
+        // stays whole. Half a second lit, then the target is twelve blocks away.
+        var flee = new CreatureHerd(53);
+        flee.Spawn(Flat, [crawler], new Vector3(0f, 64f, 0f), 1);
+        if (flee.Count == 1)
+        {
+            var stalker = flee.All[0];
+            stalker.Position = new Vector3(0.5f, 64f, 2.5f);
+
+            for (var i = 0; i < 30; i++) flee.Update(1f / 60f, Flat, player);
+            if (stalker.FuseFor <= 0f) faults.Add("half a second at arm's length lit nothing");
+
+            var fled = new Vector3(0.5f, 64f, 14.5f);
+            for (var i = 0; i < 120; i++)
+            {
+                // ⚠ Held still, so only the DISTANCE is being tested — left to walk, it chases
+                // the fled player back into fuse range and relights, honestly, which is not the
+                // claim this arm makes.
+                stalker.Position = new Vector3(0.5f, 64f, 2.5f);
+                flee.Update(1f / 60f, Flat, fled);
+            }
+
+            if (flee.TakeBlasts().Count != 0) faults.Add("a fuse blew after its target ran clear");
+            if (stalker.FuseFor > 0f) faults.Add("a fuse kept burning twelve blocks from anybody");
+        }
 
         return faults;
     }

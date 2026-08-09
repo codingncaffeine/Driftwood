@@ -4921,6 +4921,8 @@ public sealed class ClientHost : IDisposable
             if (cry.Length > 0) _audio?.Play(Pick(cry), blow.Position, 0.8f, 1.1f);
         }
 
+        foreach (var blast in _herd.TakeBlasts()) Detonate(blast.Position);
+
         // A birth is its parents' voice pitched small, and a flutter where the calf stands.
         foreach (var birth in _herd.TakeBirths())
         {
@@ -4932,6 +4934,11 @@ public sealed class ClientHost : IDisposable
 
         foreach (var creature in _herd.All)
         {
+            // The hiss, on the frame the fuse catches. The pack's fuse recording runs longer than
+            // the fuse itself, which is the right way round: the blast interrupts it.
+            if (creature.FuseLit)
+                _audio?.Play(Pick(CreatureSounds.Fuses), creature.Middle, 0.9f, 1f);
+
             if (creature.Shed)
             {
                 // ⛳ Laid where it stands rather than thrown out of it, and with no scatter — a hen
@@ -5002,6 +5009,72 @@ public sealed class ClientHost : IDisposable
                 {
                     _drops.Drop(left, death.Position);
                 }
+            }
+        }
+    }
+
+    /// <summary>One blast landing on the world: the crater, the drops, the hurt, the noise.</summary>
+    /// <remarks>
+    /// <para>⛳ <b>The shape is Core's</b> (<see cref="Explosion"/>); this walks the carved cells
+    /// through the ordinary edit machinery — relight, particles, the support pass — which is
+    /// exactly what already happens when a player mines the same cells one at a time.</para>
+    /// <para>⚠ <b>Some rubble survives, most does not.</b> A crater that handed back every block
+    /// it ate would make the crawler a mining tool; one that swallowed everything would cost a
+    /// player their wall AND the stone it was built from. Forty percent is punishment that leaves
+    /// something to rebuild with.</para>
+    /// </remarks>
+    private void Detonate(Vector3 centre)
+    {
+        _audio?.Play(Pick(CreatureSounds.Explosions), centre, 1f, Wobble());
+
+        var carved = Explosion.Carve(centre, (x, y, z) =>
+        {
+            var id = _streamer.World.GetBlock(x, y, z);
+            if (id == BlockId.Air) return null;
+
+            var type = _registry[id];
+            if (type.Unbreakable || type.Fluid != FluidKind.None) return null;
+
+            return type.Hardness;
+        });
+
+        foreach (var (x, y, z) in carved)
+        {
+            var was = _streamer.World.GetBlock(x, y, z);
+            if (was == BlockId.Air) continue;   // the support pass may have dropped it already
+
+            var at = new Vector3(x + 0.5f, y + 0.5f, z + 0.5f);
+
+            // A station in the crater spills what it held, exactly as mining it does.
+            foreach (var spilled in _furnaces.Remove(x, y, z)) _drops.Drop(spilled, at);
+            foreach (var spilled in _chests.Remove(x, y, z)) _drops.Drop(spilled, at);
+
+            _streamer.EditBlock(x, y, z, BlockId.Air);
+            _particles.Burst(_registry[was], x, y, z);
+
+            if (Random.Shared.NextDouble() < 0.4)
+            {
+                var left = _dropTable.Of(was);
+                if (!left.IsEmpty) _drops.Drop(left, at);
+            }
+        }
+
+        foreach (var (x, y, z) in carved) ShedUnsupported(x, y, z);
+
+        _particles.DeathPuff(centre, 2.4f, StarterBlocks.LayerSmoke);
+
+        // Whoever was standing in it — the player from their middle, every animal from its own.
+        var hurt = Explosion.HurtAt(centre, _player.Position + new Vector3(0f, 0.9f, 0f));
+        if (hurt > 0) _vitals.Hurt(hurt);
+
+        if (_herd is not null)
+        {
+            foreach (var creature in _herd.All)
+            {
+                if (!creature.Alive) continue;
+
+                var toll = Explosion.HurtAt(centre, creature.Middle);
+                if (toll > 0) _herd.Hurt(creature, toll, centre);
             }
         }
     }
@@ -9944,11 +10017,13 @@ public sealed class ClientHost : IDisposable
         {
             foreach (var creature in _herd.All)
             {
+                // ⚠ A burning fuse swells the whole animal a quarter over its last moment — the
+                // one visual tell the hiss has, readable from behind where the face is not.
                 _creatureRenderer.Draw(
                     viewProj, _viewPosition, sky, SampleLight(creature.Position + new Vector3(0f, 0.6f, 0f)),
                     creature.Kind, creature.Position, creature.Yaw,
                     creature.HurtFor / CreatureHerd.HurtSeconds, creature.TippedOver,
-                    creature.Scale);
+                    creature.Scale * (1f + 0.25f * creature.FuseFraction));
             }
         }
 

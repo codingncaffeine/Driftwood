@@ -1064,6 +1064,14 @@ public static class WorldAudit
                   + "and the last one kills it once"
                 : $"{herdFaults.Count} faults: {herdFaults[0]}");
 
+        // The crawler's blast, held still: the sphere, the hardness gate, the falloff.
+        var blastFaults = Explosion.Validate();
+        Check("a blast digs the sphere it can and spares what it cannot", blastFaults.Count == 0,
+            blastFaults.Count == 0
+                ? $"radius {Explosion.BlockRadius}, deepstone and the unbreakable stand, "
+                  + $"{Explosion.MaxHalfHearts} half-hearts falling to none at {Explosion.HurtRadius}"
+                : $"{blastFaults.Count} faults: {blastFaults[0]}");
+
         // ⛔ The creatures that SHIP. Everything above tests what can be read off somebody else's
         // disk; this tests what is in the box, which is the only art most players will ever see.
         var ourCreatures = StarterCreatures.Validate();
@@ -6522,11 +6530,13 @@ public static class WorldAudit
         // handing its ground to a fixed one on the way past, as every run before it has.
         (StarterBlocks.LayerCobweb, "cobweb"),
 
+        (StarterBlocks.LayerSlimeball, "slimeball"),
+
         // The moving pin: the LAST layer, by name. It has now caught three appends in the act —
         // fifteen crop rows landing after "the last layer is bonemeal", the composter's four
         // landing after black glass, and the berry bush's three after compost-ready — which is
         // exactly what it is for. Keep it pointed at whatever is genuinely last.
-        ((ushort)(StarterBlocks.LayerCount - 1), "slimeball"),
+        ((ushort)(StarterBlocks.LayerCount - 1), "gunpowder"),
     ];
 
     /// <summary>

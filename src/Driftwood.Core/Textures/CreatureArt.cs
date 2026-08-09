@@ -3,6 +3,19 @@ using Driftwood.Core.Entities;
 
 namespace Driftwood.Core.Textures;
 
+/// <summary>Which drawing goes on the front of a head.</summary>
+public enum FaceKind
+{
+    /// <summary>Two wet eyes, a muzzle, nostrils — what every animal wears.</summary>
+    Beast,
+
+    /// <summary>Dark eye pits over a fallen-open mouth. The crawler's, and ours.</summary>
+    Grim,
+
+    /// <summary>A pale glowing pair and nothing else. The farwalker's.</summary>
+    Eyes,
+}
+
 /// <summary>What a creature is made of, in colour. One row per animal.</summary>
 /// <param name="Hide">The main coat.</param>
 /// <param name="Mark">Blotches, fleece tips, wing feathers — whatever the second colour is.</param>
@@ -12,13 +25,15 @@ namespace Driftwood.Core.Textures;
 /// How much of the coat the mark takes, 0 to 1. Zero is a plain animal.
 /// </param>
 /// <param name="Grain">How rough the coat reads, in shades either way.</param>
+/// <param name="Face">Which drawing the front of its head carries.</param>
 public readonly record struct CreatureHide(
     (byte R, byte G, byte B) Hide,
     (byte R, byte G, byte B) Mark,
     (byte R, byte G, byte B) Muzzle,
     (byte R, byte G, byte B) Horn,
     float Blotching,
-    float Grain);
+    float Grain,
+    FaceKind Face = FaceKind.Beast);
 
 /// <summary>
 /// Paints a creature's sheet, in code, the way <see cref="TileGen"/> paints a block's.
@@ -88,6 +103,12 @@ public static class CreatureArt
         // Its face is boxes rather than paint (see StarterCreatures.Slime), so Muzzle here is the
         // mouth box's colour and the eyes carry their own part.
         ["slime"] = new((116, 162, 100), (98, 142, 86), (58, 82, 52), (70, 104, 62), 0.22f, 0.06f),
+
+        // Lichen over moss, mottled hard — the thing that stands still in a thicket and is not a
+        // bush. Grey-olive against the slime's pond-green (the audit holds the two apart by
+        // measurement), and its face is the grim one: dark pits over a mouth fallen open.
+        ["crawler"] = new(
+            (140, 144, 102), (94, 106, 72), (40, 46, 38), (64, 84, 60), 0.40f, 0.13f, FaceKind.Grim),
     };
 
     /// <summary>True when we have colours for this creature.</summary>
@@ -266,6 +287,28 @@ public static class CreatureArt
         // player ever looks at — a head with no eyes reads as a crate with ears.
         if (role == Part.Head && normal.Z < -0.5f)
         {
+            // The grim face: two dark pits high up, and a mouth fallen open below them — taller
+            // than it is wide, flaring at the jaw. Ours, drawn on the reference's net; no wet
+            // glint anywhere on it, because nothing about it should read as alive.
+            if (hide.Face == FaceKind.Grim)
+            {
+                var pit = t is > 0.20f and < 0.45f && (s is > 0.14f and < 0.40f || s is > 0.60f and < 0.86f);
+                var mouth = t is > 0.50f and < 0.95f && s is > 0.38f and < 0.62f;
+                var jaw = t is > 0.64f and < 0.95f && (s is > 0.24f and < 0.38f || s is > 0.62f and < 0.76f);
+
+                return pit || mouth || jaw
+                    ? ((float)hide.Muzzle.R, hide.Muzzle.G, hide.Muzzle.B)
+                    : (r, g, b);
+            }
+
+            // A pale pair and nothing else — long, level, set wide, lit from within rather than
+            // wet. The one face drawn LIGHTER than its coat.
+            if (hide.Face == FaceKind.Eyes)
+            {
+                var band = t is > 0.30f and < 0.48f && (s is > 0.06f and < 0.44f || s is > 0.56f and < 0.94f);
+                return band ? ((float)hide.Horn.R, hide.Horn.G, hide.Horn.B) : (r, g, b);
+            }
+
             var eyeY = t is > 0.24f and < 0.50f;
             var leftEye = s is > 0.12f and < 0.32f;
             var rightEye = s is > 0.68f and < 0.88f;

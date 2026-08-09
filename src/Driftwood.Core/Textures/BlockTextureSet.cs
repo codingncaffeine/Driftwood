@@ -442,6 +442,8 @@ public static class BlockTextureSet
 
         // What the slime leaves. The modern name has an underscore; the pre-flattening one did not.
         new("slimeball", "textures/item/slime_ball.png", true, "textures/items/slimeball.png"),
+
+        new("gunpowder", "textures/item/gunpowder.png", true, "textures/items/gunpowder.png"),
     ];
 
     /// <summary>
@@ -1366,6 +1368,10 @@ public static class BlockTextureSet
             // A slimeball is a lump in the slime's own pond-green, its coat colour exactly, so the
             // drop and the creature read as one thing in a pocket.
             StarterBlocks.LayerSlimeball => TileGen.IconLump(1350, 116, 162, 100),
+
+            // Gunpowder is a pile the grey of ash — bonemeal's own drawing in the opposite tone,
+            // which is the same pairing the meats make between raw and cooked.
+            StarterBlocks.LayerGunpowder => TileGen.IconPile(1351, 92, 90, 88),
 
             _ => Wheat(layer) ?? Crop(layer) ?? CropIcon(layer) ?? StainedGlass(layer)
                  ?? MetalBlock(layer) ?? Wool(layer) ?? Meat(layer) ?? Dye(layer)
