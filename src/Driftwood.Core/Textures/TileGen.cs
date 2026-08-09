@@ -484,6 +484,28 @@ public static class TileGen
     }
 
     /// <summary>
+    /// The slime block: a cube of set jelly in the slime's own pond-green, brighter at an inner
+    /// core the way the creature is — so the block and the beast read as one stuff.
+    /// </summary>
+    public static byte[] SlimeBlock(int seed)
+    {
+        var t = new byte[BytesPerTile];
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var d = (int)((Noise(x, y, seed) * 2f - 1f) * 6f);
+
+            // The core: a softened square standing brighter inside the rind.
+            var core = x >= 4 && x < 12 && y >= 4 && y < 12 ? 14 : 0;
+
+            Put(t, x, y, Clamp(94 + core + d), Clamp(146 + core * 2 + d), Clamp(82 + core + d), 255);
+        }
+
+        return t;
+    }
+
+    /// <summary>
     /// A fried egg: the white spread flat with a wandering edge, the yolk a domed disc set
     /// off-centre — dead centre reads as a target rather than a meal.
     /// </summary>

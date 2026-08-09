@@ -242,6 +242,14 @@ public sealed class BlockType
     /// </remarks>
     public bool Snares { get; init; }
 
+    /// <summary>True when a landing on this block is returned rather than taken.</summary>
+    /// <remarks>
+    /// The slime block's mechanic, named the way <see cref="Snares"/> is. What bouncing does —
+    /// the returned fall, the sneak that absorbs it, the forgiven damage — is
+    /// <c>PlayerBody</c>'s to say.
+    /// </remarks>
+    public bool Bouncy { get; init; }
+
     /// <summary>True for a block that hurts a body touching it — the cactus's whole argument.</summary>
     /// <remarks>
     /// ⛳ Named on the block for <see cref="Snares"/>'s own reason: the vitals ask what the body is

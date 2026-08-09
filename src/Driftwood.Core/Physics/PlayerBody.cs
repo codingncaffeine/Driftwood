@@ -168,6 +168,31 @@ public sealed class PlayerBody
     /// <summary>Which blocks snare a body passing through, by raw id — the webs.</summary>
     private readonly bool[] _snares;
 
+    /// <summary>Which blocks return a landing, by raw id — the slime block.</summary>
+    private readonly bool[] _bouncy;
+
+    /// <summary>How much of the arrival speed a bounce sends back up.</summary>
+    /// <remarks>
+    /// 0.65 of the speed is 0.42 of the height, so a bounce dies away in a few returns rather
+    /// than going on for ever or stopping dead.
+    /// </remarks>
+    private const float Bounce = 0.65f;
+
+    /// <summary>Below this arrival speed a bounce just lands — the end of the dying-away.</summary>
+    private const float BounceFloor = 4f;
+
+    /// <summary>
+    /// True on any frame where something took the fall away — a web holding the body, a bouncy
+    /// block returning or absorbing a landing.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>This is how the kindness reaches the vitals.</b> The body clears its own
+    /// <see cref="FallDistance"/> when a web catches it, but the vitals keep their own high-water
+    /// mark from before the catch — so a twelve-block drop into a web still billed its twelve
+    /// blocks at the floor underneath. The vitals drop their mark on any frame this is true.
+    /// </remarks>
+    public bool FallCaught { get; private set; }
+
     public PlayerBody(BlockRegistry registry)
     {
         _boxes = registry.BuildCollisionTable(out _cellsBelow);
@@ -177,6 +202,9 @@ public sealed class PlayerBody
 
         _snares = new bool[registry.Count];
         for (var id = 1; id < registry.Count; id++) _snares[id] = registry[(ushort)id].Snares;
+
+        _bouncy = new bool[registry.Count];
+        for (var id = 1; id < registry.Count; id++) _bouncy[id] = registry[(ushort)id].Bouncy;
 
         _climbTo = new int[registry.Count];
         Array.Fill(_climbTo, -1);
@@ -213,6 +241,9 @@ public sealed class PlayerBody
         InWater = Steeped(world, Blocks.FluidKind.Water);
         InLava = Steeped(world, Blocks.FluidKind.Lava);
         Snared = Webbed(world);
+
+        // Nothing has caught this frame's fall yet; a web or a bouncy landing below will say so.
+        FallCaught = false;
 
         var wishLength = new Vector2(wish.X, wish.Z).Length();
         if (wishLength > 1f) wish /= wishLength;
@@ -298,6 +329,7 @@ public sealed class PlayerBody
         {
             Velocity.Y = Math.Clamp(Velocity.Y, -SnareFall, SnareRise);
             FallDistance = 0f;
+            FallCaught = true;
         }
 
         // A ladder replaces gravity rather than fighting it, which is why this comes after the fall
@@ -490,8 +522,38 @@ public sealed class PlayerBody
                     var top = FloorCrossed(world, Position, Position.Y, target);
                     Position.Y = float.IsNaN(top) ? MathF.Floor(target) + 1f : top;
 
-                    OnGround = true;
-                    FallDistance = 0f;
+                    // ⛳ What the feet met decides whether the landing sticks. A bouncy block
+                    // returns most of the arrival unless the body is sneaking — sneaking absorbs
+                    // it, which is how you get off the thing — and either way the fall is caught,
+                    // never billed. Sampled under the centre of the feet, the cell the body is
+                    // actually resting its weight on.
+                    var floor = world.GetBlock(
+                        (int)MathF.Floor(Position.X),
+                        (int)MathF.Floor(Position.Y - 0.5f),
+                        (int)MathF.Floor(Position.Z)).Value;
+
+                    if (_bouncy[floor])
+                    {
+                        FallCaught = true;
+                        FallDistance = 0f;
+
+                        if (!Sneaking && -Velocity.Y > BounceFloor)
+                        {
+                            // The bounce: still airborne, carrying most of the fall back up.
+                            Velocity.Y = -Velocity.Y * Bounce;
+                        }
+                        else
+                        {
+                            OnGround = true;
+                            Velocity.Y = 0f;
+                        }
+                    }
+                    else
+                    {
+                        OnGround = true;
+                        FallDistance = 0f;
+                        Velocity.Y = 0f;
+                    }
                 }
                 else
                 {
@@ -500,9 +562,9 @@ public sealed class PlayerBody
                     Position.Y = float.IsNaN(under)
                         ? MathF.Ceiling(target + CurrentHeight) - 1f - CurrentHeight
                         : under - CurrentHeight;
-                }
 
-                Velocity.Y = 0f;
+                    Velocity.Y = 0f;
+                }
             }
             else
             {

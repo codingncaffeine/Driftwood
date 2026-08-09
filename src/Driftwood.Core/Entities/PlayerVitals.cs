@@ -573,6 +573,12 @@ public sealed class PlayerVitals
         var onGround = body.OnGround;
         if (!onGround) _fallInAir = MathF.Max(_fallInAir, body.FallDistance);
 
+        // ⛔ The body's kindness has to reach the bill. It clears its own distance when a web
+        // catches it or a bouncy block returns a landing, but the high-water mark here was taken
+        // BEFORE the catch — a twelve-block drop into a web still billed twelve blocks at the
+        // floor underneath, because this line did not exist.
+        if (body.FallCaught) _fallInAir = 0f;
+
         if (onGround && !_wasOnGround && _fallInAir > SafeFall)
             Hurt((int)MathF.Round((_fallInAir - SafeFall) * FallDamagePerBlock), cause: VitalsCause.Fall);
 

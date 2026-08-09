@@ -603,10 +603,12 @@ public static class StarterBlocks
     public const ushort LayerRailBoostOn = LayerCobweb + 36;
     public const ushort LayerCartIcon = LayerCobweb + 37;
 
-    // #97, the unconsumed items given consumers: the egg's answer to a fire.
+    // #97, the unconsumed items given consumers: the egg's answer to a fire, then the slimeball
+    // packed away into the first floor that returns a landing.
     public const ushort LayerFriedEgg = LayerCobweb + 38;
+    public const ushort LayerSlimeBlock = LayerCobweb + 39;
 
-    public const int LayerCount = LayerFriedEgg + 1;
+    public const int LayerCount = LayerSlimeBlock + 1;
 
     /// <summary>One anvil's name, by how worn it is and which way it lies.</summary>
     /// <remarks>
@@ -915,6 +917,19 @@ public static class StarterBlocks
                 TopLayer = layer, SideLayer = layer, BottomLayer = layer,
             });
         }
+
+        // ⛳ THE SLIME BLOCK — nine slimeballs packed away, the metals' own gesture in jelly, and
+        // the first floor that gives back: Bouncy is the point, and what bouncing does is
+        // PlayerBody's to say. Translucent like the stained glass, because a cube of set jelly
+        // that light stops dead in reads as painted stone. Cloth is the honest nearest voice the
+        // sound table has for it.
+        registry.Register(new BlockType
+        {
+            Name = "slime_block", Hardness = 0.3f, Crafted = true,
+            Opaque = false, Translucent = true, Bouncy = true,
+            Sounds = SoundMaterial.Cloth,
+            Model = BlockModel.Cube(LayerSlimeBlock, LayerSlimeBlock, LayerSlimeBlock),
+        });
 
         // ⛳ THE ANVIL, and it wears out. Three stages on one side texture, each its own pair of
         // facings — the first thing in this game that degrades where it stands rather than in a

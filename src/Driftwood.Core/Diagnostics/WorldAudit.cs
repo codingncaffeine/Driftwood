@@ -1171,6 +1171,10 @@ public static class WorldAudit
         Check("a web holds what walks in and catches what falls in", snareFaults.Count == 0,
             snareFaults.Count == 0 ? snareDetail : $"{snareFaults.Count} faults: {snareFaults[0]}");
 
+        var bounceFaults = BounceSelfTest(registry, out var bounceDetail);
+        Check("a slime floor returns a fall and never bills it", bounceFaults.Count == 0,
+            bounceFaults.Count == 0 ? bounceDetail : $"{bounceFaults.Count} faults: {bounceFaults[0]}");
+
         var herdSaveFaults = HerdSaveSelfTest(out var herdSaveDetail);
         Check("a herd survives the trip through a save", herdSaveFaults.Count == 0,
             herdSaveFaults.Count == 0 ? herdSaveDetail : $"{herdSaveFaults.Count} faults: {herdSaveFaults[0]}");
@@ -2162,7 +2166,11 @@ public static class WorldAudit
         if (byStation.Count < 2)
             faults.Add("every recipe in the book is worked at the same place, so the station gate is not used");
         if (inHand == 0) faults.Add("nothing at all can be made in bare hands, so a new world cannot start");
-        if (inHand > 12)
+
+        // ⚠ Recalibrated 12 → 13 when the slime block's unpack joined the metals' own hand
+        // unpacks (#97). The failure this band exists for is the station gate silently vanishing,
+        // which arrives as FIFTY-odd, not as one more unpack row.
+        if (inHand > 13)
             faults.Add($"{inHand} recipes are made in bare hands, which is most of a game before anything is built");
 
         // A grid holding something no recipe mentions has to make nothing. Without this the whole
@@ -4662,26 +4670,141 @@ public static class WorldAudit
             faults.Add($"webs were crossed at {crawled:F2} blocks against {freely:F2} in the open "
                      + "— a web that does not hold");
 
-        // The drop: twelve blocks into a web column. Down, but caught.
-        var shaft = new VoxelWorld(registry);
-        for (var z = -1; z <= 1; z++)
-        for (var x = -1; x <= 1; x++)
-            shaft.SetBlock(x, 49, z, stone);
-        for (var y = 50; y < 56; y++) shaft.SetBlock(0, y, 0, web);
+        // The drop: twelve blocks into a web column. Down, but caught — and the vitals run over
+        // the whole flight, because the body's own distance going to zero is only half the claim.
+        // ⛔ The high-water mark PlayerVitals keeps was taken BEFORE the web caught anything, so a
+        // caught fall was still billed at the floor underneath until FallCaught reached it.
+        VoxelWorld Shaft(bool webbed)
+        {
+            var world = new VoxelWorld(registry);
+            for (var z = -1; z <= 1; z++)
+            for (var x = -1; x <= 1; x++)
+                world.SetBlock(x, 49, z, stone);
+            if (webbed)
+                for (var y = 50; y < 56; y++) world.SetBlock(0, y, 0, web);
+            return world;
+        }
 
-        var faller = new PlayerBody(registry);
-        faller.Teleport(new Vector3(0.5f, 66f, 0.5f));
-        for (var i = 0; i < Steps * 3; i++)
-            faller.Step(shaft, Step, Vector3.Zero, false, false, false);
+        int Dropped(VoxelWorld world, out PlayerBody body)
+        {
+            body = new PlayerBody(registry);
+            var vitals = new PlayerVitals(registry);
+            body.Teleport(new Vector3(0.5f, 66f, 0.5f));
+
+            var was = vitals.Health;
+            for (var i = 0; i < Steps * 3; i++)
+            {
+                body.Step(world, Step, Vector3.Zero, false, false, false);
+                vitals.Update(world, body, Step);
+            }
+
+            return was - vitals.Health;
+        }
+
+        var billed = Dropped(Shaft(webbed: true), out var faller);
 
         if (faller.Position.Y > 50.5f)
             faults.Add($"six seconds after a twelve-block drop into webs the body hangs at "
                      + $"y {faller.Position.Y:F1}, which is a web that is a floor");
         if (faller.FallDistance > 0.5f)
             faults.Add($"a body dropped through webs still carries {faller.FallDistance:F1} blocks of fall");
+        if (billed != 0)
+            faults.Add($"a twelve-block fall caught by webs was billed {billed} half-hearts "
+                     + "at the floor underneath");
+
+        // The control: the same shaft with no webs has to bill, or "the webs forgave it" is a
+        // claim about a fixture that cannot charge anything.
+        var open12 = Dropped(Shaft(webbed: false), out _);
+        if (open12 <= 0)
+            faults.Add("the webless control shaft billed nothing — the drop fixture cannot charge");
 
         detail = $"a webbed corridor is crossed at {crawled:F2} blocks to the open run's {freely:F2}, "
-               + "and a twelve-block drop into webs settles to the floor carrying no fall";
+               + $"and a twelve-block drop into webs settles to the floor unbilled where the open "
+               + $"shaft bills {open12} half-hearts";
+
+        return faults;
+    }
+
+    /// <summary>
+    /// Drops bodies onto a slime floor and a stone one, vitals running, and checks who bounced
+    /// and who was billed.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>The stone arm is the positive control</b>: a fixture whose fall cannot bill would pass
+    /// the slime arm on a build with no fall damage at all. And the vitals run over the WHOLE
+    /// flight, because the seam this closed was between the body's kindness and the vitals' own
+    /// high-water mark — a check that reads only the body proves half the feature.
+    /// </remarks>
+    private static List<string> BounceSelfTest(BlockRegistry registry, out string detail)
+    {
+        var faults = new List<string>();
+        const float Step = 1f / 60f;
+
+        var slimeBlock = registry.ByName("slime_block").Id;
+        var stone = registry.ByName("stone").Id;
+
+        VoxelWorld Pad(BlockId floor)
+        {
+            var world = new VoxelWorld(registry);
+            for (var z = -2; z <= 2; z++)
+            for (var x = -2; x <= 2; x++)
+                world.SetBlock(x, 60, z, floor);
+            return world;
+        }
+
+        // One flight: ten blocks down onto the pad, six seconds of settling, vitals every frame.
+        (int Billed, float Apex, bool Rose) Flight(BlockId floor, bool sneak)
+        {
+            var world = Pad(floor);
+            var body = new PlayerBody(registry);
+            var vitals = new PlayerVitals(registry);
+            body.Teleport(new Vector3(0.5f, 71f, 0.5f));
+
+            var was = vitals.Health;
+            var touched = false;
+            var apex = 0f;
+            var rose = false;
+
+            for (var i = 0; i < 360; i++)
+            {
+                body.Step(world, Step, Vector3.Zero, false, sneak, false);
+                vitals.Update(world, body, Step);
+
+                if (!touched && body.Position.Y <= 61.05f) touched = true;
+                else if (touched && body.Velocity.Y > 0f)
+                {
+                    rose = true;
+                    apex = MathF.Max(apex, body.Position.Y);
+                }
+            }
+
+            return (was - vitals.Health, apex, rose);
+        }
+
+        var bounced = Flight(slimeBlock, sneak: false);
+        var absorbed = Flight(slimeBlock, sneak: true);
+        var control = Flight(stone, sneak: false);
+
+        if (control.Billed <= 0)
+            faults.Add("the stone control took no fall damage — the fixture cannot bill anything");
+        if (control.Rose)
+            faults.Add("a body bounced off stone");
+
+        if (bounced.Billed != 0)
+            faults.Add($"a ten-block fall onto slime was billed {bounced.Billed} half-hearts");
+        if (!bounced.Rose)
+            faults.Add("a ten-block fall onto slime never came back up");
+        else if (bounced.Apex - 61f < 1.5f)
+            faults.Add($"the bounce off a ten-block fall reached only {bounced.Apex - 61f:F2} blocks");
+
+        if (absorbed.Billed != 0)
+            faults.Add($"a sneaking landing on slime was billed {absorbed.Billed} half-hearts");
+        if (absorbed.Rose)
+            faults.Add("a sneaking body bounced anyway — sneak is supposed to absorb it");
+
+        detail = $"a ten-block fall onto slime returns to {MathF.Max(0f, bounced.Apex - 61f):F1} "
+               + $"blocks unbilled, a sneak absorbs it, and the same fall onto stone bills "
+               + $"{control.Billed} half-hearts";
 
         return faults;
     }
@@ -6874,16 +6997,17 @@ public static class WorldAudit
         ((ushort)(StarterBlocks.LayerGateFirst + 9), "gate_latch_top_on"),
         (StarterBlocks.LayerRail, "rail"),
 
-        // Cart icon by its own constant now the fried egg went on after it — the moving pin
-        // handing its ground to a fixed one on the way past, as every run before it has.
+        // Cart icon and the fried egg by their own constants now more went on after them — the
+        // moving pin handing its ground to fixed ones on the way past, as every run before it has.
         (StarterBlocks.LayerCartIcon, "cart_icon"),
+        (StarterBlocks.LayerFriedEgg, "fried_egg"),
 
         // The moving pin: the LAST layer, by name. It has now caught SEVEN appends in the act —
         // fifteen crop rows landing after "the last layer is bonemeal", the composter's four
         // landing after black glass, the berry bush's three after compost-ready, seagrass after
         // mossy rubble, the signal kit after seagrass, the track after the gates, and the fried
         // egg after the cart. Keep it pointed at the true end.
-        ((ushort)(StarterBlocks.LayerCount - 1), "fried_egg"),
+        ((ushort)(StarterBlocks.LayerCount - 1), "slime_block"),
     ];
 
     /// <summary>

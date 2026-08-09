@@ -453,6 +453,13 @@ public static class StarterRecipes
             Loose($"{ingot} from a block", ingot, 9, name);
         }
 
+        // ⛳ The slimeball packed away the same two directions (#97) — and the block is the point:
+        // the first floor that returns a landing. A sneak absorbs the bounce, and a fall onto it
+        // is never billed.
+        Shaped("slime block", "slime_block", 1, ["MMM", "MMM", "MMM"], "slimeball",
+            station: CraftStation.Bench);
+        Loose("slimeballs from a block", "slimeball", 9, "slime_block");
+
         // Every tool, off the two tables. The material is a tag for the tiers that have more than
         // one source — any plank, any rough stone — and a plain item for the metals.
         foreach (var tier in StarterItems.Tiers)

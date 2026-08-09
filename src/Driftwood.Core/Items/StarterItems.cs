@@ -674,9 +674,10 @@ public static class StarterItems
         Loose(items, "string", "string", StarterBlocks.LayerString);
         Loose(items, "bone", "bone", StarterBlocks.LayerBone);
 
-        // ⚠ A component with nothing yet to spend it on, the leather-and-feather posture: M1's
-        // reagents are what it is for, and being obtainable is this phase's whole claim.
+        // Nine pack away into the slime block (#97) — the metals' own gesture, and the block is
+        // the point: the first floor that returns a landing.
         Loose(items, "slimeball", "slimeball", StarterBlocks.LayerSlimeball);
+        Block(items, blocks, "slime_block", "slime block", StarterBlocks.LayerSlimeBlock);
 
         // Same posture: what will eventually want it is its own work (#27's signals arc talks of
         // blasting; nothing is promised). It is the crawler's tell in a pocket.

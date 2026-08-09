@@ -512,6 +512,10 @@ public static class BlockTextureSet
 
         // ⚠ No pack path, honestly: the reference never fries an egg, so there is no file to name.
         new("fried_egg", "", true),
+
+        // ⚠ Not cutout: the tile is a full square of jelly with no holes — the coloured-glass
+        // answer, not the clear pane's. The see-through look is the translucent PASS's alpha.
+        new("slime_block", "textures/block/slime_block.png", false, "textures/blocks/slime.png"),
     ];
 
     /// <summary>
@@ -1501,6 +1505,7 @@ public static class BlockTextureSet
             StarterBlocks.LayerRailBoostOn => TileGen.RailStraight(1373, boosted: true, lit: true),
             StarterBlocks.LayerCartIcon => TileGen.IconCart(1374),
             StarterBlocks.LayerFriedEgg => TileGen.IconFriedEgg(1375),
+            StarterBlocks.LayerSlimeBlock => TileGen.SlimeBlock(1376),
 
             _ when layer >= StarterBlocks.LayerGateFirst
                    && layer < StarterBlocks.LayerGateFirst + 10 =>
