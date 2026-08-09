@@ -569,8 +569,9 @@ public static class StarterBlocks
     public const ushort LayerRawRabbit = LayerCobweb + 4;
     public const ushort LayerCookedRabbit = LayerCobweb + 5;
     public const ushort LayerRabbitHide = LayerCobweb + 6;
+    public const ushort LayerInkSac = LayerCobweb + 7;
 
-    public const int LayerCount = LayerRabbitHide + 1;
+    public const int LayerCount = LayerInkSac + 1;
 
     /// <summary>One anvil's name, by how worn it is and which way it lies.</summary>
     /// <remarks>

@@ -342,6 +342,7 @@ public static class StarterRecipes
         LooseAt("yellow dye", "dye_yellow", 1, CraftStation.Bench, "sunwort");
         LooseAt("blue dye", "dye_blue", 2, CraftStation.Bench, "azurite");
         LooseAt("black dye", "dye_black", 1, CraftStation.Bench, "#coals");
+        LooseAt("black dye from ink", "dye_black", 2, CraftStation.Bench, "ink_sac");
 
         // ⛳ A second white, ground out of a bone. Two sources for one colour is not redundancy: a
         // marshlily is a summer afternoon and a bone is a night that went badly, and white is the

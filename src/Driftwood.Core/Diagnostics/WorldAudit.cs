@@ -6534,12 +6534,13 @@ public static class WorldAudit
         (StarterBlocks.LayerGunpowder, "gunpowder"),
         (StarterBlocks.LayerFarpearl, "farpearl"),
         (StarterBlocks.LayerRawRabbit, "raw_rabbit"),
+        (StarterBlocks.LayerRabbitHide, "rabbit_hide"),
 
         // The moving pin: the LAST layer, by name. It has now caught three appends in the act —
         // fifteen crop rows landing after "the last layer is bonemeal", the composter's four
         // landing after black glass, and the berry bush's three after compost-ready — which is
         // exactly what it is for. Keep it pointed at whatever is genuinely last.
-        ((ushort)(StarterBlocks.LayerCount - 1), "rabbit_hide"),
+        ((ushort)(StarterBlocks.LayerCount - 1), "ink_sac"),
     ];
 
     /// <summary>

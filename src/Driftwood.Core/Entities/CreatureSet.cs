@@ -37,6 +37,16 @@ public enum CreatureFamily
     /// everywhere. Underground and harmless is a third answer rather than a shade of either.
     /// </remarks>
     Cave,
+
+    /// <summary>
+    /// Lives in water and harms nobody.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ The bat's own lesson read again: the squid sat in <see cref="Beast"/> and the day it got
+    /// a model the meadow spawner would have stood it on a lawn. Where a creature lives is its own
+    /// axis, and the water is a fourth answer.
+    /// </remarks>
+    Water,
 }
 
 /// <summary>
@@ -102,7 +112,7 @@ public static class CreatureSet
         new("cat", "cat", CreatureFamily.Beast, "cat",
             ["textures/entity/cat/tabby.png", "textures/entity/cat/cat_tabby.png",
              "textures/entity/cat/red.png", "textures/entity/cat/black.png"]),
-        new("squid", "squid", CreatureFamily.Beast, "squid",
+        new("squid", "squid", CreatureFamily.Water, "squid",
             ["textures/entity/squid.png", "textures/entity/squid/squid.png"]),
         new("bat", "bat", CreatureFamily.Cave, "bat",
             ["textures/entity/bat.png", "textures/entity/bat/bat.png"]),
@@ -146,6 +156,8 @@ public static class CreatureSet
     private static readonly Dictionary<string, CreatureMove> Moves = new(StringComparer.Ordinal)
     {
         ["slime"] = CreatureMove.Hop,
+        ["bat"] = CreatureMove.Fly,
+        ["squid"] = CreatureMove.Swim,
     };
 
     public static CreatureMove MoveFor(string kind) => Moves.GetValueOrDefault(kind, CreatureMove.Walk);
@@ -167,9 +179,11 @@ public static class CreatureSet
         ["slime"] = 2f,
 
         // The reference client's own figures for the small ones, read off its renderers: a rabbit
-        // authored seventeen units tall is drawn at three fifths, a cat at four.
+        // authored seventeen units tall is drawn at three fifths, a cat at four, a bat at just
+        // over a third.
         ["rabbit"] = 0.6f,
         ["cat"] = 0.8f,
+        ["bat"] = 0.35f,
     };
 
     public static float DrawScaleFor(string kind) => DrawScales.GetValueOrDefault(kind, 1f);

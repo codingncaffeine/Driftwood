@@ -572,6 +572,10 @@ public static class StarterItems
 
         Loose(items, "rabbit_hide", "rabbit hide", StarterBlocks.LayerRabbitHide);
 
+        // The squid's, and the second door into black dye — richer than coal, which is the
+        // reason to go wading with a stick.
+        Loose(items, "ink_sac", "ink sac", StarterBlocks.LayerInkSac);
+
         items.Register(new ItemType
         {
             Name = "rotten_flesh", Label = "rotten flesh",
@@ -821,7 +825,8 @@ public static class StarterItems
         // is the reference's own answer read across.
         new CreatureDrops.Rule("rabbit", DropTrigger.Killed, "raw_rabbit", 1, 1),
         new CreatureDrops.Rule("rabbit", DropTrigger.Killed, "rabbit_hide", 0, 1),
-        new CreatureDrops.Rule("cat", DropTrigger.Killed, "string", 0, 2));
+        new CreatureDrops.Rule("cat", DropTrigger.Killed, "string", 0, 2),
+        new CreatureDrops.Rule("squid", DropTrigger.Killed, "ink_sac", 1, 3));
 
     /// <summary>What every stage of every root crop leaves when it is pulled up.</summary>
     /// <remarks>

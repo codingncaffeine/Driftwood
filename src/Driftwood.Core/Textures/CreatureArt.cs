@@ -129,6 +129,12 @@ public static class CreatureArt
         // A grey tabby: stone-grey brindled darker, a pale muzzle, a pink nose. Held apart from
         // the wolf's storm-grey by the audit's own distance check.
         ["cat"] = new((138, 126, 112), (96, 86, 74), (196, 186, 172), (176, 128, 118), 0.30f, 0.09f),
+
+        // Dusk-brown, wings going darker through the Wing mark — most of a bat IS wing.
+        ["bat"] = new((96, 78, 66), (58, 48, 44), (70, 56, 50), (64, 52, 46), 0.30f, 0.09f),
+
+        // Slate-blue, mottled the way wet skin is; the tentacle tips shade through the leg rule.
+        ["squid"] = new((96, 108, 132), (76, 88, 112), (66, 76, 98), (66, 76, 98), 0.22f, 0.08f),
     };
 
     /// <summary>True when we have colours for this creature.</summary>
@@ -213,10 +219,12 @@ public static class CreatureArt
         var n when n.StartsWith("wing", StringComparison.Ordinal) => Part.Wing,
 
         // Legs under every naming the models actually use: leg0, frontLegLeft, backLegR,
-        // rearFootRight, haunchLeft. The haunch is a leg's thigh and shades with it.
+        // rearFootRight, haunchLeft, tentacle3. The haunch is a leg's thigh and shades with it,
+        // and a tentacle's tip darkens through the same rule.
         var n when n.Contains("leg", StringComparison.OrdinalIgnoreCase)
                 || n.Contains("foot", StringComparison.OrdinalIgnoreCase)
-                || n.StartsWith("haunch", StringComparison.Ordinal) => Part.Leg,
+                || n.StartsWith("haunch", StringComparison.Ordinal)
+                || n.StartsWith("tentacle", StringComparison.Ordinal) => Part.Leg,
 
         _ => Part.Body,
     };

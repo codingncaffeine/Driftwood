@@ -451,6 +451,9 @@ public static class BlockTextureSet
         new("raw_rabbit", "textures/item/rabbit.png", true, "textures/items/rabbit_raw.png"),
         new("cooked_rabbit", "textures/item/cooked_rabbit.png", true, "textures/items/rabbit_cooked.png"),
         new("rabbit_hide", "textures/item/rabbit_hide.png", true, "textures/items/rabbit_hide.png"),
+
+        // The old layout kept no ink of its own — an ink sac WAS the black dye there.
+        new("ink_sac", "textures/item/ink_sac.png", true, "textures/items/dye_powder_black.png"),
     ];
 
     /// <summary>
@@ -1391,6 +1394,9 @@ public static class BlockTextureSet
             StarterBlocks.LayerCookedRabbit =>
                 TileGen.IconMeat(1354, 214, 160, 138, TileGen.MeatShape.Leg, cooked: true),
             StarterBlocks.LayerRabbitHide => TileGen.IconLeather(1355, 196, 158, 118),
+
+            // Ink is a lump so dark its blue only shows against the black dye it becomes.
+            StarterBlocks.LayerInkSac => TileGen.IconLump(1356, 38, 42, 56),
 
             _ => Wheat(layer) ?? Crop(layer) ?? CropIcon(layer) ?? StainedGlass(layer)
                  ?? MetalBlock(layer) ?? Wool(layer) ?? Meat(layer) ?? Dye(layer)

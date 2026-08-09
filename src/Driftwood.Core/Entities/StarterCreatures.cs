@@ -544,10 +544,87 @@ public static class StarterCreatures
                 Box(-2.2f, 0.2f, -5f, 2f, 10f, 2f, 40, 0)),
         ]);
 
+    /// <summary>
+    /// The cave's own: ears, spread wings, and the long tail membrane, cut for a 64x64 sheet.
+    /// </summary>
+    /// <remarks>
+    /// <para>⚠ The reference authors it around a hanging pivot with its tail eight units below
+    /// zero; ours is the same set of boxes stood up so the membrane's tip is the lowest point at
+    /// 0 — position is a 3D fact the sheet never sees. The head is dropped half a unit onto the
+    /// body: the reference leaves a one-unit neck gap, which is exactly the assembly margin, and
+    /// a check on its own boundary agrees with anything.</para>
+    /// <para>Drawn at 0.35, the reference client's own figure — the boxes stay sheet-true and
+    /// the animal comes out bat-sized.</para>
+    /// </remarks>
+    public static CreatureModel Bat() => new(
+        "bat", 64, 64,
+        [
+            Bone("body", "", new Vector3(0f, 24f, 0f),
+                Box(-3f, 16f, -3f, 6f, 12f, 6f, 0, 16),
+                Box(-5f, 0f, 0f, 10f, 16f, 1f, 0, 34)),
+
+            Bone("head", "body", new Vector3(0f, 28f, 0f),
+                Box(-3f, 28.5f, -3f, 6f, 6f, 6f, 0, 0)),
+
+            Bone("rightEar", "head", new Vector3(0f, 32f, 0f),
+                Box(-4f, 34f, -2f, 3f, 4f, 1f, 24, 0)),
+
+            Bone("leftEar", "head", new Vector3(0f, 32f, 0f),
+                Box(1f, 34f, -2f, 3f, 4f, 1f, 24, 0, mirror: true)),
+
+            Bone("rightWing", "body", new Vector3(0f, 24f, 0f),
+                Box(-12f, 15f, 1.5f, 10f, 16f, 1f, 42, 0)),
+
+            Bone("rightWingTip", "rightWing", new Vector3(-12f, 31f, 1.5f),
+                Box(-20f, 18f, 1.5f, 8f, 12f, 1f, 24, 16)),
+
+            Bone("leftWing", "body", new Vector3(0f, 24f, 0f),
+                Box(2f, 15f, 1.5f, 10f, 16f, 1f, 42, 0, mirror: true)),
+
+            Bone("leftWingTip", "leftWing", new Vector3(12f, 31f, 1.5f),
+                Box(12f, 18f, 1.5f, 8f, 12f, 1f, 24, 16, mirror: true)),
+        ]);
+
+    /// <summary>
+    /// The water's own: a mantle over eight tentacles hung in a ring.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ Every tentacle is one box and one patch, turned about its own pivot by its bearing on
+    /// the ring — the y-rotation case that pinned <see cref="CreatureMesh.Turn"/>'s sign. The
+    /// reference authors it floating around zero; ours stands on 0 by the same argument as the
+    /// bat. No face in v1, and that is a noted hole rather than an accident: its eyes belong on
+    /// the mantle's sides, which is a drawing the painter does not yet make.
+    /// </remarks>
+    public static CreatureModel Squid()
+    {
+        var bones = new List<CreatureBone>
+        {
+            Bone("body", "", new Vector3(0f, 25f, 0f),
+                Box(-6f, 17f, -6f, 12f, 16f, 12f, 0, 0)),
+        };
+
+        // Eight around the rim: the four cardinals and the four diagonals, each turned to face
+        // its own radius, exactly as the reference lays them.
+        (float X, float Z, float Turn)[] ring =
+        [
+            (5f, 0f, 90f), (3.5f, 3.5f, 45f), (0f, 5f, 0f), (-3.5f, 3.5f, -45f),
+            (-5f, 0f, -90f), (-3.5f, -3.5f, -135f), (0f, -5f, -180f), (3.5f, -3.5f, -225f),
+        ];
+
+        for (var i = 0; i < ring.Length; i++)
+        {
+            var (x, z, turn) = ring[i];
+            bones.Add(Posed($"tentacle{i + 1}", "body", new Vector3(x, 18f, z), new Vector3(0f, turn, 0f),
+                Box(x - 1f, 0f, z - 1f, 2f, 18f, 2f, 48, 0)));
+        }
+
+        return new CreatureModel("squid", 64, 32, [.. bones]);
+    }
+
     /// <summary>Every creature that ships with the game, by our name for it.</summary>
     public static IReadOnlyList<CreatureModel> All { get; } =
         [Cow(), Pig(), Sheep(), Chicken(), Wolf(), Zombie(), Drowned(), Husk(), Skeleton(), Spider(),
-         Slime(), Crawler(), Farwalker(), Rabbit(), Fox(), Cat()];
+         Slime(), Crawler(), Farwalker(), Rabbit(), Fox(), Cat(), Bat(), Squid()];
 
     /// <summary>Ours for this creature, or null when we have not drawn one yet.</summary>
     public static CreatureModel? ByName(string name)

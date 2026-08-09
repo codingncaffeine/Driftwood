@@ -1214,6 +1214,36 @@ public sealed class ClientHost : IDisposable
 
         TopUpBeasts();
         TopUpCaveLife();
+        TopUpWaterLife();
+    }
+
+    /// <summary>How many of the water's own are kept about. Atmosphere, like the cave's.</summary>
+    private const int WaterLifeCount = 2;
+
+    /// <summary>Puts the water's harmless things in the water — any water, any light.</summary>
+    /// <remarks>
+    /// ⛳ The bat's lesson a fourth time: where a creature lives is its own axis. The spawn walk
+    /// still stands it on the pond's floor — that is where the ground under water is — and the
+    /// swim is what lifts it off.
+    /// </remarks>
+    private void TopUpWaterLife()
+    {
+        if (_creatureRenderer is null || _herd is null) return;
+
+        var living = 0;
+        foreach (var creature in _herd.All)
+            if (FamilyOf(creature.Kind) == CreatureFamily.Water) living++;
+
+        if (living >= WaterLifeCount) return;
+
+        var kinds = KindsOf(CreatureFamily.Water);
+        if (kinds.Count == 0) return;
+
+        _herd.Spawn(
+            SolidForCreature, kinds, _player.Position, WaterLifeCount - living,
+            where: (x, y, z) =>
+                _registry[_streamer.World.GetBlock(x, y, z)].Fluid == FluidKind.Water,
+            minRadius: 8f);
     }
 
     /// <summary>Puts a few harmless things in the dark under the ground.</summary>
@@ -4923,7 +4953,8 @@ public sealed class ClientHost : IDisposable
         // falls through the floor its chunk will contain. Frozen instead, until the world arrives.
         _herd.Update(
             dt, SolidForCreature, _walking ? _player.Position : null, Sunlit,
-            known: (x, y, z) => _streamer.World.TryGetChunk(ChunkPos.FromWorld(x, y, z), out _));
+            known: (x, y, z) => _streamer.World.TryGetChunk(ChunkPos.FromWorld(x, y, z), out _),
+            water: (x, y, z) => _registry[_streamer.World.GetBlock(x, y, z)].Fluid == FluidKind.Water);
 
         foreach (var blow in _herd.TakeAttacks())
         {

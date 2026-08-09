@@ -411,6 +411,15 @@ public sealed class CreatureHerd
     /// <summary>Blocks within which a timid kind bolts from an approach nothing has swung in.</summary>
     public const float ShyRange = 6f;
 
+    /// <summary>Blocks a second a flier crosses. Quicker than a walk, jittery by rethink.</summary>
+    public const float FlySpeed = 2.4f;
+
+    /// <summary>Blocks a second a flier climbs or sinks at, when it does.</summary>
+    public const float FlyLift = 0.9f;
+
+    /// <summary>Blocks a second a swimmer drifts at. Slow is what reads as underwater.</summary>
+    public const float SwimSpeed = 1.2f;
+
     /// <summary>The two ends of a blink's reach, in blocks. Far enough to break a corner.</summary>
     public const float BlinkNear = 4f;
 
@@ -957,10 +966,14 @@ public sealed class CreatureHerd
     /// as air — stepped there, it falls through the floor its chunk will contain. Un-known
     /// creatures are frozen whole: no clocks, no gravity, no thought, until the world arrives.
     /// </param>
+    /// <param name="water">
+    /// Whether a cell is water, or null when nothing is — which beaches every swimmer, honestly.
+    /// The herd never learns what a fluid is, the same posture the dark and the daylight take.
+    /// </param>
     public void Update(
         float dt, Func<int, int, int, bool> solid,
         Vector3? player = null, Func<int, int, int, bool>? sunlit = null,
-        Func<int, int, int, bool>? known = null)
+        Func<int, int, int, bool>? known = null, Func<int, int, int, bool>? water = null)
     {
         // ⛔ The dead are swept HERE and never inside Hurt, because a fall calls Hurt from inside the
         // walk below — and taking a creature out of the list being walked is how a herd that loses
@@ -1023,7 +1036,16 @@ public sealed class CreatureHerd
 
             creature.BreedRest = MathF.Max(0f, creature.BreedRest - dt);
 
-            if (Fall(creature, dt, solid))
+            // A flier owes gravity nothing, and a swimmer owes it nothing while the water holds
+            // it — beached, it falls like anything else and then can only lie there.
+            var swimming = creature.Move == CreatureMove.Swim
+                && water is not null
+                && water(
+                    (int)MathF.Floor(creature.Position.X),
+                    (int)MathF.Floor(creature.Position.Y),
+                    (int)MathF.Floor(creature.Position.Z));
+
+            if (creature.Move != CreatureMove.Fly && !swimming && Fall(creature, dt, solid))
             {
                 // A hopper travels while it is in the air — the hop IS the stride. Straight along
                 // the yaw it launched with, no steering: it aimed on the ground.
@@ -1089,6 +1111,13 @@ public sealed class CreatureHerd
                 {
                     creature.Moving = _random.NextDouble() < 0.6;
                     creature.WantsYaw = (float)(_random.NextDouble() * 360.0);
+
+                    // A flier or swimmer also re-rolls which way is up. FallSpeed carries the
+                    // vertical wander for the kinds gravity has let go of — down positive, the
+                    // fall's own convention.
+                    if (creature.Move is CreatureMove.Fly or CreatureMove.Swim)
+                        creature.FallSpeed = ((float)_random.NextDouble() * 2f - 1f)
+                            * (creature.Move == CreatureMove.Fly ? FlyLift : SwimSpeed * 0.6f);
                 }
             }
 
@@ -1101,6 +1130,18 @@ public sealed class CreatureHerd
             creature.Yaw = Wrap(creature.Yaw + MathF.Sign(difference) * step);
 
             if (!creature.Moving) continue;
+
+            if (creature.Move == CreatureMove.Fly)
+            {
+                Glide(creature, dt, solid, null);
+                continue;
+            }
+
+            if (swimming)
+            {
+                Glide(creature, dt, solid, water);
+                continue;
+            }
 
             // A hopping kind never walks: grounded, it sits out its rest and then launches. The
             // travel itself happens in HopDrift while the body is airborne.
@@ -1148,6 +1189,61 @@ public sealed class CreatureHerd
             _creatures.AddRange(_newborn);
             _newborn.Clear();
         }
+    }
+
+    /// <summary>
+    /// One step of free movement: forward along the yaw and up or down the vertical wander, each
+    /// axis refused independently where the world says no.
+    /// </summary>
+    /// <param name="water">
+    /// Null for a flier, whose element is anywhere not solid; for a swimmer, the cells it may
+    /// occupy — which is what keeps one inside its own pond without it knowing what a pond is.
+    /// </param>
+    /// <remarks>
+    /// ⚠ <b>A refused axis turns the wander rather than stopping the animal</b> — a flier at a
+    /// cave wall picks a new heading, one at the roof drifts back down, and neither ever presses
+    /// into the rock the way a walker presses into a cliff.
+    /// </remarks>
+    private void Glide(Creature creature, float dt, Func<int, int, int, bool> solid, Func<int, int, int, bool>? water)
+    {
+        bool Open(int x, int y, int z) => water is null ? !solid(x, y, z) : water(x, y, z);
+
+        var yaw = float.DegreesToRadians(creature.Yaw);
+        var ahead = new Vector3(MathF.Cos(yaw), 0f, MathF.Sin(yaw));
+        var speed = water is null ? FlySpeed : SwimSpeed;
+        var wanted = creature.Position + ahead * (speed * dt);
+
+        var y = (int)MathF.Floor(creature.Position.Y);
+
+        if (Open((int)MathF.Floor(wanted.X), y, (int)MathF.Floor(wanted.Z))
+            && Open((int)MathF.Floor(wanted.X), y + 1, (int)MathF.Floor(wanted.Z)))
+        {
+            creature.Position = new Vector3(wanted.X, creature.Position.Y, wanted.Z);
+        }
+        else
+        {
+            creature.WantsYaw = Wrap(creature.Yaw + 90f + (float)_random.NextDouble() * 180f);
+            creature.Thinks = MathF.Min(creature.Thinks, 0.8f);
+        }
+
+        // The vertical wander, down positive by the fall's own convention. A flier keeps off the
+        // floor and from under the roof; a swimmer additionally never leaves its element.
+        var lift = -creature.FallSpeed;
+
+        var fx = (int)MathF.Floor(creature.Position.X);
+        var fz = (int)MathF.Floor(creature.Position.Z);
+
+        if (lift <= 0f && !Open(fx, (int)MathF.Floor(creature.Position.Y - 0.3f), fz))
+            lift = water is null ? FlyLift * 0.7f : SwimSpeed * 0.4f;
+
+        if (lift > 0f && !Open(fx, (int)MathF.Floor(creature.Position.Y + creature.Size.Y * creature.Scale + 0.3f), fz))
+            lift = water is null ? -FlyLift * 0.7f : -SwimSpeed * 0.4f;
+
+        creature.FallSpeed = -lift;
+
+        var toY = creature.Position.Y + lift * dt;
+        if (Open(fx, (int)MathF.Floor(toY), fz))
+            creature.Position = creature.Position with { Y = toY };
     }
 
     /// <summary>Carries an airborne hopper forward, unless a wall is in the way.</summary>
@@ -1502,6 +1598,132 @@ public sealed class CreatureHerd
         faults.AddRange(ValidateFusing());
         faults.AddRange(ValidateBlinking());
         faults.AddRange(ValidateShyness());
+        faults.AddRange(ValidateFlying());
+        faults.AddRange(ValidateSwimming());
+
+        return faults;
+    }
+
+    /// <summary>
+    /// Checks a flier gets off the floor of a roofed cave, stays out of its rock, and is still
+    /// airborne rather than parked at the end.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ The roof is the arm that matters: an unroofed check passes a flier that climbs for
+    /// ever, and every walker arm already proves grounded kinds stay grounded.
+    /// </remarks>
+    private static List<string> ValidateFlying()
+    {
+        var faults = new List<string>();
+
+        // A cave six blocks tall: floor below 64, roof from 70 up.
+        static bool Cave(int x, int y, int z) => y < 64 || y >= 70;
+
+        var bats = new CreatureHerd(79);
+        bats.Spawn(
+            Cave, [new SpawnKind("bat", new Vector3(0.9f, 0.85f, 0.9f), Move: CreatureMove.Fly)],
+            new Vector3(0f, 64f, 0f), 2);
+        if (bats.Count != 2) return ["no bats stood up for the flying check"];
+
+        var peak = 0f;
+        var buried = 0;
+
+        for (var i = 0; i < 900; i++)
+        {
+            bats.Update(1f / 60f, Cave);
+
+            foreach (var one in bats.All)
+            {
+                peak = MathF.Max(peak, one.Position.Y - 64f);
+
+                if (Cave(
+                        (int)MathF.Floor(one.Position.X),
+                        (int)MathF.Floor(one.Position.Y),
+                        (int)MathF.Floor(one.Position.Z)))
+                    buried++;
+            }
+        }
+
+        if (peak < 1f)
+            faults.Add($"a flier peaked {peak:F2} blocks off the cave floor in fifteen seconds");
+
+        if (buried > 0)
+            faults.Add($"a flier spent {buried} steps of the run inside solid rock");
+
+        foreach (var one in bats.All)
+            if (one.Position.Y >= 70f || one.Position.Y < 64f)
+                faults.Add($"a flier ended the run at y {one.Position.Y:F1} in a cave of 64..70");
+
+        return faults;
+    }
+
+    /// <summary>
+    /// Checks a swimmer swims — it rises off the pond floor and never leaves the water — and
+    /// that the same body demoted to a walker only ever wades.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>The walker control is the whole check.</b> On a flooded floor, "every step was in
+    /// water" is true of a beast standing in the shallows too; what only a swimmer does is leave
+    /// the ground without leaving the water, so the climb is the discriminating claim.
+    /// </remarks>
+    private static List<string> ValidateSwimming()
+    {
+        var faults = new List<string>();
+
+        // A pond: bedrock below 40, ten blocks of water out to eight from the middle, air above.
+        static bool Bed(int x, int y, int z) => y < 40;
+        static bool Pond(int x, int y, int z) =>
+            y is >= 40 and < 50 && Math.Abs(x) <= 8 && Math.Abs(z) <= 8;
+
+        var squids = new CreatureHerd(83);
+        squids.Spawn(
+            Bed, [new SpawnKind("squid", new Vector3(1.5f, 2.1f, 1.5f), Move: CreatureMove.Swim)],
+            new Vector3(0f, 41f, 0f), 1, where: Pond);
+        if (squids.Count != 1) return ["no squid found water to stand in for the swimming check"];
+
+        var squid = squids.All[0];
+        var peak = 0f;
+        var dry = 0;
+
+        for (var i = 0; i < 900; i++)
+        {
+            squids.Update(1f / 60f, Bed, water: Pond);
+
+            peak = MathF.Max(peak, squid.Position.Y - 40f);
+
+            if (!Pond(
+                    (int)MathF.Floor(squid.Position.X),
+                    (int)MathF.Floor(squid.Position.Y),
+                    (int)MathF.Floor(squid.Position.Z)))
+                dry++;
+        }
+
+        if (peak < 1f)
+            faults.Add($"a swimmer rose {peak:F2} blocks off the pond floor in fifteen seconds");
+
+        if (dry > 0)
+            faults.Add($"a swimmer spent {dry} steps of the run out of the water");
+
+        // ⛔ The control: the same body walking. It stands in the same water and must never
+        // climb it — a rule that floated every wader would pass the arm above.
+        var waders = new CreatureHerd(89);
+        waders.Spawn(
+            Bed, [new SpawnKind("squid", new Vector3(1.5f, 2.1f, 1.5f))],
+            new Vector3(0f, 41f, 0f), 1, where: Pond);
+        if (waders.Count == 1)
+        {
+            var wader = waders.All[0];
+            var high = 0f;
+
+            for (var i = 0; i < 300; i++)
+            {
+                waders.Update(1f / 60f, Bed, water: Pond);
+                high = MathF.Max(high, wader.Position.Y - 40f);
+            }
+
+            if (high > 0.5f)
+                faults.Add($"a walking body rose {high:F2} blocks in water it should only wade");
+        }
 
         return faults;
     }
