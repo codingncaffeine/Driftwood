@@ -1684,25 +1684,56 @@ public static class TileGen
     public static byte[] Ore(int seed, byte[] baseTile, byte r, byte g, byte b, int blobs)
     {
         var t = (byte[])baseTile.Clone();
+        var ramp = Ramp(r, g, b, 6, 0.38f);
 
+        // ⛳ Nuggets are FACETED now, the reference's own read: each is a small diamond with
+        // its top-left catching light, its bottom-right in shade, and a socket of darkened
+        // rock under its lower edge — a mineral sitting IN the stone, not a dot printed on it.
         for (var i = 0; i < blobs; i++)
         {
             var cx = (int)(Noise(i, 0, seed) * Size);
             var cy = (int)(Noise(0, i, seed + 31) * Size);
-            var radius = 1 + (int)(Noise(i, i, seed + 61) * 2f);
+            var big = Noise(i, i, seed + 61) > 0.55f;
 
-            for (var dy = -radius; dy <= radius; dy++)
-            for (var dx = -radius; dx <= radius; dx++)
+            // Wrap rather than clip: a tile that stops its detail at the edge shows a grid.
+            void Set(int dx, int dy, int tone)
             {
-                if (dx * dx + dy * dy > radius * radius) continue;
-
-                // Wrap rather than clip: a tile that stops its detail at the edge shows a grid.
                 var x = ((cx + dx) % Size + Size) % Size;
                 var y = ((cy + dy) % Size + Size) % Size;
-
-                var shade = (int)(Noise(x, y, seed + 97) * 24f) - 12;
-                Put(t, x, y, Clamp(r + shade), Clamp(g + shade), Clamp(b + shade), 255);
+                var (cr, cg, cb) = ramp[tone];
+                Put(t, x, y, cr, cg, cb, 255);
             }
+
+            void Socket(int dx, int dy)
+            {
+                var x = ((cx + dx) % Size + Size) % Size;
+                var y = ((cy + dy) % Size + Size) % Size;
+                var p = (y * Size + x) * 4;
+                t[p] = (byte)(t[p] * 55 / 100);
+                t[p + 1] = (byte)(t[p + 1] * 55 / 100);
+                t[p + 2] = (byte)(t[p + 2] * 55 / 100);
+            }
+
+            Set(0, 0, 4);           // the lit facet
+            Set(1, 0, 3);
+            Set(0, 1, 3);
+            Set(1, 1, 1);           // the shaded facet
+
+            if (big)
+            {
+                Set(2, 0, 3);
+                Set(0, 2, 2);
+                Set(2, 1, 1);
+                Set(1, 2, 1);
+                Set(-1, 1, 2);
+                Set(2, 2, 5);       // one glint on the biggest stones
+                Socket(3, 1);
+                Socket(1, 3);
+            }
+
+            Socket(2, 2);
+            Socket(0, 2 + (big ? 1 : 0));
+            Socket(-1, 0);
         }
 
         return t;
@@ -4070,8 +4101,44 @@ public static class TileGen
             var onCurl = mirrored ? x - cx == y - cy : x - cx == cy - y;
             var curl = onCurl && Math.Abs(x - cx) <= 1 ? -30 : 0;
 
-            var d = (int)(clump + fibre) + hollow + curl;
+            // Snapped to eight-level steps: the clumps and curls stay exactly where they were,
+            // but they sit as flat patches now, the quantised language of the redraw.
+            var d = (int)MathF.Round(((int)(clump + fibre) + hollow + curl) / 8f) * 8;
             Put(t, x, y, Clamp(r + d), Clamp(g + d), Clamp(b + d), 255);
+        }
+
+        return t;
+    }
+
+    /// <summary>A metal storage block: a pressed plate with a bevelled frame and corner studs.</summary>
+    /// <remarks>The reference draws every metal block as worked METAL, not as rock in a metal
+    /// colour — a flat plate, a bright top-left bevel, a shadowed lower-right one, and studs.
+    /// The face itself stays almost silent; the frame is the whole read.</remarks>
+    public static byte[] MetalPlate(int seed, byte r, byte g, byte b)
+    {
+        var t = new byte[BytesPerTile];
+        var ramp = Ramp(r, g, b, 6, 0.30f);
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var k = 2;
+
+            var edge = Math.Min(Math.Min(x, y), Math.Min(Size - 1 - x, Size - 1 - y));
+            if (edge == 0) k = x <= y ? 3 : 1;                       // outer bevel splits at the diagonal
+            else if (edge == 1) k = x < y ? 4 : 1;                   // inner lip, lit above the shadow
+            else if (edge == 2) k = 2;
+            else
+            {
+                if (Noise(x, y, seed) > 0.96f) k = 3;                // a faint mill mark
+                if (x + y == Size - 1 && Noise(x, 9, seed + 7) > 0.7f) k = 4;   // the sheen, sparse
+            }
+
+            // Corner studs, one step in.
+            if ((x is 2 or 13) && (y is 2 or 13)) k = x == 2 && y == 2 ? 5 : 1;
+
+            var (cr, cg, cb) = ramp[k];
+            Put(t, x, y, cr, cg, cb, 255);
         }
 
         return t;

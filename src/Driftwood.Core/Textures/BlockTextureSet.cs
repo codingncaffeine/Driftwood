@@ -1382,7 +1382,7 @@ public static class BlockTextureSet
 
             // Darker and shinier than the ore it is made of, so a wall of it does not read as a
             // seam of coal in stone — a storage block and its ore are seen side by side constantly.
-            StarterBlocks.LayerCoalBlock => TileGen.Speckle(1101, 30, 30, 34, 22, 0.75f),
+            StarterBlocks.LayerCoalBlock => TileGen.Rock(1101, 38, 38, 43, cells: 10, spread: 0.5f),
 
             StarterBlocks.LayerFlame => TileGen.Flame(1102),
             StarterBlocks.LayerSmoke => TileGen.Smoke(1103),
@@ -1672,7 +1672,7 @@ public static class BlockTextureSet
         if (index < 0 || index >= StarterBlocks.MetalBlockCount) return null;
 
         var (_, _, _, r, g, b) = StarterBlocks.MetalBlocks[index];
-        return TileGen.Panel(TileGen.Speckle(1120 + index, r, g, b, 7, 0.25f), 2, 26);
+        return TileGen.MetalPlate(1120 + index, r, g, b);
     }
 
     /// <summary>One shield, or null when this layer is not one.</summary>
