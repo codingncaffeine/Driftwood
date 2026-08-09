@@ -52,12 +52,19 @@ public sealed class ConnectionTable
     /// </remarks>
     private readonly bool[] _anchor;
 
+    /// <summary>True where a member is the waterlogged twin of its family's dry form.</summary>
+    private readonly bool[] _waterlogged;
+
+    private readonly Waterlogging _wet;
+
     public ConnectionTable(BlockRegistry registry, params ConnectionFamily[] families)
     {
         _families = families;
         _family = new int[registry.Count];
         _mask = new int[registry.Count];
         _anchor = new bool[registry.Count];
+        _waterlogged = new bool[registry.Count];
+        _wet = new Waterlogging(registry);
 
         Array.Fill(_family, -1);
 
@@ -77,6 +84,17 @@ public sealed class ConnectionTable
 
             _family[id] = f;
             _mask[id] = mask;
+
+            // ⛳ The wet twin sits in the SAME family at the same mask, so a fence post in the sea
+            // and one on the beach join across the waterline as one fence — membership is about
+            // what a thing is, and wet is about what its cell also holds. The rewire keeps
+            // wetness through TryRewire, so the one-ring property still stands: a swap changes
+            // shape, never whether a neighbour would join.
+            if (!_wet.TryWet(families[f].ByMask[mask], out var twin)) continue;
+
+            _family[twin.Value] = f;
+            _mask[twin.Value] = mask;
+            _waterlogged[twin.Value] = true;
         }
     }
 
@@ -113,6 +131,11 @@ public sealed class ConnectionTable
         if (wanted == _mask[here.Value]) return false;
 
         become = _families[family].ByMask[wanted];
+
+        // A wet fence re-picks its shape between wet forms; the water in the cell is not the
+        // rewire's to spill.
+        if (_waterlogged[here.Value] && _wet.TryWet(become, out var wetForm)) become = wetForm;
+
         return true;
     }
 

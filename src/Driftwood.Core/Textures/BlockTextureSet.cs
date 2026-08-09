@@ -474,6 +474,10 @@ public static class BlockTextureSet
         new("moss", "textures/block/moss_block.png", false),
         new("mossy_rubble", "textures/block/mossy_cobblestone.png", false,
             "textures/blocks/cobblestone_mossy.png"),
+
+        // ⛳ #96, waterlogging's first plant. Cutout like every crossed plant; modern packs ship
+        // the file animated as a tall frame strip, and the importer's size probe takes frame 0.
+        new("seagrass", "textures/block/seagrass.png", true),
     ];
 
     /// <summary>
@@ -1445,6 +1449,8 @@ public static class BlockTextureSet
             // trick, seeding green into the rubble's exact tile rather than a second drawing.
             StarterBlocks.LayerMossyRubble => TileGen.Ore(
                 1367, TileGen.Cobble(1034, 126, 126, 130), 96, 134, 80, 11),
+
+            StarterBlocks.LayerSeagrass => TileGen.Seagrass(1368),
 
             _ => Wheat(layer) ?? Crop(layer) ?? CropIcon(layer) ?? StainedGlass(layer)
                  ?? MetalBlock(layer) ?? Wool(layer) ?? Meat(layer) ?? Dye(layer)

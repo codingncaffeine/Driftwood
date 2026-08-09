@@ -21,6 +21,7 @@ public sealed class FluidTable
     private readonly bool[] _falling;
     private readonly bool[] _source;
     private readonly bool[] _replaceable;
+    private readonly bool[] _wet;
 
     /// <summary>kind, level, falling → block id. Built from the registry, never written out.</summary>
     private readonly ushort[] _states;
@@ -57,6 +58,7 @@ public sealed class FluidTable
         _falling = new bool[registry.Count];
         _source = new bool[registry.Count];
         _replaceable = new bool[registry.Count];
+        _wet = new bool[registry.Count];
         _states = new ushort[Kinds * (MaxLevel + 1) * 2];
 
         for (var id = 0; id < registry.Count; id++)
@@ -68,8 +70,18 @@ public sealed class FluidTable
             _falling[id] = type.FluidFalling;
             _source[id] = type.FluidSource;
             _replaceable[id] = type.Replaceable;
+            _wet[id] = type.Waterlogged;
 
             if (type.Fluid == FluidKind.None) continue;
+
+            // ⛔⛔ ONLY A TRUE FLUID MAY CLAIM ITS STATE SLOT. Every waterlogged block reads
+            // (Water, 8, still) — that is what makes the flow, drowning and light treat its cell
+            // as water — so without this guard the LAST wet form registered would own the slot,
+            // and Block(Water, 8, false) would answer it: a settling river writing seagrass into
+            // every cell it fills. The audit's guarded-states check goes red the moment this line
+            // stops filtering.
+            if (type.Waterlogged) continue;
+
             _states[StateIndex(type.Fluid, type.FluidLevel, type.FluidFalling)] = (ushort)id;
         }
 
@@ -90,6 +102,10 @@ public sealed class FluidTable
 
     /// <summary>True when a fluid or a placed block may take this cell without asking.</summary>
     public bool Replaceable(ushort block) => _replaceable[block];
+
+    /// <summary>True for a block sharing its cell with water — a real block the flow reads as a
+    /// full still source and never overwrites.</summary>
+    public bool IsWet(ushort block) => _wet[block];
 
     /// <summary>Whether either of a pair is a fluid at all, for the mesher's face test.</summary>
     public bool AnyFluid(ushort a, ushort b) =>

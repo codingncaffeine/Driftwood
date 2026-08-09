@@ -96,6 +96,19 @@ public sealed class ItemRegistry
             }
         }
 
+        // A waterlogged form is thought of, picked up and named as its dry item — twenty stair
+        // orientations are one stair, and each one standing in the sea is still that stair. After
+        // the variants loop, because it reads the dry answers; skipping the always-wet (seagrass
+        // aliases to air) whose own item already claimed them above.
+        var wet = new Waterlogging(blocks);
+        for (ushort id = 1; id < blocks.Count; id++)
+        {
+            if (!blocks[id].Waterlogged || !_forBlock[id].IsNone) continue;
+
+            var dry = wet.DryOf(new BlockId(id));
+            if (!dry.IsAir) _forBlock[id] = _forBlock[dry.Value];
+        }
+
         _sealed = true;
         return this;
     }

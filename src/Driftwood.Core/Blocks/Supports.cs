@@ -31,6 +31,14 @@ public sealed class SupportTable
     /// <summary>Which way the rest of each block is, or -1. Indexed by raw block id.</summary>
     private readonly int[] _partner;
 
+    /// <summary>What a cell keeps when the block in it falls: the water a wet one stood in.</summary>
+    /// <remarks>
+    /// ⛔ Writing bare air here would quietly delete the sea from around a shed block: seagrass over
+    /// a mined floor, a wet ladder losing its wall. One answer, shared with mining and the blast,
+    /// through <see cref="Waterlogging.Remains"/>.
+    /// </remarks>
+    private readonly ushort[] _remains;
+
     /// <summary>Reused between calls so a pass costs no allocation.</summary>
     private readonly Queue<(int X, int Y, int Z)> _pending = [];
 
@@ -51,6 +59,9 @@ public sealed class SupportTable
         _solid = new bool[registry.Count];
         _firm = new bool[registry.Count];
         _partner = new int[registry.Count];
+        _remains = new ushort[registry.Count];
+
+        var wet = new Waterlogging(registry);
 
         for (var id = 0; id < registry.Count; id++)
         {
@@ -59,6 +70,7 @@ public sealed class SupportTable
             _solid[id] = type.Solid;
             _firm[id] = type.Solid && type.Model.IsFullCube;
             _partner[id] = type.PartnerFace;
+            _remains[id] = wet.Remains(new BlockId((ushort)id)).Value;
         }
     }
 
@@ -142,7 +154,8 @@ public sealed class SupportTable
             if (was.IsAir) continue;
             if (Holds(world, cell.X, cell.Y, cell.Z)) continue;
 
-            world.SetBlock(cell.X, cell.Y, cell.Z, BlockId.Air);
+            // What the cell keeps is the water a wet block stood in — air for everything else.
+            world.SetBlock(cell.X, cell.Y, cell.Z, new BlockId(_remains[was.Value]));
             fell.Add((cell.X, cell.Y, cell.Z, was));
             count++;
 

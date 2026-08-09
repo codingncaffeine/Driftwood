@@ -444,6 +444,7 @@ public sealed class ClientHost : IDisposable
 
     /// <summary>Which fluid each block is, for the bucket's own ray.</summary>
     private FluidTable _fluidTable = null!;
+    private Waterlogging _waterlogging = null!;
 
     /// <summary>And what each animal leaves, and what had to happen for it to leave it.</summary>
     private CreatureDrops _creatureDropTable = null!;
@@ -1465,6 +1466,7 @@ public sealed class ClientHost : IDisposable
         _registry = registry;
         _ids = ids;
         _fluidTable = new FluidTable(registry);
+        _waterlogging = new Waterlogging(registry);
         _startup.Mark("blocks");
 
         // The item layer sits on top of the block layer and never the other way round, which is why
@@ -5106,7 +5108,10 @@ public sealed class ClientHost : IDisposable
             if (id == BlockId.Air) return null;
 
             var type = _registry[id];
-            if (type.Unbreakable || type.Fluid != FluidKind.None) return null;
+
+            // A waterlogged block declares a fluid and is not one: the blast carves it like its
+            // dry form. Without the second clause every wet fence in the crater would shrug.
+            if (type.Unbreakable || (type.Fluid != FluidKind.None && !type.Waterlogged)) return null;
 
             return type.Hardness;
         });
@@ -5122,7 +5127,8 @@ public sealed class ClientHost : IDisposable
             foreach (var spilled in _furnaces.Remove(x, y, z)) _drops.Drop(spilled, at);
             foreach (var spilled in _chests.Remove(x, y, z)) _drops.Drop(spilled, at);
 
-            _streamer.EditBlock(x, y, z, BlockId.Air);
+            // The cell keeps the water a wet block stood in — a blast under the sea leaves sea.
+            _streamer.EditBlock(x, y, z, _waterlogging.Remains(was));
             _particles.Burst(_registry[was], x, y, z);
 
             if (Random.Shared.NextDouble() < 0.4)
@@ -6287,7 +6293,11 @@ public sealed class ClientHost : IDisposable
         foreach (var spilled in _furnaces.Remove(hit.X, hit.Y, hit.Z)) _drops.Drop(spilled, centre);
         foreach (var spilled in _chests.Remove(hit.X, hit.Y, hit.Z)) _drops.Drop(spilled, centre);
 
-        _streamer.EditBlock(hit.X, hit.Y, hit.Z, BlockId.Air);
+        // The cell keeps the water a wet block stood in — breaking a wet fence is a hole in the
+        // water, not a hole in the sea.
+        _streamer.EditBlock(
+            hit.X, hit.Y, hit.Z,
+            _waterlogging.Remains(_streamer.World.GetBlock(hit.X, hit.Y, hit.Z)));
         ShedUnsupported(hit.X, hit.Y, hit.Z);
 
         // ⛳ Digging is work, and it is most of what a player does. Charged here rather than per
@@ -6387,7 +6397,12 @@ public sealed class ClientHost : IDisposable
 
             if (Buckets.Filled(kind) is not { } becomes) return false;
 
-            _streamer.EditBlock(from.X, from.Y, from.Z, BlockId.Air);
+            // A wet block gives up its water and stands dry; a bare source empties to air. For
+            // seagrass the dry form IS air — lifting the water lifts the plant, the genre's rule.
+            var scooped = _streamer.World.GetBlock(from.X, from.Y, from.Z);
+            _streamer.EditBlock(
+                from.X, from.Y, from.Z,
+                _waterlogging.IsWet(scooped) ? _waterlogging.DryOf(scooped) : BlockId.Air);
             _inventory.SpendHeld();
             _inventory.Add(new ItemStack(_items.ByName(becomes).Id, 1));
 
@@ -6402,6 +6417,21 @@ public sealed class ClientHost : IDisposable
 
         // Into the cell the crosshair would build in, which is the one a player is looking at.
         if (_target is not { } aim) return false;
+
+        // ⛳ Water poured AT a block that can hold it goes INTO it (#96): the struck cell wets,
+        // rather than a source landing in the cell in front of it.
+        if (pouring == FluidKind.Water
+            && _waterlogging.TryWet(_streamer.World.GetBlock(aim.X, aim.Y, aim.Z), out var wetted))
+        {
+            _streamer.EditBlock(aim.X, aim.Y, aim.Z, wetted);
+            _inventory.SpendHeld();
+            _inventory.Add(new ItemStack(_items.ByName("bucket").Id, 1));
+
+            _audio?.Play(
+                Pick(ActionSounds.BucketEmptyWater),
+                new Vector3(aim.X + 0.5f, aim.Y + 0.5f, aim.Z + 0.5f), 0.8f, Wobble());
+            return true;
+        }
 
         var (px, py, pz) = aim.Adjacent;
         if (!_registry[_streamer.World.GetBlock(px, py, pz)].Replaceable) return false;
@@ -6879,7 +6909,9 @@ public sealed class ClientHost : IDisposable
                 // different recordings. Which way it went is what the toggle landed on; the
                 // name test covers doors and trapdoors both, and anything else that toggles
                 // keeps its material's own voice.
-                var swung = _registry[other].Name;
+                // ⚠ Read through the DRY name: a wet trapdoor's own name ends "_waterlogged",
+                // which would fail the "_open" suffix test and play the shut sound on opening.
+                var swung = _registry[_waterlogging.DryOf(other)].Name;
                 if (swung.Contains("door", StringComparison.Ordinal))
                 {
                     _audio?.Play(
@@ -6901,9 +6933,13 @@ public sealed class ClientHost : IDisposable
         // Genre-standard, and the reason placement cannot simply test for air: what is already
         // there sometimes decides what happens, and until now it only ever decided whether to give
         // up. Merging into the cell that was struck, not the one beside it.
+        // ⚠ The struck slab is compared through its DRY form — a wet slab is still that slab, and
+        // filling it squeezes the water out, which is the genre's rule for a cell with no room left.
         if (_inventory.HeldType is { Places: { } holding }
             && _slabMerge.TryGetValue(_streamer.World.GetBlock(hit.X, hit.Y, hit.Z).Value, out var whole)
-            && Array.IndexOf(holding.Variants, _streamer.World.GetBlock(hit.X, hit.Y, hit.Z)) >= 0)
+            && Array.IndexOf(
+                holding.Variants,
+                _waterlogging.DryOf(_streamer.World.GetBlock(hit.X, hit.Y, hit.Z))) >= 0)
         {
             _streamer.EditBlock(hit.X, hit.Y, hit.Z, whole);
             _inventory.SpendHeld();
@@ -6914,7 +6950,12 @@ public sealed class ClientHost : IDisposable
         }
 
         var (x, y, z) = hit.Adjacent;
-        if (!_streamer.World.GetBlock(x, y, z).IsAir) return false;
+
+        // Air builds as it always has; a fluid cell can be built INTO now (#96). The crosshair
+        // passes through fluid to whatever is behind it, so the cell this reaches through water is
+        // the one in front of the sea floor or the wall — exactly where a dock post goes.
+        var occupant = _registry[_streamer.World.GetBlock(x, y, z)];
+        if (!_streamer.World.GetBlock(x, y, z).IsAir && !occupant.Replaceable) return false;
 
         // ⛳ THE MAIN HAND FIRST, THEN THE OTHER ONE — which is what makes a torch in the offhand and
         // a pickaxe in the main hand the loop everybody wants. Asked in that order and never both:
@@ -6946,6 +6987,25 @@ public sealed class ClientHost : IDisposable
         var height = Math.Clamp(landing.Y - y, 0f, 1f);
 
         if (!held.TryResolve(hit.Face, height, _camera.Forward, out var block)) return false;
+
+        // ⛳ What the cell already holds decides what the placement becomes (#96):
+        //  - a WATER SOURCE wets anything that has a wet form, and the water survives inside it;
+        //  - flowing water is built over dry — only a source waterlogs, the genre's own line;
+        //  - an always-wet plant (seagrass) goes nowhere BUT a source: its water IS the cell's;
+        //  - anything with no wet form must fill the cell to displace fluid — a seawall works, a
+        //    torch standing in the sea does not.
+        if (_registry[block].Waterlogged)
+        {
+            if (!(occupant.Fluid == FluidKind.Water && occupant.FluidSource)) return false;
+        }
+        else if (occupant.Fluid != FluidKind.None)
+        {
+            if (occupant is { Fluid: FluidKind.Water, FluidSource: true }
+                && _waterlogging.TryWet(block, out var wet))
+                block = wet;
+            else if (!_registry[block].Model.IsFullCube)
+                return false;
+        }
 
         // What holds it up is the block's own answer, not the item's. A torch put against a wall
         // resolved to a different block from one put on the floor, and that block already says

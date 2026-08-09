@@ -2476,6 +2476,65 @@ public static class TileGen
         return t;
     }
 
+    /// <summary>
+    /// Seagrass: ribbon blades swaying from the sea floor, in kelp greens.
+    /// </summary>
+    /// <remarks>
+    /// Four blades, each drawn per pixel down its own gentle S-curve — the ToSegment discipline in
+    /// spirit: a column per row can never skip a cell, where stepping a diagonal would dither. The
+    /// sway is baked into the drawing, since the tile itself is static; darker toward the roots the
+    /// way everything under two blocks of water is.
+    /// </remarks>
+    public static byte[] Seagrass(int seed)
+    {
+        var t = new byte[BytesPerTile];
+
+        // Root column, phase and height for each blade. Heights differ so the tips break rank.
+        (float Root, float Phase, int Top)[] blades =
+            [(2.5f, 0.0f, 3), (6f, 2.1f, 1), (9.5f, 4.2f, 4), (13f, 1.2f, 2)];
+
+        foreach (var (root, phase, top) in blades)
+        {
+            // Walked root-up with the last row's column in hand, so a row where the sway steps
+            // sideways paints the old column too — a diagonal that is not bridged is two islands,
+            // which is the feather's checkerboard arriving one blade at a time.
+            var prev = int.MinValue;
+
+            for (var y = Size - 1; y >= top; y--)
+            {
+                // The S-curve: strongest sway at the tip, still at the root.
+                var reach = (Size - 1f - y) / (Size - 1f);
+                var x = (int)MathF.Round(root + MathF.Sin(reach * 3.1f + phase) * 2.2f * reach);
+                if ((uint)x >= Size) continue;
+
+                var grain = (int)((Noise(x, y, seed) * 2f - 1f) * 12f);
+                var depth = (int)(reach * 26f);
+
+                Put(t, x, y,
+                    Clamp(52 + grain + depth / 3),
+                    Clamp(118 + grain + depth),
+                    Clamp(74 + grain + depth / 2), 255);
+
+                if (prev != int.MinValue && prev != x && (uint)prev < Size)
+                    Put(t, prev, y,
+                        Clamp(48 + grain + depth / 3),
+                        Clamp(112 + grain + depth),
+                        Clamp(70 + grain + depth / 2), 255);
+
+                prev = x;
+
+                // A second texel on alternating rows keeps a blade a ribbon rather than a wire.
+                if (x + 1 < Size && ((y + (int)root) & 1) == 0)
+                    Put(t, x + 1, y,
+                        Clamp(46 + grain + depth / 3),
+                        Clamp(108 + grain + depth),
+                        Clamp(66 + grain + depth / 2), 255);
+            }
+        }
+
+        return t;
+    }
+
     /// <summary>A sheet of flame, transparent around it — what stands in a campfire.</summary>
     /// <remarks>
     /// Tapering as it rises and eaten into at the edges, so the two crossed planes it is drawn on

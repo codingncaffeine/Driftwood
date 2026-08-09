@@ -128,6 +128,9 @@ public static class StarterItems
         Block(items, blocks, "glowcap", "glowcap", StarterBlocks.LayerGlowcap);
 
         Block(items, blocks, "marsh_reed", "marsh reed", StarterBlocks.LayerMarshReed);
+
+        // Sheared off the sea floor, replanted in any water source over solid ground (#96).
+        Block(items, blocks, "seagrass", "seagrass", StarterBlocks.LayerSeagrass);
         Block(items, blocks, "moss", "moss", StarterBlocks.LayerMoss);
         Block(items, blocks, "mossy_rubble", "mossy rubble", StarterBlocks.LayerMossyRubble);
         Block(items, blocks, "deepstone", "deepstone", StarterBlocks.LayerDeepstone);
@@ -593,13 +596,15 @@ public static class StarterItems
         RegisterMeats(items);
         RegisterTools(items);
 
-        // ⛳ The one tool whose work is not mining. It takes a fleece off a live sheep, which is why
-        // it carries no tier: there is no block it is the right answer for, and giving it one would
-        // make it a shovel with a strange picture.
+        // ⛳ The tool whose work is lifting rather than mining. It takes a fleece off a live sheep,
+        // and since #96 there IS a block it is the right answer for: seagrass names Shears as its
+        // harvest class, so a bare hand tears the plant to nothing and shears bring it up whole.
+        // Tier 1 because the harvest gate and the reachability walk both compare tiers, and a
+        // tierless tool would satisfy neither for the one block that asks for it.
         items.Register(new ItemType
         {
             Name = "shears", Label = "shears", IconLayer = StarterBlocks.LayerShears,
-            MaxStack = 1, Tool = ToolClass.Shears, Durability = 238,
+            MaxStack = 1, Tool = ToolClass.Shears, Tier = 1, Durability = 238,
         });
 
         // ⛳ The buckets, and they are what turn a fluid from scenery into a thing a player uses.

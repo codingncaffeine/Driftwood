@@ -40,6 +40,12 @@ public sealed class BlockRegistry
         if (type.Opaque && !type.Model.IsFullCube)
             throw new InvalidOperationException($"block '{type.Name}' is opaque but its model is not a full cube");
 
+        // A filled cell has no room left for water. A full-cube waterlogged form would also draw
+        // its water shell inside its own faces and read the flow's questions ambiguously, so the
+        // combination is refused here by name rather than surfacing as either of those.
+        if (type.Waterlogged && (type.Opaque || type.Model.IsFullCube))
+            throw new InvalidOperationException($"block '{type.Name}' is waterlogged but fills its cell");
+
         type.Id = new BlockId((ushort)_byId.Count);
         _byId.Add(type);
         _byName[type.Name] = type;

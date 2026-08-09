@@ -348,6 +348,10 @@ public static class WorldAudit
         Check("fluid flows, settles, and drains", fluidFaults.Count == 0,
             fluidFaults.Count == 0 ? fluidDetail : string.Join("; ", fluidFaults));
 
+        var wetFaults = WaterloggingFaults(registry, ids, out var wetDetail);
+        Check("a block can stand in the sea and keep it", wetFaults.Count == 0,
+            wetFaults.Count == 0 ? wetDetail : string.Join("; ", wetFaults));
+
         var spawnFaults = SpawnBandFaults(out var spawnDetail);
         Check("where a thing lives takes two questions", spawnFaults.Count == 0,
             spawnFaults.Count == 0 ? spawnDetail : string.Join("; ", spawnFaults));
@@ -1022,6 +1026,20 @@ public static class WorldAudit
             mossCells is > 100 and < 30_000 && minY[ids.Moss.Value] > TerrainGenerator.MossFloor,
             $"{mossCells:N0} moss cells (want 100-30,000), lowest at y {minY[ids.Moss.Value]} "
             + $"(want above {TerrainGenerator.MossFloor})");
+
+        // ⛳ Seagrass meadows on the drowned floor (#96). Band measured across the five gate seeds
+        // at chunks 12 — 485 (saltmarsh, whose seas are shallow shelves) to 2,358 (driftwood) —
+        // and the ceiling is what a broken depth gate would blow through, because every sea cell
+        // is eligible then. Height needs no band: never above the waterline is the rule itself.
+        // ⚠ Blind to a wrong CLUSTERING: an even wash and proper beds count the same. That is the
+        // patch field's job and only eyes grade it.
+        var seagrassCells = counts[ids.Seagrass.Value];
+        Check(
+            "the drowned floor grows seagrass",
+            seagrassCells is > 300 and < 3_500
+                && maxY[ids.Seagrass.Value] < TerrainGenerator.SeaLevel,
+            $"{seagrassCells:N0} seagrass cells (want 300-3,500), topmost at "
+            + $"y {maxY[ids.Seagrass.Value]} (want under the waterline at {TerrainGenerator.SeaLevel})");
 
         // The dusting has to be a fringe on the snowfield rather than a second one. Measured as its
         // share of all the white ground: with no band the edge either vanishes (a snow line drawn
@@ -6799,11 +6817,15 @@ public static class WorldAudit
         (StarterBlocks.LayerGlowcap, "glowcap"),
         (StarterBlocks.LayerMarshReed, "marsh_reed"),
 
-        // The moving pin: the LAST layer, by name. It has now caught three appends in the act —
+        // Mossy rubble by its own constant now seagrass went on after it — the moving pin handing
+        // its ground to a fixed one on the way past, as every run before it has.
+        (StarterBlocks.LayerMossyRubble, "mossy_rubble"),
+
+        // The moving pin: the LAST layer, by name. It has now caught FOUR appends in the act —
         // fifteen crop rows landing after "the last layer is bonemeal", the composter's four
-        // landing after black glass, and the berry bush's three after compost-ready — which is
-        // exactly what it is for. Keep it pointed at whatever is genuinely last.
-        ((ushort)(StarterBlocks.LayerCount - 1), "mossy_rubble"),
+        // landing after black glass, the berry bush's three after compost-ready, and seagrass
+        // after mossy rubble — which is exactly what it is for. Keep it pointed at the true end.
+        ((ushort)(StarterBlocks.LayerCount - 1), "seagrass"),
     ];
 
     /// <summary>
@@ -8997,6 +9019,226 @@ public static class WorldAudit
     }
 
     /// <summary>A bare world of empty chunks, with a stone floor laid across it.</summary>
+    /// <summary>
+    /// Everything waterlogging claims (#96), each claim with the arm that stops it passing broken.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛔ <b>The six landmines this feature was designed around are exactly what these
+    /// measure</b>: the state-table clobber (a river writing seagrass), the translucent-layer sweep,
+    /// the dry-quad cull against water, the drops guard swallowing wet forms, the bucket ray
+    /// stopping at a scoopable block, and bare air written where the sea should stay. Each was
+    /// control-tested by breaking the guard on purpose during the build and watching the arm here
+    /// go red naming it.</para>
+    /// <para>⚠ What this cannot see, said out loud: the placement click itself (client code — the
+    /// wet-form swap is table-level and checked, the click is played by hand), and whether the
+    /// water shell LOOKS like sea, which is eyes' work.</para>
+    /// </remarks>
+    private static List<string> WaterloggingFaults(
+        BlockRegistry registry, StarterBlocks.Ids ids, out string detail)
+    {
+        var faults = new List<string>();
+        var changed = new List<(int X, int Y, int Z)>();
+        var table = new FluidTable(registry);
+        var wet = new Waterlogging(registry);
+
+        var fenceDry = registry.ByName("driftoak_fence_0").Id;
+        var fenceWet = registry.ByName("driftoak_fence_0" + Waterlogging.Suffix).Id;
+        var slabDry = registry.ByName("stone_slab_lower").Id;
+        var slabWet = registry.ByName("stone_slab_lower" + Waterlogging.Suffix).Id;
+        var seagrass = registry.ByName("seagrass").Id;
+
+        // ── The pairing table is populated and points both ways ──────────────────────────────────
+        // 538 written as a literal on purpose: 130 shaped + 384 connected + 16 trapdoors + 4
+        // ladders + 4 chests. A clone loop that quietly skipped a family reads fewer.
+        if (wet.Pairs != 538)
+            faults.Add($"the waterlogging table pairs {wet.Pairs} forms, not the 538 registered");
+        if (!wet.TryWet(fenceDry, out var wetOfFence) || wetOfFence != fenceWet)
+            faults.Add("the fence's wet form is not its dry form's partner");
+        if (wet.DryOf(fenceWet) != fenceDry)
+            faults.Add("the wet fence does not point back at its dry form");
+        if (!wet.IsWet(seagrass) || !wet.DryOf(seagrass).IsAir)
+            faults.Add("seagrass is not an always-wet form whose dry form is air");
+        if (wet.IsWet(ids.Water))
+            faults.Add("water itself reads as waterlogged, which would scoop to nothing");
+        if (wet.TryWet(registry.ByName("door_east_south_lower").Id, out _))
+            faults.Add("a door has a wet form, and the genre refuses doors on purpose");
+
+        // ── ⛔ The state table is guarded: only true water answers for water ──────────────────────
+        // The sharpest line in the feature. Every wet id reads (Water, 8, still); if any of the
+        // 539 claimed the slot, a settling river would write that block into every cell it fills.
+        // Control (run during the build): removing the guard in FluidTable made this name seagrass.
+        if (table.Block(FluidKind.Water, FluidEngine.MaxLevel, falling: false) != ids.Water)
+            faults.Add($"the water state slot answers "
+                     + $"'{registry[table.Block(FluidKind.Water, FluidEngine.MaxLevel, false)].Name}', "
+                     + "so a settling river writes that block into the world");
+
+        // ── A wet block feeds the flow and is never overwritten by it ────────────────────────────
+        {
+            var world = FluidBox(registry, ids, 0, 0, 1);
+            Put(world, 0, 1, 0, fenceWet);
+
+            var engine = new FluidEngine(table);
+            engine.Touch(0, 1, 0);
+            engine.Settle(world, changed);
+
+            var beside = At(world, 1, 1, 0).Value;
+            if (table.KindOf(beside) != FluidKind.Water || table.IsSource(beside))
+                faults.Add("a wet fence fed nothing sideways, or fed a full source");
+            else if (table.LevelOf(beside) != FluidEngine.MaxLevel - 1)
+                faults.Add($"the wet fence's leak is level {table.LevelOf(beside)}, not 7");
+
+            if (At(world, 0, 1, 0) != fenceWet)
+                faults.Add("the flow overwrote the wet fence it was fed by");
+
+            // The control arm: the dry fence in the same seat feeds nothing at all.
+            var dry = FluidBox(registry, ids, 0, 0, 1);
+            Put(dry, 0, 1, 0, fenceDry);
+
+            var control = new FluidEngine(table);
+            control.Touch(0, 1, 0);
+            control.Settle(dry, changed);
+
+            if (!At(dry, 1, 1, 0).IsAir)
+                faults.Add("a DRY fence fed water sideways, so the leak check measures nothing");
+        }
+
+        // ── What an emptied cell keeps ────────────────────────────────────────────────────────────
+        if (wet.Remains(fenceWet) != ids.Water || wet.Remains(seagrass) != ids.Water)
+            faults.Add("taking a wet block does not leave the water it stood in");
+        if (!wet.Remains(slabDry).IsAir)
+            faults.Add("taking a dry slab leaves something other than air");
+
+        // The shed goes through the same answer: seagrass over a mined floor leaves sea, a reed
+        // over a mined floor leaves nothing — both arms, or the first is measuring the box.
+        {
+            var world = FluidBox(registry, ids, 0, 0, 1);
+            Put(world, 0, 1, 0, seagrass);
+
+            var supports = new SupportTable(registry);
+            var fell = new List<(int X, int Y, int Z, BlockId Was)>();
+            world.SetBlock(0, 0, 0, BlockId.Air);
+            supports.Shed(world, 0, 0, 0, fell);
+
+            if (At(world, 0, 1, 0) != ids.Water)
+                faults.Add($"shed seagrass left '{registry[At(world, 0, 1, 0)].Name}', not the sea");
+            if (!fell.Any(f => f.Was == seagrass))
+                faults.Add("the shed does not report the seagrass it took down");
+
+            var control = FluidBox(registry, ids, 0, 0, 1);
+            Put(control, 0, 1, 0, ids.MarshReed);
+            fell.Clear();
+            control.SetBlock(0, 0, 0, BlockId.Air);
+            supports.Shed(control, 0, 0, 0, fell);
+
+            if (!At(control, 0, 1, 0).IsAir)
+                faults.Add("a shed reed left something behind, so the seagrass arm measures nothing");
+        }
+
+        // ── The bucket ray takes a wet cell as a source, and refuses a dry one ───────────────────
+        {
+            var world = FluidBox(registry, ids, 0, 0, 1);
+            Put(world, 0, 1, 0, fenceWet);
+
+            var solid = registry.BuildSolidTable();
+            var eye = new Vector3(0.5f, 3.5f, 0.5f);
+            var down = new Vector3(0f, -1f, 0f);
+
+            if (!Buckets.TrySource(world, table, solid, eye, down, out var cell, out var kind)
+                || cell != (0, 1, 0) || kind != FluidKind.Water)
+                faults.Add("a bucket aimed at a wet fence cannot scoop the water inside it");
+
+            Put(world, 0, 1, 0, fenceDry);
+            if (Buckets.TrySource(world, table, solid, eye, down, out _, out _))
+                faults.Add("a bucket scooped water out of a DRY fence, so the wet arm measures nothing");
+        }
+
+        // ── The rewire keeps a fence wet, and joins wet to dry across the waterline ──────────────
+        {
+            var world = FluidBox(registry, ids, 0, 0, 1);
+            Put(world, 0, 1, 0, fenceWet);
+            Put(world, 1, 1, 0, fenceDry);
+
+            var connections = StarterBlocks.Connections(registry);
+
+            if (!connections.TryRewire(world, 0, 1, 0, out var become)
+                || !registry[become].Waterlogged
+                || (connections.MaskOf(become) & 1) == 0)
+                faults.Add("a wet fence does not stay wet while joining the dry one beside it");
+
+            if (!connections.TryRewire(world, 1, 1, 0, out var dryBecome)
+                || registry[dryBecome].Waterlogged
+                || (connections.MaskOf(dryBecome) & 2) == 0)
+                faults.Add("a dry fence does not join the wet one beside it, or got wet doing so");
+        }
+
+        // ── The mesher draws the block AND its water, and the dry quads survive the sea ──────────
+        {
+            var mesher = new ChunkMesher(registry);
+
+            var bare = FluidBox(registry, ids, 0, 0, 0);
+            Put(bare, 0, 1, 0, slabDry);
+            var dryMesh = mesher.Build(bare, new ChunkPos(0, 0, 0));
+            var dryQuads = mesher.LastModelQuads;
+            var dryLate = dryMesh is { } dm && dm.OpaqueIndexCount < dm.Indices.Length;
+
+            var wetBox = FluidBox(registry, ids, 0, 0, 0);
+            Put(wetBox, 0, 1, 0, slabWet);
+            mesher.Build(wetBox, new ChunkPos(0, 0, 0));
+            var wetQuads = mesher.LastModelQuads;
+
+            var overWater = FluidBox(registry, ids, 0, 0, 0);
+            Put(overWater, 0, 0, 0, ids.Water);
+            Put(overWater, 0, 1, 0, slabWet);
+            var seaMesh = mesher.Build(overWater, new ChunkPos(0, 0, 0));
+            var seaQuads = mesher.LastModelQuads;
+            var seaLate = seaMesh is { } sm && sm.OpaqueIndexCount < sm.Indices.Length;
+
+            if (dryLate)
+                faults.Add("a dry stone slab reached the translucent pass, which is the layer sweep "
+                         + "marking shared dry art as water");
+
+            // +5, not +6: the box floor is opaque, so the shell's bottom face is culled exactly as
+            // the dry slab's own bottom is — the first run of this check wanted 6 and the mesher
+            // was right. The shell culling face-for-face as a water cube IS the claim.
+            if (wetQuads != dryQuads + 5)
+                faults.Add($"a wet slab on the box floor meshes {wetQuads} model quads against the "
+                         + $"dry form's {dryQuads}; its water shell should add the 5 uncovered faces");
+            if (seaQuads != dryQuads + 6)
+                faults.Add($"a wet slab over open water meshes {seaQuads} model quads, wanting "
+                         + $"{dryQuads} + 1 uncovered underside + 5 shell faces — the slab's own "
+                         + "quads are being culled as if they were the water they stand in");
+            if (!seaLate)
+                faults.Add("a wet slab's water shell never reached the translucent pass");
+        }
+
+        // ── Drops: a wet form leaves its dry item, and seagrass answers only to shears ───────────
+        {
+            var items = StarterItems.Register(registry);
+            var drops = StarterItems.Drops(registry, items);
+
+            var fromWet = drops.Of(slabWet);
+            var fromDry = drops.Of(slabDry);
+            if (fromWet.IsEmpty || fromWet.Item != fromDry.Item)
+                faults.Add("a wet slab does not leave the dry slab's own item");
+            if (!drops.Of(ids.Water).IsEmpty)
+                faults.Add("water itself leaves an item, so the wet-drop arm measures nothing");
+
+            var shears = items.ByName("shears");
+            var grass = registry[seagrass];
+            if (!MiningRules.CanHarvest(grass, shears))
+                faults.Add("shears cannot lift seagrass");
+            if (MiningRules.CanHarvest(grass, null))
+                faults.Add("a bare hand harvests seagrass, which shears exist to gate");
+            if (drops.Of(seagrass).IsEmpty)
+                faults.Add("seagrass leaves nothing even to the tool that lifts it");
+        }
+
+        detail = $"{wet.Pairs} dry/wet pairs + seagrass; a wet fence leaks 7 and is never "
+               + "overwritten, shed cells keep their sea, the bucket scoops through a block, and "
+               + "a wet slab meshes its own quads plus exactly the water faces its seat exposes";
+        return faults;
+    }
+
     private static VoxelWorld FluidBox(
         BlockRegistry registry, StarterBlocks.Ids ids, int floorY, int chunksLow, int chunksHigh)
     {

@@ -584,8 +584,9 @@ public static class StarterBlocks
     public const ushort LayerMarshReed = LayerCobweb + 13;
     public const ushort LayerMoss = LayerCobweb + 14;
     public const ushort LayerMossyRubble = LayerCobweb + 15;
+    public const ushort LayerSeagrass = LayerCobweb + 16;
 
-    public const int LayerCount = LayerMossyRubble + 1;
+    public const int LayerCount = LayerSeagrass + 1;
 
     /// <summary>One anvil's name, by how worn it is and which way it lies.</summary>
     /// <remarks>
@@ -785,7 +786,10 @@ public static class StarterBlocks
         BlockId MarshReed,
 
         /// <summary>The wet shallow caves' floor covering.</summary>
-        BlockId Moss)
+        BlockId Moss,
+
+        /// <summary>The sea floor's meadow: the always-waterlogged plant that proved #96.</summary>
+        BlockId Seagrass)
     {
         /// <summary>Every rock an ore can form in. Ore replaces rock, whichever rock it is.</summary>
         public BlockId[] Rock => [Stone, Deepstone, Coralstone, Driftstone, Saltstone];
@@ -1142,6 +1146,23 @@ public static class StarterBlocks
             SupportFace = Faces.NegY,
             LightEmission = LightValue.PackBlock(5, 10, 9),
             Model = BlockModel.Cross(LayerGlowcap, tinted: false),
+        });
+
+        // ⛳ Seagrass — the first block that IS its own cell's water, and the reason waterlogging
+        // exists (#96). Waterlogged with no dry form registered: the flow reads its cell as a full
+        // still source, a head in it drowns, and taking the plant leaves the sea it stood in.
+        // Shears lift the plant itself; a bare hand gets nothing, which is exactly what the
+        // harvest-tier line already means. It stands only on the flooded floor — the placement
+        // rule adds "and only into a water source", which is the one thing SupportFace cannot say.
+        var seagrass = registry.Register(new BlockType
+        {
+            Name = "seagrass", Hardness = 0.05f, Solid = false, Opaque = false,
+            Sounds = SoundMaterial.Grass,
+            SupportFace = Faces.NegY,
+            HarvestClass = ToolClass.Shears, HarvestTier = 1,
+            Fluid = FluidKind.Water, FluidLevel = FluidEngine.MaxLevel, Waterlogged = true,
+            LightAttenuation = 1,
+            Model = BlockModel.Cross(LayerSeagrass, tinted: false),
         });
         var log = registry.Register(new BlockType
         {
@@ -1647,6 +1668,8 @@ public static class StarterBlocks
                     stage >= ComposterStages ? LayerCompostReady : LayerCompost, stage),
             });
 
+        RegisterWaterlogged(registry);
+
         return new Ids(
             stone, dirt, grass, sand, water, gravel, log, leaves, planks, coal, iron, bedrock,
             emberstone, vine, deepstone, coralstone, driftstone, saltstone, copper, gold, stormglass,
@@ -1654,7 +1677,81 @@ public static class StarterBlocks
             emberbloom, sunwort,
             rubble, glass, bricks, bench, furnace, furnaceLit, lava, wildCrops, berryBushRipe,
             mushroomBrown, mushroomRed, pumpkin, cobweb, ice, cactus, deadBush, glowcap, marshReed,
-            moss);
+            moss, seagrass);
+    }
+
+    /// <summary>
+    /// The waterlogged form of everything that can stand in the sea: same shape, same cost, same
+    /// art, plus the cell's own water.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ <b>One clone loop over the families rather than a wet flag on each registration</b>,
+    /// so the set of waterloggable things is a list here and nowhere else: slabs, stairs, the
+    /// connected families (fences, walls, panes), trapdoors, ladders and chests — the genre's own
+    /// set, minus what it also refuses (doors) and what fire forbids (torches, lanterns, campfires;
+    /// the glowcap is the underwater lamp). Every clone shares the dry form's model and layers, so
+    /// pack support and collision arrive with it.</para>
+    /// <para>⚠ <b>Registered after every dry family and before anything reads the registry</b> —
+    /// the clone asks the dry form for its facts, and <see cref="Waterlogging"/> pairs the two by
+    /// name once the registry seals.</para>
+    /// <para>⚠ <c>Derived</c>, not <c>Crafted</c>: no recipe makes one and no census finds one —
+    /// they exist the way a flowing tail exists, through play. Except seagrass, which generates
+    /// and is registered with the plants, not here.</para>
+    /// </remarks>
+    private static void RegisterWaterlogged(BlockRegistry registry)
+    {
+        foreach (var name in WaterloggableNames())
+        {
+            var dry = registry.ByName(name);
+
+            registry.Register(new BlockType
+            {
+                Name = name + Waterlogging.Suffix,
+                Solid = dry.Solid, Opaque = false, Translucent = dry.Translucent,
+                Hardness = dry.Hardness,
+                HarvestClass = dry.HarvestClass, HarvestTier = dry.HarvestTier,
+                Use = dry.Use, SupportFace = dry.SupportFace, PartnerFace = dry.PartnerFace,
+                Climbable = dry.Climbable, Sounds = dry.Sounds, Tint = dry.Tint,
+                Derived = true,
+                Fluid = FluidKind.Water, FluidLevel = FluidEngine.MaxLevel, Waterlogged = true,
+
+                // At least the water's own dimming, and never less than the dry form's: a wet
+                // stained pane keeps its glass depth, and open water through a wet fence goes
+                // dark at the sea's own rate.
+                LightAttenuation = Math.Max(1, dry.LightAttenuation),
+                Model = dry.Model,
+            });
+        }
+    }
+
+    /// <summary>Every dry block that has a waterlogged form, by name. The one list.</summary>
+    public static IEnumerable<string> WaterloggableNames()
+    {
+        foreach (var m in ShapedNames)
+        {
+            yield return $"{m}_slab_lower";
+            yield return $"{m}_slab_upper";
+
+            for (var i = 0; i < Placeable.Facings.Length; i++)
+            {
+                yield return $"{m}_stairs_{FacingNames[i]}_lower";
+                yield return $"{m}_stairs_{FacingNames[i]}_upper";
+            }
+        }
+
+        foreach (var m in ConnectedNames)
+        for (var mask = 0; mask < ConnectionFamily.Masks; mask++)
+            yield return $"{m}_{mask}";
+
+        for (var i = 0; i < Placeable.Facings.Length; i++)
+        {
+            foreach (var upper in (bool[])[false, true])
+            foreach (var open in (bool[])[false, true])
+                yield return TrapdoorName(i, upper, open);
+
+            yield return $"ladder_{FacingNames[i]}";
+            yield return $"chest_{FacingNames[i]}";
+        }
     }
 
     /// <summary>
@@ -2032,6 +2129,13 @@ public static class StarterBlocks
                 var open = registry.ByName(TrapdoorName(i, upper, open: true)).Id;
                 yield return (shut, open);
                 yield return (open, shut);
+
+                // A trapdoor under the sea swings between its own wet forms — the water in the
+                // cell is not a thing a hinge can empty.
+                var shutWet = registry.ByName(TrapdoorName(i, upper, open: false) + Waterlogging.Suffix).Id;
+                var openWet = registry.ByName(TrapdoorName(i, upper, open: true) + Waterlogging.Suffix).Id;
+                yield return (shutWet, openWet);
+                yield return (openWet, shutWet);
             }
 
             foreach (var hinge in Placeable.Hinges(Placeable.Facings[i]))
@@ -2339,6 +2443,10 @@ public static class StarterBlocks
     ];
 
     /// <summary>Each half-slab, and the whole block two of them become.</summary>
+    /// <remarks>
+    /// ⚠ The wet halves merge to the same dry whole: filling the cell squeezes the water out,
+    /// which is the genre's own rule — a full cube has no room left to be waterlogged.
+    /// </remarks>
     public static IEnumerable<(BlockId Slab, BlockId Full)> SlabMerges(BlockRegistry registry)
     {
         foreach (var (material, full) in SlabDoubles)
@@ -2346,6 +2454,8 @@ public static class StarterBlocks
             var whole = registry.ByName(full).Id;
             yield return (registry.ByName($"{material}_slab_lower").Id, whole);
             yield return (registry.ByName($"{material}_slab_upper").Id, whole);
+            yield return (registry.ByName($"{material}_slab_lower{Waterlogging.Suffix}").Id, whole);
+            yield return (registry.ByName($"{material}_slab_upper{Waterlogging.Suffix}").Id, whole);
         }
     }
 

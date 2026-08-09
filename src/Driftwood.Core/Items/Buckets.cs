@@ -57,14 +57,19 @@ public static class Buckets
 
             var block = world.GetBlock(here.X, here.Y, here.Z).Value;
 
+            // ⚠ Asked before the solid stop, because a waterlogged block is both: a targetable
+            // thing AND a full still source. Stopping first would make the water inside a wet
+            // fence unscoopable for ever, silently — the caller decides whether taking it leaves
+            // the dry block or nothing.
+            if (fluids.IsSource(block))
+            {
+                cell = here;
+                kind = fluids.KindOf(block);
+                return true;
+            }
+
             // Anything you could stand on stops the ray, exactly as it stops the crosshair.
             if (solid[block]) return false;
-
-            if (!fluids.IsSource(block)) continue;
-
-            cell = here;
-            kind = fluids.KindOf(block);
-            return true;
         }
 
         return false;

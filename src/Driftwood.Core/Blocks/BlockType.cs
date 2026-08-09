@@ -304,6 +304,23 @@ public sealed class BlockType
     public bool FluidSource => Fluid != FluidKind.None && FluidLevel >= FluidEngine.MaxLevel && !FluidFalling;
 
     /// <summary>
+    /// True for a block that shares its cell with the fluid it declares — a fence standing in the
+    /// sea, and the seagrass that is never anywhere else.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ <b>The genre's <c>waterlogged=true</c> is a distinct palette entry, which is this
+    /// codebase's every-state-is-an-id rule arriving from the other direction.</b> A waterlogged
+    /// form declares <see cref="Fluid"/> and a full <see cref="FluidLevel"/> exactly as water does,
+    /// so the flow, drowning, swimming and light attenuation all treat the cell as water without a
+    /// line of new engine — what this flag adds is "and it is also a real block", which is the fact
+    /// the state table, the mesher's translucent-layer sweep and the drops table each need to hear,
+    /// because each of them otherwise mistakes the block for the fluid it stands in.</para>
+    /// <para>⛔ Never on a full cube: a filled cell has no room left for water, and
+    /// <see cref="BlockRegistry.Register"/> refuses the combination by name.</para>
+    /// </remarks>
+    public bool Waterlogged { get; init; }
+
+    /// <summary>
     /// True when a fluid or a placed block may take this cell without asking.
     /// </summary>
     /// <remarks>

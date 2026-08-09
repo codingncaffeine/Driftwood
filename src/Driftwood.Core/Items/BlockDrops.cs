@@ -40,7 +40,12 @@ public sealed class BlockDrops
             // the table below. Every level of every fluid is its own registered block, so writing
             // them out would be a list somebody has to extend by hand the day a third fluid lands —
             // and a forgotten row would not fail loudly, it would hand out an item that never existed.
-            if (blocks[id].Fluid != Blocks.FluidKind.None)
+            //
+            // ⛔ A WATERLOGGED BLOCK DECLARES A FLUID AND IS NOT ONE. Without its exception, every
+            // wet fence and slab in the game would silently drop nothing — the exact quiet failure
+            // this guard warns about, arriving through the guard itself. A wet form leaves its dry
+            // item, which ItemRegistry.Seal already answers through ForBlock.
+            if (blocks[id].Fluid != Blocks.FluidKind.None && !blocks[id].Waterlogged)
             {
                 _item[id] = ItemId.None;
                 _count[id] = 0;

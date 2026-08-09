@@ -138,6 +138,7 @@ public sealed class TerrainGenerator
     private readonly int _seedClay;
     private readonly int _seedMeadow;
     private readonly int _seedDune;
+    private readonly int _seedSeagrass;
     private readonly int _seedGlowcap;
     private readonly int _seedReed;
     private readonly int _seedMoss;
@@ -206,6 +207,7 @@ public sealed class TerrainGenerator
         _seedClay = seed.Derive("deposit.clay");
         _seedMeadow = seed.Derive("decor.meadowgrass");
         _seedDune = seed.Derive("decor.dunes");
+        _seedSeagrass = seed.Derive("decor.seagrass");
         _seedGlowcap = seed.Derive("decor.glowcap");
         _seedReed = seed.Derive("decor.reeds");
         _seedMoss = seed.Derive("decor.moss");
@@ -973,6 +975,21 @@ public sealed class TerrainGenerator
             var beach = surface <= SeaLevel + 2;
             var top = TopOf(wx, wz, surface, beach);
 
+            // ⛳ Seagrass first (#96): the flooded floor's own meadow, anywhere the sea stands at
+            // least two deep over the sand. A slow patch field decides WHERE beds grow and a fast
+            // per-column roll which columns stand a blade — the meadow discipline, and the sea
+            // floor is broad enough that the reed lesson about patch fields on strips does not
+            // bite. The blade replaces a WATER cell, which its own registration hands straight
+            // back: seagrass is waterlogged, so the sea it stands in never has a hole in it.
+            if (surface + 2 <= SeaLevel)
+            {
+                if (Noise.Fbm2(wx / 40f, wz / 40f, _seedSeagrass, 2) > 0.10f
+                    && Noise.Value2(wx, wz, _seedSeagrass + 7) < 0.22f)
+                    PlaceIntoWater(chunk, ox, oy, oz, wx, surface + 1, wz, _ids.Seagrass);
+
+                continue;   // the drowned floor grows nothing else
+            }
+
             // ⛳ The marsh reed first: ground sitting exactly at the waterline, soaked climate,
             // sand or grass underfoot — two or three joints of cane on the reeds' own derived
             // seed, every chunk in the stack keeping its own share of cells (a reed straddles
@@ -1335,6 +1352,20 @@ public sealed class TerrainGenerator
         var lz = wz - oz;
         if ((uint)lx >= Chunk.Size || (uint)ly >= Chunk.Size || (uint)lz >= Chunk.Size) return;
         if (!chunk.Get(lx, ly, lz).IsAir) return;
+        chunk.Set(lx, ly, lz, id);
+    }
+
+    /// <summary>
+    /// Writes a waterlogged plant only over the water it lives in, so a cave mouth or an iced lid
+    /// under the sea never grows a blade in its air pocket.
+    /// </summary>
+    private void PlaceIntoWater(Chunk chunk, int ox, int oy, int oz, int wx, int wy, int wz, BlockId id)
+    {
+        var lx = wx - ox;
+        var ly = wy - oy;
+        var lz = wz - oz;
+        if ((uint)lx >= Chunk.Size || (uint)ly >= Chunk.Size || (uint)lz >= Chunk.Size) return;
+        if (chunk.Get(lx, ly, lz).Value != _ids.Water.Value) return;
         chunk.Set(lx, ly, lz, id);
     }
 

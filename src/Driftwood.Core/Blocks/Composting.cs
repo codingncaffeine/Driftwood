@@ -31,6 +31,7 @@ public static class Composting
         ["berries"] = 0.3f,
         ["cactus"] = 0.5f,
         ["marsh_reed"] = 0.5f,
+        ["seagrass"] = 0.3f,
         ["moss"] = 0.65f,
         ["glowcap"] = 0.65f,
         ["mushroom_brown"] = 0.65f,

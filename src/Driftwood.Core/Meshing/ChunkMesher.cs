@@ -141,15 +141,52 @@ public sealed class ChunkMesher
         // same shape as the drowning test that read water off three flags lava also satisfied.
         // Stained glass is the second thing that wants this pass and is not a fluid at all, so the
         // question is asked outright now. See BlockType.Translucent.
+        //
+        // ⛔⛔ AND A WATERLOGGED BLOCK IS THE THIRD SHAPE OF THE SAME MISTAKE, from the other side:
+        // it declares Fluid = Water, but its model's layers are the DRY block's own art, shared with
+        // every dry sibling — so sweeping them in here would send every stone slab in the world to
+        // the translucent pass. Only the water in the cell blends, and water's layer is already
+        // marked by water itself. A wet stained pane still lands here through Translucent.
         _lateLayer = new bool[ushort.MaxValue];
         for (var id = 1; id < registry.Count; id++)
         {
             var type = registry[(ushort)id];
-            if (type.Fluid != FluidKind.Water && !type.Translucent) continue;
+            if ((type.Fluid != FluidKind.Water || type.Waterlogged) && !type.Translucent) continue;
 
             foreach (var quad in type.Model.Quads) _lateLayer[quad.Layer] = true;
         }
+
+        // The water a waterlogged cell also holds: six flush cube faces at water's own layers and
+        // tint, emitted beside the block's model. Built exactly as water's cube is, so the shell
+        // and the open sea it borders are one surface.
+        var water = registry.ByName("water");
+        _waterSrc = water.Id.Value;
+        _waterShell = BlockModel.Cube(
+            water.TopLayer, water.SideLayer, water.BottomLayer, tinted: true).Quads;
+
+        _dryAlias = new ushort[registry.Count];
+        var pairs = new Waterlogging(registry);
+        for (var id = 0; id < registry.Count; id++)
+            _dryAlias[id] = pairs.DryOf(new BlockId((ushort)id)).Value;
     }
+
+    /// <summary>The water source id, which is what a wet cell's shell culls and tints as.</summary>
+    private readonly ushort _waterSrc;
+
+    /// <summary>Six flush water faces, emitted for every waterlogged cell.</summary>
+    private readonly ModelQuad[] _waterShell;
+
+    /// <summary>
+    /// What each block culls its own model quads as: itself, or its dry form when waterlogged.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ A wet slab's fluid kind matches the sea around it, so culling its STONE quads as the wet
+    /// id hands them to <see cref="FluidTable.HiddenBy"/> — and the slab's underside vanishes seen
+    /// from underwater. The dry alias asks the question the quads are actually about, while the
+    /// water shell culls as water and keeps its seams interior. Seagrass aliases to air, which is
+    /// right twice: its crossed quads carry no cull face, and nothing hides behind a plant.
+    /// </remarks>
+    private readonly ushort[] _dryAlias;
 
     /// <summary>
     /// Finds this block's tint colour and returns its index in the chunk's palette.
@@ -552,6 +589,10 @@ public sealed class ChunkMesher
             var here = _snapshot.Get(x, y, z);
             if (here == 0 || _greedy.FullCube[here]) continue;
 
+            // The block's own quads ask their cull question as the DRY form — a wet slab's stone
+            // face against the sea is a real surface, seen through the water in front of it.
+            var cullAs = _dryAlias[here];
+
             var quads = _models[here].Quads;
             foreach (var quad in quads)
             {
@@ -559,10 +600,24 @@ public sealed class ChunkMesher
                 {
                     var cn = Faces.Normals[quad.CullFace];
                     var beyond = _snapshot.Get(x + cn.X, y + cn.Y, z + cn.Z);
-                    if (Hidden(here, beyond)) continue;
+                    if (Hidden(cullAs, beyond)) continue;
                 }
 
                 EmitModelQuad(quad, here, x, y, z, ox, oy, oz);
+            }
+
+            // And the water the cell also holds, culled and tinted as water — so a wet cell
+            // against the open sea keeps the seam interior, and one standing in air wears the
+            // sea's own surface on every exposed side.
+            if (!_fluids.IsWet(here)) continue;
+
+            foreach (var quad in _waterShell)
+            {
+                var cn = Faces.Normals[quad.CullFace];
+                var beyond = _snapshot.Get(x + cn.X, y + cn.Y, z + cn.Z);
+                if (Hidden(_waterSrc, beyond)) continue;
+
+                EmitModelQuad(quad, _waterSrc, x, y, z, ox, oy, oz);
             }
         }
     }
