@@ -304,6 +304,10 @@ public static class StarterRecipes
             mirrored: false, station: CraftStation.Bench);
         Shaped("cart", "cart", 1, ["I I", "III"], mirrored: false, station: CraftStation.Bench);
 
+        // ⛳ The cart's own consumer (#97): a chest on axles. The hold spills where it stood when
+        // the cart comes apart, the chest's rule — never packed inside the item.
+        LooseAt("cargo cart", "cargo_cart", 1, CraftStation.Bench, "cart", "chest");
+
         // ⚠ The first thing azurite has ever been for. Six ores come up out of the ground and this
         // was the one with no recipe anywhere in the tree — a mineral a player mines four of and
         // can do nothing whatever with, which is a hole rather than a decision. Set round a

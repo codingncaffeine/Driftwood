@@ -1,5 +1,6 @@
 using System.Numerics;
 using Driftwood.Core.Blocks;
+using Driftwood.Core.Items;
 using Driftwood.Core.World;
 
 namespace Driftwood.Core.Entities;
@@ -22,6 +23,14 @@ public sealed class Cart
 
     /// <summary>Blocks per second along the parameter: positive toward B.</summary>
     public float Velocity;
+
+    /// <summary>The hold: a chest riding the axles, or null for a rider's cart.</summary>
+    /// <remarks>
+    /// ⛳ The cargo IS the kind — a cart with a hold opens as a chest, cannot be boarded, and
+    /// wears the box on its back. One field answers all three questions, and being a real
+    /// <see cref="Chest"/> means the chest screen works the hold with nothing new taught to it.
+    /// </remarks>
+    public Chest? Cargo;
 
     /// <summary>Where the wheels are, in world blocks.</summary>
     public Vector3 Position(RailForm form) => new Vector3(X, Y, Z) + RailForms.At(form, T);
@@ -60,9 +69,9 @@ public sealed class CartSystem
     public List<Cart> All { get; } = [];
 
     /// <summary>Puts a cart on a rail, resting at the middle of its line.</summary>
-    public Cart Place(int x, int y, int z)
+    public Cart Place(int x, int y, int z, bool cargo = false)
     {
-        var cart = new Cart { X = x, Y = y, Z = z };
+        var cart = new Cart { X = x, Y = y, Z = z, Cargo = cargo ? new Chest() : null };
         All.Add(cart);
         return cart;
     }

@@ -77,6 +77,16 @@ public sealed class ItemType
     /// <summary>What this puts down, and how it decides which way up. Null when it places nothing.</summary>
     public Placeable? Places { get; init; }
 
+    /// <summary>
+    /// True when using this puts an ENTITY into the world rather than a block — the carts.
+    /// </summary>
+    /// <remarks>
+    /// The client owns the gesture (a cart is clicked onto a rail, not built into a cell), so
+    /// this flag is how anything headless — the recipe report's consumption sweep — knows the
+    /// item's purpose is placement, exactly as <see cref="Places"/> says it for blocks.
+    /// </remarks>
+    public bool PlacesEntity { get; init; }
+
     /// <summary>True when this draws as a cube rather than as a flat sprite.</summary>
     /// <remarks>
     /// Not the same question as <see cref="Places"/>. A torch is placeable and is drawn flat, because

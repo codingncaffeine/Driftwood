@@ -531,6 +531,9 @@ public static class BlockTextureSet
 
         new("loom_top", "textures/block/loom_top.png", false),
         new("loom_side", "textures/block/loom_side.png", false),
+
+        new("cargo_cart_icon", "textures/item/chest_minecart.png", true,
+            "textures/items/minecart_chest.png"),
     ];
 
     /// <summary>
@@ -1536,6 +1539,8 @@ public static class BlockTextureSet
             // thread's colours — over a paler timber frame than the bench's.
             StarterBlocks.LayerLoomTop => TileGen.Tilled(1383, 214, 206, 188),
             StarterBlocks.LayerLoomSide => TileGen.Panel(TileGen.Planks(1384, 168, 132, 92), 2, 28),
+
+            StarterBlocks.LayerCargoCartIcon => TileGen.IconCart(1374, laden: true),
 
             _ when layer >= StarterBlocks.LayerGateFirst
                    && layer < StarterBlocks.LayerGateFirst + 10 =>

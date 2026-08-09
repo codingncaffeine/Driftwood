@@ -3777,6 +3777,11 @@ public static class WorldAudit
             DayTime = 0.375f,
         };
 
+        // A plain cart and a laden one, so CRGO proves it hands the hold to the RIGHT cart —
+        // and the two-slot hold exercises the different-size read the chests already allow.
+        state.Carts.Add((5, 65, 5, 0.5f, 0f, null));
+        state.Carts.Add((6, 65, 5, 0.25f, -2f, [items.Stack("brick", 19), items.Stack("paper", 3)]));
+
         var path = Path.Combine(Path.GetTempPath(), $"driftwood-audit-{Environment.ProcessId}.dws");
 
         try
@@ -3841,6 +3846,22 @@ public static class WorldAudit
                 faults.Add($"{back.PendingEdits} edits are waiting for a chunk of {world.Edits.Count}");
 
             if (back.Changed) faults.Add("a world is marked changed the instant it is loaded, so every load autosaves");
+
+            if (into.Carts.Count != 2)
+            {
+                faults.Add($"{into.Carts.Count} carts came back of 2");
+            }
+            else
+            {
+                if (into.Carts[0].Cargo is not null)
+                    faults.Add("the plain cart came back carrying a hold");
+
+                if (into.Carts[1].Cargo is not { } hold)
+                    faults.Add("the laden cart came back empty-handed");
+                else if (items[hold[0].Item].Name != "brick" || hold[0].Count != 19
+                         || items[hold[1].Item].Name != "paper" || hold[1].Count != 3)
+                    faults.Add("the hold's stacks did not come back by name and count");
+            }
 
             if (!backFurnaces.TryGet(3, 65, 3, out var backFurnace))
             {
@@ -7236,13 +7257,16 @@ public static class WorldAudit
         (StarterBlocks.LayerBlastcaskBottom, "blastcask_bottom"),
         (StarterBlocks.LayerSmithingSide, "smithing_table_side"),
 
+        // The loom's side by its own constant now the cargo cart went on after it.
+        (StarterBlocks.LayerLoomSide, "loom_side"),
+
         // The moving pin: the LAST layer, by name. It has caught NINE appends in the act —
         // fifteen crop rows landing after "the last layer is bonemeal", the composter's four
         // landing after black glass, the berry bush's three after compost-ready, seagrass after
         // mossy rubble, the signal kit after seagrass, the track after the gates, the fried egg
         // after the cart, the cask after the slime block, and the stations after the cask.
         // Keep it pointed at the true end.
-        ((ushort)(StarterBlocks.LayerCount - 1), "loom_side"),
+        ((ushort)(StarterBlocks.LayerCount - 1), "cargo_cart_icon"),
     ];
 
     /// <summary>
@@ -9744,6 +9768,44 @@ public static class WorldAudit
             for (var i = 0; i < 40; i++) carts.Step(world, 0.05f);
             if (parked.X != 0 || parked.T is < 0.45f or > 0.55f)
                 faults.Add("a cart nobody pushed moved on its own");
+        }
+
+        // ── The hold (#97): cargo rides the cart, and a mined rail hands both back ──────────
+        {
+            var world = Box();
+            for (var x = 0; x <= 4; x++) Lay(world, x, 0, railX);
+
+            var carts = new CartSystem(rails);
+            var laden = carts.Place(0, 1, 0, cargo: true);
+
+            if (laden.Cargo is null)
+            {
+                faults.Add("a cart placed with cargo has no hold");
+            }
+            else
+            {
+                // Count is the claim; which item is the save round-trip's, tested by name there.
+                laden.Cargo.Contents[0] = new ItemStack(new ItemId(1), 12);
+                laden.Velocity = 3f;
+                for (var i = 0; i < 200; i++) carts.Step(world, 0.05f);
+
+                if (laden.Cargo.Contents[0].Count != 12)
+                    faults.Add("rolling spilled the hold");
+
+                // Mine the rail out from under it: homeless, with the hold still aboard —
+                // spilling is the caller's act, never the roll's.
+                world.SetBlock(laden.X, 1, laden.Z, BlockId.Air);
+                var homeless = carts.Step(world, 0.05f);
+
+                if (homeless is null || !homeless.Contains(laden))
+                    faults.Add("a laden cart whose rail was mined is not homeless");
+                else if (laden.Cargo.Contents[0].Count != 12)
+                    faults.Add("losing the rail emptied the hold before anybody could spill it");
+            }
+
+            // And a plain cart has no hold at all — the kind IS the field.
+            if (carts.Place(1, 1, 0).Cargo is not null)
+                faults.Add("a plain cart was born carrying a chest");
         }
 
         {

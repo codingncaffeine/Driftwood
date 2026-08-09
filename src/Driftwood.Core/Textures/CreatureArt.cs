@@ -79,6 +79,9 @@ public static class CreatureArt
         // the roster — but painted through the same brush as everything else that moves.
         ["cart"] = new((104, 106, 112), (134, 136, 142), (62, 64, 70), (122, 96, 60), 0.18f, 0.05f),
 
+        // The cargo cart (#97): the same iron, warmed by the timber of the hold riding in it.
+        ["cargo_cart"] = new((110, 104, 96), (140, 132, 118), (64, 60, 54), (146, 112, 64), 0.2f, 0.06f),
+
         // ⛳ THE HOSTILES, and the palette is where they are told apart. All three wear the same two
         // nets the beasts do — that is the point of a net — so if they read as one another it is
         // because the colours failed, not the geometry. Grain is turned up on all of them: a rotted

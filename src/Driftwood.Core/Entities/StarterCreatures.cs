@@ -80,6 +80,21 @@ public static class StarterCreatures
                 Box(-4f, 0f, 3f, 8f, 1f, 2f, 44, 49)),        // back axle
         ]);
 
+    /// <summary>The cargo cart (#97): the same tub with the hold riding in it.</summary>
+    public static CreatureModel CargoCart() => new(
+        "cargo_cart", 64, 64,
+        [
+            Bone("body", "", new Vector3(0f, 2f, 0f),
+                Box(-5f, 1f, -7f, 10f, 2f, 14f, 0, 0),
+                Box(-5f, 3f, -7f, 1f, 5f, 14f, 0, 16),
+                Box(4f, 3f, -7f, 1f, 5f, 14f, 30, 16, mirror: true),
+                Box(-5f, 3f, -8f, 10f, 5f, 1f, 0, 40),
+                Box(-5f, 3f, 7f, 10f, 5f, 1f, 22, 40),
+                Box(-4f, 0f, -5f, 8f, 1f, 2f, 44, 46),
+                Box(-4f, 0f, 3f, 8f, 1f, 2f, 44, 49),
+                Box(-4f, 3f, -5f, 8f, 6f, 10f, 0, 48)),       // the chest in the tub
+        ]);
+
     public static CreatureModel Cow() => new(
         "cow", 64, 32,
         [

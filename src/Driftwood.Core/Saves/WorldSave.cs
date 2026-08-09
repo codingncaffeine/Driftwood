@@ -59,11 +59,13 @@ public sealed record WorldState(
 
     /// <summary>The carts standing on the track, both ways through a save (#28).</summary>
     /// <remarks>
-    /// A cart is (cell, parameter, signed speed) and nothing else — its position is derived from
-    /// the rail under it, exactly as the world is derived from the seed. The rider is never
-    /// saved: whoever was aboard steps off as the world closes, which is also the genre's rule.
+    /// A cart is (cell, parameter, signed speed) — its position is derived from the rail under
+    /// it, exactly as the world is derived from the seed. The rider is never saved: whoever was
+    /// aboard steps off as the world closes, which is also the genre's rule. ⛳ A cargo cart's
+    /// hold rides here too, but is WRITTEN as its own CRGO section — fields are positional and
+    /// sections carry their length, so an old build skips the holds and still reads the carts.
     /// </remarks>
-    public List<(int X, int Y, int Z, float T, float Velocity)> Carts { get; } = [];
+    public List<(int X, int Y, int Z, float T, float Velocity, ItemStack[]? Cargo)> Carts { get; } = [];
 }
 
 /// <summary>
@@ -275,9 +277,13 @@ public static class WorldSave
 
             // Built before anything is written, because the palette has to be at the front of the
             // file and it is not known until everything that uses it has been walked.
+            // ⛔ The cargo holds belong in this walk too — built inline in the section block, their
+            // names entered the palette AFTER it had been written, and every stack came back as
+            // nothing. The save check caught it the day it was written.
             var edits = EditBytes(state.World, blocks);
             var furnaces = FurnaceBytes(state.Furnaces, items, state.Catalogue);
             var chests = ChestBytes(state.Chests, items, state.Catalogue);
+            var cargo = CargoBytes(state.Carts, items, state.Catalogue);
             var player = PlayerBytes(state, items);
 
             var path = PathFor(name);
@@ -322,7 +328,7 @@ public static class WorldSave
                 SaveSection.Write(into, "CART", Bytes(carts =>
                 {
                     carts.Write(state.Carts.Count);
-                    foreach (var (x, y, z, t, velocity) in state.Carts)
+                    foreach (var (x, y, z, t, velocity, _) in state.Carts)
                     {
                         carts.Write(x);
                         carts.Write(y);
@@ -331,6 +337,11 @@ public static class WorldSave
                         carts.Write(velocity);
                     }
                 }));
+
+                // ⛳ The cargo carts' holds, as their OWN section rather than new fields in CART:
+                // fields are positional and sections carry their length, so a build from before
+                // cargo skips the holds and still reads every cart as a plain one.
+                SaveSection.Write(into, "CRGO", cargo);
             }
 
             File.Move(temporary, path, overwrite: true);
@@ -457,6 +468,7 @@ public static class WorldSave
             byte[]? edits = null;
             byte[]? furnaces = null;
             byte[]? chests = null;
+            byte[]? cargo = null;
             byte[]? player = null;
             byte[]? unlocks = null;
 
@@ -493,9 +505,12 @@ public static class WorldSave
                         for (var i = 0; i < count; i++)
                             into.Carts.Add((
                                 carts.ReadInt32(), carts.ReadInt32(), carts.ReadInt32(),
-                                carts.ReadSingle(), carts.ReadSingle()));
+                                carts.ReadSingle(), carts.ReadSingle(), null));
                         break;
                     }
+
+                    // The holds wait for the item palette, exactly as the chests do.
+                    case "CRGO": cargo = payload; break;
 
                     // Written by a newer build than this one. Skipped, and deliberately not an
                     // error: the length said how far, which is the whole reason sections carry one.
@@ -511,6 +526,7 @@ public static class WorldSave
             if (edits is not null) ReadEdits(Reader(edits), into.World, toBlock);
             if (furnaces is not null) ReadFurnaces(Reader(furnaces), into.Furnaces, toItem);
             if (chests is not null) ReadChests(Reader(chests), into.Chests, toItem);
+            if (cargo is not null) ReadCargo(Reader(cargo), into, toItem);
             if (player is not null) ReadPlayer(Reader(player), into, toItem);
 
             if (unlocks is not null)
@@ -742,6 +758,57 @@ public static class WorldSave
                 var stack = Stack(from, toItem);
                 if (slot < Chest.Slots) chest.Contents[slot] = stack;
             }
+        }
+    }
+
+    /// <summary>
+    /// The cargo carts' holds, keyed on each cart's index in the CART list — which is written
+    /// in All order and read back in it. Stacks go by NAME through the item palette, the
+    /// chests' own discipline.
+    /// </summary>
+    private static byte[] CargoBytes(
+        List<(int X, int Y, int Z, float T, float Velocity, ItemStack[]? Cargo)> carts,
+        Palette items, ItemRegistry catalogue) => Bytes(into =>
+    {
+        var laden = 0;
+        foreach (var cart in carts)
+            if (cart.Cargo is not null) laden++;
+
+        into.Write(laden);
+
+        for (var i = 0; i < carts.Count; i++)
+        {
+            if (carts[i].Cargo is not { } hold) continue;
+
+            into.Write(i);
+            into.Write(hold.Length);
+            foreach (var stack in hold) Stack(into, stack, items, catalogue);
+        }
+    });
+
+    /// <summary>Reattaches each saved hold to its cart, by the cart's own index in CART.</summary>
+    private static void ReadCargo(BinaryReader from, WorldState into, int[] toItem)
+    {
+        var laden = from.ReadInt32();
+
+        for (var i = 0; i < laden; i++)
+        {
+            var index = from.ReadInt32();
+            var slots = from.ReadInt32();
+            var hold = new ItemStack[Chest.Slots];
+
+            // Written by a build whose holds were a different size: read what is there and
+            // keep what fits, the chests' own rule.
+            for (var slot = 0; slot < slots; slot++)
+            {
+                var stack = Stack(from, toItem);
+                if (slot < Chest.Slots) hold[slot] = stack;
+            }
+
+            if (index < 0 || index >= into.Carts.Count) continue;
+
+            var (x, y, z, t, v, _) = into.Carts[index];
+            into.Carts[index] = (x, y, z, t, v, hold);
         }
     }
 

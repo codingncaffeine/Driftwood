@@ -621,7 +621,10 @@ public static class StarterBlocks
     public const ushort LayerLoomTop = LayerCobweb + 46;
     public const ushort LayerLoomSide = LayerCobweb + 47;
 
-    public const int LayerCount = LayerLoomSide + 1;
+    // The cargo cart's icon (#97) — the cart's own drawing with the hold riding in it.
+    public const ushort LayerCargoCartIcon = LayerCobweb + 48;
+
+    public const int LayerCount = LayerCargoCartIcon + 1;
 
     /// <summary>One anvil's name, by how worn it is and which way it lies.</summary>
     /// <remarks>

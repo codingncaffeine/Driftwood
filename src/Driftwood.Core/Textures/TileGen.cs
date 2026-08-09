@@ -2848,7 +2848,7 @@ public static class TileGen
     }
 
     /// <summary>The cart as an item: an open iron box on wheels, side on.</summary>
-    public static byte[] IconCart(int seed)
+    public static byte[] IconCart(int seed, bool laden = false)
     {
         var t = new byte[BytesPerTile];
 
@@ -2865,6 +2865,13 @@ public static class TileGen
                 Put(t, x, y, Clamp(108 + grain), Clamp(110 + grain), Clamp(116 + grain), 255);
             else if (hollow)
                 Put(t, x, y, Clamp(52 + grain), Clamp(54 + grain), Clamp(58 + grain), 255);
+
+            // Laden, the hold rides in the tub — a timber box standing proud of the walls.
+            if (laden && y is >= 2 and <= 9 && x is >= 3 and <= 12)
+            {
+                var lid = y is 2 or 3 ? 16 : 0;
+                Put(t, x, y, Clamp(146 + lid + grain), Clamp(112 + lid + grain), Clamp(64 + grain), 255);
+            }
 
             // Two wheels below the tub.
             var wheel = (x - 4) * (x - 4) + (y - 13) * (y - 13) <= 2

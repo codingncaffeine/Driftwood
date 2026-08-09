@@ -240,7 +240,14 @@ public static class StarterItems
         items.Register(new ItemType
         {
             Name = "cart", Label = "cart", IconLayer = StarterBlocks.LayerCartIcon,
-            MaxStack = 1,
+            MaxStack = 1, PlacesEntity = true,
+        });
+
+        // And the cart with a hold (#97): a chest on axles, the cart item's own consumer.
+        items.Register(new ItemType
+        {
+            Name = "cargo_cart", Label = "cargo cart",
+            IconLayer = StarterBlocks.LayerCargoCartIcon, MaxStack = 1, PlacesEntity = true,
         });
         Block(items, blocks, "moss", "moss", StarterBlocks.LayerMoss);
         Block(items, blocks, "mossy_rubble", "mossy rubble", StarterBlocks.LayerMossyRubble);

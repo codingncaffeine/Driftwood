@@ -1148,6 +1148,11 @@ public sealed class ClientHost : IDisposable
                 new CreatureKind("cart", "cart", default, "cart", []),
                 StarterCreatures.Cart(), "ours", "", 0, 0));
 
+            // And the cargo cart beside it: the same tub with the hold riding in it (#97).
+            resolved.Add(new CreatureSet.Resolved(
+                new CreatureKind("cargo_cart", "cargo_cart", default, "cargo_cart", []),
+                StarterCreatures.CargoCart(), "ours", "", 0, 0));
+
             // ⚠ The renderer only. The herd is made when the player spawns, because a herd made here
             // is one SpawnCreatures finds already present and declines to fill — which is a world
             // with every animal loaded, none of them placed, and nothing anywhere saying so.
@@ -1788,11 +1793,22 @@ public sealed class ClientHost : IDisposable
         _savedCreatures.AddRange(state.Creatures);
 
         // The carts stand back on the track exactly where they were; nobody is aboard, which is
-        // also how they were written.
+        // also how they were written. A hold comes back as the chest it was.
         _cartSystem.All.Clear();
         _ridingCart = null;
-        foreach (var (cx, cy, cz, t, velocity) in state.Carts)
-            _cartSystem.All.Add(new Cart { X = cx, Y = cy, Z = cz, T = t, Velocity = velocity });
+        foreach (var (cx, cy, cz, t, velocity, hold) in state.Carts)
+        {
+            var cart = new Cart { X = cx, Y = cy, Z = cz, T = t, Velocity = velocity };
+
+            if (hold is not null)
+            {
+                cart.Cargo = new Chest();
+                for (var slot = 0; slot < hold.Length && slot < Chest.Slots; slot++)
+                    cart.Cargo.Contents[slot] = hold[slot];
+            }
+
+            _cartSystem.All.Add(cart);
+        }
 
         // ⚠ Brought up to date rather than left to work itself out. Poll announces everything the
         // pockets can pay for that has not been announced, so a world loaded with a full inventory
@@ -1838,7 +1854,9 @@ public sealed class ClientHost : IDisposable
         if (_herd is not null) state.Creatures.AddRange(_herd.Capture());
 
         foreach (var cart in _cartSystem.All)
-            state.Carts.Add((cart.X, cart.Y, cart.Z, cart.T, cart.Velocity));
+            state.Carts.Add((
+                cart.X, cart.Y, cart.Z, cart.T, cart.Velocity,
+                cart.Cargo is { } hold ? [.. hold.Contents] : null));
 
         return state;
     }
@@ -2106,7 +2124,7 @@ public sealed class ClientHost : IDisposable
             foreach (var cart in homeless)
             {
                 var at = new Vector3(cart.X + 0.5f, cart.Y + 0.5f, cart.Z + 0.5f);
-                _drops.Drop(new ItemStack(_items.ByName("cart").Id, 1), at);
+                DropCart(cart, at);
                 if (_ridingCart == cart) _ridingCart = null;
             }
         }
@@ -3477,6 +3495,25 @@ public sealed class ClientHost : IDisposable
 
         _hudScreen.Cut = was is null ? -1 : _hudScreen.Cuts.IndexOf(was);
         if (_hudScreen.Cut < 0 && _hudScreen.Cuts.Count > 0) _hudScreen.Cut = 0;
+    }
+
+    /// <summary>A cargo cart's hold: the chest screen, on a chest that happens to roll.</summary>
+    private void OpenCartHold(Cart cart, Chest hold)
+    {
+        _hudScreen.Kind = HudScreenKind.Chest;
+        _hudScreen.TabNames = [];
+        _hudScreen.Tab = 0;
+        _hudScreen.Grid = null;
+        _laidOut = null;
+        _hudScreen.Stored = hold;
+        _station = (cart.X, cart.Y, cart.Z);
+        StopHands();
+        TakeThePointer();
+        RefreshScreen();
+
+        _audio?.Play(
+            Pick(ActionSounds.ChestOpen),
+            new Vector3(cart.X + 0.5f, cart.Y + 0.5f, cart.Z + 0.5f), 0.6f, Wobble());
     }
 
     /// <summary>A chest: twenty seven slots, and the player's own pockets under them.</summary>
@@ -6535,6 +6572,24 @@ public sealed class ClientHost : IDisposable
         if (!float.IsInfinity(blockAt)) _target = hit;
     }
 
+    /// <summary>
+    /// Turns a cart back into its item — and a cargo cart's hold spills where it stood, the
+    /// chest's own rule: what it carried goes on the floor, never with the item.
+    /// </summary>
+    private void DropCart(Cart cart, Vector3 at)
+    {
+        _drops.Drop(new ItemStack(_items.ByName(cart.Cargo is null ? "cart" : "cargo_cart").Id, 1), at);
+
+        if (cart.Cargo is { } hold)
+        {
+            foreach (var stack in hold.Contents)
+                if (!stack.IsEmpty) _drops.Drop(stack, at);
+
+            // Standing in a hold that is no longer there.
+            if (_hudScreen.IsOpen && ReferenceEquals(_hudScreen.Stored, hold)) CloseScreen();
+        }
+    }
+
     /// <summary>Removes the targeted block, and empties it first if it was holding anything.</summary>
     private void BreakTarget()
     {
@@ -6545,7 +6600,7 @@ public sealed class ClientHost : IDisposable
             if (_ridingCart == cart) _ridingCart = null;
 
             var at = new Vector3(cart.X + 0.5f, cart.Y + 0.5f, cart.Z + 0.5f);
-            _drops.Drop(new ItemStack(_items.ByName("cart").Id, 1), at);
+            DropCart(cart, at);
             return;
         }
 
@@ -6650,20 +6705,27 @@ public sealed class ClientHost : IDisposable
     {
         if (_ridingCart is not null) return false;
 
-        // Boarding first: a click on a cart means the cart whatever is in hand.
+        // A click on a cart means the cart, whatever is in hand — but which cart decides what
+        // the click does: a hold opens as the chest it is, a plain cart is boarded.
         if (_cartSystem.Pick(_streamer.World, _camera.Position, _camera.Forward, 5f) is { } cart)
         {
+            if (cart.Cargo is { } hold)
+            {
+                OpenCartHold(cart, hold);
+                return true;
+            }
+
             _ridingCart = cart;
             return true;
         }
 
-        if (_inventory.HeldType is not { Name: "cart" }) return false;
+        if (_inventory.HeldType is not { Name: "cart" or "cargo_cart" } held) return false;
         if (_target is not { } hit) return false;
 
         // On the rail that was struck — a cart is used on track, never on ground.
         if (!_railTable.IsRail(_streamer.World.GetBlock(hit.X, hit.Y, hit.Z).Value)) return false;
 
-        _cartSystem.Place(hit.X, hit.Y, hit.Z);
+        _cartSystem.Place(hit.X, hit.Y, hit.Z, cargo: held.Name == "cargo_cart");
         _inventory.SpendHeld();
         PlaySound(
             _registry[_streamer.World.GetBlock(hit.X, hit.Y, hit.Z)], SoundEvent.Place,
@@ -10657,7 +10719,7 @@ public sealed class ClientHost : IDisposable
                 _creatureRenderer.Draw(
                     viewProj, _viewPosition, sky,
                     SampleLight(at + new Vector3(0f, 0.4f, 0f)),
-                    "cart", at, yawDeg);
+                    cart.Cargo is null ? "cart" : "cargo_cart", at, yawDeg);
             }
         }
 

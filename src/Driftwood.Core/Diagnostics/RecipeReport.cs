@@ -218,7 +218,8 @@ public static class RecipeReport
             if (type.Id.IsNone) continue;
             if (consumed.Contains(type.Id)) continue;
             if (type.IsFuel || type.IsFood || type.Wears is not null) continue;
-            if (type.Places is not null) continue;   // a block you put down is its own purpose
+            if (type.Places is not null) continue;    // a block you put down is its own purpose
+            if (type.PlacesEntity) continue;          // and so is a cart clicked onto a rail
             if (Buckets.IsCarrier(type.Name)) continue;   // a carrier is used, never consumed
 
             // ⚠ Counted rather than listed. The smithing table is their transformer: a worn tool
