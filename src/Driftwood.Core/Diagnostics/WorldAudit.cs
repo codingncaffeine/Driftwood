@@ -1191,6 +1191,10 @@ public static class WorldAudit
         Check("the loom offers every colour its carpet and banner", loomFaults.Count == 0,
             loomFaults.Count == 0 ? loomDetail : $"{loomFaults.Count} faults: {loomFaults[0]}");
 
+        var bedFaults = BedSelfTest(registry, out var bedDetail);
+        Check("a bed sleeps only at night and both halves are one thing", bedFaults.Count == 0,
+            bedFaults.Count == 0 ? bedDetail : $"{bedFaults.Count} faults: {bedFaults[0]}");
+
         var herdSaveFaults = HerdSaveSelfTest(out var herdSaveDetail);
         Check("a herd survives the trip through a save", herdSaveFaults.Count == 0,
             herdSaveFaults.Count == 0 ? herdSaveDetail : $"{herdSaveFaults.Count} faults: {herdSaveFaults[0]}");
@@ -3780,6 +3784,7 @@ public static class WorldAudit
             Pitch = -12f,
             Played = 3725.5,
             DayTime = 0.375f,
+            BedSpawn = new Vector3(3.5f, 65.6f, 1.5f),
         };
 
         // A plain cart and a laden one, so CRGO proves it hands the hold to the RIGHT cart —
@@ -3851,6 +3856,9 @@ public static class WorldAudit
                 faults.Add($"{back.PendingEdits} edits are waiting for a chunk of {world.Edits.Count}");
 
             if (back.Changed) faults.Add("a world is marked changed the instant it is loaded, so every load autosaves");
+
+            if (into.BedSpawn is not { } wake || Vector3.Distance(wake, new Vector3(3.5f, 65.6f, 1.5f)) > 0.01f)
+                faults.Add("the bed spawn did not come back where it was");
 
             if (into.Carts.Count != 2)
             {
@@ -4990,6 +4998,48 @@ public static class WorldAudit
         detail = "wood stone copper iron stormglass diamond; 30 of 60 carries to 66 of 132, a "
                + "nearly-dead tool keeps a swing, gold is refused both ways, and every rung's "
                + "material resolves";
+
+        return faults;
+    }
+
+    /// <summary>
+    /// Works the bed's rulebook: the sleep window against the clock's own sunrise and sunset,
+    /// the morning constant landing inside day, and the two halves partnered both ways.
+    /// </summary>
+    private static List<string> BedSelfTest(BlockRegistry registry, out string detail)
+    {
+        var faults = new List<string>();
+
+        // The window, against the clock's own map: noon refuses, midnight sleeps, and both
+        // twilights fall on the honest side of their boundary.
+        if (Beds.CanSleep(0.5f)) faults.Add("a bed slept at noon");
+        if (!Beds.CanSleep(0.0f)) faults.Add("a bed refused midnight");
+        if (!Beds.CanSleep(0.85f)) faults.Add("a bed refused the middle of the evening");
+        if (Beds.CanSleep(0.5f)) faults.Add("a bed slept at noon");
+        if (Beds.CanSleep(0.25f)) faults.Add("a bed slept at sunrise");
+        if (Beds.CanSleep(0.75f)) faults.Add("a bed slept at sunset");
+        if (Beds.CanSleep(Beds.Morning)) faults.Add("waking lands inside the sleep window — an endless night");
+
+        // Both halves, all four ways round, each naming the other — the door contract, flat.
+        foreach (var (foot, head) in StarterBlocks.BedPairs(registry))
+        {
+            var footType = registry[foot];
+            var headType = registry[head];
+
+            if (footType.PartnerFace < 0 || headType.PartnerFace < 0)
+            {
+                faults.Add($"{footType.Name} or its head has no partner face");
+                continue;
+            }
+
+            if (headType.PartnerFace != Placeable.Opposite(footType.PartnerFace))
+                faults.Add($"{footType.Name} and {headType.Name} do not point at each other");
+            if (footType.Use != BlockUse.Bed || headType.Use != BlockUse.Bed)
+                faults.Add($"{footType.Name} or its head does not answer as a bed");
+        }
+
+        detail = "noon refuses, midnight and evening sleep, waking lands in daylight, and all "
+               + "four beds' halves point at each other";
 
         return faults;
     }
@@ -7262,11 +7312,12 @@ public static class WorldAudit
         (StarterBlocks.LayerBlastcaskBottom, "blastcask_bottom"),
         (StarterBlocks.LayerSmithingSide, "smithing_table_side"),
 
-        // The loom's side and the cargo cart by their own constants now cherry went on after
-        // them.
+        // The loom's side, the cargo cart and cherry by their own constants now more went on
+        // after them.
         (StarterBlocks.LayerLoomSide, "loom_side"),
         (StarterBlocks.LayerCargoCartIcon, "cargo_cart_icon"),
         (StarterBlocks.LayerCherryLogSide, "cherry_log"),
+        (StarterBlocks.LayerCherryLeaves, "cherry_leaves"),
 
         // The moving pin: the LAST layer, by name. It has caught NINE appends in the act —
         // fifteen crop rows landing after "the last layer is bonemeal", the composter's four
@@ -7274,7 +7325,7 @@ public static class WorldAudit
         // mossy rubble, the signal kit after seagrass, the track after the gates, the fried egg
         // after the cart, the cask after the slime block, and the stations after the cask.
         // Keep it pointed at the true end.
-        ((ushort)(StarterBlocks.LayerCount - 1), "cherry_leaves"),
+        ((ushort)(StarterBlocks.LayerCount - 1), "bed_side"),
     ];
 
     /// <summary>

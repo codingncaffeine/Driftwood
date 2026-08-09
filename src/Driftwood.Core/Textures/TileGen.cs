@@ -505,6 +505,57 @@ public static class TileGen
         return t;
     }
 
+    /// <summary>The bed's blanket: a deep red quilt, stitched into squares.</summary>
+    public static byte[] BedBlanket(int seed)
+    {
+        var t = new byte[BytesPerTile];
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var d = (int)((Noise(x, y, seed) * 2f - 1f) * 8f);
+
+            // The quilting: a dim line every fourth row and column, lit on its lower edge.
+            var seam = x % 4 == 3 || y % 4 == 3 ? -14 : 0;
+
+            Put(t, x, y, Clamp(178 + seam + d), Clamp(52 + seam / 2 + d), Clamp(48 + seam / 2 + d), 255);
+        }
+
+        return t;
+    }
+
+    /// <summary>The head end: the same quilt with the pillow lying across its upper half.</summary>
+    public static byte[] BedPillow(int seed)
+    {
+        var t = BedBlanket(seed);
+
+        for (var y = 2; y < 8; y++)
+        for (var x = 2; x < 14; x++)
+        {
+            var d = (int)((Noise(x, y, seed + 7) * 2f - 1f) * 6f);
+            var edge = y is 2 or 7 || x is 2 or 13 ? -18 : 0;
+            Put(t, x, y, Clamp(232 + edge + d), Clamp(230 + edge + d), Clamp(224 + edge + d), 255);
+        }
+
+        return t;
+    }
+
+    /// <summary>The bed's side: the frame's planks below, the quilt hanging over above.</summary>
+    public static byte[] BedSide(int seed)
+    {
+        var t = Planks(seed, 148, 112, 70);
+
+        for (var y = 0; y < 10; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var d = (int)((Noise(x, y, seed + 13) * 2f - 1f) * 8f);
+            var hem = y is 8 or 9 ? -16 : 0;
+            Put(t, x, y, Clamp(172 + hem + d), Clamp(50 + hem / 2 + d), Clamp(46 + hem / 2 + d), 255);
+        }
+
+        return t;
+    }
+
     /// <summary>The blastcask: powder-keg staves in warning red-brown, banded twice with iron.</summary>
     public static byte[] BlastcaskSide(int seed)
     {

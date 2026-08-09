@@ -540,6 +540,12 @@ public static class BlockTextureSet
         new("cherry_log_top", "textures/block/cherry_log_top.png", false),
         new("cherry_planks", "textures/block/cherry_planks.png", false),
         new("cherry_leaves", "textures/block/cherry_leaves.png", true),
+
+        // ⚠ No pack paths, honestly: the reference's bed is an entity sheet (#56's problem), so
+        // there is no block texture to name for any of the three.
+        new("bed_foot_top", "", false),
+        new("bed_head_top", "", false),
+        new("bed_side", "", false),
     ];
 
     /// <summary>
@@ -1554,6 +1560,11 @@ public static class BlockTextureSet
             StarterBlocks.LayerCherryLogTop => TileGen.Rings(1391, 214, 168, 158),
             StarterBlocks.LayerCherryPlanks => TileGen.Planks(1392, 222, 168, 158),
             StarterBlocks.LayerCherryLeaves => TileGen.Leaves(1393, 236, 172, 198, 0.22f),
+
+            // The bed (#99): quilt, pillow end, and the frame's hung side.
+            StarterBlocks.LayerBedFootTop => TileGen.BedBlanket(1394),
+            StarterBlocks.LayerBedHeadTop => TileGen.BedPillow(1394),
+            StarterBlocks.LayerBedSide => TileGen.BedSide(1395),
 
             _ when layer >= StarterBlocks.LayerGateFirst
                    && layer < StarterBlocks.LayerGateFirst + 10 =>

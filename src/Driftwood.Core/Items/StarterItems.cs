@@ -698,6 +698,20 @@ public static class StarterItems
         // #58's last group-A station: where a worn tool becomes the same tool a tier up.
         Block(items, blocks, Smithing.Table, "smithing table", StarterBlocks.LayerSmithingSide);
 
+        // ⛳ The bed (#99): one item, four feet — the head half is the placement's to write, the
+        // door's own arrangement lying flat.
+        items.Register(new ItemType
+        {
+            Name = "bed", Label = "bed",
+            IconLayer = StarterBlocks.LayerBedFootTop, DrawsAsBlock = true,
+            Places = new Placeable
+            {
+                Label = "bed",
+                Kind = PlacementKind.Facing,
+                Variants = StarterBlocks.BedFeet(blocks),
+            },
+        });
+
         // ⛳ The loom and the banners it weaves (#98). The carpets already exist — the wool axis
         // shipped them — so the banner is the new cloth: sixteen standing colours whose cloth IS
         // the wool, because no pack can reskin a banner yet (#56, the packed-sheet problem).

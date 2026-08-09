@@ -630,7 +630,12 @@ public static class StarterBlocks
     public const ushort LayerCherryPlanks = LayerCobweb + 51;
     public const ushort LayerCherryLeaves = LayerCobweb + 52;
 
-    public const int LayerCount = LayerCherryLeaves + 1;
+    // #99, the bed: the blanket, the pillow end, and the frame's side.
+    public const ushort LayerBedFootTop = LayerCobweb + 53;
+    public const ushort LayerBedHeadTop = LayerCobweb + 54;
+    public const ushort LayerBedSide = LayerCobweb + 55;
+
+    public const int LayerCount = LayerBedSide + 1;
 
     /// <summary>One anvil's name, by how worn it is and which way it lies.</summary>
     /// <remarks>
@@ -989,6 +994,29 @@ public static class StarterBlocks
                 Solid = false, Opaque = false, Sounds = SoundMaterial.Cloth,
                 Model = BlockModel.Banner(
                     (ushort)(LayerFirstWool + i), LayerPlanks, Placeable.Facings[f]),
+            });
+        }
+
+        // ⛳ THE BED (#99) — two cells and one thing, lying flat: PartnerFace sideways, the
+        // door's own machinery turned on its side, so breaking either half takes both and
+        // nothing anywhere asks which end was struck. Nine sixteenths high on the snow layer's
+        // model. What sleeping DOES — the window, the morning — is Beds.cs's to say.
+        for (var f = 0; f < Placeable.Facings.Length; f++)
+        {
+            registry.Register(new BlockType
+            {
+                Name = $"{Beds.FootStem}_{FacingNames[f]}", Hardness = 0.4f, Crafted = true,
+                Opaque = false, Sounds = SoundMaterial.Cloth, Use = BlockUse.Bed,
+                PartnerFace = Placeable.Opposite(Placeable.Facings[f]),
+                Model = BlockModel.Layer(LayerBedFootTop, LayerBedSide, LayerPlanks, 9f),
+            });
+
+            registry.Register(new BlockType
+            {
+                Name = $"{Beds.HeadStem}_{FacingNames[f]}", Hardness = 0.4f, Crafted = true,
+                Opaque = false, Sounds = SoundMaterial.Cloth, Use = BlockUse.Bed,
+                PartnerFace = Placeable.Facings[f],
+                Model = BlockModel.Layer(LayerBedHeadTop, LayerBedSide, LayerPlanks, 9f),
             });
         }
 
@@ -2344,6 +2372,24 @@ public static class StarterBlocks
         var ids = new BlockId[Placeable.Facings.Length];
         for (var i = 0; i < ids.Length; i++) ids[i] = registry.ByName($"chest_{FacingNames[i]}").Id;
         return ids;
+    }
+
+    /// <summary>The four bed feet, in <see cref="Placeable.Facings"/> order.</summary>
+    public static BlockId[] BedFeet(BlockRegistry registry)
+    {
+        var ids = new BlockId[Placeable.Facings.Length];
+        for (var i = 0; i < ids.Length; i++)
+            ids[i] = registry.ByName($"{Beds.FootStem}_{FacingNames[i]}").Id;
+        return ids;
+    }
+
+    /// <summary>Each bed foot and the head that lies beyond it, for the two-cell placement.</summary>
+    public static IEnumerable<(BlockId Foot, BlockId Head)> BedPairs(BlockRegistry registry)
+    {
+        for (var i = 0; i < Placeable.Facings.Length; i++)
+            yield return (
+                registry.ByName($"{Beds.FootStem}_{FacingNames[i]}").Id,
+                registry.ByName($"{Beds.HeadStem}_{FacingNames[i]}").Id);
     }
 
     /// <summary>One colour's four banners, in <see cref="Placeable.Facings"/> order.</summary>

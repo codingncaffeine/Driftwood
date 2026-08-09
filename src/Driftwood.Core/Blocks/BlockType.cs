@@ -50,6 +50,9 @@ public enum BlockUse
     /// <remarks>The stonecutter's screen with a different station asked — one chooser, two trades.</remarks>
     Loom,
 
+    /// <summary>Sleeps in the bed — at night. The window and the morning are Beds.cs's to say.</summary>
+    Bed,
+
     /// <summary>
     /// Puts food on a lit campfire, or takes it off again.
     /// </summary>

@@ -534,6 +534,12 @@ public sealed class ClientHost : IDisposable
     /// <summary>Each lower half of a two-cell block, and what goes above it.</summary>
     private readonly Dictionary<ushort, BlockId> _tallUpper = [];
 
+    /// <summary>Each bed foot and the head half that lies beyond it — the door map, flat.</summary>
+    private readonly Dictionary<ushort, BlockId> _bedHead = [];
+
+    /// <summary>Where a slept-in bed stands, or null — the respawn asks it before the world spawn.</summary>
+    private Vector3? _bedSpawn;
+
     /// <summary>What holds each block up, and what comes down when that is taken away.</summary>
     private SupportTable _supports = null!;
 
@@ -1506,6 +1512,7 @@ public sealed class ClientHost : IDisposable
         foreach (var (slab, whole) in StarterBlocks.SlabMerges(registry)) _slabMerge[slab.Value] = whole;
         foreach (var (from, to) in StarterBlocks.Toggles(registry)) _toggle[from.Value] = to;
         foreach (var (lower, upper) in StarterBlocks.TallPairs(registry)) _tallUpper[lower.Value] = upper;
+        foreach (var (foot, head) in StarterBlocks.BedPairs(registry)) _bedHead[foot.Value] = head;
         _supports = new SupportTable(registry);
         _litCask = registry.ByName(Blastcask.Lit).Id;
 
@@ -1795,6 +1802,8 @@ public sealed class ClientHost : IDisposable
         _savedCreatures.Clear();
         _savedCreatures.AddRange(state.Creatures);
 
+        _bedSpawn = state.BedSpawn;
+
         // The carts stand back on the track exactly where they were; nobody is aboard, which is
         // also how they were written. A hold comes back as the chest it was.
         _cartSystem.All.Clear();
@@ -1852,6 +1861,7 @@ public sealed class ClientHost : IDisposable
             Pitch = _camera.Pitch,
             Played = _playedBefore + _elapsed,
             DayTime = _clock.TimeOfDay,
+            BedSpawn = _bedSpawn,
         };
 
         if (_herd is not null) state.Creatures.AddRange(_herd.Capture());
@@ -6410,7 +6420,7 @@ public sealed class ClientHost : IDisposable
 
         if (!what.Died) return;
 
-        _player.Teleport(_spawnPoint);
+        _player.Teleport(RespawnPoint());
         _vitals.Restore();
 
         // ⛳ Dying is the one moment a player most wants the last few minutes to have been kept, and
@@ -7211,6 +7221,47 @@ public sealed class ClientHost : IDisposable
         Notice($"forged up for one {_items[paidWith].Label}", _items[upgraded.Item]);
     }
 
+    /// <summary>
+    /// Sleeps in a bed: night skips to morning, and the bed becomes where death brings you back.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ The refusal is worded, the fire-book lesson: a bed that does nothing all day reads as a
+    /// broken bed, not as a rule.
+    /// </remarks>
+    private void UseBed(int x, int y, int z)
+    {
+        if (!Beds.CanSleep(_clock.TimeOfDay))
+        {
+            Notice("sleep waits for dark", null);
+            return;
+        }
+
+        _clock.SetTime(Beds.Morning);
+        _bedSpawn = new Vector3(x + 0.5f, y + 0.6f, z + 0.5f);
+
+        PlaySound(SoundMaterial.Cloth, SoundEvent.Place, new Vector3(x + 0.5f, y + 0.5f, z + 0.5f), 0.7f);
+        Notice("slept till morning — you will wake here", null);
+    }
+
+    /// <summary>The slept-in bed if it still stands, else the world spawn — with a word.</summary>
+    private Vector3 RespawnPoint()
+    {
+        if (_bedSpawn is { } at)
+        {
+            var standing = _registry[_streamer.World.GetBlock(
+                (int)MathF.Floor(at.X), (int)MathF.Floor(at.Y), (int)MathF.Floor(at.Z))];
+
+            if (Beds.IsBed(standing.Name)) return at;
+
+            // The bed is gone: say so, fall back, and forget the claim — a stale spawn that
+            // keeps resurrecting somewhere a bed used to be is worse than none.
+            _bedSpawn = null;
+            Notice("your bed is gone", null);
+        }
+
+        return _spawnPoint;
+    }
+
     /// <summary>Puts a short line on screen with a picture beside it.</summary>
     /// <remarks>
     /// ⚠ Through the toast strip rather than a new mechanism, so it wears the same style, obeys the
@@ -7299,6 +7350,10 @@ public sealed class ClientHost : IDisposable
 
             case BlockUse.Loom:
                 OpenChooser(hit.X, hit.Y, hit.Z, CraftStation.Loom);
+                return true;
+
+            case BlockUse.Bed:
+                UseBed(hit.X, hit.Y, hit.Z);
                 return true;
 
             case BlockUse.Anvil:
@@ -7483,6 +7538,16 @@ public sealed class ClientHost : IDisposable
             if (!_streamer.World.GetBlock(x, y + 1, z).IsAir) return false;
         }
 
+        // A bed is the same arrangement lying flat: the cell the foot's partner face names has
+        // to be free, and floored, before either half is written.
+        var flat = _bedHead.TryGetValue(block.Value, out var head);
+        if (flat)
+        {
+            var (px, py, pz) = Faces.Normals[_registry[block].PartnerFace];
+            if (!_streamer.World.GetBlock(x + px, y + py, z + pz).IsAir) return false;
+            if (!_registry[_streamer.World.GetBlock(x + px, y - 1 + py, z + pz)].Solid) return false;
+        }
+
         if (_walking)
         {
             var probe = _streamer.World;
@@ -7495,6 +7560,12 @@ public sealed class ClientHost : IDisposable
 
         _streamer.EditBlock(x, y, z, block);
         if (tall) _streamer.EditBlock(x, y + 1, z, _tallUpper[block.Value]);
+
+        if (flat)
+        {
+            var (px, py, pz) = Faces.Normals[_registry[block].PartnerFace];
+            _streamer.EditBlock(x + px, y + py, z + pz, _bedHead[block.Value]);
+        }
 
         if (fromOffhand) SpendOffhand();
         else _inventory.SpendHeld();

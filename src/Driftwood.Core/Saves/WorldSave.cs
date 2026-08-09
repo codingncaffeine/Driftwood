@@ -50,6 +50,9 @@ public sealed record WorldState(
     public double Played { get; set; }
     public float DayTime { get; set; }
 
+    /// <summary>Where a slept-in bed stands, or null when none ever was (#99).</summary>
+    public Vector3? BedSpawn { get; set; }
+
     /// <summary>The animals standing in the world, both ways through a save.</summary>
     /// <remarks>
     /// ⛳ A list rather than the herd itself, because the herd does not exist until the world has
@@ -837,6 +840,15 @@ public static class WorldSave
         // ⛳ The section is length-prefixed and read from its own byte array, so the reader can ask
         // whether there is anything after the worn slots. An older save simply has nothing there.
         into.Write(state.Vitals.Food);
+
+        // ⛳ The bed spawn (#99), appended for hunger's own reason. Nullability rides a bool.
+        into.Write(state.BedSpawn.HasValue);
+        if (state.BedSpawn is { } bed)
+        {
+            into.Write(bed.X);
+            into.Write(bed.Y);
+            into.Write(bed.Z);
+        }
     });
 
     private static void ReadPlayer(BinaryReader from, WorldState into, int[] toItem)
@@ -889,5 +901,10 @@ public static class WorldSave
         // writer wrote and anything added after it lands where it should.
         _ = breath;
         into.Vitals.Restore(health, PlayerVitals.MaxBreath, food);
+
+        // The bed spawn (#99), if this save is new enough to carry one. Absent means no bed was
+        // ever slept in, which is exactly what null says.
+        if (from.BaseStream.Position < from.BaseStream.Length && from.ReadBoolean())
+            into.BedSpawn = new Vector3(from.ReadSingle(), from.ReadSingle(), from.ReadSingle());
     }
 }

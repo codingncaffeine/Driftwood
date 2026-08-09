@@ -484,6 +484,10 @@ public static class StarterRecipes
         Shaped("smithing table", "smithing_table", 1, ["II", "PP", "PP"],
             station: CraftStation.Bench);
 
+        // ⛳ The bed (#99): any colour of wool over either species of plank — what it does at
+        // night is Beds.cs's to say, and the wool gets its third consumer.
+        Shaped("bed", "bed", 1, ["MMM", "PPP"], "#wool", station: CraftStation.Bench);
+
         // ⛳ The loom and its list (#98): a choosing station like the stonecutter, so one wool on
         // the bed offers both trades — the carpet at a BETTER rate than the bench's own row
         // (one wool weaves two where the bench cuts three from a pair), which is the
