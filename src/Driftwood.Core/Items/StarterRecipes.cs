@@ -34,7 +34,10 @@ public static class StarterRecipes
     /// <summary>What each shaped material is cut from.</summary>
     private static readonly (string Material, string From)[] ShapedFrom =
     [
-        ("driftoak", "#planks"),
+        // ⛔ Named planks, not #planks, since the second species: through the tag a cherry plank
+        // would have sawn into a DRIFTOAK slab.
+        ("driftoak", "driftoak_planks"),
+        ("cherry", "cherry_planks"),
         ("stone", "stone"),
         ("rubble", "rubble"),
         ("bricks", "bricks"),
@@ -182,7 +185,11 @@ public static class StarterRecipes
 
         // The first two moves of the game. A log opens into four planks with nothing but hands, and
         // two planks make the sticks everything else is hafted on.
-        Loose("planks from a log", "driftoak_planks", 4, "#logs");
+        // ⛔ Split per species the day the second one landed: with the #logs tag here, a cherry
+        // log would have pulped into DRIFTOAK planks. The tag keeps its fuel-and-charcoal jobs;
+        // planks follow their own tree.
+        Loose("planks from a log", "driftoak_planks", 4, "driftoak_log");
+        Loose("cherry planks from a log", "cherry_planks", 4, "cherry_log");
         Shaped("sticks", "stick", 4, ["P", "P"]);
 
         // The bench, which is what three-wide costs. Everything below this line that needs one says
@@ -339,7 +346,7 @@ public static class StarterRecipes
         // worked form are all offered together, which is the whole gesture of a stonecutter.
         foreach (var (material, from) in ShapedFrom)
         {
-            if (material == "driftoak") continue;      // timber is sawn at a bench, not on stone
+            if (material is "driftoak" or "cherry") continue;   // timber is sawn at a bench, not on stone
 
             Cut($"cut {material} slab", from, $"{material}_slab", 2);
             Cut($"cut {material} stairs", from, $"{material}_stairs", 1);
@@ -348,7 +355,9 @@ public static class StarterRecipes
         // Things that join up with what is beside them. A run of six across two rows is the genre's
         // own grammar for anything wall-shaped, and the count is what says how far it goes: six
         // rubble is six wall, six glass is sixteen panes because a pane is a sixteenth of a wall.
-        Shaped("fence", "driftoak_fence", 3, ["MSM", "MSM"], "#planks");
+        // ⛔ Per species for the planks-recipe's reason: a fence is the colour of its wood.
+        Shaped("fence", "driftoak_fence", 3, ["MSM", "MSM"], "driftoak_planks");
+        Shaped("cherry fence", "cherry_fence", 3, ["MSM", "MSM"], "cherry_planks");
         Shaped("pane", "glass_pane", 16, ["MMM", "MMM"], "glass");
 
         foreach (var (wall, from) in WallsFrom)
@@ -608,8 +617,8 @@ public static class StarterRecipes
 
         return new Dictionary<string, Ingredient>(StringComparer.Ordinal)
         {
-            ["#logs"] = Tag("any log", "driftoak_log"),
-            ["#planks"] = Tag("any plank", "driftoak_planks"),
+            ["#logs"] = Tag("any log", "driftoak_log", "cherry_log"),
+            ["#planks"] = Tag("any plank", "driftoak_planks", "cherry_planks"),
 
             // Either fire-starter. They burn the same and light the same, and a torch recipe that
             // insisted on the mined one would be a trap for anyone who spawned above ground.

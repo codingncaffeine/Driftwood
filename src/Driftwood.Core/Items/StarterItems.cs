@@ -114,6 +114,11 @@ public static class StarterItems
         // no cave nearby from being unable to light their first furnace at all.
         Block(items, blocks, "driftoak_log", "driftoak log", StarterBlocks.LayerLogSide, Timber);
         Block(items, blocks, "driftoak_planks", "driftoak planks", StarterBlocks.LayerPlanks, Timber);
+
+        // The second species (#94). Burns like any timber; the blossom has no item, exactly as
+        // the driftoak's leaves have none.
+        Block(items, blocks, "cherry_log", "cherry log", StarterBlocks.LayerCherryLogSide, Timber);
+        Block(items, blocks, "cherry_planks", "cherry planks", StarterBlocks.LayerCherryPlanks, Timber);
         Block(items, blocks, "stone", "stone", StarterBlocks.LayerStone);
         Block(items, blocks, "rubble", "rubble", StarterBlocks.LayerRubble);
         Block(items, blocks, "dirt", "dirt", StarterBlocks.LayerDirt);

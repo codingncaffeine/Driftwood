@@ -126,6 +126,7 @@ public sealed class TerrainGenerator
     private readonly int _seedEmber;
     private readonly int _seedTree;
     private readonly int _seedForest;
+    private readonly int _seedCherry;
     private readonly int _seedDiamondOre;
     private readonly int _seedCopper;
     private readonly int _seedGold;
@@ -192,6 +193,7 @@ public sealed class TerrainGenerator
         _seedEmber = seed.Derive("ore.emberstone");
         _seedTree = seed.Derive("decor.tree");
         _seedForest = seed.Derive("decor.forest");
+        _seedCherry = seed.Derive("decor.cherry");
         _seedCopper = seed.Derive("ore.copper");
         _seedGold = seed.Derive("ore.gold");
         // ⚠ The stormglass seam's stream is called "ore.diamond" and must stay called that: a derived
@@ -1133,10 +1135,16 @@ public sealed class TerrainGenerator
         int CrownOffsetZ,
         int CrownDepth,
         int Branches,
-        int Seed)
+        int Seed,
+        bool Cherry)
     {
         /// <summary>Y of the topmost log.</summary>
         public int TopY => BaseY + TrunkHeight - 1;
+
+        /// <summary>The species' own wood and canopy, resolved where the writes happen.</summary>
+        public BlockId LogOf(StarterBlocks.Ids ids) => Cherry ? ids.CherryLog : ids.Log;
+
+        public BlockId LeavesOf(StarterBlocks.Ids ids) => Cherry ? ids.CherryLeaves : ids.Leaves;
     }
 
     /// <summary>
@@ -1174,6 +1182,16 @@ public sealed class TerrainGenerator
         // mean to a band so a later tweak cannot quietly walk it back down.
         var trunk = 5 + (int)(Noise.Value2(cellX, cellZ, _seedTree + 53) * 4f);
 
+        // ⛳ THE GROVES (#94): a slow field on its own derived seed decides which STANDS are
+        // cherry — a split of the existing tree roll, the bush-and-pumpkin discipline, so no
+        // tree moves and no shipped field re-bands. Mild ground only: the blossom stays off the
+        // arid fringe and clear of the snow country.
+        // ⚠ The threshold is calibrated against fBm's REAL spread (typically ±0.2, the P0
+        // lesson), not its nominal ±1 — 0.22 here was the extreme tail and grew nothing on any
+        // seed at the gate's own sample.
+        var cherry = Noise.Fbm2(x / 240f, z / 240f, _seedCherry, 2) > 0.10f
+                     && _climate.Temperature(x, z) is > 0.38f and < HotLine;
+
         spec = new TreeSpec(
             X: x,
             Z: z,
@@ -1184,7 +1202,8 @@ public sealed class TerrainGenerator
             CrownOffsetZ: (int)(Noise.Value2(cellX, cellZ, _seedTree + 113) * 3f) - 1,
             CrownDepth: 3 + (int)(Noise.Value2(cellX, cellZ, _seedTree + 127) * 2f),
             Branches: trunk >= 6 ? (int)(Noise.Value2(cellX, cellZ, _seedTree + 131) * 3f) : 0,
-            Seed: Noise.Hash2(cellX, cellZ, _seedTree));
+            Seed: Noise.Hash2(cellX, cellZ, _seedTree),
+            Cherry: cherry);
 
         return true;
     }
@@ -1212,7 +1231,7 @@ public sealed class TerrainGenerator
             tree.CrownRadius, tree.CrownDepth);
 
         for (var i = 0; i < tree.TrunkHeight; i++)
-            Place(chunk, ox, oy, oz, tree.X, tree.BaseY + i, tree.Z, _ids.Log);
+            Place(chunk, ox, oy, oz, tree.X, tree.BaseY + i, tree.Z, tree.LogOf(_ids));
 
         // A flare of logs at the foot, so a trunk meets the ground instead of being planted in it.
         for (var face = 0; face < 4; face++)
@@ -1226,7 +1245,7 @@ public sealed class TerrainGenerator
                 2 => (0, 1),
                 _ => (0, -1),
             };
-            PlaceIntoAir(chunk, ox, oy, oz, tree.X + dx, tree.BaseY, tree.Z + dz, _ids.Log);
+            PlaceIntoAir(chunk, ox, oy, oz, tree.X + dx, tree.BaseY, tree.Z + dz, tree.LogOf(_ids));
         }
     }
 
@@ -1266,7 +1285,7 @@ public sealed class TerrainGenerator
                 bx += dx;
                 bz += dz;
                 if (step == length) by++;   // limbs rise as they go out, they do not stick out flat
-                PlaceIntoAir(chunk, ox, oy, oz, bx, by, bz, _ids.Log);
+                PlaceIntoAir(chunk, ox, oy, oz, bx, by, bz, tree.LogOf(_ids));
             }
 
             PlaceCrown(chunk, ox, oy, oz, tree, bx, by, bz, radius: 1, depth: 2);
@@ -1308,7 +1327,7 @@ public sealed class TerrainGenerator
                 var atCentre = dx == 0 && dz == 0;
                 if (!atCentre && Noise.Value3(lx, y, lz, tree.Seed + 29) > 0.88f) continue;
 
-                PlaceLeaf(chunk, ox, oy, oz, lx, y, lz);
+                PlaceLeaf(chunk, ox, oy, oz, tree, lx, y, lz);
 
                 // Vines hang off the underside only, which is the edge you see them against.
                 if (dy == -(depth - 1)) HangVine(chunk, ox, oy, oz, tree, lx, y, lz);
@@ -1327,6 +1346,9 @@ public sealed class TerrainGenerator
     /// </remarks>
     private void HangVine(Chunk chunk, int ox, int oy, int oz, in TreeSpec tree, int wx, int wy, int wz)
     {
+        // No vines through the blossom: green strands on pink read as damage, not dressing.
+        if (tree.Cherry) return;
+
         if (Noise.Value3(wx, wy, wz, tree.Seed + 37) > 0.14f) return;
 
         var length = 1 + (int)(Noise.Value3(wx, wy, wz, tree.Seed + 41) * 4f);
@@ -1379,13 +1401,13 @@ public sealed class TerrainGenerator
     /// Testing the heightmap instead would be pure but wrong — it cannot see the trunk that another
     /// tree already placed, and canopies start carving holes in their neighbours.
     /// </remarks>
-    private void PlaceLeaf(Chunk chunk, int ox, int oy, int oz, int wx, int wy, int wz)
+    private void PlaceLeaf(Chunk chunk, int ox, int oy, int oz, in TreeSpec tree, int wx, int wy, int wz)
     {
         var lx = wx - ox;
         var ly = wy - oy;
         var lz = wz - oz;
         if ((uint)lx >= Chunk.Size || (uint)ly >= Chunk.Size || (uint)lz >= Chunk.Size) return;
         if (!chunk.Get(lx, ly, lz).IsAir) return;
-        chunk.Set(lx, ly, lz, _ids.Leaves);
+        chunk.Set(lx, ly, lz, tree.LeavesOf(_ids));
     }
 }

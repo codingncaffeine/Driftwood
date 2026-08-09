@@ -534,6 +534,12 @@ public static class BlockTextureSet
 
         new("cargo_cart_icon", "textures/item/chest_minecart.png", true,
             "textures/items/minecart_chest.png"),
+
+        // ⚠ Modern paths only: cherry postdates the flattening, so no legacy names exist.
+        new("cherry_log", "textures/block/cherry_log.png", false),
+        new("cherry_log_top", "textures/block/cherry_log_top.png", false),
+        new("cherry_planks", "textures/block/cherry_planks.png", false),
+        new("cherry_leaves", "textures/block/cherry_leaves.png", true),
     ];
 
     /// <summary>
@@ -1541,6 +1547,13 @@ public static class BlockTextureSet
             StarterBlocks.LayerLoomSide => TileGen.Panel(TileGen.Planks(1384, 168, 132, 92), 2, 28),
 
             StarterBlocks.LayerCargoCartIcon => TileGen.IconCart(1374, laden: true),
+
+            // Cherry (#94): dark red-brown bark round pale pink heartwood, rose planks, and the
+            // blossom — which is NOT climate-tinted, because pink IS the species.
+            StarterBlocks.LayerCherryLogSide => TileGen.Bark(1390, 92, 58, 54),
+            StarterBlocks.LayerCherryLogTop => TileGen.Rings(1391, 214, 168, 158),
+            StarterBlocks.LayerCherryPlanks => TileGen.Planks(1392, 222, 168, 158),
+            StarterBlocks.LayerCherryLeaves => TileGen.Leaves(1393, 236, 172, 198, 0.22f),
 
             _ when layer >= StarterBlocks.LayerGateFirst
                    && layer < StarterBlocks.LayerGateFirst + 10 =>

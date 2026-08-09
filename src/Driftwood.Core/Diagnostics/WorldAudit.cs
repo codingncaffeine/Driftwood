@@ -646,6 +646,10 @@ public static class WorldAudit
         {
             ids.Ice.Value, ids.Cactus.Value, ids.DeadBush.Value, ids.MarshReed.Value,
             ids.Moss.Value,
+
+            // Cherry stands only where its grove field and a mild band agree (#94) — grove's to
+            // grant, the ice rule's own shape.
+            ids.CherryLog.Value, ids.CherryLeaves.Value,
         };
 
         var missing = new List<string>();
@@ -2180,9 +2184,10 @@ public static class WorldAudit
         if (inHand == 0) faults.Add("nothing at all can be made in bare hands, so a new world cannot start");
 
         // ⚠ Recalibrated 12 → 13 when the slime block's unpack joined the metals' own hand
-        // unpacks (#97). The failure this band exists for is the station gate silently vanishing,
-        // which arrives as FIFTY-odd, not as one more unpack row.
-        if (inHand > 13)
+        // unpacks (#97), and 13 → 14 when cherry's planks-from-a-log joined the driftoak's
+        // (#94). The failure this band exists for is the station gate silently vanishing, which
+        // arrives as FIFTY-odd, not as one more row.
+        if (inHand > 14)
             faults.Add($"{inHand} recipes are made in bare hands, which is most of a game before anything is built");
 
         // A grid holding something no recipe mentions has to make nothing. Without this the whole
@@ -7257,8 +7262,11 @@ public static class WorldAudit
         (StarterBlocks.LayerBlastcaskBottom, "blastcask_bottom"),
         (StarterBlocks.LayerSmithingSide, "smithing_table_side"),
 
-        // The loom's side by its own constant now the cargo cart went on after it.
+        // The loom's side and the cargo cart by their own constants now cherry went on after
+        // them.
         (StarterBlocks.LayerLoomSide, "loom_side"),
+        (StarterBlocks.LayerCargoCartIcon, "cargo_cart_icon"),
+        (StarterBlocks.LayerCherryLogSide, "cherry_log"),
 
         // The moving pin: the LAST layer, by name. It has caught NINE appends in the act —
         // fifteen crop rows landing after "the last layer is bonemeal", the composter's four
@@ -7266,7 +7274,7 @@ public static class WorldAudit
         // mossy rubble, the signal kit after seagrass, the track after the gates, the fried egg
         // after the cart, the cask after the slime block, and the stations after the cask.
         // Keep it pointed at the true end.
-        ((ushort)(StarterBlocks.LayerCount - 1), "cargo_cart_icon"),
+        ((ushort)(StarterBlocks.LayerCount - 1), "cherry_leaves"),
     ];
 
     /// <summary>
@@ -9948,10 +9956,11 @@ public static class WorldAudit
         var seagrass = registry.ByName("seagrass").Id;
 
         // ── The pairing table is populated and points both ways ──────────────────────────────────
-        // 538 written as a literal on purpose: 130 shaped + 384 connected + 16 trapdoors + 4
-        // ladders + 4 chests. A clone loop that quietly skipped a family reads fewer.
-        if (wet.Pairs != 538)
-            faults.Add($"the waterlogging table pairs {wet.Pairs} forms, not the 538 registered");
+        // 564 written as a literal on purpose: 140 shaped + 400 connected + 16 trapdoors + 4
+        // ladders + 4 chests — cherry's slabs, stairs and fence joined at #94. A clone loop
+        // that quietly skipped a family reads fewer.
+        if (wet.Pairs != 564)
+            faults.Add($"the waterlogging table pairs {wet.Pairs} forms, not the 564 registered");
         if (!wet.TryWet(fenceDry, out var wetOfFence) || wetOfFence != fenceWet)
             faults.Add("the fence's wet form is not its dry form's partner");
         if (wet.DryOf(fenceWet) != fenceDry)

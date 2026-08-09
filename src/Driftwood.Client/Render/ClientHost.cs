@@ -589,8 +589,10 @@ public sealed class ClientHost : IDisposable
     /// <summary>Seconds until the next look for a canopy to shed a leaf from.</summary>
     private float _untilLeaf;
 
-    /// <summary>The block a falling leaf comes off. One species today.</summary>
+    /// <summary>The blocks a falling leaf comes off — one per species, petals included.</summary>
     private BlockId _leafBlock;
+
+    private BlockId _cherryLeafBlock;
 
     /// <summary>
     /// Walking rather than flying. The fly camera stays available behind F3 — it is how terrain
@@ -1573,6 +1575,7 @@ public sealed class ClientHost : IDisposable
         _particles = new ParticleSystem(registry);
         _growth = new Growth(registry);
         _leafBlock = ids.Leaves;
+        _cherryLeafBlock = ids.CherryLeaves;
         _inventory = new Inventory(_items);
         _equipment = new Equipment(_items);
         _drops = new DroppedItems(registry, _items);
@@ -6306,9 +6309,10 @@ public sealed class ClientHost : IDisposable
             var z = (int)MathF.Floor(eye.Z) + _soundPick.Next(-Reach, Reach + 1);
 
             var here = _streamer.World.GetBlock(x, y, z);
-            if (here.Value != _leafBlock.Value) continue;
+            if (here.Value != _leafBlock.Value && here.Value != _cherryLeafBlock.Value) continue;
             if (!_streamer.World.GetBlock(x, y - 1, z).IsAir) continue;
 
+            // The particle wears the block's own tile, so a blossom sheds petals for free.
             _particles.Leaf(_registry[here], new Vector3(x + 0.5f, y, z + 0.5f));
             return;
         }

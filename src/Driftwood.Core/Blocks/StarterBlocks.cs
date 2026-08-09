@@ -624,7 +624,13 @@ public static class StarterBlocks
     // The cargo cart's icon (#97) — the cart's own drawing with the hold riding in it.
     public const ushort LayerCargoCartIcon = LayerCobweb + 48;
 
-    public const int LayerCount = LayerCargoCartIcon + 1;
+    // #94, the second wood species: cherry's bark, rings, planks and blossom.
+    public const ushort LayerCherryLogSide = LayerCobweb + 49;
+    public const ushort LayerCherryLogTop = LayerCobweb + 50;
+    public const ushort LayerCherryPlanks = LayerCobweb + 51;
+    public const ushort LayerCherryLeaves = LayerCobweb + 52;
+
+    public const int LayerCount = LayerCherryLeaves + 1;
 
     /// <summary>One anvil's name, by how worn it is and which way it lies.</summary>
     /// <remarks>
@@ -827,7 +833,11 @@ public static class StarterBlocks
         BlockId Moss,
 
         /// <summary>The sea floor's meadow: the always-waterlogged plant that proved #96.</summary>
-        BlockId Seagrass)
+        BlockId Seagrass,
+
+        /// <summary>The second wood species (#94): grove-banded, blossom untinted on purpose.</summary>
+        BlockId CherryLog,
+        BlockId CherryLeaves)
     {
         /// <summary>Every rock an ore can form in. Ore replaces rock, whichever rock it is.</summary>
         public BlockId[] Rock => [Stone, Deepstone, Coralstone, Driftstone, Saltstone];
@@ -1295,6 +1305,34 @@ public static class StarterBlocks
             Name = "driftoak_planks", Hardness = 2f, Crafted = true, Sounds = SoundMaterial.Wood,
             HarvestClass = ToolClass.Axe,
             TopLayer = LayerPlanks, SideLayer = LayerPlanks, BottomLayer = LayerPlanks,
+        });
+
+        // ⛳ THE SECOND WOOD SPECIES (#94). Same three blocks as the driftoak trio above, and one
+        // deliberate difference: ⛔ the blossom is NOT climate-tinted — pink is the species'
+        // whole identity, and a canopy that went summer-green with the biome would be a second
+        // driftoak with different bark.
+        var cherryLog = registry.Register(new BlockType
+        {
+            Name = "cherry_log", Hardness = 2f, Sounds = SoundMaterial.Wood,
+            HarvestClass = ToolClass.Axe,
+            TopLayer = LayerCherryLogTop, SideLayer = LayerCherryLogSide,
+            BottomLayer = LayerCherryLogTop,
+        });
+
+        var cherryLeaves = registry.Register(new BlockType
+        {
+            Name = "cherry_leaves", Hardness = 0.2f, Opaque = false, LightAttenuation = 1,
+            Sounds = SoundMaterial.Leaves,
+            TopLayer = LayerCherryLeaves, SideLayer = LayerCherryLeaves,
+            BottomLayer = LayerCherryLeaves,
+        });
+
+        registry.Register(new BlockType
+        {
+            Name = "cherry_planks", Hardness = 2f, Crafted = true, Sounds = SoundMaterial.Wood,
+            HarvestClass = ToolClass.Axe,
+            TopLayer = LayerCherryPlanks, SideLayer = LayerCherryPlanks,
+            BottomLayer = LayerCherryPlanks,
         });
 
         // The ore ladder is a tier ladder. Coal comes up with the first wooden pickaxe, the two
@@ -1787,7 +1825,7 @@ public static class StarterBlocks
             emberbloom, sunwort,
             rubble, glass, bricks, bench, furnace, furnaceLit, lava, wildCrops, berryBushRipe,
             mushroomBrown, mushroomRed, pumpkin, cobweb, ice, cactus, deadBush, glowcap, marshReed,
-            moss, seagrass);
+            moss, seagrass, cherryLog, cherryLeaves);
     }
 
     /// <summary>The five gate kinds, in the order their tiles sit from <see cref="LayerGateFirst"/>.</summary>
@@ -2594,6 +2632,8 @@ public static class StarterBlocks
     private static readonly ShapedMaterial[] ShapedMaterials =
     [
         new("driftoak", LayerPlanks, LayerPlanks, LayerPlanks, SoundMaterial.Wood, ToolClass.Axe, 0),
+        new("cherry", LayerCherryPlanks, LayerCherryPlanks, LayerCherryPlanks,
+            SoundMaterial.Wood, ToolClass.Axe, 0),
         new("stone", LayerStone, LayerStone, LayerStone, SoundMaterial.Stone, ToolClass.Pickaxe, 1),
         new("rubble", LayerRubble, LayerRubble, LayerRubble, SoundMaterial.Stone, ToolClass.Pickaxe, 1),
         new("bricks", LayerBricks, LayerBricks, LayerBricks, SoundMaterial.Stone, ToolClass.Pickaxe, 1),
@@ -2683,6 +2723,8 @@ public static class StarterBlocks
     private static readonly ConnectedMaterial[] ConnectedMaterials =
     [
         new("driftoak_fence", LayerPlanks, SoundMaterial.Wood, ToolClass.Axe, 0,
+            2f, 1f, [(6f, 9f), (12f, 15f)], FenceCollideHigh),
+        new("cherry_fence", LayerCherryPlanks, SoundMaterial.Wood, ToolClass.Axe, 0,
             2f, 1f, [(6f, 9f), (12f, 15f)], FenceCollideHigh),
         new("rubble_wall", LayerRubble, SoundMaterial.Stone, ToolClass.Pickaxe, 1,
             4f, 3f, [(0f, 14f)], FenceCollideHigh),
