@@ -767,6 +767,113 @@ public sealed class TerrainGenerator
     }
 
     /// <summary>
+    /// The odds a tree grid cell grows anything, as a field over the ground — the world's woods
+    /// and meadows are this field's highs and lows.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ One statement of the rule, the <see cref="Carved"/> discipline: <see cref="TryTreeAt"/>
+    /// rolls against it and <see cref="BiomeAt(int,int,int)"/> names ground by it, and written
+    /// twice the two would drift — a "woods" whose trees rolled against some other field is a
+    /// census lying about the world.
+    /// </remarks>
+    private float ForestDensity(int wx, int wz) =>
+        0.62f + Noise.Fbm2(wx / 210f, wz / 210f, _seedForest, 3) * 1.7f;
+
+    /// <summary>
+    /// Whether ground sits under the grove field on mild ground — where the stands grow cherry.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ The threshold is calibrated against fBm's REAL spread (typically ±0.2, the P0 lesson),
+    /// not its nominal ±1 — 0.22 here was the extreme tail and grew nothing on any seed at the
+    /// gate's own sample. Mild ground only: the blossom stays off the arid fringe and clear of
+    /// the snow country. One statement, <see cref="ForestDensity"/>'s reason: the tree roll and
+    /// the biome name both ask it.
+    /// </remarks>
+    private bool CherryGround(int wx, int wz) =>
+        Noise.Fbm2(wx / 240f, wz / 240f, _seedCherry, 2) > 0.10f
+        && _climate.Temperature(wx, wz) is > 0.38f and < HotLine;
+
+    /// <summary>
+    /// Forest density above which ground counts as woods rather than everyday woodland.
+    /// </summary>
+    /// <remarks>
+    /// The field runs about 0.28 to 0.96 (0.62 ± 1.7 × fBm's real ±0.2 spread), and the roll
+    /// against it is uniform, so this line is also simply "at least six cells in seven grow" —
+    /// a thicket. ⚠ Measured, and the measurement is why the woodland exists at all: the field's
+    /// middle is broad and well-treed, so a two-way split at ANY line left "meadow" holding
+    /// scattered-tree ground and the woods only 1.8× woodier than it. Three names, two tails —
+    /// the marked ones are claims the census can actually hold.
+    /// </remarks>
+    public const float WoodsLine = 0.86f;
+
+    /// <summary>
+    /// Forest density below which ground counts as meadow — the open tail, where the clearings
+    /// the density field was built to give actually are.
+    /// </summary>
+    /// <remarks>
+    /// Under this line at most a third of tree cells grow, so the ground reads as grass and
+    /// flowers with the odd tree rather than as thin woodland. <see cref="WoodsLine"/>'s remark
+    /// says why the open ground needs its own line rather than being everything-under-one.
+    /// </remarks>
+    public const float MeadowLine = 0.35f;
+
+    /// <summary>
+    /// Blocks above the sea past which open ground counts as highlands.
+    /// </summary>
+    /// <remarks>
+    /// Sized against the relief the shaping curve actually delivers (surface spans roughly y
+    /// 35..101): high enough that a rolling hill is still meadow, low enough that a peak too warm
+    /// for snow still reads as somewhere with thinner air. The squared altitude term means most
+    /// ground past this line is snowfield anyway — highlands is the warm mountain's name.
+    /// </remarks>
+    public const int HighlandRise = 22;
+
+    /// <summary>What this column of the world is, by name.</summary>
+    public Biome BiomeAt(int wx, int wz) => BiomeAt(wx, wz, SurfaceHeight(wx, wz));
+
+    /// <summary>
+    /// The classifier itself, for a caller that already has the column's surface in hand.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ <b>Every branch is a read of a rule the generator already places material by</b> —
+    /// the terrain's own sea and beach branches, <see cref="SnowDepth"/>, <see cref="CherryGround"/>,
+    /// <see cref="ForestDensity"/>, <see cref="AridSurface"/> — so naming the regions changed no
+    /// cell of any world, and the name cannot disagree with the ground unless one of the shared
+    /// rules stops being shared. The audit's agreement check walks real columns to hold that.</para>
+    /// <para>⛔ <b>The order is the placement order's own precedence, not a style choice.</b> Sea
+    /// and beach first because the terrain fill branches that way before any climate is asked;
+    /// snow beats everything on land because the snow rule decides the surface block itself;
+    /// cherry before woods because the grove field picks the species wherever trees stand at all;
+    /// woods before drylands because the tree roll never asks about rainfall, so an arid thicket
+    /// is a thicket; highlands last of the specials because altitude decides nothing the others
+    /// have not already claimed; and the open meadow is only ever what the drier and higher names
+    /// left unclaimed, so a hot dry flat is drylands rather than a meadow that happens to be both.</para>
+    /// </remarks>
+    public Biome BiomeAt(int wx, int wz, int surface)
+    {
+        if (surface < SeaLevel)
+            return FrozenSurface(wx, wz) ? Biome.FrozenSea : Biome.Sea;
+
+        if (surface <= SeaLevel + 2)
+            return AridSurface(wx, wz) ? Biome.Dunes
+                 : WetShore(wx, wz) ? Biome.Marsh
+                 : Biome.Shore;
+
+        var snow = SnowDepth(wx, wz, surface);
+        if (snow > 0f) return Biome.Snowfield;
+        if (snow > -SnowDusting) return Biome.Tundra;
+
+        if (CherryGround(wx, wz)) return Biome.CherryGrove;
+
+        var density = ForestDensity(wx, wz);
+        if (density > WoodsLine) return Biome.Woods;
+        if (AridSurface(wx, wz)) return Biome.Drylands;
+        if (surface - SeaLevel >= HighlandRise) return Biome.Highlands;
+        if (density < MeadowLine) return Biome.Meadow;
+        return Biome.Woodland;
+    }
+
+    /// <summary>
     /// How far short of the snow line a column may sit and still carry a dusting of it.
     /// </summary>
     /// <remarks>
@@ -1164,7 +1271,7 @@ public sealed class TerrainGenerator
         // world the same handful of trees per hectare, which reads as orchard: no thickets to push
         // through, no clearings to come out into. This makes the odds themselves vary over a few
         // hundred blocks, so the world has woods and it has meadows.
-        var density = 0.62f + Noise.Fbm2(cellX * TreeGrid / 210f, cellZ * TreeGrid / 210f, _seedForest, 3) * 1.7f;
+        var density = ForestDensity(cellX * TreeGrid, cellZ * TreeGrid);
         if (Noise.Value2(cellX, cellZ, _seedTree) > density) return false;
 
         // Jitter inside the cell so the grid never shows through as rows.
@@ -1184,13 +1291,8 @@ public sealed class TerrainGenerator
 
         // ⛳ THE GROVES (#94): a slow field on its own derived seed decides which STANDS are
         // cherry — a split of the existing tree roll, the bush-and-pumpkin discipline, so no
-        // tree moves and no shipped field re-bands. Mild ground only: the blossom stays off the
-        // arid fringe and clear of the snow country.
-        // ⚠ The threshold is calibrated against fBm's REAL spread (typically ±0.2, the P0
-        // lesson), not its nominal ±1 — 0.22 here was the extreme tail and grew nothing on any
-        // seed at the gate's own sample.
-        var cherry = Noise.Fbm2(x / 240f, z / 240f, _seedCherry, 2) > 0.10f
-                     && _climate.Temperature(x, z) is > 0.38f and < HotLine;
+        // tree moves and no shipped field re-bands.
+        var cherry = CherryGround(x, z);
 
         spec = new TreeSpec(
             X: x,

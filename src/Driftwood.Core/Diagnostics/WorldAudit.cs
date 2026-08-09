@@ -269,6 +269,93 @@ public static class WorldAudit
                 $"  {registry[id].Name,-12} {counts[id],14:N0}  {pct,6:F2}%   y {minY[id]}..{maxY[id]}");
         }
 
+        // ⛳ THE PER-BIOME CENSUS — the ship criterion P4 was set. One walk over every column of
+        // the volume: the name from the classifier, the ground truth read off the world, and the
+        // two held against each other in the checks. The classifier reads the same rule objects
+        // the generator places by, so a disagreement here means one statement of a shared rule
+        // has been edited into two — the drift the agreement check exists to catch.
+        var biomeCounts = new long[Biomes.Count];
+        var biomeTrunks = new long[Biomes.Count];
+        var tundraDusted = 0L;
+        var tundraOpen = 0L;
+        var biomeDisagreements = 0L;
+        string? firstDisagreement = null;
+
+        for (var wz = minBlock; wz <= maxBlock; wz++)
+        for (var wx = minBlock; wx <= maxBlock; wx++)
+        {
+            var surface = generator.SurfaceHeight(wx, wz);
+            var biome = generator.BiomeAt(wx, wz, surface);
+            biomeCounts[(int)biome]++;
+
+            // What the name claims about the ground, asked of the ground itself. The sea rows are
+            // read at sea level (their surface is the seabed); everything else at its surface.
+            var groundY = biome is Biome.Sea or Biome.FrozenSea ? TerrainGenerator.SeaLevel : surface;
+            var ground = world.GetBlock(wx, groundY, wz);
+            var groundOk = biome switch
+            {
+                Biome.Sea => ground == ids.Water,
+                Biome.FrozenSea => ground == ids.Ice,
+                Biome.Shore or Biome.Dunes or Biome.Marsh => ground == ids.Sand,
+                Biome.Snowfield => ground == ids.Snow,
+                _ => ground == ids.Grass,
+            };
+
+            if (!groundOk)
+            {
+                biomeDisagreements++;
+                firstDisagreement ??=
+                    $"{Biomes.NameOf(biome)} at {wx},{wz} stands on {registry[ground.Value].Name}";
+            }
+
+            // Trunk bases, for the discrimination check: woods must actually be woodier.
+            var over = world.GetBlock(wx, surface + 1, wz);
+            if (over == ids.Log || over == ids.CherryLog) biomeTrunks[(int)biome]++;
+
+            // The dusting fringe: every open tundra column owes the layer. A tree part standing
+            // in the cell is the one honest excuse, so only bare air counts against it.
+            if (biome == Biome.Tundra)
+            {
+                if (over == ids.SnowLayer) tundraDusted++;
+                else if (over.IsAir) tundraOpen++;
+            }
+        }
+
+        var biomeColumns = (long)(maxBlock - minBlock + 1) * (maxBlock - minBlock + 1);
+
+        // ⛳ Shares are judged over a fixed span, the relief probe's own reason: the forest field's
+        // wavelength is 210 blocks, so a 384-block window holds two or three patches of it and the
+        // share of any one name swings by half with the sample — seed 'tidefall' read woods at
+        // 2.8% of a window whose seed carries the usual amount of wood. The wide probe crosses
+        // twenty wavelengths and answers for the SEED; the walked census above answers for THIS
+        // WORLD, which is why the agreement and rung checks stay on it.
+        var wideBiomes = new long[Biomes.Count];
+        for (var wz = -ReliefProbeSpan / 2; wz < ReliefProbeSpan / 2; wz += 16)
+        for (var wx = -ReliefProbeSpan / 2; wx < ReliefProbeSpan / 2; wx += 16)
+            wideBiomes[(int)generator.BiomeAt(wx, wz)]++;
+
+        long wideTotal = 0;
+        foreach (var c in wideBiomes) wideTotal += c;
+
+        sb.AppendLine();
+        sb.AppendLine("biome census");
+        for (var b = 0; b < Biomes.Count; b++)
+        {
+            var wideShare = wideBiomes[b] * 100.0 / wideTotal;
+            if (biomeCounts[b] == 0)
+            {
+                sb.AppendLine($"  {Biomes.NameOf((Biome)b),-12} {"absent",14}           "
+                    + $"          seed-wide {wideShare,5:F1}%");
+                continue;
+            }
+
+            var share = biomeCounts[b] * 100.0 / biomeColumns;
+            var trunkRate = biomeTrunks[b] * 1000.0 / biomeCounts[b];
+            sb.AppendLine(
+                $"  {Biomes.NameOf((Biome)b),-12} {biomeCounts[b],14:N0}  {share,6:F2}%   "
+                + $"trunks/1k {trunkRate,6:F1}   seed-wide {wideShare,5:F1}%");
+        }
+
         // Sanity gates. Each one has caught a real class of generator bug: an empty world, a
         // world with no sky, ore that never rolled, a sea that never filled, trees that all
         // failed their surface test.
@@ -674,6 +761,74 @@ public static class WorldAudit
                 ? $"{registry.Count - crafted - derived - climatic.Count - 1} of {registry.Count - 1} blocks generate; "
                   + $"{crafted} are built, {derived} only ever flow, {climatic.Count} is climate's to grant"
                 : $"never generated: {string.Join(", ", missing)}");
+
+        // ⛳ THE BIOME CHECKS. Agreement is strict zero: the classifier reads the very rules the
+        // generator places by, so any column standing on the wrong material means a shared rule
+        // has been forked or the classification order no longer matches the placement order.
+        Check("a biome's ground agrees with its name", biomeDisagreements == 0,
+            biomeDisagreements == 0
+                ? $"{biomeColumns:N0} columns, every one on the material its name claims"
+                : $"{biomeDisagreements:N0} disagree; first: {firstDisagreement}");
+
+        // Only the everyday biomes are demanded — frozen sea, dunes, marsh, cherry groves and
+        // drylands are climate's to grant, the material census's own discipline, and each is
+        // already held by its block's equivalence check the moment its climate exists. Existence
+        // is asked of the seed-wide probe, not the window: a narrow window legitimately misses a
+        // rare name the seed carries.
+        var everyday = new[]
+        {
+            Biome.Sea, Biome.Shore, Biome.Snowfield, Biome.Tundra,
+            Biome.Woods, Biome.Woodland, Biome.Meadow,
+        };
+        var absentEveryday = everyday.Where(b => wideBiomes[(int)b] == 0).ToArray();
+        Check("the everyday biomes exist", absentEveryday.Length == 0,
+            absentEveryday.Length == 0
+                ? "sea, shore, snowfield, tundra, woods, woodland and meadow all present seed-wide"
+                : $"absent: {string.Join(", ", absentEveryday.Select(Biomes.NameOf))}");
+
+        // The woodland is the everyday ground and the other two are its tails, so the bands hold
+        // the SHAPE of the three-way split — as shares of the treed ground itself, seed-wide.
+        // Measured against all five calibration seeds; the denominator is the ore bands' lesson
+        // (climate steals columns from all three, so "of all columns" swings with every seed's
+        // snow) and the wide span is the sample-size lesson beside the census above.
+        var treedWide = wideBiomes[(int)Biome.Woods] + wideBiomes[(int)Biome.Woodland]
+                      + wideBiomes[(int)Biome.Meadow];
+        var woodsOfTreed = treedWide == 0 ? 0 : wideBiomes[(int)Biome.Woods] * 100.0 / treedWide;
+        var woodlandOfTreed = treedWide == 0 ? 0 : wideBiomes[(int)Biome.Woodland] * 100.0 / treedWide;
+        var meadowOfTreed = treedWide == 0 ? 0 : wideBiomes[(int)Biome.Meadow] * 100.0 / treedWide;
+        // Measured across all five calibration seeds: woodland 54.2-55.7, woods 27.0-29.1,
+        // meadow 15.9-18.5 — the split is a property of the forest field's own distribution, so
+        // it barely moves by seed and the bands can sit close. What they cannot catch: a change
+        // that moves BOTH lines together in a way that trades woodland against the two tails in
+        // equal measure — the rung check is the one that would see the look itself change.
+        Check("woodland share in band", woodlandOfTreed is > 45 and < 65,
+            $"{woodlandOfTreed:F1}% of treed ground (want 45-65)");
+        Check("woods share in band", woodsOfTreed is > 18 and < 40,
+            $"{woodsOfTreed:F1}% of treed ground (want 18-40)");
+        Check("meadow share in band", meadowOfTreed is > 8 and < 30,
+            $"{meadowOfTreed:F1}% of treed ground (want 8-30)");
+
+        // The one claim the names make that a material census cannot: the three rungs must be in
+        // order AND spread — woods over woodland over meadow in trunk cells per thousand columns,
+        // with the wood at least three times the meadow. Order and MAGNITUDE, the tool-tier lesson.
+        var woodsTrunkRate = biomeCounts[(int)Biome.Woods] == 0 ? 0
+            : biomeTrunks[(int)Biome.Woods] * 1000.0 / biomeCounts[(int)Biome.Woods];
+        var woodlandTrunkRate = biomeCounts[(int)Biome.Woodland] == 0 ? 0
+            : biomeTrunks[(int)Biome.Woodland] * 1000.0 / biomeCounts[(int)Biome.Woodland];
+        var meadowTrunkRate = biomeCounts[(int)Biome.Meadow] == 0 ? 0
+            : biomeTrunks[(int)Biome.Meadow] * 1000.0 / biomeCounts[(int)Biome.Meadow];
+        Check("the tree rungs are in order",
+            woodsTrunkRate > woodlandTrunkRate && woodlandTrunkRate > meadowTrunkRate
+            && woodsTrunkRate >= meadowTrunkRate * 3 && woodsTrunkRate > 0,
+            $"trunk cells/1k: woods {woodsTrunkRate:F1} > woodland {woodlandTrunkRate:F1} > "
+            + $"meadow {meadowTrunkRate:F1} (want ordered, woods at least 3x meadow)");
+
+        // Every open tundra column owes its dusting — the layer rule and the tundra band are the
+        // same numbers, so bare grass in the fringe means the placement no longer matches.
+        Check("the dusting fringe is dusted", tundraOpen == 0 && tundraDusted > 0,
+            tundraOpen == 0
+                ? $"{tundraDusted:N0} dusted columns, none bare"
+                : $"{tundraOpen:N0} tundra columns bare over grass");
 
         // Ore gets a band, not a floor. Too little and mining never gates progression; too much
         // and it stops being a reward. A floor-only check passes a world where one stone block
