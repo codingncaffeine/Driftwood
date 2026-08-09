@@ -165,6 +165,11 @@ public static class CreatureSet
     {
         // The reference's medium size class: an eight-unit cube drawn at two is a one-block slime.
         ["slime"] = 2f,
+
+        // The reference client's own figures for the small ones, read off its renderers: a rabbit
+        // authored seventeen units tall is drawn at three fifths, a cat at four.
+        ["rabbit"] = 0.6f,
+        ["cat"] = 0.8f,
     };
 
     public static float DrawScaleFor(string kind) => DrawScales.GetValueOrDefault(kind, 1f);

@@ -408,6 +408,9 @@ public sealed class CreatureHerd
     /// <summary>Half-hearts a second the sun costs one that burns in it.</summary>
     public const float ScorchRate = 1.6f;
 
+    /// <summary>Blocks within which a timid kind bolts from an approach nothing has swung in.</summary>
+    public const float ShyRange = 6f;
+
     /// <summary>The two ends of a blink's reach, in blocks. Far enough to break a corner.</summary>
     public const float BlinkNear = 4f;
 
@@ -1048,6 +1051,26 @@ public sealed class CreatureHerd
                 }
             }
 
+            // A timid kind bolts from an approach nothing has swung in — the fox's whole
+            // character. Renewed while the walker keeps closing, so it stays ahead of them.
+            if (creature.FleeFor <= 0f && player is { } stroller
+                && CreatureVitals.Timid(creature.Kind)
+                && Vector3.DistanceSquared(stroller, creature.Position) < ShyRange * ShyRange)
+            {
+                var off = creature.Position - stroller;
+                off.Y = 0f;
+
+                if (off.LengthSquared() > 1e-6f)
+                {
+                    creature.Yaw = float.RadiansToDegrees(MathF.Atan2(off.Z, off.X));
+                    creature.WantsYaw = creature.Yaw;
+                }
+
+                creature.Moving = true;
+                creature.FleeFor = 1.2f;
+                creature.Thinks = 0.6f;
+            }
+
             Scorch(creature, dt, sunlit);
             var hunting = Hunt(creature, dt, player);
             var courting = !hunting && Court(creature, dt);
@@ -1478,6 +1501,61 @@ public sealed class CreatureHerd
         faults.AddRange(ValidateHopping());
         faults.AddRange(ValidateFusing());
         faults.AddRange(ValidateBlinking());
+        faults.AddRange(ValidateShyness());
+
+        return faults;
+    }
+
+    /// <summary>
+    /// Checks a timid kind bolts from a mere approach — and that an ordinary beast does not.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>The cow is the control.</b> Both stand four blocks from somebody who never swings;
+    /// the fox must be fleeing and further away within two seconds, the cow must not be fleeing
+    /// at all — or "it ran" is true of a rule that panics every beast at the sight of people.
+    /// </remarks>
+    private static List<string> ValidateShyness()
+    {
+        var faults = new List<string>();
+
+        static bool Flat(int x, int y, int z) => y < 64;
+
+        var walker = new Vector3(0.5f, 64f, 0.5f);
+
+        var foxes = new CreatureHerd(71);
+        foxes.Spawn(Flat, [new SpawnKind("fox", new Vector3(0.6f, 0.9f, 1.1f))], new Vector3(0f, 64f, 0f), 1);
+        if (foxes.Count != 1) return ["no fox stood up for the shyness check"];
+
+        var fox = foxes.All[0];
+        fox.Position = new Vector3(0.5f, 64f, 4.5f);
+        fox.Moving = false;
+
+        // ⚠ "Did it bolt", not "is it fleeing at the final frame" — the flee flag honestly
+        // expires once the fox has put the shy range behind it, which is the mechanism working.
+        var was = Vector3.Distance(fox.Position, walker);
+        var bolted = false;
+
+        for (var i = 0; i < 120; i++)
+        {
+            foxes.Update(1f / 60f, Flat, walker);
+            bolted |= fox.FleeFor > 0f;
+        }
+
+        if (!bolted) faults.Add("a fox four blocks from somebody never bolted");
+        if (Vector3.Distance(fox.Position, walker) < was + 1.5f)
+            faults.Add($"a shy fox opened only {Vector3.Distance(fox.Position, walker) - was:F1} blocks in two seconds");
+
+        var cows = new CreatureHerd(73);
+        cows.Spawn(Flat, [new SpawnKind("cow", new Vector3(0.75f, 1.56f, 1.50f))], new Vector3(0f, 64f, 0f), 1);
+        if (cows.Count == 1)
+        {
+            var cow = cows.All[0];
+            cow.Position = new Vector3(0.5f, 64f, 4.5f);
+
+            for (var i = 0; i < 120; i++) cows.Update(1f / 60f, Flat, walker);
+
+            if (cow.FleeFor > 0f) faults.Add("a cow fled from somebody who never swung");
+        }
 
         return faults;
     }

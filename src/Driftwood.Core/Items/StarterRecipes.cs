@@ -482,6 +482,12 @@ public static class StarterRecipes
         foreach (var meat in StarterItems.Meats)
             Smelt($"raw_{meat.Name}", $"cooked_{meat.Name}", work: SmeltWork.Food);
 
+        // The rabbit's, standing outside the meat table for the layer-numbering reason its items
+        // do. And its hide: four in a square make a leather, so a warren is a slow tannery and
+        // the first armour no longer strictly needs a cow.
+        Smelt("raw_rabbit", "cooked_rabbit", work: SmeltWork.Food);
+        Shaped("leather from hides", "leather", 1, ["MM", "MM"], "rabbit_hide");
+
         // ⛳ And the one crop worth cooking, which finally gives the smoker something to do that does
         // not involve an animal — it has been a station for meat alone since the day it landed.
         Smelt("potato", "baked_potato", work: SmeltWork.Food);

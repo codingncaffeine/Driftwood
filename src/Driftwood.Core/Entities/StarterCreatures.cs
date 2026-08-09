@@ -420,10 +420,134 @@ public static class StarterCreatures
                 Box(1f, 0f, -1f, 2f, 30f, 2f, 56, 0, mirror: true)),
         ]);
 
+    /// <summary>
+    /// The small quick one: a tilted trunk on haunches, with the ears that are half its height.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ Nearly every bone carries a bind pose — the trunk, haunches and tail lean back twenty
+    /// degrees, the front legs ten, each ear fifteen out sideways — and each reaches its own boxes
+    /// only, exactly as the reference authors it. Drawn at 0.6, the reference's own figure.
+    /// </remarks>
+    public static CreatureModel Rabbit() => new(
+        "rabbit", 64, 32,
+        [
+            Posed("body", "", new Vector3(0f, 5f, 8f), new Vector3(-20f, 0f, 0f),
+                Box(-3f, 2f, -2f, 6f, 5f, 10f, 0, 0, mirror: true)),
+
+            Bone("head", "body", new Vector3(0f, 8f, -1f),
+                Box(-2.5f, 8f, -6f, 5f, 4f, 5f, 32, 0, mirror: true)),
+
+            Posed("earRight", "body", new Vector3(0f, 8f, -1f), new Vector3(0f, -15f, 0f),
+                Box(-2.5f, 12f, -2f, 2f, 5f, 1f, 58, 0, mirror: true)),
+
+            Posed("earLeft", "body", new Vector3(0f, 8f, -1f), new Vector3(0f, 15f, 0f),
+                Box(0.5f, 12f, -2f, 2f, 5f, 1f, 52, 0, mirror: true)),
+
+            Bone("nose", "body", new Vector3(0f, 8f, -1f),
+                Box(-0.5f, 9.5f, -6.5f, 1f, 1f, 1f, 32, 9, mirror: true)),
+
+            Posed("haunchLeft", "body", new Vector3(3f, 6.5f, 3.7f), new Vector3(-20f, 0f, 0f),
+                Box(2f, 2.5f, 3.7f, 2f, 4f, 5f, 16, 15, mirror: true)),
+
+            Posed("haunchRight", "body", new Vector3(-3f, 6.5f, 3.7f), new Vector3(-20f, 0f, 0f),
+                Box(-4f, 2.5f, 3.7f, 2f, 4f, 5f, 30, 15, mirror: true)),
+
+            Bone("rearFootLeft", "body", new Vector3(3f, 6.5f, 3.7f),
+                Box(2f, 0f, 0f, 2f, 1f, 7f, 8, 24, mirror: true)),
+
+            Bone("rearFootRight", "body", new Vector3(-3f, 6.5f, 3.7f),
+                Box(-4f, 0f, 0f, 2f, 1f, 7f, 26, 24, mirror: true)),
+
+            Posed("frontLegLeft", "body", new Vector3(3f, 7f, -1f), new Vector3(-10f, 0f, 0f),
+                Box(2f, 0f, -2f, 2f, 7f, 2f, 8, 15, mirror: true)),
+
+            Posed("frontLegRight", "body", new Vector3(-3f, 7f, -1f), new Vector3(-10f, 0f, 0f),
+                Box(-4f, 0f, -2f, 2f, 7f, 2f, 0, 15, mirror: true)),
+
+            Posed("tail", "body", new Vector3(0f, 4f, 7f), new Vector3(-20f, 0f, 0f),
+                Box(-1.5f, 2.5f, 7f, 3f, 3f, 2f, 52, 6, mirror: true)),
+        ]);
+
+    /// <summary>
+    /// The rust-red one: a wolf's posture wearing sharper lines and a brush of a tail.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ The reference's file opens with two empty rigging bones (<c>world</c>, <c>root</c>) and a
+    /// second whole head for its sleeping pose; neither is carried — an empty bone draws nothing
+    /// and we do not sleep. ⚠ Its first ear reads uv (0,0), overlapping the skull's own patch —
+    /// the reference's file does exactly this, and painting ears after the skull is what resolves
+    /// it, the wolf's own arrangement.
+    /// </remarks>
+    public static CreatureModel Fox() => new(
+        "fox", 64, 32,
+        [
+            LaidDown("body", "", new Vector3(0f, 8f, 0f),
+                Box(-3f, 0f, -3f, 6f, 11f, 6f, 30, 15)),
+
+            Bone("head", "body", new Vector3(0f, 8f, -3f),
+                Box(-4f, 4f, -9f, 8f, 6f, 6f, 0, 0),
+                Box(-4f, 10f, -8f, 2f, 2f, 1f, 0, 0),
+                Box(2f, 10f, -8f, 2f, 2f, 1f, 22, 0),
+                Box(-2f, 4f, -12f, 4f, 2f, 3f, 0, 24)),
+
+            Bone("leg0", "body", new Vector3(-3f, 6f, 6f),
+                Box(-3.005f, 0f, 5f, 2f, 6f, 2f, 14, 24)),
+
+            Bone("leg1", "body", new Vector3(1f, 6f, 6f),
+                Box(1.005f, 0f, 5f, 2f, 6f, 2f, 22, 24)),
+
+            Bone("leg2", "body", new Vector3(-3f, 6f, -1f),
+                Box(-3.005f, 0f, -2f, 2f, 6f, 2f, 14, 24)),
+
+            Bone("leg3", "body", new Vector3(1f, 6f, -1f),
+                Box(1.005f, 0f, -2f, 2f, 6f, 2f, 22, 24)),
+
+            Posed("tail", "body", new Vector3(0f, 8f, 7f), new Vector3(80f, 0f, 0f),
+                Box(-2f, -2f, 4.75f, 4f, 9f, 5f, 28, 0)),
+        ]);
+
+    /// <summary>
+    /// The quiet one: long and low, on a two-jointed tail.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ Its trunk and both tail joints are authored on end and laid down by nineties, each
+    /// reaching its own box only. Drawn at 0.8, the reference's own figure.
+    /// </remarks>
+    public static CreatureModel Cat() => new(
+        "cat", 64, 32,
+        [
+            LaidDown("body", "", new Vector3(0f, 7f, 1f),
+                Box(-2f, -1f, -2f, 4f, 16f, 6f, 20, 0)),
+
+            Bone("head", "body", new Vector3(0f, 9f, -9f),
+                Box(-2.5f, 7f, -12f, 5f, 4f, 5f, 0, 0),
+                Box(-1.5f, 7.02f, -13f, 3f, 2f, 2f, 0, 24),
+                Box(-2f, 11f, -9f, 1f, 1f, 2f, 0, 10),
+                Box(1f, 11f, -9f, 1f, 1f, 2f, 6, 10)),
+
+            Posed("tail1", "body", new Vector3(0f, 9f, 8f), new Vector3(90f, 0f, 0f),
+                Box(-0.5f, 1f, 8f, 1f, 8f, 1f, 0, 15)),
+
+            Posed("tail2", "tail1", new Vector3(0f, 9f, 16f), new Vector3(90f, 0f, 0f),
+                Box(-0.5f, 1f, 16f, 1f, 8f, 1f, 4, 15)),
+
+            Bone("backLegL", "body", new Vector3(1.1f, 6f, 7f),
+                Box(0.1f, 0f, 6f, 2f, 6f, 2f, 8, 13)),
+
+            Bone("backLegR", "body", new Vector3(-1.1f, 6f, 7f),
+                Box(-2.1f, 0f, 6f, 2f, 6f, 2f, 8, 13)),
+
+            Bone("frontLegL", "body", new Vector3(1.2f, 10f, -4f),
+                Box(0.2f, 0.2f, -5f, 2f, 10f, 2f, 40, 0)),
+
+            Bone("frontLegR", "body", new Vector3(-1.2f, 10f, -4f),
+                Box(-2.2f, 0.2f, -5f, 2f, 10f, 2f, 40, 0)),
+        ]);
+
     /// <summary>Every creature that ships with the game, by our name for it.</summary>
     public static IReadOnlyList<CreatureModel> All { get; } =
         [Cow(), Pig(), Sheep(), Chicken(), Wolf(), Zombie(), Drowned(), Husk(), Skeleton(), Spider(),
-         Slime(), Crawler(), Farwalker()];
+         Slime(), Crawler(), Farwalker(), Rabbit(), Fox(), Cat()];
 
     /// <summary>Ours for this creature, or null when we have not drawn one yet.</summary>
     public static CreatureModel? ByName(string name)

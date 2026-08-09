@@ -124,6 +124,15 @@ public static class CreatureVitals
     private static readonly HashSet<string> Blinkers = new(StringComparer.Ordinal) { "farwalker" };
 
     /// <summary>
+    /// Kinds that will not be walked up to: they bolt at approach, unstruck.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ The fox's whole character. A cow lets you stand beside it and a fox never does — which
+    /// is what makes its drop-less presence in a meadow a texture rather than a missing feature.
+    /// </remarks>
+    private static readonly HashSet<string> Timids = new(StringComparer.Ordinal) { "fox" };
+
+    /// <summary>
     /// The kinds the sun does not agree with.
     /// </summary>
     /// <remarks>
@@ -154,6 +163,9 @@ public static class CreatureVitals
 
     /// <summary>True when this kind steps through space rather than being cornered.</summary>
     public static bool Blinks(string kind) => Blinkers.Contains(kind);
+
+    /// <summary>True when this kind bolts from an approach nothing has swung in.</summary>
+    public static bool Timid(string kind) => Timids.Contains(kind);
 
     /// <summary>True when full daylight sets this one alight.</summary>
     public static bool BurnsInDaylight(string kind) => Burns.Contains(kind);

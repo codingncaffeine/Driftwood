@@ -560,7 +560,17 @@ public static class StarterBlocks
     public const ushort LayerGunpowder = LayerCobweb + 2;
     public const ushort LayerFarpearl = LayerCobweb + 3;
 
-    public const int LayerCount = LayerFarpearl + 1;
+    /// <summary>The rabbit's pair of meats and its hide.</summary>
+    /// <remarks>
+    /// ⚠ NOT rows in <c>StarterItems.Meats</c> — that table's icon layers are a run in the middle
+    /// of this numbering, so a fifth meat there would renumber everything after it. The rabbit
+    /// registers standalone, the rotten-flesh arrangement.
+    /// </remarks>
+    public const ushort LayerRawRabbit = LayerCobweb + 4;
+    public const ushort LayerCookedRabbit = LayerCobweb + 5;
+    public const ushort LayerRabbitHide = LayerCobweb + 6;
+
+    public const int LayerCount = LayerRabbitHide + 1;
 
     /// <summary>One anvil's name, by how worn it is and which way it lies.</summary>
     /// <remarks>

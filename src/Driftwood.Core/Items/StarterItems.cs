@@ -555,6 +555,23 @@ public static class StarterItems
         // The farwalker's pearl — the teleport reagent M1's summons are written against.
         Loose(items, "farpearl", "farpearl", StarterBlocks.LayerFarpearl);
 
+        // The rabbit's pair and its hide. ⚠ Standalone rather than rows in Meats, because that
+        // table's icon layers are a fixed run mid-numbering — see StarterBlocks.LayerRawRabbit.
+        // The chicken's own feed values: a small animal is a light meal.
+        items.Register(new ItemType
+        {
+            Name = "raw_rabbit", Label = "raw rabbit",
+            IconLayer = StarterBlocks.LayerRawRabbit, Feeds = 1,
+        });
+
+        items.Register(new ItemType
+        {
+            Name = "cooked_rabbit", Label = "cooked rabbit",
+            IconLayer = StarterBlocks.LayerCookedRabbit, Feeds = 5,
+        });
+
+        Loose(items, "rabbit_hide", "rabbit hide", StarterBlocks.LayerRabbitHide);
+
         items.Register(new ItemType
         {
             Name = "rotten_flesh", Label = "rotten flesh",
@@ -796,7 +813,15 @@ public static class StarterItems
 
         // Sometimes. A farwalker is the hardest fight on the roster — 80 health, hits for 7,
         // cannot be cornered — and the pearl is why anybody picks that fight.
-        new CreatureDrops.Rule("farwalker", DropTrigger.Killed, "farpearl", 0, 1));
+        new CreatureDrops.Rule("farwalker", DropTrigger.Killed, "farpearl", 0, 1),
+
+        // The quiet beasts. The rabbit follows the animal rule — a meal and a component; four
+        // hides make a leather at the bench, so a warren is a slow tannery. The fox leaves
+        // nothing and that is its character: it exists to be seen, not farmed. The cat's string
+        // is the reference's own answer read across.
+        new CreatureDrops.Rule("rabbit", DropTrigger.Killed, "raw_rabbit", 1, 1),
+        new CreatureDrops.Rule("rabbit", DropTrigger.Killed, "rabbit_hide", 0, 1),
+        new CreatureDrops.Rule("cat", DropTrigger.Killed, "string", 0, 2));
 
     /// <summary>What every stage of every root crop leaves when it is pulled up.</summary>
     /// <remarks>

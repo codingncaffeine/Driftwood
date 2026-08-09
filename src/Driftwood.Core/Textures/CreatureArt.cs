@@ -115,6 +115,20 @@ public static class CreatureArt
         // whole of what a farwalker looks like. Purple-shifted so it does not read as the spider.
         ["farwalker"] = new(
             (30, 28, 40), (44, 38, 58), (20, 18, 28), (198, 182, 224), 0.14f, 0.09f, FaceKind.Eyes),
+
+        // ── The quiet beasts. ──
+        // Warm sand-brown over a cream belly. ⚠ The muzzle is well DARKER than the coat on
+        // purpose: this head is five texels wide, and a face at that size has to spend its few
+        // pixels on contrast or the audit's own face check reads it as bare — it did.
+        ["rabbit"] = new((150, 122, 92), (208, 194, 172), (112, 84, 74), (120, 96, 76), 0.18f, 0.07f),
+
+        // Rust over a white chest and chin — the one warm-orange animal in the game, which is
+        // most of how it reads as a fox at all. Legs go dark through the hoof rule.
+        ["fox"] = new((196, 116, 58), (226, 218, 206), (52, 40, 34), (40, 32, 28), 0.26f, 0.08f),
+
+        // A grey tabby: stone-grey brindled darker, a pale muzzle, a pink nose. Held apart from
+        // the wolf's storm-grey by the audit's own distance check.
+        ["cat"] = new((138, 126, 112), (96, 86, 74), (196, 186, 172), (176, 128, 118), 0.30f, 0.09f),
     };
 
     /// <summary>True when we have colours for this creature.</summary>
@@ -187,6 +201,7 @@ public static class CreatureArt
         "beak" => Part.Muzzle,
         "comb" => Part.Horn,
         "mouth" => Part.Muzzle,
+        "nose" => Part.Muzzle,
 
         // ⛔ The slime's shell. Left entirely unpainted — transparent texels are discarded by the
         // cutout shader, which is the only honest way to draw a translucent thing without blending.
@@ -194,8 +209,15 @@ public static class CreatureArt
         "gel" => Part.Shell,
 
         var n when n.StartsWith("eye", StringComparison.Ordinal) => Part.Eye,
-        var n when n.StartsWith("leg", StringComparison.Ordinal) => Part.Leg,
+        var n when n.StartsWith("ear", StringComparison.Ordinal) => Part.Horn,
         var n when n.StartsWith("wing", StringComparison.Ordinal) => Part.Wing,
+
+        // Legs under every naming the models actually use: leg0, frontLegLeft, backLegR,
+        // rearFootRight, haunchLeft. The haunch is a leg's thigh and shades with it.
+        var n when n.Contains("leg", StringComparison.OrdinalIgnoreCase)
+                || n.Contains("foot", StringComparison.OrdinalIgnoreCase)
+                || n.StartsWith("haunch", StringComparison.Ordinal) => Part.Leg,
+
         _ => Part.Body,
     };
 

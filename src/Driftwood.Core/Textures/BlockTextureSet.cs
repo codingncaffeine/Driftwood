@@ -447,6 +447,10 @@ public static class BlockTextureSet
 
         // Ours is the farwalker's pearl; the pack paints it under the reference's coined name.
         new("farpearl", "textures/item/ender_pearl.png", true, "textures/items/ender_pearl.png"),
+
+        new("raw_rabbit", "textures/item/rabbit.png", true, "textures/items/rabbit_raw.png"),
+        new("cooked_rabbit", "textures/item/cooked_rabbit.png", true, "textures/items/rabbit_cooked.png"),
+        new("rabbit_hide", "textures/item/rabbit_hide.png", true, "textures/items/rabbit_hide.png"),
     ];
 
     /// <summary>
@@ -1379,6 +1383,14 @@ public static class BlockTextureSet
             // The farpearl is a lump in the farwalker's own eye-violet — the drop wearing the one
             // colour anybody has ever seen of the thing it came off.
             StarterBlocks.LayerFarpearl => TileGen.IconLump(1352, 148, 132, 178),
+
+            // The rabbit's pair, on the chicken's leg drawing — a small meat is a small meat —
+            // and its hide on the leather drawing, paler, the way the animal is paler than a cow.
+            StarterBlocks.LayerRawRabbit =>
+                TileGen.IconMeat(1353, 214, 160, 138, TileGen.MeatShape.Leg, cooked: false),
+            StarterBlocks.LayerCookedRabbit =>
+                TileGen.IconMeat(1354, 214, 160, 138, TileGen.MeatShape.Leg, cooked: true),
+            StarterBlocks.LayerRabbitHide => TileGen.IconLeather(1355, 196, 158, 118),
 
             _ => Wheat(layer) ?? Crop(layer) ?? CropIcon(layer) ?? StainedGlass(layer)
                  ?? MetalBlock(layer) ?? Wool(layer) ?? Meat(layer) ?? Dye(layer)
