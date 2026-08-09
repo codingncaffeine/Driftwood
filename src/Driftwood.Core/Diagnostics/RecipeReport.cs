@@ -201,6 +201,12 @@ public static class RecipeReport
         foreach (var smelt in book.Smelting)
         foreach (var member in smelt.Input.Members) consumed.Add(member);
 
+        // ⛳ The composter is a consumer the book cannot see: a helping thrown in is spent as
+        // surely as an ingredient, and seeds' only sink is that bin. Read off Composting's own
+        // rulebook rather than restated, so a new compostable is counted the day it is added.
+        foreach (var name in Composting.Accepted)
+            if (items.TryByName(name, out var composted)) consumed.Add(composted.Id);
+
         // ⛔ EVERY EXCLUSION IS NAMED, because the first run of this listed thirty-four items and
         // thirty-two of them were fine — twenty-four tools, a pair of shears, three buckets. A
         // findings list that is mostly noise is read once and then never again, which is the same
@@ -213,13 +219,15 @@ public static class RecipeReport
             if (consumed.Contains(type.Id)) continue;
             if (type.IsFuel || type.IsFood || type.Wears is not null) continue;
             if (type.Places is not null) continue;   // a block you put down is its own purpose
+            if (Buckets.IsCarrier(type.Name)) continue;   // a carrier is used, never consumed
 
             // ⚠ Counted rather than listed, and it is a real gap in a way the others are not: the
             // smithing table is meant to take a tool and a material and hand back the tool a tier
             // up, which is the one recipe in the plan that consumes one. See #58.
             if (type.IsTool) { tools++; continue; }
 
-            findings.Add(new Finding("nothing-consumes-it", type.Name, "no recipe or smelt takes it"));
+            findings.Add(new Finding(
+                "nothing-consumes-it", type.Name, "no recipe, smelt or composter takes it"));
         }
 
         if (tools > 0)

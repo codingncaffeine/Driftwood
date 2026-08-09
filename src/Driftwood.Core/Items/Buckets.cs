@@ -90,4 +90,15 @@ public static class Buckets
         "lava_bucket" => FluidKind.Lava,
         _ => FluidKind.None,
     };
+
+    /// <summary>
+    /// True of the bucket family — empty or full. A carrier is used, never consumed: filling one
+    /// does not spend it any more than swinging spends a pickaxe.
+    /// </summary>
+    /// <remarks>
+    /// Answered here rather than by a name list in a report, so a third fluid's bucket joins the
+    /// family the day <see cref="Holds"/> learns it.
+    /// </remarks>
+    public static bool IsCarrier(string item) =>
+        item == "bucket" || Holds(item) != FluidKind.None;
 }
