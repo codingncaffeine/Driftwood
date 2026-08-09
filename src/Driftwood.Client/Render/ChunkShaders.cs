@@ -34,6 +34,8 @@ public static class ChunkShaders
         out vec3 vLight;
         out vec3 vUvw;
         out float vFog;
+        out vec3 vWorld;
+        out vec3 vShade;   // AO and climate tint alone, for light added per fragment
 
         // Index 6 is the model format's "do not shade": a plant's two crossed planes face opposite
         // ways and must not come out one bright and one dark, so both are lit as if facing up.
@@ -114,6 +116,12 @@ public static class ChunkShaders
             // one a fragment.
             vLight = max(light, uNightFloor) * kAo[ao] * uTint[tint];
 
+            // And the same two factors alone, for the carried light the fragment shader adds —
+            // it has to sit under the same shade and tint as the baked light or a hand-lit
+            // corner ignores its own occlusion.
+            vShade = kAo[ao] * uTint[tint];
+            vWorld = world;
+
             // A merged cube face takes its texture coordinates from where the corner is in the
             // world, projected onto the two axes lying in its face. Nothing is stored per vertex: a
             // quad spanning six blocks lands on uv 0..6 and the sampler's repeat wrapping tiles it,
@@ -147,10 +155,16 @@ public static class ChunkShaders
         in vec3 vLight;
         in vec3 vUvw;
         in float vFog;
+        in vec3 vWorld;
+        in vec3 vShade;
 
         uniform sampler2DArray uBlocks;
         uniform vec3 uFogColor;
         uniform float uAlpha;
+        uniform vec3 uHeldPos;     // where the carried light is, in world space
+        uniform vec3 uHeldLight;   // its colour and strength, zero when the hands are dark
+        uniform float uHeldRange;  // blocks to nothing — one number, owned by the host
+        uniform float uTime;       // shared with the vertex stage: same clock, same sway
 
         out vec4 FragColor;
 
@@ -162,11 +176,25 @@ public static class ChunkShaders
             // keeps them in the opaque pass, where they need no sorting and still write depth.
             if (texel.a < 0.5) discard;
 
+            // ⛳ THE LIGHT CARRIED IN A HAND: a point of the held block's own colours, falling
+            // linearly to nothing, breathing with the same firelight sway as everything else,
+            // under the fragment's own occlusion and tint. Per FRAGMENT rather than per vertex,
+            // because greedy quads span whole walls — a light evaluated only at a quad's corners
+            // leaves the wall dark at its middle, which is exactly where you are standing.
+            // It knows nothing of walls (no flood runs here), so a thin wall leaks a faint glow;
+            // at this radius that is the trade every carried light in the genre makes.
+            vec3 held = uHeldLight * clamp(1.0 - distance(vWorld, uHeldPos) / uHeldRange, 0.0, 1.0);
+            float sway = sin(uTime * 2.6 + vWorld.x * 1.7 + vWorld.z * 2.3)
+                       + sin(uTime * 7.1 + vWorld.y * 2.9 - vWorld.x * 1.1);
+            held *= 0.95 + 0.025 * sway;
+
+            vec3 light = max(vLight, held * vShade);
+
             // ⛳ Alpha belongs to the PASS, not to the tile. Water's own texture is fully opaque and
             // has to stay that way — the cutout discard above and the whole mip chain are built on
             // every block texture being one or the other — so what makes a lake see-through is which
             // pass drew it. The opaque pass sets this to one and pays nothing.
-            FragColor = vec4(mix(texel.rgb * vLight, uFogColor, vFog), uAlpha);
+            FragColor = vec4(mix(texel.rgb * light, uFogColor, vFog), uAlpha);
         }
         """;
 }

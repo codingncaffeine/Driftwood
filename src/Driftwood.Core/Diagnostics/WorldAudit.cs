@@ -1089,6 +1089,35 @@ public static class WorldAudit
                 ? string.Join("; ", creatureDrops.Describe())
                 : $"{creatureDropFaults.Count} faults: {creatureDropFaults[0]}");
 
+        // ⛳ The carried-light rule, held to its readable cases: a lantern in a hand sheds the
+        // lantern block's own light, a torch the torch's — and the campfire GLOWS, because the
+        // item is registered "put down alight" and the rule answers with the block it places.
+        // (This check's first draft expected the campfire dark and the check corrected the
+        // author, which is the direction that proves it is measuring.) A block with no emission
+        // and an empty hand shed nothing. The falloff and the sway are the client's; what can go
+        // quietly wrong here is the resolution, so the resolution is what is pinned, as literals.
+        var glowFaults = new List<string>();
+
+        void Glow(string name, ushort want)
+        {
+            var got = HeldGlow.Of(name.Length == 0 ? null : items.ByName(name), registry);
+            if (got != want)
+                glowFaults.Add(
+                    $"'{(name.Length == 0 ? "an empty hand" : name)}' sheds {got:x4} rather than {want:x4}");
+        }
+
+        Glow("lantern", LightValue.PackBlock(15, 13, 10));
+        Glow("torch", LightValue.PackBlock(14, 10, 5));
+        Glow("campfire", LightValue.PackBlock(15, 11, 6));
+        Glow("bench", 0);
+        Glow("shears", 0);
+        Glow("", 0);
+
+        Check("a carried light sheds its block's own light", glowFaults.Count == 0,
+            glowFaults.Count == 0
+                ? "lantern 15/13/10, torch 14/10/5 and a lit campfire in hand; a bench, shears and an empty hand shed nothing"
+                : $"{glowFaults.Count} faults: {glowFaults[0]}");
+
         // ⛳ The 2012 grid, which is a table of cell numbers and therefore a table that can be wrong
         // in the one way nothing notices: two layers reading one cell imports cleanly, paints every
         // tile and puts the wrong picture on one block.

@@ -5961,10 +5961,19 @@ public sealed class ClientHost : IDisposable
             return new EntityLight(1f, Vector3.Zero);
 
         var packed = _streamer.World.GetLight(x, y, z);
-        return new EntityLight(
-            LightValue.Sky(packed) / (float)LightValue.Max,
-            new Vector3(LightValue.Red(packed), LightValue.Green(packed), LightValue.Blue(packed))
-                / LightValue.Max);
+        var block = new Vector3(LightValue.Red(packed), LightValue.Green(packed), LightValue.Blue(packed))
+            / LightValue.Max;
+
+        // The carried light reaches bodies exactly as it reaches walls — same source, same
+        // falloff — so a cow beside your lantern is lit by it and your own arm most of all.
+        if (_heldGlow != Vector3.Zero)
+        {
+            block = Vector3.Max(
+                block,
+                _heldGlow * MathF.Max(0f, 1f - Vector3.Distance(at, HeldGlowPos) / HeldGlowRange));
+        }
+
+        return new EntityLight(LightValue.Sky(packed) / (float)LightValue.Max, block);
     }
 
     /// <summary>
@@ -7181,6 +7190,8 @@ public sealed class ClientHost : IDisposable
         // where the frames got to.
         _animatedTextures.Update(_elapsed);
 
+        ReadHeldGlow();
+
         _chunkShader.Use();
         _chunkShader.SetMatrix4("uViewProj", viewProj);
         _chunkShader.SetVec3("uCameraPos", _viewPosition);
@@ -7195,6 +7206,9 @@ public sealed class ClientHost : IDisposable
         _chunkShader.SetFloat("uFogStart", _fogStart);
         _chunkShader.SetFloat("uFogEnd", _fogEnd);
         _chunkShader.SetFloat("uTime", FlickerClock);
+        _chunkShader.SetVec3("uHeldPos", _spawned ? HeldGlowPos : Vector3.Zero);
+        _chunkShader.SetVec3("uHeldLight", _heldGlow);
+        _chunkShader.SetFloat("uHeldRange", HeldGlowRange);
 
         _chunkShader.SetFloat("uAlpha", 1f);
 
@@ -10069,6 +10083,40 @@ public sealed class ClientHost : IDisposable
     }
 
     private static readonly Vector3 HalfChunk = new(Chunk.Size * 0.5f);
+
+    /// <summary>Blocks from the hand at which a carried light has faded to nothing.</summary>
+    /// <remarks>
+    /// A little under a placed lantern's own fifteen-block flood: a carried flame swings and
+    /// gutters, and reading slightly smaller in the hand than on a hook is what makes hanging
+    /// one up still worth doing.
+    /// </remarks>
+    private const float HeldGlowRange = 12f;
+
+    /// <summary>The carried light's colours this frame, 0..1 per channel. Zero for dark hands.</summary>
+    private Vector3 _heldGlow;
+
+    /// <summary>Where the carried light hangs — the chest, whichever view the camera took.</summary>
+    private Vector3 HeldGlowPos => _player.Position + new Vector3(0f, 1.4f, 0f);
+
+    /// <summary>What the hands are shedding this frame: the brighter of the two, per channel.</summary>
+    /// <remarks>
+    /// ⛳ The RULE is Core's (<see cref="HeldGlow"/>: an item sheds what its block emits), so the
+    /// audit holds it still; this is only the per-frame read of both hands. The offhand counts,
+    /// which is the whole reason to carry a torch there.
+    /// </remarks>
+    private void ReadHeldGlow()
+    {
+        if (!_spawned) { _heldGlow = Vector3.Zero; return; }
+
+        var off = _equipment[EquipSlot.Offhand];
+        var packed = LightValue.MaxBlock(
+            HeldGlow.Of(_inventory.HeldType, _registry),
+            HeldGlow.Of(off.IsEmpty ? null : _items[off.Item], _registry));
+
+        _heldGlow = new Vector3(
+            LightValue.Red(packed), LightValue.Green(packed), LightValue.Blue(packed))
+            / LightValue.Max;
+    }
 
     /// <summary>
     /// The clock the firelight sway runs on: the world's own elapsed time, wrapped.
