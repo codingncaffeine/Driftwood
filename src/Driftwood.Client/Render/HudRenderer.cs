@@ -194,6 +194,24 @@ public sealed class HudScreen
 
     public Vector4 SkinPreviewBounds;
 
+    /// <summary>The inventory figure's user-controlled turn, with a tiny idle turn added on draw.</summary>
+    public float FigureYaw = -12f;
+
+    /// <summary>Published shared-preview geometry for the inventory branch of --ui-check.</summary>
+    public int FigureSkinFaces;
+
+    public int FigureOuterFaces;
+
+    public int FigureArmourFaces;
+
+    public int FigureHeldItems;
+
+    public float FigureArmWidth;
+
+    public Vector4 FigureBox;
+
+    public Vector4 FigureBounds;
+
     /// <summary>The current swing cooldown, so the crosshair can show when the next strike lands.</summary>
     public bool AttackCooling;
 
@@ -451,11 +469,10 @@ public sealed class HudRenderer : IDisposable
     /// <summary>A candidate may be inspected without becoming the skin worn by the world model.</summary>
     private BlockTextureArray? _previewSkin;
 
-    private ModelBox[] _previewBoxes = [];
-    private ModelVertex[][] _previewVertices = [];
-    private readonly List<(float Depth, Vector2 A, Vector2 B, Vector2 C, Vector2 D,
-                           Vector2 Ua, Vector2 Ub, Vector2 Uc, Vector2 Ud, Vector4 Tint)>
-        _previewFaces = new(48);
+    private ProjectedPlayerPreview? _wornPreview;
+    private ProjectedPlayerPreview? _candidatePreview;
+    private readonly List<ProjectedPlayerFace> _projectedSkinFaces = new(48);
+    private readonly List<ProjectedPlayerFace> _projectedArmourFaces = new(48);
 
     private BlockTextureArray? _gui;
     private bool[] _guiPresent = [];
@@ -470,9 +487,6 @@ public sealed class HudRenderer : IDisposable
     /// textures — this one is layered so the overlay's single batch can sample all of them.
     /// </remarks>
     private BlockTextureArray? _armour;
-
-    /// <summary>The model the sheet dresses, so the figure follows it rather than a copy of it.</summary>
-    private ModelBox[] _dollBoxes = [];
 
     private float[] _upload = new float[8192];
 
@@ -603,6 +617,17 @@ public sealed class HudRenderer : IDisposable
         _guiUnder.Clear();
         _guiOver.Clear();
         layout.Clear();
+
+        screen.SkinPreviewQuads = 0;
+        screen.SkinPreviewBox = Vector4.Zero;
+        screen.SkinPreviewBounds = Vector4.Zero;
+        screen.FigureSkinFaces = 0;
+        screen.FigureOuterFaces = 0;
+        screen.FigureArmourFaces = 0;
+        screen.FigureHeldItems = 0;
+        screen.FigureArmWidth = 0f;
+        screen.FigureBox = Vector4.Zero;
+        screen.FigureBounds = Vector4.Zero;
 
         // A whole number of screen pixels per layout unit, never a half. Everything here is pixel
         // art — a font drawn at twice its authored size, two-pixel bevels, hard edges — and all of
@@ -1037,102 +1062,62 @@ public sealed class HudRenderer : IDisposable
         };
     }
 
-    /// <summary>
-    /// Projects the model's emitted faces into the preview. Boxes, UVs and outer layers all come
-    /// from <see cref="PlayerModel"/>; this is a small orthographic camera, not a paper-doll copy.
-    /// </summary>
+    /// <summary>Projects the candidate through the same camera the inventory figure now uses.</summary>
     private void DrawSkinPreview(HudScreen screen, float x, float y, float w, float h)
     {
-        screen.SkinPreviewQuads = 0;
-        screen.SkinPreviewBounds = Vector4.Zero;
-        if (_previewSkin is null || _previewBoxes.Length == 0) return;
+        if (_previewSkin is null || _candidatePreview is null) return;
 
-        _previewFaces.Clear();
+        var measure = DrawPlayerPreview(
+            _candidatePreview, _previewQuads,
+            x, y, w, h, screen.SkinPreviewYaw, screen.Drift, bottomInset: 16f,
+            ReadOnlySpan<int>.Empty);
 
-        var yaw = float.DegreesToRadians(screen.SkinPreviewYaw);
-        var turn = Matrix4x4.CreateRotationY(yaw);
-        var view = Vector3.Normalize(new Vector3(0f, 0.14f, -1f));
-        var light = Vector3.Normalize(new Vector3(-0.45f, 0.7f, -0.55f));
-        var scale = MathF.Min((w - 18f) / 1.05f, (h - 22f) / PlayerBody.Height);
-        var centreX = x + w * 0.5f;
-        var floor = y + h - 16f;
-        var idle = MathF.Sin(screen.Drift * 0.8f) * 0.025f;
+        screen.SkinPreviewQuads = measure.SkinFaces;
+        screen.SkinPreviewBounds = measure.Bounds;
+    }
 
-        var minX = float.MaxValue;
-        var minY = float.MaxValue;
-        var maxX = float.MinValue;
-        var maxY = float.MinValue;
+    /// <summary>
+    /// The one screen-space player renderer. SKINS supplies a candidate with no equipment; inventory
+    /// supplies the worn model and material indices. Geometry, pose, camera, culling and lighting are
+    /// otherwise identical.
+    /// </summary>
+    private ProjectedPlayerMeasure DrawPlayerPreview(
+        ProjectedPlayerPreview model,
+        List<float> skinBatch,
+        float x,
+        float y,
+        float w,
+        float h,
+        float yaw,
+        float drift,
+        float bottomInset,
+        ReadOnlySpan<int> armourMaterials)
+    {
+        var measure = model.Project(
+            x, y, w, h, yaw, drift, bottomInset, armourMaterials,
+            _projectedSkinFaces, _projectedArmourFaces);
 
-        Span<Vector3> points = stackalloc Vector3[4];
-        Span<Vector2> uv = stackalloc Vector2[4];
+        foreach (var face in _projectedSkinFaces)
+            DrawProjected(skinBatch, face, armour: false);
 
-        for (var boxIndex = 0; boxIndex < _previewBoxes.Length; boxIndex++)
-        {
-            var box = _previewBoxes[boxIndex];
-            var vertices = _previewVertices[boxIndex];
+        foreach (var face in _projectedArmourFaces)
+            DrawProjected(_armourQuads, face, armour: true);
 
-            var pose = box.Part switch
-            {
-                PlayerPart.RightArm => Matrix4x4.CreateRotationX(0.08f + idle),
-                PlayerPart.LeftArm => Matrix4x4.CreateRotationX(-0.08f - idle),
-                PlayerPart.RightLeg => Matrix4x4.CreateRotationX(-idle * 0.5f),
-                PlayerPart.LeftLeg => Matrix4x4.CreateRotationX(idle * 0.5f),
-                _ => Matrix4x4.Identity,
-            };
+        return measure;
+    }
 
-            for (var face = 0; face < vertices.Length / 4; face++)
-            {
-                var mean = 0f;
-                var normal = Vector3.Zero;
+    private void DrawProjected(List<float> into, in ProjectedPlayerFace face, bool armour)
+    {
+        var va = armour ? face.Ua.Y * _armourV : face.Ua.Y;
+        var vb = armour ? face.Ub.Y * _armourV : face.Ub.Y;
+        var vc = armour ? face.Uc.Y * _armourV : face.Uc.Y;
+        var vd = armour ? face.Ud.Y * _armourV : face.Ud.Y;
 
-                for (var corner = 0; corner < 4; corner++)
-                {
-                    var vertex = vertices[face * 4 + corner];
-                    var local = Vector3.Transform(vertex.Position, pose);
-                    var world = local + box.Pivot * PlayerModel.Unit;
-                    world = Vector3.Transform(world, turn);
-                    points[corner] = world;
-                    uv[corner] = vertex.Uv;
-                    mean += world.Z;
-                    normal = Vector3.TransformNormal(vertex.Normal, pose);
-                }
-
-                normal = Vector3.Normalize(Vector3.TransformNormal(normal, turn));
-                if (Vector3.Dot(normal, view) <= 0.02f) continue;
-
-                Vector2 Project(Vector3 point) => new(
-                    centreX + point.X * scale,
-                    floor - (point.Y + point.Z * 0.10f) * scale);
-
-                var a = Project(points[0]);
-                var b = Project(points[1]);
-                var c = Project(points[2]);
-                var d = Project(points[3]);
-
-                minX = MathF.Min(minX, MathF.Min(MathF.Min(a.X, b.X), MathF.Min(c.X, d.X)));
-                minY = MathF.Min(minY, MathF.Min(MathF.Min(a.Y, b.Y), MathF.Min(c.Y, d.Y)));
-                maxX = MathF.Max(maxX, MathF.Max(MathF.Max(a.X, b.X), MathF.Max(c.X, d.X)));
-                maxY = MathF.Max(maxY, MathF.Max(MathF.Max(a.Y, b.Y), MathF.Max(c.Y, d.Y)));
-
-                var shade = 0.72f + MathF.Max(0f, Vector3.Dot(normal, light)) * 0.28f;
-                _previewFaces.Add((mean * 0.25f, a, b, c, d, uv[0], uv[1], uv[2], uv[3],
-                    new Vector4(shade, shade, shade, 1f)));
-            }
-        }
-
-        // Camera sits on negative Z: larger Z is farther and is painted first. Inflated overlay
-        // faces then naturally land over the base face beneath their transparent texels.
-        _previewFaces.Sort(static (a, b) => b.Depth.CompareTo(a.Depth));
-        foreach (var face in _previewFaces)
-            Quad(_previewQuads, 0, face.Tint,
-                face.A.X, face.A.Y, face.Ua.X, face.Ua.Y,
-                face.B.X, face.B.Y, face.Ub.X, face.Ub.Y,
-                face.C.X, face.C.Y, face.Uc.X, face.Uc.Y,
-                face.D.X, face.D.Y, face.Ud.X, face.Ud.Y);
-
-        screen.SkinPreviewQuads = _previewFaces.Count;
-        if (_previewFaces.Count > 0)
-            screen.SkinPreviewBounds = new Vector4(minX, minY, maxX - minX, maxY - minY);
+        Quad(into, face.Layer, face.Tint,
+            face.A.X, face.A.Y, face.Ua.X, va,
+            face.B.X, face.B.Y, face.Ub.X, vb,
+            face.C.X, face.C.Y, face.Uc.X, vc,
+            face.D.X, face.D.Y, face.Ud.X, vd);
     }
 
     /// <summary>The visited surface, centred on the player unless it has been panned away.</summary>
@@ -2127,48 +2112,17 @@ public sealed class HudRenderer : IDisposable
         }
     }
 
-    /// <summary>
-    /// The window the player's own figure stands in, and the figure.
-    /// </summary>
+    /// <summary>The projected player: worn skin, outer layers, armour and both held items.</summary>
     /// <remarks>
-    /// <para>A flat front view cut out of the skin sheet rather than the model rendered into the
-    /// panel: the overlay is a quad batcher in screen space, and standing up a second camera, a
-    /// depth buffer and a lighting rig to show a player who is standing still and facing forward
-    /// would be a renderer to keep working forever for a picture that has no depth in it anyway.
-    /// </para>
-    /// <para><b>Built from <see cref="PlayerModel.Build"/> and <see cref="PlayerModel.FaceRect"/>,
-    /// not from a copy of their numbers.</b> Each box already knows where it sits in model space and
-    /// where its front face lands on the sheet, so the figure is those two things read out — a slim
-    /// arm is narrower here because it is narrower there, a legacy sheet points both arms at one
-    /// patch here because it does there, and an overlay stands proud by the same quarter unit. The
-    /// alternative is a second table of skin coordinates, and the day the two disagree the figure is
-    /// wearing somebody's shoe on its head.</para>
-    /// <para>The model's own right appears on the viewer's left, which is why screen x runs against
-    /// model x — and it is the same reason a skin's face looks back at you.</para>
-    /// </remarks>
-    /// <summary>
-    /// The paperdoll: the player, wearing what they are wearing and holding what they are holding.
-    /// </summary>
-    /// <remarks>
-    /// <para>⛳ <b>From the user, and they are right:</b> <i>"the inventory paperdoll should show a
-    /// live version of the player, showing the weapon/armor that the player is using otherwise
-    /// there's no point in having it there"</i>. It was the bare skin — a window that showed the
-    /// same picture whether you were in rags or a full stormglass set, next to four slots whose
-    /// entire subject is which of those you are in.</para>
-    /// <para>⛳ <b>The plates are the body's own boxes at a stand-off</b>, so this is the same loop
-    /// the skin runs with a different sheet and a bigger inflation — no second model, no second net,
-    /// and the figure cannot drift out of step with what the world draws because both read
-    /// <c>ArmourModel.Build</c>. Painter's order does the rest: skin, inner layer, outer layer.</para>
-    /// <para>⚠ <b>Front faces only, as before.</b> This is a flat cut-out rather than a projection —
-    /// a turned figure is the recipe book's trick and it costs a sort per frame for a window nobody
-    /// looks at from an angle. What was missing was never the third dimension, it was the armour.
-    /// </para>
+    /// The old flat cut-out and its separate front-face armour loop are gone. This calls the same
+    /// <see cref="ProjectedPlayerPreview"/> path as SKINS, then puts the existing item sprites at the
+    /// projected fists. A small automatic four-degree drift keeps it alive; dragging the window owns
+    /// the larger angle in <see cref="HudScreen.FigureYaw"/>.
     /// </remarks>
     private void Figure(
         ScreenLayout layout, HudScreen screen, ItemRegistry catalogue, Equipment equipment,
         ItemStack held, bool frame = true)
     {
-        _ = screen;
         var box = ScreenLayout.Figure;
 
         if (frame)
@@ -2176,134 +2130,71 @@ public sealed class HudRenderer : IDisposable
                 layout, box.X, box.Y, box.W, box.H,
                 raised: false, new Vector4(0.13f, 0.14f, 0.16f, 0.98f));
 
-        if (_skin is null || _dollBoxes.Length == 0) return;
+        var x = layout.X(box.X);
+        var y = layout.Y(box.Y);
+        var w = layout.Size(box.W);
+        var h = layout.Size(box.H);
+        screen.FigureBox = new Vector4(x, y, w, h);
+        layout.Add(ZoneKind.PlayerPreview, 0, x, y, w, h);
 
-        // The model is thirty two units tall and sixteen across at the shoulders. Two panel pixels
-        // per unit fits both inside the window with a margin, and two is a whole number, which is
-        // the only kind this interface uses.
-        const float Units = PlayerModel.UnitsTall;
-        const float Across = 16f;
-        const float PerUnit = 2f;
+        if (_skin is null || _wornPreview is null) return;
 
-        var left = box.X + MathF.Round((box.W - Across * PerUnit) * 0.5f);
-        var top = box.Y + MathF.Round((box.H - Units * PerUnit) * 0.5f);
-
-        foreach (var part in _dollBoxes)
+        Span<int> materials = stackalloc int[Equipment.Slots];
+        materials.Fill(-1);
+        if (_armour is not null)
         {
-            var grow = part.Inflate;
-            var minX = part.Pivot.X + part.Offset.X - grow;
-            var maxX = minX + part.Width + grow * 2f;
-            var minY = part.Pivot.Y + part.Offset.Y - grow;
-            var maxY = minY + part.Height + grow * 2f;
-
-            var (fx, fy, fw, fh) = PlayerModel.FaceRect(part, 0);
-
-            // Normalised against sixty four whatever the sheet is stored at — a 128 or 512 pixel
-            // skin is the same layout at a different resolution, which is the whole reason the
-            // loader squares every sheet up on the way in.
-            var u0 = fx / (float)PlayerModel.SheetSize;
-            var u1 = (fx + fw) / (float)PlayerModel.SheetSize;
-            var v0 = fy / (float)PlayerModel.SheetSize;
-            var v1 = (fy + fh) / (float)PlayerModel.SheetSize;
-
-            // A mirrored net is applied left-for-right, so its u runs the other way across the face.
-            if (part.Mirror) (u0, u1) = (u1, u0);
-
-            RectUv(
-                _skinQuads,
-                layout.X(left + (Across * 0.5f - maxX) * PerUnit),
-                layout.Y(top + (Units - maxY) * PerUnit),
-                layout.Size((maxX - minX) * PerUnit),
-                layout.Size((maxY - minY) * PerUnit),
-                u0, v0, u1, v1,
-                Vector4.One);
+            foreach (var piece in Armour.Pieces)
+            {
+                var worn = equipment[piece.Slot];
+                if (worn.IsEmpty) continue;
+                materials[(int)piece.Slot] = Armour.MaterialOf(catalogue[worn.Item]);
+            }
         }
 
-        Plates(layout, catalogue, equipment, left, top, Across, Units, PerUnit);
-        InHand(layout, catalogue, held, equipment[EquipSlot.Offhand], box);
+        var yaw = screen.FigureYaw + MathF.Sin(screen.Drift * 0.35f) * 4f;
+        var measure = DrawPlayerPreview(
+            _wornPreview, _skinQuads, x, y, w, h, yaw, screen.Drift, bottomInset: 0f, materials);
+
+        screen.FigureSkinFaces = measure.SkinFaces;
+        screen.FigureOuterFaces = measure.OuterFaces;
+        screen.FigureArmourFaces = measure.ArmourFaces;
+        screen.FigureArmWidth = measure.ArmWidth;
+        screen.FigureBounds = measure.Bounds;
+        screen.FigureHeldItems = InHand(
+            layout, catalogue, held, equipment[EquipSlot.Offhand], measure);
     }
 
-    /// <summary>Whatever armour is worn, over the body it is worn on.</summary>
+    /// <summary>What each hand is holding, centred on the shared projection's two fists.</summary>
     /// <remarks>
-    /// ⛔ <b>The INNER layer first and the outer over it, which is the order the two inflations
-    /// exist for.</b> Leggings and a chestplate both cover the waist; drawn the other way round the
-    /// belt sits on top of the breastplate and the figure reads as somebody wearing their trousers
-    /// outside their armour. The world renderer draws them in this order for the same reason and
-    /// gets away with a depth buffer — a flat cut-out has nothing but the order.
+    /// These remain readable inventory sprites rather than pretending the HUD owns the world item
+    /// mesh. Their anchors are nevertheless the posed, turned fists, so they travel with the model;
+    /// a small outward separation keeps both visible in a side view.
     /// </remarks>
-    private void Plates(
-        ScreenLayout layout, ItemRegistry catalogue, Equipment equipment,
-        float left, float top, float across, float units, float perUnit)
-    {
-        if (_armour is null) return;
-
-        // Sheet 1 is the tighter one, so it goes down first.
-        foreach (var pass in (ReadOnlySpan<int>)[1, 0])
-        foreach (var plate in ArmourModel.Build())
-        {
-            if (plate.Sheet != pass) continue;
-
-            var worn = equipment[plate.Slot];
-            if (worn.IsEmpty) continue;
-
-            var material = Armour.MaterialOf(catalogue[worn.Item]);
-            if (material < 0) continue;
-
-            var grow = plate.Inflate;
-            var minX = plate.Pivot.X + plate.Offset.X - grow;
-            var maxX = minX + plate.Width + grow * 2f;
-            var minY = plate.Pivot.Y + plate.Offset.Y - grow;
-            var maxY = minY + plate.Height + grow * 2f;
-
-            var (fx, fy, fw, fh) = ArmourModel.FaceRect(plate, 0);
-
-            // ⚠ Against the NET's own 64x32 for the fraction, then scaled by how much of the square
-            // layer the net occupies. The rects come back in 64-wide texels whatever resolution the
-            // sheet arrived at, so the two steps are "where on the net" and "where the net sits in
-            // the layer" — folding them into one division is how a sleeve reads a kneecap.
-            var u0 = fx / (float)ArmourArt.Width;
-            var u1 = (fx + fw) / (float)ArmourArt.Width;
-            var v0 = fy / (float)ArmourArt.Height * _armourV;
-            var v1 = (fy + fh) / (float)ArmourArt.Height * _armourV;
-
-            if (plate.Mirror) (u0, u1) = (u1, u0);
-
-            RectUv(
-                _armourQuads,
-                layout.X(left + (across * 0.5f - maxX) * perUnit),
-                layout.Y(top + (units - maxY) * perUnit),
-                layout.Size((maxX - minX) * perUnit),
-                layout.Size((maxY - minY) * perUnit),
-                u0, v0, u1, v1,
-                Vector4.One,
-                material * 2 + plate.Sheet);
-        }
-    }
-
-    /// <summary>What each hand is holding, beside the hand holding it.</summary>
-    /// <remarks>
-    /// ⚠ <b>Beside the fists rather than in them.</b> A held thing in the world is a projection, a
-    /// grip and a swing; here it is a sixteen-pixel icon and the figure is a flat cut-out, so
-    /// putting it "in" a hand means overlapping the arm with a picture drawn at a different scale
-    /// and from a different angle. Set against the hand it reads as carried and stays legible,
-    /// which is the whole job of a doll.
-    /// </remarks>
-    private void InHand(
+    private int InHand(
         ScreenLayout layout, ItemRegistry catalogue, ItemStack held, ItemStack other,
-        (int X, int Y, int W, int H) box)
+        in ProjectedPlayerMeasure measure)
     {
-        const float Size = 14f;
+        var size = layout.Size(13f);
+        var centre = measure.Bounds.X + measure.Bounds.Z * 0.5f;
+        var count = 0;
 
-        var y = box.Y + box.H - Size - 2f;
-
-        // The model faces us, so the hand it swings with is on our left.
         if (!held.IsEmpty)
-            Rect(_blocks, layout.X(box.X + 2f), layout.Y(y),
-                layout.Size(Size), layout.Size(Size), Vector4.One, catalogue[held.Item].IconLayer);
+        {
+            var x = MathF.Min(measure.MainHand.X - size * 0.5f, centre - size * 1.05f);
+            Rect(_blocks, x, measure.MainHand.Y - size * 0.55f,
+                size, size, Vector4.One, catalogue[held.Item].IconLayer);
+            count++;
+        }
 
         if (!other.IsEmpty)
-            Rect(_blocks, layout.X(box.X + box.W - Size - 2f), layout.Y(y),
-                layout.Size(Size), layout.Size(Size), Vector4.One, catalogue[other.Item].IconLayer);
+        {
+            var x = MathF.Max(measure.OffHand.X - size * 0.5f, centre + size * 0.05f);
+            Rect(_blocks, x, measure.OffHand.Y - size * 0.55f,
+                size, size, Vector4.One, catalogue[other.Item].IconLayer);
+            count++;
+        }
+
+        return count;
     }
 
     /// <summary>
@@ -2318,7 +2209,7 @@ public sealed class HudRenderer : IDisposable
     {
         _skin?.Dispose();
         _skin = new BlockTextureArray(_gl, [skin.Pixels], skin.Size);
-        _dollBoxes = PlayerModel.Build(skin.Arms, skin.Legacy);
+        _wornPreview = ProjectedPlayerPreview.For(skin.Arms, skin.Legacy);
 
         BuildArmourSheets(pack);
         BuildGui(pack);
@@ -2329,15 +2220,7 @@ public sealed class HudRenderer : IDisposable
     {
         _previewSkin?.Dispose();
         _previewSkin = new BlockTextureArray(_gl, [skin.Pixels], skin.Size);
-        _previewBoxes = PlayerModel.Build(skin.Arms, skin.Legacy);
-        _previewVertices = new ModelVertex[_previewBoxes.Length][];
-        for (var i = 0; i < _previewBoxes.Length; i++)
-        {
-            var vertices = new List<ModelVertex>(24);
-            var indices = new List<uint>(36);
-            PlayerModel.Emit(_previewBoxes[i], vertices, indices);
-            _previewVertices[i] = [.. vertices];
-        }
+        _candidatePreview = ProjectedPlayerPreview.For(skin.Arms, skin.Legacy);
     }
 
     private void BuildGui(TexturePack? pack)

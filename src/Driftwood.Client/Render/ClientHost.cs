@@ -2959,6 +2959,8 @@ public sealed class ClientHost : IDisposable
     private Vector2 _mapDragAt;
     private bool _draggingSkinPreview;
     private Vector2 _skinDragAt;
+    private bool _draggingFigure;
+    private Vector2 _figureDragAt;
 
     /// <summary>Puts the pointer's share of the track on screen.</summary>
     private void DragScrollbar(Zone track)
@@ -3749,6 +3751,7 @@ public sealed class ClientHost : IDisposable
         _hudScreen.Hovered = null;
         _draggingMap = false;
         _draggingSkinPreview = false;
+        _draggingFigure = false;
         _shown.Clear();
         _hudScreen.Recipes.Clear();
         _hudScreen.Payable.Clear();
@@ -3967,7 +3970,8 @@ public sealed class ClientHost : IDisposable
             HudScreenKind.Player when _hudScreen.Tab == (int)PlayerTab.Map =>
                 $"drag or arrows pan, wheel zooms, home follows you, tab changes tab, {close} closes",
             HudScreenKind.Player when _hudScreen.Tab == (int)PlayerTab.Items =>
-                $"arrows pick, h opens the handbook, tab changes tab, {close} closes",
+                $"click moves items, drag the model to turn it, h opens the handbook, "
+                + $"tab changes tab, {close} closes",
             HudScreenKind.Player =>
                 $"arrows pick, enter chooses, wheel scrolls, tab changes tab, {close} closes",
             _ when OnTab(GameTab.Controls) =>
@@ -5337,16 +5341,7 @@ public sealed class ClientHost : IDisposable
             return;
         }
 
-        using (var pack = string.IsNullOrWhiteSpace(_packPath) ? null : TexturePack.Open(_packPath))
-        {
-            var replacement = new PlayerRenderer(_gl, next, pack);
-            var previous = _playerRenderer;
-            _playerRenderer = replacement;
-            _hud.SetSkin(next, pack);
-            previous.Dispose();
-        }
-
-        _skinData = next;
+        ApplySkinRenderers(next);
         _skinPath = path;
         _settings.PlayerSkin = name;
         _settingsDirty = true;
@@ -5355,6 +5350,18 @@ public sealed class ClientHost : IDisposable
         SetLocalSkinPreview(name, next);
         _skins = SkinLibrary.List();
         RefreshScreen();
+    }
+
+    /// <summary>Moves one decoded skin/model into the world, first person and inventory preview in one selection.</summary>
+    private void ApplySkinRenderers(PlayerSkinData next)
+    {
+        using var pack = string.IsNullOrWhiteSpace(_packPath) ? null : TexturePack.Open(_packPath);
+        var replacement = new PlayerRenderer(_gl, next, pack);
+        var previous = _playerRenderer;
+        _playerRenderer = replacement;
+        _hud.SetSkin(next, pack);
+        _skinData = next;
+        previous.Dispose();
     }
 
     private void ChangeSkinModel(int by)
@@ -6740,6 +6747,16 @@ public sealed class ClientHost : IDisposable
                 return;
             }
 
+            if (button == MouseButton.Left
+                && _hudScreen.Kind == HudScreenKind.Player
+                && _hudScreen.Tab == (int)PlayerTab.Items
+                && _layout.At(_hudScreen.Pointer.X, _hudScreen.Pointer.Y) is { Kind: ZoneKind.PlayerPreview })
+            {
+                _draggingFigure = true;
+                _figureDragAt = _hudScreen.Pointer;
+                return;
+            }
+
             ScreenClick(button);
             return;
         }
@@ -6777,6 +6794,7 @@ public sealed class ClientHost : IDisposable
                 _draggingScrollbar = false;
                 _draggingMap = false;
                 _draggingSkinPreview = false;
+                _draggingFigure = false;
                 break;
             case MouseButton.Right: _holdingPlace = false; break;
         }
@@ -6849,6 +6867,14 @@ public sealed class ClientHost : IDisposable
                 _hudScreen.SkinPreviewYaw = NormalAngle(
                     _hudScreen.SkinPreviewYaw + moved.X * 1.4f);
                 _skinDragAt = _hudScreen.Pointer;
+                RefreshScreen();
+            }
+
+            if (_draggingFigure)
+            {
+                var moved = _hudScreen.Pointer - _figureDragAt;
+                _hudScreen.FigureYaw = NormalAngle(_hudScreen.FigureYaw + moved.X * 1.4f);
+                _figureDragAt = _hudScreen.Pointer;
                 RefreshScreen();
             }
 
@@ -9904,6 +9930,16 @@ public sealed class ClientHost : IDisposable
             case 61:
                 OpenPlayer(PlayerTab.Items, atBench: false, default);
 
+                // The projected paper doll has to answer for all of its live state at once: a full
+                // suit, unlike items in both fists, and a skin/model swap while the screen remains
+                // open. Nothing here comes from disk and all of it is removed before the tooltip
+                // and recipe probes use the same pockets.
+                _uiFigureOriginalSkin = _skinData;
+                _inventory.Clear();
+                _equipment.Clear();
+                HoldFigureItemsForCheck();
+                WearFigureArmourForCheck();
+
                 // ⛳ A block and the slab cut from it, in two pockets. They wear the SAME tile — a
                 // slab's icon layer is its own particle layer, which is the rock — so the only thing
                 // that can tell them apart in a square is the shape being drawn. That is why it is a
@@ -9913,6 +9949,16 @@ public sealed class ClientHost : IDisposable
                 _inventory.Add(new ItemStack(_items.ByName("stone_slab").Id, 1));
                 RefreshScreen();
                 break;
+
+            case 70: ProbeFigurePreview(size); break;
+            case 71: RemoveFigureArmourForControl(); break;
+            case 72: CaptureUnequippedFigure(size); break;
+            case 73: RemoveFigureItemsForControl(); break;
+            case 74: CaptureEmptyHandedFigure(size); break;
+            case 75: TurnFigurePreview(size); break;
+            case 76: CaptureTurnedFigure(size); break;
+            case 77: HoldFigureThenSelectSlim(size); break;
+            case 78: CaptureLiveFigure(size); break;
 
             case 90:
                 SampleUi(size, "items");
@@ -9928,6 +9974,7 @@ public sealed class ClientHost : IDisposable
                 SampleHeldIcon(size, "stone_slab", "icon slab top", 0f, 0.2f);
                 SampleEmptyPocket(size, "icon empty top", 0f, 0.2f);
                 _inventory.Clear();
+                _equipment.Clear();
                 break;
 
             // ⛳ THE TOOLTIP, AND THE GUTTER BESIDE IT. A stone goes in the first pocket, the pointer
@@ -11112,6 +11159,163 @@ public sealed class ClientHost : IDisposable
     private byte[]? _uiSkinTurned;
     private (int X0, int Y0, int X1, int Y1) _uiSkinRegion = (-1, -1, -1, -1);
 
+    private bool _uiFigureCanvas;
+    private bool _uiFigureDragged;
+    private bool _uiFigureSlim;
+    private int _uiFigureFaces = -1;
+    private int _uiFigureOuterFaces = -1;
+    private int _uiFigureArmourFaces = -1;
+    private int _uiFigureHeldItems = -1;
+    private int _uiFigurePixelScale = 1;
+    private int _uiFigureEquipmentPixels = -1;
+    private int _uiFigureHeldPixels = -1;
+    private int _uiFigureTurnPixels = -1;
+    private int _uiFigureTurnNoise = -1;
+    private int _uiFigureLivePixels = -1;
+    private byte[]? _uiFigureFront;
+    private byte[]? _uiFigureTurned;
+    private (int X0, int Y0, int X1, int Y1) _uiFigureRegion = (-1, -1, -1, -1);
+    private PlayerSkinData? _uiFigureOriginalSkin;
+
+    private void WearFigureArmourForCheck()
+    {
+        foreach (var piece in Armour.Pieces)
+            if (_items.TryByName($"iron_{piece.Name}", out var armour))
+                _equipment.Restore(piece.Slot, new ItemStack(armour.Id, 1));
+    }
+
+    private void HoldFigureItemsForCheck()
+    {
+        _inventory.SetHeld(new ItemStack(_items.ByName("iron_sword").Id, 1));
+        if (_items.TryByName(Armour.ShieldName, out var shield))
+            _equipment.Restore(EquipSlot.Offhand, new ItemStack(shield.Id, 1));
+    }
+
+    /// <summary>Captures the equipped inventory model, then grabs its actual hit zone.</summary>
+    private void ProbeFigurePreview(Vector2D<int> size)
+    {
+        var canvas = _layout.Zones.FirstOrDefault(zone => zone.Kind == ZoneKind.PlayerPreview);
+        _uiFigureCanvas = canvas.W > 0f && canvas.H > 0f
+            && _layout.At(canvas.CentreX, canvas.CentreY) is { Kind: ZoneKind.PlayerPreview };
+        _uiFigureFaces = _hudScreen.FigureSkinFaces;
+        _uiFigureOuterFaces = _hudScreen.FigureOuterFaces;
+        _uiFigureArmourFaces = _hudScreen.FigureArmourFaces;
+        _uiFigureHeldItems = _hudScreen.FigureHeldItems;
+        _uiFigureFront = ReadFrame(size);
+        _uiFigureRegion = FramebufferRect(_hudScreen.FigureBox, size);
+        var scale = HudRenderer.ScaleFor(size.Y);
+        _uiFigurePixelScale = Math.Max(1, (int)MathF.Round(scale * scale));
+    }
+
+    private void RemoveFigureArmourForControl()
+    {
+        foreach (var piece in Armour.Pieces) _equipment.TakeAll(piece.Slot);
+    }
+
+    /// <summary>Compares a full suit with the same skin, hands, angle and clock wearing none.</summary>
+    private void CaptureUnequippedFigure(Vector2D<int> size)
+    {
+        if (_uiFigureFront is not null)
+            _uiFigureEquipmentPixels = Differ(
+                _uiFigureFront, ReadFrame(size), out _, _uiFigureRegion);
+        WearFigureArmourForCheck();
+    }
+
+    private void RemoveFigureItemsForControl()
+    {
+        _inventory.SetHeld(ItemStack.Empty);
+        _equipment.TakeAll(EquipSlot.Offhand);
+    }
+
+    /// <summary>Likewise isolates the two item sprites from the dressed body behind them.</summary>
+    private void CaptureEmptyHandedFigure(Vector2D<int> size)
+    {
+        if (_uiFigureFront is not null)
+            _uiFigureHeldPixels = Differ(
+                _uiFigureFront, ReadFrame(size), out _, _uiFigureRegion);
+        HoldFigureItemsForCheck();
+    }
+
+    /// <summary>Turns the inventory model through the same pointer path a player uses.</summary>
+    private void TurnFigurePreview(Vector2D<int> size)
+    {
+        var canvas = _layout.Zones.FirstOrDefault(zone => zone.Kind == ZoneKind.PlayerPreview);
+        if (canvas.W <= 0f || canvas.H <= 0f) return;
+
+        var scale = HudRenderer.ScaleFor(size.Y);
+        _hudScreen.Pointer = new Vector2(canvas.CentreX, canvas.CentreY);
+        var before = _hudScreen.FigureYaw;
+        OnMouseDown(MouseButton.Left);
+        var grabbed = _draggingFigure;
+        var toX = MathF.Min(canvas.X + canvas.W - 3f, canvas.CentreX + 24f);
+        OnMouseMove(new Vector2(toX * scale, canvas.CentreY * scale));
+        OnMouseUp(MouseButton.Left);
+        _uiFigureDragged = grabbed && MathF.Abs(_hudScreen.FigureYaw - before) > 1f;
+    }
+
+    private void CaptureTurnedFigure(Vector2D<int> size) => _uiFigureTurned = ReadFrame(size);
+
+    /// <summary>
+    /// Takes the held-angle control frame, then exercises the real live skin renderer swap. The next
+    /// rendered frame must already be slim and use the new pixels; no close/reopen or relaunch sits
+    /// between the selection and the capture.
+    /// </summary>
+    private void HoldFigureThenSelectSlim(Vector2D<int> size)
+    {
+        if (_uiFigureTurned is not null)
+        {
+            var held = ReadFrame(size);
+            _uiFigureTurnPixels = _uiFigureFront is null
+                ? -1
+                : Differ(_uiFigureFront, _uiFigureTurned, out _, _uiFigureRegion);
+            _uiFigureTurnNoise = Differ(_uiFigureTurned, held, out _, _uiFigureRegion);
+        }
+
+        ApplySkinRenderers(UiCheckSlimSkin());
+    }
+
+    private void CaptureLiveFigure(Vector2D<int> size)
+    {
+        var live = ReadFrame(size);
+        _uiFigureLivePixels = _uiFigureTurned is null
+            ? -1
+            : Differ(_uiFigureTurned, live, out _, _uiFigureRegion);
+        _uiFigureFaces = _hudScreen.FigureSkinFaces;
+        _uiFigureOuterFaces = _hudScreen.FigureOuterFaces;
+        _uiFigureArmourFaces = _hudScreen.FigureArmourFaces;
+        _uiFigureHeldItems = _hudScreen.FigureHeldItems;
+        _uiFigureSlim = MathF.Abs(_hudScreen.FigureArmWidth - 3f) < 0.01f;
+
+        Console.WriteLine(
+            $"ui-check    figure 3D  {_uiFigureFaces} skin faces, {_uiFigureOuterFaces} outer, "
+            + $"{_uiFigureArmourFaces} armour ({_uiFigureEquipmentPixels} px), "
+            + $"{_uiFigureHeldItems} held ({_uiFigureHeldPixels} px), slim {_uiFigureSlim}; "
+            + $"turn {_uiFigureTurnPixels} px vs {_uiFigureTurnNoise} held, "
+            + $"live skin/model {_uiFigureLivePixels} px");
+        Console.Out.Flush();
+
+        if (_uiFigureOriginalSkin is not null) ApplySkinRenderers(_uiFigureOriginalSkin);
+    }
+
+    private static PlayerSkinData UiCheckSlimSkin()
+    {
+        var painted = PlayerSkin.Paint(ArmStyle.Slim);
+        var pixels = (byte[])painted.Pixels.Clone();
+
+        // Recolour only existing ink: alpha/outer-layer cut-outs remain the real generated skin,
+        // while the framebuffer has a guaranteed visible difference from any normally worn skin.
+        for (var i = 0; i < pixels.Length; i += 4)
+        {
+            if (pixels[i + 3] == 0) continue;
+            var alternate = ((i / 4) / painted.Size + (i / 4) % painted.Size) % 2 == 0;
+            pixels[i] = alternate ? (byte)220 : (byte)54;
+            pixels[i + 1] = alternate ? (byte)72 : (byte)205;
+            pixels[i + 2] = alternate ? (byte)196 : (byte)235;
+        }
+
+        return painted with { Pixels = pixels, Summary = "UI-check slim live-selection control" };
+    }
+
     private void ProbeProgressTab()
     {
         var labels = _hudScreen.Rows.Select(row => row.Label).ToHashSet(StringComparer.Ordinal);
@@ -11570,6 +11774,40 @@ public sealed class ClientHost : IDisposable
             faults.Add("dragging the map canvas did not pan it");
         if (!_uiMapZoomed)
             faults.Add("scrolling over the map did not zoom it");
+
+        if (!_uiFigureCanvas)
+            faults.Add("the inventory player preview drew no draggable canvas");
+        if (_uiFigureFaces <= 0)
+            faults.Add("the inventory player preview emitted no PlayerModel faces");
+        if (_uiFigureOuterFaces <= 0)
+            faults.Add("the inventory player preview omitted every skin outer layer");
+        if (!_uiFigureSlim)
+            faults.Add("a live slim-model selection left the inventory preview with classic-width arms");
+        if (_uiFigureArmourFaces <= 0)
+            faults.Add("a fully equipped inventory preview emitted no worn-armour faces");
+        if (_uiFigureEquipmentPixels < 250 * _uiFigurePixelScale)
+            faults.Add(
+                $"wearing a full suit changed only {_uiFigureEquipmentPixels} pixels in the inventory preview");
+        if (_uiFigureHeldItems != 2)
+            faults.Add($"the inventory preview showed {_uiFigureHeldItems} held items instead of both hands");
+        if (_uiFigureHeldPixels < 50 * _uiFigurePixelScale)
+            faults.Add(
+                $"putting unlike items in both hands changed only {_uiFigureHeldPixels} inventory-preview pixels");
+        if (!_uiFigureDragged)
+            faults.Add("dragging the inventory player preview did not change its angle");
+        // Pointer movement alone changes about a hundred pixels per squared UI scale inside this
+        // small viewport. A real quarter turn changes several thousand, so keep a deliberately wide
+        // scale-aware floor rather than letting the cursor impersonate a rotating model.
+        if (_uiFigureTurnPixels < Math.Max(
+                500 * _uiFigurePixelScale,
+                _uiFigureTurnNoise * 4 + 50 * _uiFigurePixelScale))
+            faults.Add(
+                $"turning the inventory player changed {_uiFigureTurnPixels} pixels against "
+                + $"{_uiFigureTurnNoise} at a held angle, so its projected rotation did not reach the framebuffer");
+        if (_uiFigureLivePixels < 100 * _uiFigurePixelScale)
+            faults.Add(
+                $"selecting a new slim skin/model changed only {_uiFigureLivePixels} inventory-preview pixels "
+                + "on the next frame");
 
         if (!_uiSkinRows)
             faults.Add("the skin tab is missing its shelf, preview, import, or community controls");

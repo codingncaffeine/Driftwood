@@ -78,6 +78,9 @@ public enum ZoneKind
     /// <summary>The rotatable player model on the skin shelf.</summary>
     SkinPreview,
 
+    /// <summary>The inventory's projected player model; dragging it turns the shared preview.</summary>
+    PlayerPreview,
+
     /// <summary>
     /// A box to type into, sitting on a row. The index is that row's.
     /// </summary>

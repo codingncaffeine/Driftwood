@@ -148,6 +148,10 @@ across seeds, so one seed does not hand you a continent and the next an archipel
 | `Esc` | options — controls, video, audio, world, saves, packs, skins | |
 | `F3` / `F5` | walk or fly / cycle the view | |
 
+The figure in your pockets is the same projected, layered player model used by the SKINS preview:
+it updates as soon as a skin or classic/slim model is chosen, keeps worn armour and both held items,
+and can be dragged to turn it while its limbs hold a quiet idle pose.
+
 The button does not edit the world; it starts a swing, and the swing edits the world. That is why
 holding one mines at a readable pace rather than at the speed of the event queue, and why there is
 always something on screen causing the block to go.
