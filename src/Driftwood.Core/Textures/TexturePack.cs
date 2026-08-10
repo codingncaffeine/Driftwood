@@ -558,6 +558,71 @@ public sealed class TexturePack : IDisposable
         }
     }
 
+    /// <summary>
+    /// Reads one ordinary asset without decoding it, using the same dialect and namespace search as
+    /// the texture loaders.
+    /// </summary>
+    /// <remarks>
+    /// Fonts need both JSON and PNG bytes. Keeping that lookup here means a nested archive, a second
+    /// namespace and a folder pack continue to have exactly one definition of where an asset lives.
+    /// The returned bytes are owned by the caller.
+    /// </remarks>
+    public byte[]? TryReadAssetBytes(string assetPath, out string from) =>
+        ReadAsset(assetPath, out from);
+
+    /// <summary>
+    /// Reads a namespaced resource identifier such as <c>minecraft:font/ascii.png</c> from one
+    /// category below <c>assets/&lt;namespace&gt;</c>, such as <c>textures</c> or <c>font</c>.
+    /// </summary>
+    /// <remarks>
+    /// Resource identifiers come from files in the pack and are therefore untrusted. They are
+    /// accepted only as slash-separated relative names; a font definition cannot use this door to
+    /// walk out of a folder pack and read an arbitrary file from the machine.
+    /// </remarks>
+    public byte[]? TryReadResourceBytes(
+        string resource, string category, out string from)
+    {
+        from = resource;
+        if (string.IsNullOrWhiteSpace(resource) || string.IsNullOrWhiteSpace(category)) return null;
+
+        var colon = resource.IndexOf(':');
+        var space = colon >= 0 ? resource[..colon] : "minecraft";
+        var name = colon >= 0 ? resource[(colon + 1)..] : resource;
+        space = space.Trim();
+        name = name.Replace('\\', '/').Trim('/');
+        category = category.Replace('\\', '/').Trim('/');
+
+        if (!SafeResourcePart(space) || !SafeResourcePath(name) || !SafeResourcePath(category))
+            return null;
+
+        var relative = $"assets/{space}/{category}/{name}";
+        var candidate = $"{_prefix}{relative}";
+        var raw = ReadAllBytes(candidate);
+
+        // Bedrock and a few hand-made Java packs keep their resource folders at the pack root. The
+        // normal candidate reader already knows that exception, but it cannot preserve an explicit
+        // namespace, so only the default namespace receives this careful fallback.
+        if (raw is null && space.Equals("minecraft", StringComparison.OrdinalIgnoreCase))
+        {
+            var ordinary = $"{category}/{name}";
+            raw = ReadAsset(ordinary, out from);
+            return raw;
+        }
+
+        if (raw is not null) from = relative;
+        return raw;
+    }
+
+    private static bool SafeResourcePart(string part) =>
+        part.Length is > 0 and <= 128
+        && part.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '-' or '.');
+
+    private static bool SafeResourcePath(string path) =>
+        path.Length is > 0 and <= 1_024
+        && !path.StartsWith('/')
+        && !path.Any(char.IsControl)
+        && path.Split('/').All(part => part.Length > 0 && part is not "." and not "..");
+
     /// <summary>Loads one texture by its modern path, scaled to the given tile size.</summary>
     /// <param name="from">
     /// Where it actually came off, which for an old pack is not the path that was asked for. The

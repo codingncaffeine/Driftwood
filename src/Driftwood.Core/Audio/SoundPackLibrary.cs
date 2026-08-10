@@ -132,21 +132,37 @@ public sealed class SoundPackLibrary
                 || !remote.Remote.Id.All(char.IsAsciiLetterOrDigit))
                 throw new InvalidDataException("the downloaded sound pack has an invalid provider ID");
 
-            if (remote.Encoded.LongLength <= 0 || remote.Encoded.LongLength > SoundPackArchive.MaximumArchiveBytes)
-                throw new InvalidDataException("the downloaded sound pack has an unsafe size");
+            if (!File.Exists(remote.ArchivePath))
+                throw new FileNotFoundException("the downloaded sound pack is no longer in staging");
 
-            var actual = Convert.ToHexString(SHA512.HashData(remote.Encoded)).ToLowerInvariant();
+            var length = new FileInfo(remote.ArchivePath).Length;
+            if (length <= 0 || length > SoundPackArchive.MaximumArchiveBytes)
+                throw new InvalidDataException("the downloaded sound pack has an unsafe size");
+            if (length != remote.Length)
+                throw new InvalidDataException("the downloaded sound pack changed size in staging");
+
+            string actual;
+            using (var source = File.OpenRead(remote.ArchivePath))
+                actual = Convert.ToHexString(SHA512.HashData(source)).ToLowerInvariant();
             if (!actual.Equals(remote.Sha512, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException("the downloaded sound pack did not match Modrinth's SHA-512");
 
+            var inspection = SoundPackArchive.Inspect(remote.ArchivePath);
             Directory.CreateDirectory(Folder);
             var id = "mr-" + remote.Remote.Id;
             var temporary = System.IO.Path.Combine(Folder, id + ".download");
-            File.WriteAllBytes(temporary, remote.Encoded);
 
             try
             {
-                var inspection = SoundPackArchive.Inspect(temporary);
+                // Provider downloads are already private temporary files. On the usual same-volume
+                // AppData layout, moving avoids a second several-hundred-megabyte copy and keeps the
+                // game responsive after the bar reaches 100%. A cross-volume temp directory falls
+                // back to a byte-preserving copy.
+                if (remote.Temporary && SameVolume(remote.ArchivePath, temporary))
+                    File.Move(remote.ArchivePath, temporary, overwrite: true);
+                else
+                    File.Copy(remote.ArchivePath, temporary, overwrite: true);
+
                 var metadata = new Metadata
                 {
                     Id = id,
@@ -174,6 +190,13 @@ public sealed class SoundPackLibrary
             why = error.Message;
             return null;
         }
+    }
+
+    private static bool SameVolume(string first, string second)
+    {
+        var firstRoot = System.IO.Path.GetPathRoot(System.IO.Path.GetFullPath(first));
+        var secondRoot = System.IO.Path.GetPathRoot(System.IO.Path.GetFullPath(second));
+        return string.Equals(firstRoot, secondRoot, StringComparison.OrdinalIgnoreCase);
     }
 
     public bool Remove(string id)
@@ -357,7 +380,7 @@ public static class SoundPackLibrarySelfTest
                 "Ab12Cd34", "tiny-sounds", "Tiny Remote Sounds", "fixture maker", "CC0-1.0", 12, "",
                 new Uri("https://modrinth.com/resourcepack/tiny-sounds"));
             var remoteFile = new RemoteSoundPackFile(
-                remote, "Version1", "r1", "Tiny Sounds.zip", hash, encoded);
+                remote, "Version1", "r1", "Tiny Sounds.zip", hash, packPath, encoded.LongLength);
             var downloaded = shelf.Install(remoteFile, out var remoteWhy);
             if (downloaded is null)
                 faults.Add($"a verified remote sound pack was refused: {remoteWhy}");

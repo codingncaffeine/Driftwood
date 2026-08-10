@@ -857,6 +857,12 @@ public static class WorldAudit
         Check("every letter is drawn and distinct", fontFaults.Count == 0,
             fontFaults.Count == 0 ? fontDetail : $"{fontFaults.Count} faults: {fontFaults[0]}");
 
+        var packFontFaults = PackFontSelfTest(out var packFontDetail);
+        Check("resource packs can dress the readable font", packFontFaults.Count == 0,
+            packFontFaults.Count == 0
+                ? packFontDetail
+                : $"{packFontFaults.Count} faults: {packFontFaults[0]}");
+
         var cursorFaults = CursorSelfTest(out var cursorDetail);
         Check("the pointer keeps its authored silhouette", cursorFaults.Count == 0,
             cursorFaults.Count == 0 ? cursorDetail : $"{cursorFaults.Count} faults: {cursorFaults[0]}");
@@ -2898,8 +2904,59 @@ public static class WorldAudit
             if (!GuiTextureSet.Entries.Any(entry => entry.Layer == layer))
                 faults.Add($"the pack contract has no {layer} sprite");
 
+        var theme = DefaultGuiTheme.Build(guiLayers.Length);
+        GuiTextureSet.Layer[] themed =
+        [
+            GuiTextureSet.Layer.MenuBackground,
+            GuiTextureSet.Layer.MenuListBackground,
+            GuiTextureSet.Layer.OptionsBackground,
+            GuiTextureSet.Layer.WidgetButton,
+            GuiTextureSet.Layer.WidgetButtonHighlighted,
+            GuiTextureSet.Layer.WidgetButtonDisabled,
+            GuiTextureSet.Layer.TextField,
+            GuiTextureSet.Layer.TextFieldHighlighted,
+            GuiTextureSet.Layer.Tab,
+            GuiTextureSet.Layer.TabHighlighted,
+            GuiTextureSet.Layer.TabSelected,
+            GuiTextureSet.Layer.TabSelectedHighlighted,
+            GuiTextureSet.Layer.TooltipBackground,
+        ];
+
+        foreach (var layer in themed)
+        {
+            var at = (int)layer;
+            if (at >= theme.Present.Length || !theme.Present[at])
+            {
+                faults.Add($"the first-party GUI theme has no {layer} fallback");
+                continue;
+            }
+
+            var tile = theme.Tiles[at];
+            if (tile.Length != GuiTextureSet.Size * GuiTextureSet.Size * 4)
+                faults.Add($"the {layer} fallback is {tile.Length} bytes rather than one GUI tile");
+            else if (Enumerable.Range(0, tile.Length / 4).Any(pixel =>
+                         tile[pixel * 4] != tile[pixel * 4 + 1]
+                         || tile[pixel * 4] != tile[pixel * 4 + 2]))
+                faults.Add($"the {layer} fallback has colour in neutral interface chrome");
+        }
+
+        if (theme.Tiles[(int)GuiTextureSet.Layer.WidgetButton].AsSpan().SequenceEqual(
+                theme.Tiles[(int)GuiTextureSet.Layer.WidgetButtonHighlighted]))
+            faults.Add("normal and highlighted first-party buttons are the same sprite");
+        if (theme.Tiles[(int)GuiTextureSet.Layer.Tab].AsSpan().SequenceEqual(
+                theme.Tiles[(int)GuiTextureSet.Layer.TabSelected]))
+            faults.Add("normal and selected first-party tabs are the same sprite");
+
+        var surfaceTones = theme.Tiles[(int)GuiTextureSet.Layer.OptionsBackground]
+            .Where((_, index) => index % 4 == 0)
+            .Distinct()
+            .Count();
+        if (surfaceTones < 6)
+            faults.Add($"the first-party options surface has only {surfaceTones} graphite tones");
+
         detail = $"64px stone gains {detailedColours.Count} colours from {nativeColours.Count} without "
-               + $"moving its silhouette; {GuiTextureSet.Entries.Length} pack GUI layers mapped";
+               + $"moving its silhouette; {GuiTextureSet.Entries.Length} pack GUI layers mapped; "
+               + $"{theme.Painted} original greyscale fallbacks with {surfaceTones} surface tones";
         return faults;
     }
 
@@ -6164,6 +6221,149 @@ public static class WorldAudit
                + $"advancing {narrowest} to {widest} pixels";
 
         return faults;
+    }
+
+    /// <summary>
+    /// Opens synthetic modern and legacy resource packs through the real font reader.
+    /// </summary>
+    private static List<string> PackFontSelfTest(out string detail)
+    {
+        var faults = new List<string>();
+        var root = Path.Combine(Path.GetTempPath(), $"driftwood-pack-font-{Guid.NewGuid():N}");
+        var modern = Path.Combine(root, "modern");
+        var legacy = Path.Combine(root, "legacy");
+        var fallback = TileGen.Font();
+
+        try
+        {
+            var pixel = Png.Encode(new Image(1, 1, [218, 218, 218, 255]));
+            WritePackRoot(modern, pixel);
+            Directory.CreateDirectory(Path.Combine(modern, "assets", "minecraft", "font", "include"));
+            Directory.CreateDirectory(Path.Combine(modern, "assets", "minecraft", "textures", "font"));
+            File.WriteAllText(
+                Path.Combine(modern, "assets", "minecraft", "font", "default.json"),
+                """
+                {
+                  "providers": [
+                    { "type": "reference", "id": "minecraft:include/check" },
+                    { "type": "space", "advances": { " ": 5 } },
+                    { "type": "ttf", "file": "minecraft:font/not-used.ttf", "size": 11 }
+                  ]
+                }
+                """);
+            File.WriteAllText(
+                Path.Combine(modern, "assets", "minecraft", "font", "include", "check.json"),
+                """
+                {
+                  "providers": [
+                    { "type": "bitmap", "file": "minecraft:font/check.png", "height": 8,
+                      "ascent": 7, "chars": ["A"] }
+                  ]
+                }
+                """);
+            File.WriteAllBytes(
+                Path.Combine(modern, "assets", "minecraft", "textures", "font", "check.png"), pixel);
+
+            using (var pack = TexturePack.Open(modern, out var why))
+            {
+                if (pack is null)
+                {
+                    faults.Add($"the modern font fixture would not open: {why}");
+                }
+                else
+                {
+                    var font = FontTextureSet.Load(pack);
+                    var a = 'A' - TileGen.FirstGlyph;
+                    var b = 'B' - TileGen.FirstGlyph;
+                    var space = ' ' - TileGen.FirstGlyph;
+
+                    if (font.BitmapGlyphs != 1)
+                        faults.Add($"a one-glyph bitmap provider loaded {font.BitmapGlyphs} glyphs");
+                    if (font.SpaceAdvances != 1 || font.Advances[space] != 10)
+                        faults.Add($"a five-unit space became {font.Advances[space]} rather than 10 pixels");
+                    if (font.Providers != 4)
+                        faults.Add($"reference, bitmap, space and TTF providers counted as {font.Providers}");
+                    if (font.Tiles[a].AsSpan().SequenceEqual(fallback[a]))
+                        faults.Add("the modern bitmap provider did not replace A");
+                    if (!font.Tiles[b].AsSpan().SequenceEqual(fallback[b]))
+                        faults.Add("a sparse modern font replaced B even though it supplied only A");
+                    if (!font.Omissions.Contains("ttf", StringComparer.OrdinalIgnoreCase))
+                        faults.Add("an unsupported TTF provider was not named as an omission");
+                    if (font.Faults.Count > 0)
+                        faults.Add($"the valid modern font reported: {font.Faults[0]}");
+                }
+            }
+
+            var legacyPixels = new byte[16 * 16 * 4];
+            for (var code = 0; code < 256; code++)
+            {
+                if (code == ' ') continue;
+                var at = code * 4;
+                var tone = (byte)(72 + code % 151);
+                legacyPixels[at] = tone;
+                legacyPixels[at + 1] = tone;
+                legacyPixels[at + 2] = tone;
+                legacyPixels[at + 3] = 255;
+            }
+
+            WritePackRoot(legacy, pixel);
+            Directory.CreateDirectory(Path.Combine(legacy, "assets", "minecraft", "textures", "font"));
+            File.WriteAllBytes(
+                Path.Combine(legacy, "assets", "minecraft", "textures", "font", "ascii.png"),
+                Png.Encode(new Image(16, 16, legacyPixels)));
+
+            using (var pack = TexturePack.Open(legacy, out var why))
+            {
+                if (pack is null)
+                {
+                    faults.Add($"the legacy font fixture would not open: {why}");
+                }
+                else
+                {
+                    var font = FontTextureSet.Load(pack);
+                    if (font.BitmapGlyphs != TileGen.GlyphCount)
+                        faults.Add(
+                            $"a complete legacy ascii.png loaded {font.BitmapGlyphs} of "
+                            + $"{TileGen.GlyphCount} printable glyphs");
+                    if (font.Providers != 0)
+                        faults.Add($"a legacy sheet invented {font.Providers} JSON providers");
+                    if (font.Faults.Count > 0)
+                        faults.Add($"the valid legacy font reported: {font.Faults[0]}");
+                }
+            }
+
+            detail = "modern reference + bitmap + space providers replace one ASCII glyph sparsely; "
+                   + "legacy ascii.png replaces all 95; unsupported TTF is named, not guessed";
+        }
+        catch (Exception error) when (
+            error is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            faults.Add($"font fixture: {error.Message}");
+            detail = "font fixture could not complete";
+        }
+        finally
+        {
+            try
+            {
+                if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+                faults.Add($"font fixture cleanup: {error.Message}");
+            }
+        }
+
+        return faults;
+
+        static void WritePackRoot(string folder, byte[] tile)
+        {
+            Directory.CreateDirectory(Path.Combine(folder, "assets", "minecraft", "textures", "block"));
+            File.WriteAllText(
+                Path.Combine(folder, "pack.mcmeta"),
+                """{ "pack": { "pack_format": 18, "description": "font self-test" } }""");
+            File.WriteAllBytes(
+                Path.Combine(folder, "assets", "minecraft", "textures", "block", "stone.png"), tile);
+        }
     }
 
     /// <summary>

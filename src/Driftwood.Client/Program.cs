@@ -802,8 +802,9 @@ public static class Program
                                 percentiles, then exit (default 15 s, seed defaults to 'driftwood')
               --shot <folder>   photograph what is in the hand — a pickaxe, a sword, a torch and a
                                 block, in each view, at rest and mid-swing — write them there and
-                                quit. The real world, the real camera, the real grip; the way to
-                                look at a held thing without starting the game and holding one.
+                                quit. With --ui-check, write each deterministic UI state instead.
+                                The real world, the real camera, the real grip; the way to look at
+                                a held thing without starting the game and holding one.
               --uploads <n>     chunk uploads allowed per frame (default 4)
               --stall <ms>      with --bench, burn this long every 200th frame — the control that
                                 proves the benchmark can see a hitch it is known to contain

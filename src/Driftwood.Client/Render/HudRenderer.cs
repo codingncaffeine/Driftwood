@@ -119,6 +119,9 @@ public enum GameTab
 /// <param name="Edits">
 /// A line of typed text this row is the box for, drawn where the value would be.
 /// </param>
+/// <param name="Progress">
+/// Zero through one draws a slim determinate bar along the row's foot; a negative value draws none.
+/// </param>
 /// <remarks>
 /// ⛳ <b>A text field is a row, which is why it cost almost nothing.</b> Scrolling, hit testing, the
 /// note strip and the way the keyboard walks the list are all already here and all already right; a
@@ -126,7 +129,8 @@ public enum GameTab
 /// can have a box to type in without learning anything new.
 /// </remarks>
 public readonly record struct MenuRow(
-    string Label, string Value = "", bool Heading = false, string Note = "", TextField? Edits = null);
+    string Label, string Value = "", bool Heading = false, string Note = "", TextField? Edits = null,
+    float Progress = -1f);
 
 /// <summary>
 /// Everything the overlay needs to know about the screen the player has open.
@@ -467,8 +471,8 @@ public sealed class HudRenderer : IDisposable
     private readonly uint _vbo;
     private readonly uint _ebo;
     private readonly BlockTextureArray _icons;
-    private readonly BlockTextureArray _font;
-    private readonly int[] _advance;
+    private BlockTextureArray _font;
+    private int[] _advance;
 
     private readonly List<float> _backdrop = new(64);
     private readonly List<float> _plain = new(4096);
@@ -1072,8 +1076,8 @@ public sealed class HudRenderer : IDisposable
             return;
         }
 
-        const float Panel = MenuPanel;
-        var left = MathF.Round((w - Panel) / 2f);
+        var panel = screen.Kind == HudScreenKind.Game ? GameMenuPanel : MenuPanel;
+        var left = MathF.Round((w - panel) / 2f);
 
         // Sat where it is tall rather than always a fixed way down the screen.
         var tall = 22f + Math.Min(screen.Rows.Count, ScreenLayout.MenuLines(h)) * ScreenLayout.MenuLine + 12f;
@@ -1086,8 +1090,8 @@ public sealed class HudRenderer : IDisposable
         var titleTop = MathF.Max(6f, top - TitleArt.LetterHeight * cell - 26f);
         Title(screen, w * 0.5f, titleTop, cell, screen.Drift);
 
-        Tabs(screen, layout, left, top, Panel);
-        Rows(screen, layout, left, top + 22f, Panel, h);
+        Tabs(screen, layout, left, top, panel);
+        Rows(screen, layout, left, top + 22f, panel, h);
 
         Footer(screen, w, h);
     }
@@ -1098,7 +1102,7 @@ public sealed class HudRenderer : IDisposable
         const float rowsWide = MenuPanel;
         const float gap = 14f;
         const float previewWide = 132f;
-        const float totalWide = rowsWide + gap + previewWide;
+        const float totalWide = GameMenuPanel;
 
         var shown = Math.Min(screen.Rows.Count, ScreenLayout.MenuLines(h));
         var tall = 22f + shown * ScreenLayout.MenuLine + 12f;
@@ -1285,32 +1289,68 @@ public sealed class HudRenderer : IDisposable
         _ => new Vector4(0.28f, 0.51f, 0.25f, 1f),
     };
 
-    /// <summary>The tabs, with the open one lit and underlined.</summary>
+    /// <summary>A single joined tab rail, with the open section carried by the mint state colour.</summary>
     private void Tabs(HudScreen screen, ScreenLayout layout, float left, float top, float panel)
     {
         var names = screen.TabNames;
+        if (names.Length == 0) return;
+
+        var widths = new float[names.Length];
+        var natural = 0f;
+        for (var i = 0; i < names.Length; i++)
+        {
+            widths[i] = MathF.Round(TextWidth(names[i], 8f)) + 10f;
+            natural += widths[i];
+        }
+
+        // Fill a wider rail rather than leaving an orphaned rule to its right. On an unusually
+        // narrow surface the same calculation contracts every tab proportionally and FitText below
+        // is the final guard; no tab is ever allowed to leave the panel it belongs to.
+        if (natural <= panel)
+        {
+            var extra = (panel - natural) / names.Length;
+            for (var i = 0; i < widths.Length; i++) widths[i] += extra;
+        }
+        else
+        {
+            var scale = panel / natural;
+            for (var i = 0; i < widths.Length; i++) widths[i] *= scale;
+        }
+
         var pen = left;
 
         for (var i = 0; i < names.Length; i++)
         {
             var name = names[i];
-            var width = MathF.Round(TextWidth(name, 8f)) + 10f;
+            var width = i == names.Length - 1
+                ? left + panel - pen
+                : MathF.Round(widths[i]);
             var open = screen.Tab == i;
+            var hot = screen.Hovered is { Kind: ZoneKind.Tab } over && over.Index == i;
+            var layer = open
+                ? hot ? GuiTextureSet.Layer.TabSelectedHighlighted : GuiTextureSet.Layer.TabSelected
+                : hot ? GuiTextureSet.Layer.TabHighlighted : GuiTextureSet.Layer.Tab;
 
-            // The open one stands out of the screen and the shut ones are pressed into it, which is
-            // the oldest way of drawing a tab and still the one that needs no explaining.
-            Bevel(pen, top, width, 16f, open, open ? PanelFill : new Vector4(0.22f, 0.22f, 0.22f, 0.95f));
+            if (HasGui(layer))
+                NineSlice(_guiUnder, pen, top, width, 18f, layer, 130f, 24f, 4f);
+            else
+            {
+                var fill = open ? PanelFill : new Vector4(0.22f, 0.22f, 0.22f, 0.97f);
+                Rect(_plain, pen, top, width, 18f, fill);
+                Rect(_plain, pen, top, width, 2f, open ? PanelLight : PanelDark);
+                Rect(_plain, pen, top, 1f, 18f, i == 0 ? PanelLight : PanelDark);
+                if (i == names.Length - 1)
+                    Rect(_plain, pen + width - 1f, top, 1f, 18f, PanelDark);
+            }
+            Rect(_plain, pen, top + 16f, width, 2f, open ? Picked : PanelDark);
 
-            Text(name, pen + 5f, top + 4f, 8f,
+            var shown = FitText(name, MathF.Max(1f, width - 8f), 8f);
+            TextCentred(shown, pen + width * 0.5f, top + 4f, 8f,
                 open ? Highlight : InkFaint);
 
-            layout.Add(ZoneKind.Tab, i, pen, top, width, 16f);
-            pen += width + 2f;
+            layout.Add(ZoneKind.Tab, i, pen, top, width, 18f);
+            pen += width;
         }
-
-        // The rule the open tab is standing on. Drawn after, so its two pixels meet the panel below
-        // rather than the tab above.
-        Rect(_plain, left, top + 16f, panel, 2f, PanelLight);
     }
 
     /// <summary>
@@ -1335,7 +1375,10 @@ public sealed class HudRenderer : IDisposable
         var shown = Math.Min(lines, total);
         var first = Math.Clamp(screen.Scroll, 0, Math.Max(0, total - lines));
 
-        Frame(left - 4f, top - 4f, panel + 8f, shown * Line + 12f);
+        var surface = screen.Kind == HudScreenKind.Start
+            ? GuiTextureSet.Layer.MenuListBackground
+            : GuiTextureSet.Layer.OptionsBackground;
+        SurfaceFrame(left - 4f, top - 4f, panel + 8f, shown * Line + 12f, surface);
 
         if (total > lines) Scrollbar(screen, layout, left + panel + 6f, top - 2f, shown * Line + 8f, first, lines, total);
 
@@ -1346,31 +1389,61 @@ public sealed class HudRenderer : IDisposable
 
             if (row.Heading)
             {
-                Text(row.Label, left, y, 8f, Highlight);
+                Rect(_plain, left - 2f, y - 1f, panel + 4f, Line - 1f,
+                    new Vector4(0.17f, 0.17f, 0.17f, 0.72f));
+                Rect(_plain, left - 2f, y - 1f, 2f, Line - 1f, Picked with { W = 0.70f });
+                Text(FitText(row.Label, panel - 8f, 8f), left + 4f, y, 8f, Highlight);
                 continue;
             }
 
             var lit = i == screen.Selected;
             var hot = screen.Hovered is { Kind: ZoneKind.Row } over && over.Index == i;
 
-            if (lit && HasGui(GuiTextureSet.Layer.WidgetButtonHighlighted))
-                NineSlice(_guiOver, left - 2f, y - 2f, panel + 4f, Line,
-                    GuiTextureSet.Layer.WidgetButtonHighlighted, 200f, 20f, 4f);
+            var button = lit || hot
+                ? GuiTextureSet.Layer.WidgetButtonHighlighted
+                : GuiTextureSet.Layer.WidgetButton;
+            if (HasGui(button))
+                NineSlice(_guiUnder, left - 2f, y - 2f, panel + 4f, Line,
+                    button, 200f, 20f, 4f,
+                    new Vector4(1f, 1f, 1f, lit ? 1f : hot ? 0.94f : 0.72f));
             else if (lit)
-                Bevel(left - 2f, y - 2f, panel + 4f, Line, raised: false, new Vector4(0.50f, 0.50f, 0.50f, 0.97f));
+                Bevel(left - 2f, y - 2f, panel + 4f, Line, raised: false,
+                    new Vector4(0.27f, 0.27f, 0.27f, 0.98f));
             else if (hot)
                 Rect(_plain, left - 2f, y - 2f, panel + 4f, Line, new Vector4(1f, 1f, 1f, 0.10f));
 
-            Text(row.Label, left + 6f, y, 8f, lit ? Vector4.One : InkDim);
+            if (lit)
+            {
+                Rect(_plain, left - 2f, y - 2f, 2f, Line, Picked);
+                Rect(_plain, left, y + Line - 3f, panel + 2f, 1f, Picked with { W = 0.50f });
+            }
+
+            if (row.Progress >= 0f)
+            {
+                var progress = Math.Clamp(row.Progress, 0f, 1f);
+                Rect(_plain, left + 2f, y + Line - 5f, panel - 4f, 2f,
+                    new Vector4(0.08f, 0.08f, 0.08f, 0.80f));
+                if (progress > 0f)
+                    Rect(_plain, left + 2f, y + Line - 5f, (panel - 4f) * progress, 2f,
+                        new Vector4(0.82f, 0.92f, 0.58f, 0.95f));
+            }
 
             var boxWidth = 0f;
             if (row.Edits is { } field) boxWidth = Box(screen, field, left, y, panel);
-            else if (row.Value.Length > 0)
+            var valueText = "";
+            var valueWidth = 0f;
+            if (row.Edits is null && row.Value.Length > 0)
             {
-                var width = TextWidth(row.Value, 8f);
-                Text(row.Value, left + panel - width - 4f, y, 8f,
+                valueText = FitText(row.Value, MathF.Min(154f, panel * 0.43f), 8f);
+                valueWidth = TextWidth(valueText, 8f);
+                Text(valueText, left + panel - valueWidth - 4f, y, 8f,
                     lit ? Ink : InkDim);
             }
+
+            var reserved = boxWidth > 0f ? boxWidth + 8f : valueWidth > 0f ? valueWidth + 12f : 6f;
+            var labelWidth = MathF.Max(8f, panel - reserved - 8f);
+            Text(FitText(row.Label, labelWidth, 8f), left + 6f, y, 8f,
+                lit ? Vector4.One : InkDim);
 
             // A heading has no zone at all, so the pointer cannot land on something the keyboard
             // deliberately skips over. The row's whole width is clickable, not just its words.
@@ -1408,9 +1481,14 @@ public sealed class HudRenderer : IDisposable
         var width = MathF.Min(panel * 0.55f, 132f);
         var x = left + panel - width;
         var focused = ReferenceEquals(screen.Typing, field);
+        var layer = focused ? GuiTextureSet.Layer.TextFieldHighlighted : GuiTextureSet.Layer.TextField;
 
-        Bevel(x, y - 2f, width, ScreenLayout.MenuLine, raised: false,
-            new Vector4(0.13f, 0.13f, 0.14f, 0.98f));
+        if (HasGui(layer))
+            NineSlice(_guiOver, x, y - 2f, width, ScreenLayout.MenuLine,
+                layer, 200f, 20f, 4f);
+        else
+            Bevel(x, y - 2f, width, ScreenLayout.MenuLine, raised: false,
+                new Vector4(0.13f, 0.13f, 0.13f, 0.98f));
 
         var inside = width - 8f;
         var text = field.Text.AsSpan();
@@ -1425,7 +1503,7 @@ public sealed class HudRenderer : IDisposable
         while (shown.Length > 0 && TextWidth(shown, Glyph) > inside) shown = shown[..^1];
 
         if (text.Length == 0 && !focused && field.Placeholder.Length > 0)
-            Text(field.Placeholder, x + 4f, y, Glyph, InkFaint);
+            Text(FitText(field.Placeholder, width - 8f, Glyph), x + 4f, y, Glyph, InkFaint);
         else
             Text(shown, x + 4f, y, Glyph, focused ? Vector4.One : Ink);
 
@@ -1463,8 +1541,14 @@ public sealed class HudRenderer : IDisposable
         const float Glyph = 7f;
         var lines = Wrap(note, panel - 8f, Glyph);
 
-        Bevel(left - 4f, y, panel + 8f, lines.Count * 9f + 7f, raised: false,
-            new Vector4(0.20f, 0.20f, 0.20f, 0.96f));
+        var height = lines.Count * 9f + 7f;
+        if (HasGui(GuiTextureSet.Layer.TooltipBackground))
+            NineSlice(_guiOver, left - 4f, y, panel + 8f, height,
+                GuiTextureSet.Layer.TooltipBackground, 100f, 100f, 5f,
+                new Vector4(1f, 1f, 1f, 0.97f));
+        else
+            Bevel(left - 4f, y, panel + 8f, height, raised: false,
+                new Vector4(0.20f, 0.20f, 0.20f, 0.96f));
 
         for (var i = 0; i < lines.Count; i++)
             Text(lines[i], left, y + 4f + i * 9f, Glyph, InkFaint);
@@ -2288,6 +2372,7 @@ public sealed class HudRenderer : IDisposable
 
         BuildArmourSheets(pack);
         BuildGui(pack);
+        BuildFont(pack);
     }
 
     /// <summary>Uploads a candidate for the SKINS preview without changing the worn player.</summary>
@@ -2304,11 +2389,28 @@ public sealed class HudRenderer : IDisposable
         _gui = null;
         _guiPresent = [];
 
-        if (GuiTextureSet.Load(pack) is not { } gui) return;
-
+        var gui = GuiTextureSet.Load(pack);
         _gui = new BlockTextureArray(_gl, gui.Tiles, GuiTextureSet.Size);
         _guiPresent = gui.Present;
         Console.WriteLine($"interface   {gui.Summary}");
+    }
+
+    /// <summary>Rebuilds the 95 safe UI glyph layers from the selected sparse resource pack.</summary>
+    private void BuildFont(TexturePack? pack)
+    {
+        var font = FontTextureSet.Load(pack);
+        _font.Dispose();
+        _font = new BlockTextureArray(_gl, font.Tiles, TileGen.Size);
+        _advance = font.Advances;
+
+        if (pack is null || font.BitmapGlyphs == 0 && font.SpaceAdvances == 0) return;
+
+        Console.WriteLine(
+            $"font        {font.Summary}"
+            + (font.Omissions.Count > 0
+                ? $"; not used: {string.Join(", ", font.Omissions)}"
+                : "")
+            + (font.Faults.Count > 0 ? $"; {font.Faults.Count} faults" : ""));
     }
 
     private bool HasGui(GuiTextureSet.Layer layer) =>
@@ -2457,7 +2559,11 @@ public sealed class HudRenderer : IDisposable
         y = MathF.Round(MathF.Max(2f, y));
 
         screen.TipBox = new Vector4(x, y, boxWidth, boxHeight);
-        Bevel(x, y, boxWidth, boxHeight, raised: false, TipFill);
+        if (HasGui(GuiTextureSet.Layer.TooltipBackground))
+            NineSlice(_guiOver, x, y, boxWidth, boxHeight,
+                GuiTextureSet.Layer.TooltipBackground, 100f, 100f, 5f);
+        else
+            Bevel(x, y, boxWidth, boxHeight, raised: false, TipFill);
         Text(told.Title, x + Pad, y + Pad, Title, Ink);
 
         for (var i = 0; i < lines.Count; i++)
@@ -2594,7 +2700,46 @@ public sealed class HudRenderer : IDisposable
         Rect(_plain, x + w - 2f, y, 2f, 2f, PanelFill);
     }
 
-    private void Frame(float x, float y, float w, float h) => Bevel(x, y, w, h, raised: true, PanelFill);
+    private void Frame(float x, float y, float w, float h)
+    {
+        Bevel(x, y, w, h, raised: true, PanelFill);
+
+        // Small clean-room corner brackets and directional etching give plain fallback panels a
+        // material identity. Kept inside the rim and strictly greyscale; selection remains the only
+        // mint state, and pack-provided surfaces take the separate path below.
+        if (w < 18f || h < 18f) return;
+        Rect(_plain, x + 4f, y + 4f, 8f, 1f, PanelLight with { W = 0.42f });
+        Rect(_plain, x + 4f, y + 4f, 1f, 6f, PanelLight with { W = 0.42f });
+        Rect(_plain, x + w - 12f, y + h - 5f, 8f, 1f, PanelDark with { W = 0.72f });
+        Rect(_plain, x + w - 5f, y + h - 10f, 1f, 6f, PanelDark with { W = 0.72f });
+    }
+
+    /// <summary>A standard pack surface tiled under a directional Driftwood frame.</summary>
+    private void SurfaceFrame(float x, float y, float w, float h, GuiTextureSet.Layer surface)
+    {
+        x = MathF.Round(x);
+        y = MathF.Round(y);
+        w = MathF.Round(w);
+        h = MathF.Round(h);
+
+        if (!HasGui(surface))
+        {
+            Frame(x, y, w, h);
+            return;
+        }
+
+        TileGui(_guiUnder, x + 2f, y + 2f, MathF.Max(0f, w - 4f), MathF.Max(0f, h - 4f),
+            surface, 16f);
+
+        Rect(_plain, x, y, w, 2f, PanelLight);
+        Rect(_plain, x, y, 2f, h, PanelLight);
+        Rect(_plain, x, y + h - 2f, w, 2f, PanelDark);
+        Rect(_plain, x + w - 2f, y, 2f, h, PanelDark);
+        Rect(_plain, x + 4f, y + 4f, 8f, 1f, PanelLight with { W = 0.48f });
+        Rect(_plain, x + 4f, y + 4f, 1f, 6f, PanelLight with { W = 0.48f });
+        Rect(_plain, x + w - 12f, y + h - 5f, 8f, 1f, PanelDark with { W = 0.78f });
+        Rect(_plain, x + w - 5f, y + h - 10f, 1f, 6f, PanelDark with { W = 0.78f });
+    }
 
     /// <summary>
     /// What is picked out: a line round it, and a wash of the same colour outside that.
@@ -2644,8 +2789,7 @@ public sealed class HudRenderer : IDisposable
 
         foreach (var c in line)
         {
-            var glyph = TileGen.GlyphOf(c);
-            if (glyph < 0) glyph = TileGen.GlyphOf('?');
+            var glyph = DisplayGlyphOf(c);
 
             // A dark copy one unit down and right, so text stays readable over snow and over a cave
             // mouth alike. The same reason the crosshair is two colours.
@@ -2665,8 +2809,7 @@ public sealed class HudRenderer : IDisposable
 
         foreach (var c in line)
         {
-            var glyph = TileGen.GlyphOf(c);
-            width += Advance(glyph < 0 ? TileGen.GlyphOf('?') : glyph, height);
+            width += Advance(DisplayGlyphOf(c), height);
         }
 
         return width;
@@ -2679,6 +2822,12 @@ public sealed class HudRenderer : IDisposable
 
     /// <summary>How wide the settings panel is, so anything checking what fits can ask.</summary>
     public const float MenuPanel = 232f;
+
+    /// <summary>
+    /// The game settings shell. Eight joined tabs and two honest text columns fit inside it at every
+    /// supported scale; it is also exactly the total width already proven by the skin preview.
+    /// </summary>
+    public const float GameMenuPanel = 378f;
 
     /// <summary>How many wrapped lines a note comes to at the width it is drawn in.</summary>
     public int NoteLines(string note) => Wrap(note, MenuPanel - 8f, NoteGlyph).Count;
@@ -2694,7 +2843,58 @@ public sealed class HudRenderer : IDisposable
     /// comma never collides with what follows it.
     /// </remarks>
     private float Advance(int glyph, float height) =>
-        MathF.Max(1f, MathF.Round(_advance[glyph] * (height / TileGen.Size)));
+        MathF.Max(0f, MathF.Round(_advance[glyph] * (height / TileGen.Size)));
+
+    /// <summary>
+    /// Fits one unbroken label into a measured column. The renderer has no scissor rectangle, so an
+    /// ellipsis is the hard guarantee that a result name and its right-aligned state never paint
+    /// through one another.
+    /// </summary>
+    private string FitText(string line, float width, float height)
+    {
+        if (line.Length == 0 || TextWidth(line, height) <= width) return line;
+
+        const string tail = "...";
+        var tailWidth = TextWidth(tail, height);
+        if (tailWidth >= width) return ".";
+
+        var length = 0;
+        var used = 0f;
+        foreach (var c in line)
+        {
+            var step = Advance(DisplayGlyphOf(c), height);
+            if (used + step + tailWidth > width) break;
+            used += step;
+            length++;
+        }
+
+        return length <= 0 ? tail : line[..length].TrimEnd() + tail;
+    }
+
+    /// <summary>
+    /// UI prose predates the ASCII-only renderer and contains typographic punctuation. Map those
+    /// marks to deliberate ASCII shapes instead of the old question-mark boxes; pack fonts then
+    /// replace the same safe layers without changing string or input semantics.
+    /// </summary>
+    private static int DisplayGlyphOf(char c)
+    {
+        var shown = c switch
+        {
+            '\u00a0' => ' ',
+            '\u00b7' or '\u2022' => '|',
+            '\u2010' or '\u2011' or '\u2012' or '\u2013' or '\u2014' or '\u2212' => '-',
+            '\u2018' or '\u2019' or '\u2032' => '\'',
+            '\u201c' or '\u201d' or '\u2033' => '"',
+            '\u2026' => '.',
+            '\u00d7' => 'x',
+            '\u2190' => '<',
+            '\u2192' => '>',
+            _ => c,
+        };
+
+        var glyph = TileGen.GlyphOf(shown);
+        return glyph >= 0 ? glyph : TileGen.GlyphOf('?');
+    }
 
     /// <summary>Draws a line centred on a point.</summary>
     private void TextCentred(string line, float centreX, float y, float height, Vector4 colour) =>
@@ -3628,6 +3828,23 @@ public sealed class HudRenderer : IDisposable
         Vertex(into, x + w, y, u1, v0, layer, colour);
         Vertex(into, x + w, y + h, u1, v1, layer, colour);
         Vertex(into, x, y + h, u0, v1, layer, colour);
+    }
+
+    /// <summary>Repeats a standard 16px-style pack surface without stretching its grain.</summary>
+    private static void TileGui(
+        List<float> into, float x, float y, float w, float h,
+        GuiTextureSet.Layer layer, float tile)
+    {
+        if (w <= 0f || h <= 0f || tile <= 0f) return;
+
+        for (var py = 0f; py < h; py += tile)
+        for (var px = 0f; px < w; px += tile)
+        {
+            var wide = MathF.Min(tile, w - px);
+            var tall = MathF.Min(tile, h - py);
+            RectUv(into, x + px, y + py, wide, tall,
+                0f, 0f, wide / tile, tall / tile, Vector4.One, (int)layer);
+        }
     }
 
     /// <summary>Stretches the middle of a pack sprite while leaving its corners at authored size.</summary>

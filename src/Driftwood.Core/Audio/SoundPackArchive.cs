@@ -17,7 +17,11 @@ public sealed record SoundPackInspection(
 /// </summary>
 public static class SoundPackArchive
 {
-    public const long MaximumArchiveBytes = 128L * 1024 * 1024;
+    // Large, audio-heavy packs routinely pass 128 MiB. The archive is never held in memory and
+    // never extracted wholesale, so the useful outer bound here is a disk/network guard rather
+    // than the ZIP-bomb guard. Entry count, individual sound size and expanded sound bytes remain
+    // separately bounded below.
+    public const long MaximumArchiveBytes = 2L * 1024 * 1024 * 1024;
     public const long MaximumClipBytes = 32L * 1024 * 1024;
     public const long MaximumExpandedBytes = 512L * 1024 * 1024;
     public const int MaximumArchiveEntries = 8_192;
@@ -25,15 +29,16 @@ public static class SoundPackArchive
     /// <summary>Every file name the game can currently ask a pack to provide.</summary>
     public static IReadOnlySet<string> RequiredNames { get; } = BuildRequiredNames();
 
-    public static SoundPackInspection Inspect(string path)
+    public static SoundPackInspection Inspect(string path, bool requireSounds = true)
     {
         if (string.IsNullOrWhiteSpace(path)) throw new InvalidDataException("no sound-pack path was given");
+        if (Directory.Exists(path)) return InspectFolder(path, requireSounds);
         if (!File.Exists(path)) throw new FileNotFoundException("the sound pack is no longer on disk", path);
 
         var length = new FileInfo(path).Length;
         if (length <= 0) throw new InvalidDataException("the sound pack is empty");
         if (length > MaximumArchiveBytes)
-            throw new InvalidDataException($"the sound pack is larger than {MaximumArchiveBytes / 1024 / 1024} MiB");
+            throw new InvalidDataException($"the sound pack is larger than {DescribeBytes(MaximumArchiveBytes)}");
 
         using var archive = ZipFile.OpenRead(path);
         if (archive.Entries.Count > MaximumArchiveEntries)
@@ -62,11 +67,76 @@ public static class SoundPackArchive
                 throw new InvalidDataException($"the sound pack provides '{key}' more than once");
         }
 
-        if (entries.Count == 0)
+        if (entries.Count == 0 && requireSounds)
             throw new InvalidDataException("no sounds were found under assets/minecraft/sounds");
 
         var covered = entries.Keys.Count(RequiredNames.Contains);
         return new SoundPackInspection(entries.Count, covered, RequiredNames.Count, expanded, entries);
+    }
+
+    /// <summary>
+    /// The same bounded sound walk for an unpacked texture pack. Folder packs are a supported shape
+    /// on the texture shelf, so their standard audio overrides must not disappear merely because
+    /// there is no ZIP central directory to index.
+    /// </summary>
+    private static SoundPackInspection InspectFolder(string root, bool requireSounds)
+    {
+        var entries = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        long expanded = 0;
+        var files = 0;
+        var options = new EnumerationOptions
+        {
+            RecurseSubdirectories = true,
+            AttributesToSkip = FileAttributes.ReparsePoint,
+            IgnoreInaccessible = false,
+        };
+
+        foreach (var path in Directory.EnumerateFiles(root, "*", options))
+        {
+            files++;
+            if (files > MaximumArchiveEntries)
+                throw new InvalidDataException($"the sound pack contains more than {MaximumArchiveEntries:N0} files");
+
+            var relative = Path.GetRelativePath(root, path).Replace('\\', '/');
+            ValidateArchiveName(relative);
+            var key = KeyOf(relative);
+            if (key is null) continue;
+
+            var length = new FileInfo(path).Length;
+            if (length <= 0) throw new InvalidDataException($"'{relative}' is an empty sound");
+            if (length > MaximumClipBytes)
+                throw new InvalidDataException(
+                    $"'{relative}' is larger than {MaximumClipBytes / 1024 / 1024} MiB");
+
+            expanded += length;
+            if (expanded > MaximumExpandedBytes)
+                throw new InvalidDataException(
+                    $"the sounds expand past {MaximumExpandedBytes / 1024 / 1024} MiB");
+
+            if (!entries.TryAdd(key, relative))
+                throw new InvalidDataException($"the sound pack provides '{key}' more than once");
+        }
+
+        if (entries.Count == 0 && requireSounds)
+            throw new InvalidDataException("no sounds were found under assets/minecraft/sounds");
+
+        var covered = entries.Keys.Count(RequiredNames.Contains);
+        return new SoundPackInspection(entries.Count, covered, RequiredNames.Count, expanded, entries);
+    }
+
+    /// <summary>A compact binary size for the sound-pack browser and its safety messages.</summary>
+    public static string DescribeBytes(long bytes)
+    {
+        const double KiB = 1024;
+        const double MiB = KiB * 1024;
+        const double GiB = MiB * 1024;
+        return bytes switch
+        {
+            >= (long)GiB => $"{bytes / GiB:0.#} GiB",
+            >= (long)MiB => $"{bytes / MiB:0.#} MiB",
+            >= (long)KiB => $"{bytes / KiB:0.#} KiB",
+            _ => $"{Math.Max(0, bytes):N0} B",
+        };
     }
 
     /// <summary>Reads one already-indexed entry with the same bounds used at installation.</summary>

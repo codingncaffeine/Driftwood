@@ -282,17 +282,39 @@ filled by a sound pack chosen in the **AUDIO** tab. Packs are sparse: each file 
 partial archive still works, and a missing slot uses a local fallback whenever one exists.
 
 The tab can import a local Minecraft resource-pack ZIP or search Modrinth's audio resource packs
-without an account or API key. Search results show author, license and download count before the
-explicit **DOWNLOAD & USE** action. An open-source-only switch uses Modrinth's corresponding catalog
-filter. All Rights Reserved projects remain visibly marked: Driftwood does not ship, relicense or
-hide their files, and the license shown by the author remains the license that applies.
+without an account or API key. Search results show author, license, download count and the latest
+archive size before the explicit **DOWNLOAD & USE** action. An open-source-only switch uses
+Modrinth's corresponding catalog filter. All Rights Reserved projects remain visibly marked:
+Driftwood does not ship, relicense or hide their files, and the license shown by the author remains
+the license that applies.
 
-A download goes straight from Modrinth to the player, is held to fixed archive and expanded-size
-limits, checked for unsafe paths, and accepted only when its byte count and SHA-512 match Modrinth's
-metadata. The original, unmodified archive and a small attribution record live in
+A download streams straight from Modrinth to a temporary file instead of being held in memory, with
+byte and percentage progress on both the result and install rows. It is checked for unsafe paths and
+accepted only when its byte count and SHA-512 match Modrinth's metadata. The 2 GiB outer ceiling is
+only a network/disk safety guard; ZIP-bomb protection remains separate at 8,192 archive entries,
+32 MiB for one clip and 512 MiB of expanded audio. Large real packs, including a measured 452.9 MiB
+archive, pass through the same streaming path. The original, unmodified archive and a small
+attribution record live in
 `%APPDATA%\Driftwood\sound-packs`; nothing is unpacked or copied back into Driftwood. Selecting or
 installing a pack rebuilds the audio layer immediately, while removing the active one hands playback
 back to the embedded recordings before deleting it.
+
+A texture pack's standard sounds are also used automatically. The layers are, from lowest to
+highest priority: five embedded Driftwood fallbacks, sounds in the active texture pack, then the
+pack explicitly selected on the AUDIO tab. Every layer is sparse. If an active pack appears silent,
+check the **MUTE** row first; the volume and active-pack rows both say when mute is on.
+
+These are useful starting searches. The counts below come from inspecting the latest stable primary
+archives through Driftwood; a clip count includes variants and therefore is not the same thing as
+the number of distinct runtime slots covered.
+
+| Pack | Archive inspected | Driftwood coverage | Best fit |
+| --- | ---: | ---: | --- |
+| [Enhanced Audio](https://modrinth.com/resourcepack/enhanced-audio) | 662 clips / 18.1 MiB | 424 of 429 pack slots; **429 of 429 effective** with the five fallbacks | The most complete tested choice; realistic, All Rights Reserved |
+| [Bassier Sounds](https://modrinth.com/resourcepack/bassier-sounds) | 1,946 clips / 27.0 MiB | 226 of 429 slots | Broad bass-heavy replacement and the strongest tested open-license option; MIT |
+| [Player-Vibes](https://modrinth.com/resourcepack/player-vibes-new) | 704 clips / 452.9 MiB | 206 of 429 slots | Deep player movement and interaction variety; All Rights Reserved |
+
+These links point to the authors' pages; Driftwood redistributes none of the three archives.
 
 For a full decode sweep without installing an archive:
 
@@ -315,6 +337,19 @@ looking at what is inside rather than at the extension. A pack is treated as a *
 overrides**: anything it does not carry keeps Driftwood's own art, so a half-finished pack still
 leaves a complete world. A pack is never unpacked — it is read where it sits and closed again.
 
+That sparse layering now includes the interface and readable font, not only world art. Driftwood's
+default menus use an original graphite-and-pewter pixel theme with tiled shading, bevel states,
+etched corners and joined tabs. Thirteen first-party fallback sprites cover the standard menu,
+list/options surfaces, buttons, text fields, tabs and tooltips; a resource pack can replace any of
+those among the 44 mapped GUI destinations without making the remaining controls look unfinished.
+The wider eight-tab settings shell measures and shortens long labels and values before drawing, so
+pack fonts cannot push the two columns through one another.
+
+Legacy `ascii.png`/`font.png` sheets and modern `font/default.json` bitmap, space and reference
+providers can replace the 95 printable ASCII glyphs sparsely. A missing glyph keeps Driftwood's own
+readable drawing. TTF, Unihex, Unicode shaping and arbitrary mod font providers are named as
+unsupported instead of guessed; those need a substantially different text renderer.
+
 There is a **shelf** in the options screen, reachable from the menu before a world exists. Packs
 installed onto it live in `%APPDATA%\Driftwood\packs`, and the setting stores a **name** rather than
 a path, so it survives the file being moved and swapping between two packs stops meaning going to
@@ -327,10 +362,14 @@ Driftwood.exe --packs --pack C:\a\Pack.zip     install one and say what it turne
 
 Every row says **what the thing is** — which layout it turned out to be and what resolution it is
 drawn at, rather than a filename — because that is the only line that says whether the file somebody
-downloaded is the file they meant. A pack that will not open is **listed with the reason** rather
-than dropped: "no packs" and "a pack I cannot read" are otherwise the same four words, and packs
-arrive broken far more often than saves do. A layout not read yet is named as such — a 2012-era
-atlas pack is a real thing somebody may be holding, not a mistake they made.
+downloaded is the file they meant. Enter opens an accordion of measured runtime compatibility before
+anything is applied: blocks/items, GUI/font, texture-pack audio, creatures/armour and particles each
+get their own count, while models, blockstates and loader extensions are named as unread rather than
+quietly claimed. Applying and removing are separate, confirmed actions. A pack that will not open is
+**listed with the reason** rather than dropped: "no packs" and "a pack I cannot read" are otherwise
+the same four words, and packs arrive broken far more often than saves do. A layout not read yet is
+named as such — a 2012-era atlas pack is a real thing somebody may be holding, not a mistake they
+made.
 
 Animated textures play, at whatever frame rate the pack asks for, with the whole mip chain uploaded
 per layer so a lake does not freeze at distance.
@@ -414,8 +453,9 @@ it. Every give-up path is a fault now.
 Two instruments exist because a headless check cannot see a screen.
 
 ```
-Driftwood.exe --ui-check      open every screen in turn, read the pixels back, exit
-Driftwood.exe --shot <folder> photograph the hand and the screens, exit
+Driftwood.exe --ui-check                    open every screen, read the pixels back, exit
+Driftwood.exe --ui-check --shot <folder>    also photograph every deterministic UI state
+Driftwood.exe --shot <folder>               photograph the held-item/view matrix, exit
 ```
 
 `--ui-check` opens each screen and reads the framebuffer, because everything short of that proves
@@ -423,8 +463,10 @@ only that geometry was *built* — and geometry was built correctly all the way 
 nothing arrived on screen. A count of quads cannot tell "not drawn" from "drawn somewhere else"; a
 pixel can.
 
-`--shot` exists because a tile can be looked at and a tile **in a fist** cannot: that is a
-projection, a swing, a grip and two entirely different arm poses on top of the drawing.
+Combining `--ui-check` with `--shot` produces a contact sheet for checking tab joins, text fit,
+pack-skinned controls and every menu state by eye. `--shot` on its own exists because a tile can be
+looked at and a tile **in a fist** cannot: that is a projection, a swing, a grip and two entirely
+different arm poses on top of the drawing.
 
 ## Measuring frame time
 

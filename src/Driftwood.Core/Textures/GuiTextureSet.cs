@@ -5,6 +5,11 @@ public static class GuiTextureSet
 {
     public const int Size = 256;
 
+    // SetSkin is also used by the live player preview. The authored defaults never change, so build
+    // their pixels once and clone only the two small outer arrays before sparse pack replacements.
+    private static readonly Lazy<DefaultGuiTheme.Result> Defaults = new(() =>
+        DefaultGuiTheme.Build(Enum.GetValues<Layer>().Length));
+
     public enum Layer
     {
         Inventory,
@@ -36,8 +41,19 @@ public static class GuiTextureSet
         RecipeButton,
         RecipeButtonHighlighted,
         RecipeOverlay,
+        MenuBackground,
+        MenuListBackground,
+        OptionsBackground,
         WidgetButton,
         WidgetButtonHighlighted,
+        WidgetButtonDisabled,
+        TextField,
+        TextFieldHighlighted,
+        Tab,
+        TabHighlighted,
+        TabSelected,
+        TabSelectedHighlighted,
+        TooltipBackground,
         Scroller,
         ScrollerBackground,
     }
@@ -75,27 +91,40 @@ public static class GuiTextureSet
         new(Layer.RecipeButton, "textures/gui/sprites/recipe_book/button.png"),
         new(Layer.RecipeButtonHighlighted, "textures/gui/sprites/recipe_book/button_highlighted.png"),
         new(Layer.RecipeOverlay, "textures/gui/sprites/recipe_book/overlay_recipe.png"),
+        new(Layer.MenuBackground, "textures/gui/menu_background.png"),
+        new(Layer.MenuListBackground, "textures/gui/menu_list_background.png"),
+        new(Layer.OptionsBackground, "textures/gui/options_background.png"),
         new(Layer.WidgetButton, "textures/gui/sprites/widget/button.png"),
         new(Layer.WidgetButtonHighlighted, "textures/gui/sprites/widget/button_highlighted.png"),
+        new(Layer.WidgetButtonDisabled, "textures/gui/sprites/widget/button_disabled.png"),
+        new(Layer.TextField, "textures/gui/sprites/widget/text_field.png"),
+        new(Layer.TextFieldHighlighted, "textures/gui/sprites/widget/text_field_highlighted.png"),
+        new(Layer.Tab, "textures/gui/sprites/widget/tab.png"),
+        new(Layer.TabHighlighted, "textures/gui/sprites/widget/tab_highlighted.png"),
+        new(Layer.TabSelected, "textures/gui/sprites/widget/tab_selected.png"),
+        new(Layer.TabSelectedHighlighted, "textures/gui/sprites/widget/tab_selected_highlighted.png"),
+        new(Layer.TooltipBackground, "textures/gui/sprites/tooltip/background.png"),
         new(Layer.Scroller, "textures/gui/sprites/widget/scroller.png"),
         new(Layer.ScrollerBackground, "textures/gui/sprites/widget/scroller_background.png"),
     ];
 
-    public sealed record Result(byte[][] Tiles, bool[] Present, int Loaded)
+    public sealed record Result(byte[][] Tiles, bool[] Present, bool[] FromPack, int Loaded, int Defaults)
     {
-        public string Summary => $"{Loaded} of {Tiles.Length} GUI layers from the pack";
+        public string Summary => Loaded == 0
+            ? $"Driftwood's {Defaults}-layer graphite pixel theme"
+            : $"{Loaded} of {Tiles.Length} GUI layers from the pack over {Defaults} Driftwood fallbacks";
     }
 
-    public static Result? Load(TexturePack? pack)
+    public static Result Load(TexturePack? pack)
     {
-        if (pack is null) return null;
-
         var count = Enum.GetValues<Layer>().Length;
-        var tiles = new byte[count][];
-        var present = new bool[count];
+        var defaults = Defaults.Value;
+        var tiles = (byte[][])defaults.Tiles.Clone();
+        var present = (bool[])defaults.Present.Clone();
+        var fromPack = new bool[count];
         var loaded = 0;
 
-        for (var i = 0; i < count; i++) tiles[i] = new byte[Size * Size * 4];
+        if (pack is null) return new Result(tiles, present, fromPack, 0, defaults.Painted);
 
         foreach (var entry in Entries)
         {
@@ -107,9 +136,10 @@ public static class GuiTextureSet
             var layer = (int)entry.Layer;
             tiles[layer] = tile;
             present[layer] = true;
+            fromPack[layer] = true;
             loaded++;
         }
 
-        return loaded == 0 ? null : new Result(tiles, present, loaded);
+        return new Result(tiles, present, fromPack, loaded, defaults.Painted);
     }
 }

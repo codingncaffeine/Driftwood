@@ -29,8 +29,13 @@ public sealed class SoundLibrary
     /// <summary>The local fallback folder, whether or not it exists in a single-file build.</summary>
     public string Root { get; }
 
-    /// <summary>The selected original ZIP, or null for local fallback only.</summary>
-    public string? ActivePack { get; }
+    /// <summary>The highest-priority active resource pack, or null for local fallback only.</summary>
+    public string? ActivePack { get; private set; }
+
+    /// <summary>Resource packs contributing sounds, texture pack first and audio choice last.</summary>
+    public IReadOnlyList<string> ActivePacks => _activePacks;
+
+    private readonly List<string> _activePacks = [];
 
     public int Count => _sources.Count;
     public int LocalCount { get; private set; }
@@ -41,15 +46,27 @@ public sealed class SoundLibrary
         new HashSet<string>(Embedded.Select(item => item.Key), StringComparer.OrdinalIgnoreCase);
 
     public SoundLibrary(string root, string? packPath = null)
+        : this(root, texturePackPath: null, soundPackPath: packPath)
+    {
+    }
+
+    /// <summary>
+    /// Builds the standard resource-pack stack: Driftwood fallbacks, the active texture pack's
+    /// sounds, then the explicitly selected audio pack. Later layers sparsely override earlier ones.
+    /// </summary>
+    public SoundLibrary(string root, string? texturePackPath, string? soundPackPath)
     {
         Root = root;
-        ActivePack = string.IsNullOrWhiteSpace(packPath) ? null : packPath;
 
         IndexFolder(root);
         IndexEmbeddedFallback();
         LocalCount = _sources.Count;
 
-        if (ActivePack is not null) IndexPack(ActivePack);
+        if (!string.IsNullOrWhiteSpace(texturePackPath))
+            IndexPack(texturePackPath, requireSounds: false);
+        if (!string.IsNullOrWhiteSpace(soundPackPath)
+            && !string.Equals(soundPackPath, texturePackPath, StringComparison.OrdinalIgnoreCase))
+            IndexPack(soundPackPath, requireSounds: true);
         BuildBareIndex();
     }
 
@@ -84,19 +101,28 @@ public sealed class SoundLibrary
         }
     }
 
-    private void IndexPack(string path)
+    private void IndexPack(string path, bool requireSounds)
     {
         try
         {
-            var inspection = SoundPackArchive.Inspect(path);
-            PackCount = inspection.Clips;
+            var inspection = SoundPackArchive.Inspect(path, requireSounds);
+            if (inspection.Clips == 0) return;
+
+            PackCount += inspection.Clips;
+            _activePacks.Add(path);
+            ActivePack = path;
+            var folder = Directory.Exists(path);
 
             foreach (var (key, entry) in inspection.Entries)
             {
                 var extension = Path.GetExtension(entry);
                 Add(key, new ClipSource(
                     extension, $"{Path.GetFileName(path)}:{entry}",
-                    ArchivePath: path, ArchiveEntry: entry), replace: true);
+                    FilePath: folder
+                        ? Path.Combine(path, entry.Replace('/', Path.DirectorySeparatorChar))
+                        : null,
+                    ArchivePath: folder ? null : path,
+                    ArchiveEntry: folder ? null : entry), replace: true);
             }
         }
         catch (Exception error) when (
@@ -145,7 +171,8 @@ public sealed class SoundLibrary
 
         fault = ActivePack is null
             ? $"'{name}' is not in Driftwood's local fallback; install a sound pack from Options > Audio"
-            : $"'{name}' is not in {Path.GetFileName(ActivePack)} or Driftwood's local fallback";
+            : $"'{name}' is not in {string.Join(" or ", _activePacks.Select(Path.GetFileName))} "
+              + "or Driftwood's local fallback";
         return null;
     }
 
