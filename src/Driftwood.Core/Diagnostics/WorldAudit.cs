@@ -849,6 +849,10 @@ public static class WorldAudit
         Check("every letter is drawn and distinct", fontFaults.Count == 0,
             fontFaults.Count == 0 ? fontDetail : $"{fontFaults.Count} faults: {fontFaults[0]}");
 
+        var cursorFaults = CursorSelfTest(out var cursorDetail);
+        Check("the pointer keeps its authored silhouette", cursorFaults.Count == 0,
+            cursorFaults.Count == 0 ? cursorDetail : $"{cursorFaults.Count} faults: {cursorFaults[0]}");
+
         var joinFaults = ConnectionSelfTest(registry, out var joinDetail);
         Check("things that join up find their neighbours", joinFaults.Count == 0,
             joinFaults.Count == 0 ? joinDetail : $"{joinFaults.Count} faults: {joinFaults[0]}");
@@ -6151,6 +6155,114 @@ public static class WorldAudit
         detail = $"{tiles.Length} glyphs, {inked} with ink, none alike, "
                + $"advancing {narrowest} to {widest} pixels";
 
+        return faults;
+    }
+
+    /// <summary>
+    /// Reads the cursor tile as authored art: exact palette, useful footprint, and one connected
+    /// silhouette rooted at its top-left hotspot.
+    /// </summary>
+    /// <remarks>
+    /// A cursor can remain technically present while turning into a pale triangular blob, losing its
+    /// hotspot, or acquiring one floating pixel. The framebuffer check below the client can prove it
+    /// wins painter's order; this deliberately separate check proves what won still has the compact
+    /// graphite/pearl/pewter arrow and restrained mint focus glint that was designed here.
+    /// </remarks>
+    private static List<string> CursorSelfTest(out string detail)
+    {
+        var faults = new List<string>();
+        var tile = TileGen.Cursor();
+
+        if (tile.Length != TileGen.BytesPerTile)
+        {
+            detail = $"{tile.Length} bytes where a {TileGen.Size}px RGBA tile needs {TileGen.BytesPerTile}";
+            faults.Add(detail);
+            return faults;
+        }
+
+        const int Graphite = 0x121418;
+        const int Pearl = 0xEEF1EC;
+        const int Mint = 0x8CFAC7;
+        const int Pewter = 0x585E68;
+
+        var colours = new Dictionary<int, int>();
+        var opaque = new bool[TileGen.Size * TileGen.Size];
+        var minX = TileGen.Size;
+        var minY = TileGen.Size;
+        var maxX = -1;
+        var maxY = -1;
+
+        for (var y = 0; y < TileGen.Size; y++)
+        for (var x = 0; x < TileGen.Size; x++)
+        {
+            var pixel = y * TileGen.Size + x;
+            var at = pixel * 4;
+            var alpha = tile[at + 3];
+            if (alpha == 0) continue;
+
+            if (alpha != 255) faults.Add($"cursor pixel {x},{y} has partial alpha {alpha}");
+
+            opaque[pixel] = true;
+            minX = Math.Min(minX, x);
+            minY = Math.Min(minY, y);
+            maxX = Math.Max(maxX, x);
+            maxY = Math.Max(maxY, y);
+
+            var colour = tile[at] << 16 | tile[at + 1] << 8 | tile[at + 2];
+            colours.TryGetValue(colour, out var count);
+            colours[colour] = count + 1;
+        }
+
+        var graphite = colours.GetValueOrDefault(Graphite);
+        var pearl = colours.GetValueOrDefault(Pearl);
+        var mint = colours.GetValueOrDefault(Mint);
+        var pewter = colours.GetValueOrDefault(Pewter);
+        var ink = opaque.Count(pixel => pixel);
+        var known = graphite + pearl + mint + pewter;
+
+        if (graphite != 40 || pearl != 20 || mint != 4 || pewter != 12)
+            faults.Add(
+                $"cursor palette counts are graphite {graphite}, pearl {pearl}, mint {mint}, pewter {pewter}; "
+                + "expected 40, 20, 4, 12");
+        if (known != ink)
+            faults.Add($"the cursor has {ink - known} opaque pixels outside its four-colour palette");
+        if (!opaque[0]) faults.Add("the cursor's top-left hotspot is transparent");
+        if ((minX, minY, maxX, maxY) != (0, 0, 9, 15))
+            faults.Add($"the cursor occupies {minX},{minY} through {maxX},{maxY}, not its 10x16 footprint");
+
+        // Flood from the hotspot. Every bit of ink must be reachable through a side, because a
+        // diagonal-only or floating speck flickers apart when the sprite is scaled.
+        var reached = new bool[opaque.Length];
+        var pending = new Queue<int>();
+        if (opaque[0]) pending.Enqueue(0);
+
+        while (pending.Count > 0)
+        {
+            var pixel = pending.Dequeue();
+            if (reached[pixel]) continue;
+            reached[pixel] = true;
+
+            var x = pixel % TileGen.Size;
+            var y = pixel / TileGen.Size;
+
+            void Visit(int nx, int ny)
+            {
+                if (nx < 0 || ny < 0 || nx >= TileGen.Size || ny >= TileGen.Size) return;
+                var next = ny * TileGen.Size + nx;
+                if (opaque[next] && !reached[next]) pending.Enqueue(next);
+            }
+
+            Visit(x - 1, y);
+            Visit(x + 1, y);
+            Visit(x, y - 1);
+            Visit(x, y + 1);
+        }
+
+        var connected = reached.Count(pixel => pixel);
+        if (connected != ink) faults.Add($"only {connected} of the cursor's {ink} pixels join its hotspot");
+
+        detail = $"{ink} connected pixels in a 10x16 arrow: {graphite} graphite outline, "
+               + $"{pearl} pearl face, {pewter} pewter shade, {mint} mint glint";
         return faults;
     }
 

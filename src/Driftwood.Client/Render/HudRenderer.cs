@@ -272,6 +272,13 @@ public sealed class HudScreen
     /// <summary>Where the pointer is, in layout units. The hotspot is the top left of the tile.</summary>
     public Vector2 Pointer;
 
+    /// <summary>Where the code-authored cursor landed this frame, in layout units.</summary>
+    /// <remarks>
+    /// Zero-width while no screen is open. Published so the framebuffer check can read the pointer
+    /// that was actually drawn instead of duplicating its scale and hotspot arithmetic.
+    /// </remarks>
+    public Vector4 CursorBox;
+
     /// <summary>What the pointer is over, refreshed each frame from the layout.</summary>
     public Zone? Hovered;
 
@@ -455,6 +462,7 @@ public sealed class HudRenderer : IDisposable
     private readonly List<float> _plain = new(4096);
     private readonly List<float> _blocks = new(2048);
     private readonly List<float> _iconQuads = new(2048);
+    private readonly List<float> _cursorQuads = new(64);
     private readonly List<float> _text = new(8192);
     private readonly List<float> _skinQuads = new(256);
     private readonly List<float> _previewQuads = new(512);
@@ -610,6 +618,7 @@ public sealed class HudRenderer : IDisposable
         _plain.Clear();
         _blocks.Clear();
         _iconQuads.Clear();
+        _cursorQuads.Clear();
         _text.Clear();
         _skinQuads.Clear();
         _previewQuads.Clear();
@@ -628,6 +637,7 @@ public sealed class HudRenderer : IDisposable
         screen.FigureArmWidth = 0f;
         screen.FigureBox = Vector4.Zero;
         screen.FigureBounds = Vector4.Zero;
+        screen.CursorBox = Vector4.Zero;
 
         // A whole number of screen pixels per layout unit, never a half. Everything here is pixel
         // art — a font drawn at twice its authored size, two-pixel bevels, hard edges — and all of
@@ -759,6 +769,13 @@ public sealed class HudRenderer : IDisposable
         Flush(_iconQuads, textured: true, _icons);
         Flush(_guiOver, textured: true, _gui);
         Flush(_text, textured: true, _font);
+
+        // ⛔ THE POINTER OWNS A PASS, NOT A PLACE IN THE METHOD. Pointer() is called after every
+        // other builder, but painter's order is the order these BATCHES FLUSH — while it shared the
+        // icon batch, a packed GUI overlay and every glyph were still painted over it. This is the
+        // final flush on purpose: carried items, their counts, tooltips and all pack chrome stay
+        // beneath the one thing somebody must never lose against the screen.
+        Flush(_cursorQuads, textured: true, _icons);
 
         _gl.BindVertexArray(0);
         _gl.Disable(EnableCap.Blend);
@@ -2391,7 +2408,11 @@ public sealed class HudRenderer : IDisposable
 
     private void Pointer(ItemRegistry catalogue, HudScreen screen, ScreenLayout layout)
     {
-        var size = MathF.Max(12f, MathF.Round(layout.Zoom * 8f));
+        // One authored cursor pixel always occupies a whole number of layout pixels. The old twelve-
+        // unit minimum squeezed a 16px tile onto a 3:4 grid, so alternating columns came out one and
+        // two pixels wide even though texture filtering was nearest. It now steps 16, 32, ... with
+        // the panel zoom and remains crisp at every integer overlay scale.
+        var size = TileGen.Size * MathF.Max(1f, MathF.Ceiling(layout.Zoom * 0.5f));
         var at = screen.Pointer;
 
         if (!screen.Carried.IsEmpty)
@@ -2406,7 +2427,8 @@ public sealed class HudRenderer : IDisposable
                 Number(screen.Carried.Count, hx + held, hy + held - 6f, MathF.Max(5f, held * 0.42f));
         }
 
-        Rect(_iconQuads, at.X, at.Y, size, size, Vector4.One, IconCursor);
+        screen.CursorBox = new Vector4(at.X, at.Y, size, size);
+        Rect(_cursorQuads, at.X, at.Y, size, size, Vector4.One, IconCursor);
     }
 
     // The interface's own palette. Named rather than written out at each use, so the whole thing

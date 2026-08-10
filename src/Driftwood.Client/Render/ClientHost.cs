@@ -9960,6 +9960,16 @@ public sealed class ClientHost : IDisposable
             case 77: HoldFigureThenSelectSlim(size); break;
             case 78: CaptureLiveFigure(size); break;
 
+            // ⛔ THE CURSOR OVER SOMETHING THAT FLUSHES AFTER THE OLD ICON BATCH. Merely seeing a
+            // pointer over a panel cannot prove painter's order: panels flush first, so even the
+            // regressed build passed that picture. This places one graphite cursor pixel exactly on
+            // an inked cell of the live ITEMS tab and hangs a counted stone stack under the arrow.
+            // The next frame reads the whole sprite; the one after moves it away and reads the same
+            // tab pixel as a bright control. If text wins the batch order, those two reads are equal.
+            case 79: AimCursorProbe(size); break;
+            case 80: CaptureCursorProbe(size); break;
+            case 81: CaptureCursorControl(size); break;
+
             case 90:
                 SampleUi(size, "items");
                 ProbeSquares();
@@ -11177,6 +11187,18 @@ public sealed class ClientHost : IDisposable
     private (int X0, int Y0, int X1, int Y1) _uiFigureRegion = (-1, -1, -1, -1);
     private PlayerSkinData? _uiFigureOriginalSkin;
 
+    /// <summary>The cursor-over-text framebuffer pair and its whole-sprite receipt.</summary>
+    private bool _uiCursorAimed;
+    private bool _uiCursorCarried;
+    private bool _uiCursorIntegerGrid;
+    private int _uiCursorOpaque = -1;
+    private int _uiCursorMatched = -1;
+    private int _uiCursorCellPixels = -1;
+    private (int X, int Y) _uiCursorTarget = (-1, -1);
+    private (byte R, byte G, byte B) _uiCursorExpected;
+    private (byte R, byte G, byte B) _uiCursorTop;
+    private (byte R, byte G, byte B) _uiCursorControl;
+
     private void WearFigureArmourForCheck()
     {
         foreach (var piece in Armour.Pieces)
@@ -11295,6 +11317,148 @@ public sealed class ClientHost : IDisposable
         Console.Out.Flush();
 
         if (_uiFigureOriginalSkin is not null) ApplySkinRenderers(_uiFigureOriginalSkin);
+    }
+
+    /// <summary>
+    /// Lines a graphite cursor texel up with a known inked cell of the first live tab label.
+    /// </summary>
+    private void AimCursorProbe(Vector2D<int> size)
+    {
+        var tab = _layout.Zones.FirstOrDefault(zone => zone.Kind == ZoneKind.Tab && zone.Index == 0);
+        if (tab.W <= 0f || _hudScreen.TabNames.Length == 0 || _hudScreen.TabNames[0].Length == 0)
+            return;
+
+        var glyphLayer = TileGen.GlyphOf(_hudScreen.TabNames[0][0]);
+        if (glyphLayer < 0) return;
+
+        // Font cells are authored 5x8 and doubled into the 16px tile. Find a whole 2x2 ink cell so
+        // the control remains opaque even at the one-times UI scale, where it becomes one pixel.
+        var glyph = TileGen.Font()[glyphLayer];
+        var glyphCellX = -1;
+        var glyphCellY = -1;
+        for (var y = 0; y < TileGen.Size / 2 && glyphCellX < 0; y++)
+        for (var x = 0; x < TileGen.Size / 2; x++)
+        {
+            var sx = x * 2;
+            var sy = y * 2;
+            bool Ink(int dx, int dy) => glyph[((sy + dy) * TileGen.Size + sx + dx) * 4 + 3] == 255;
+            if (!Ink(0, 0) || !Ink(1, 0) || !Ink(0, 1) || !Ink(1, 1)) continue;
+
+            glyphCellX = x;
+            glyphCellY = y;
+            break;
+        }
+
+        if (glyphCellX < 0) return;
+
+        var cursor = TileGen.Cursor();
+        var cursorX = -1;
+        var cursorY = -1;
+        for (var y = 3; y < TileGen.Size && cursorX < 0; y++)
+        for (var x = 0; x < TileGen.Size; x++)
+        {
+            var at = (y * TileGen.Size + x) * 4;
+            if (cursor[at] != 18 || cursor[at + 1] != 20 || cursor[at + 2] != 24
+                || cursor[at + 3] != 255) continue;
+
+            cursorX = x;
+            cursorY = y;
+            _uiCursorExpected = (cursor[at], cursor[at + 1], cursor[at + 2]);
+            break;
+        }
+
+        var cursorSize = _hudScreen.CursorBox.Z;
+        if (cursorX < 0 || cursorSize <= 0f) return;
+
+        var scale = (int)HudRenderer.ScaleFor(size.Y);
+        var cursorCell = (int)MathF.Round(cursorSize * scale / TileGen.Size);
+        if (scale <= 0 || cursorCell <= 0) return;
+
+        // Text() rounds its origin before emitting the quad. Work in physical pixels from here so
+        // both the glyph cell and cursor texel begin on the same exact framebuffer pixel.
+        var textX = (int)(MathF.Round(tab.X + 5f) * scale);
+        var textY = (int)(MathF.Round(tab.Y + 4f) * scale);
+        var targetX = textX + glyphCellX * scale;
+        var targetY = textY + glyphCellY * scale;
+        var pointerX = targetX - cursorX * cursorCell;
+        var pointerY = targetY - cursorY * cursorCell;
+
+        _uiCursorTarget = (targetX, targetY);
+        _hudScreen.Pointer = new Vector2(pointerX / (float)scale, pointerY / (float)scale);
+        _hudScreen.Hovered = _layout.At(_hudScreen.Pointer.X, _hudScreen.Pointer.Y);
+        _hudScreen.Carried = new ItemStack(_items.ByName("stone").Id, 37);
+        _uiCursorAimed = true;
+    }
+
+    /// <summary>Reads every opaque cursor texel, then moves it away for the live-text control.</summary>
+    private unsafe void CaptureCursorProbe(Vector2D<int> size)
+    {
+        var box = _hudScreen.CursorBox;
+        if (!_uiCursorAimed || box.Z <= 0f || box.W <= 0f) return;
+
+        var scale = (int)HudRenderer.ScaleFor(size.Y);
+        var cell = (int)MathF.Round(box.Z * scale / TileGen.Size);
+        var left = (int)MathF.Round(box.X * scale);
+        var top = (int)MathF.Round(box.Y * scale);
+        var cursor = TileGen.Cursor();
+
+        _uiCursorOpaque = 0;
+        _uiCursorMatched = 0;
+        _uiCursorCellPixels = cell;
+        _uiCursorIntegerGrid = cell > 0
+            && MathF.Abs(box.Z / TileGen.Size - MathF.Round(box.Z / TileGen.Size)) < 0.001f
+            && MathF.Abs(box.W / TileGen.Size - MathF.Round(box.W / TileGen.Size)) < 0.001f
+            && MathF.Abs(box.X * scale - left) < 0.001f
+            && MathF.Abs(box.Y * scale - top) < 0.001f;
+        _uiCursorCarried = _hudScreen.Carried.Count == 37;
+
+        for (var y = 0; y < TileGen.Size; y++)
+        for (var x = 0; x < TileGen.Size; x++)
+        {
+            var at = (y * TileGen.Size + x) * 4;
+            if (cursor[at + 3] == 0) continue;
+
+            _uiCursorOpaque++;
+            var actual = ReadUiPixel(size, left + x * cell, top + y * cell);
+            var distance = Math.Abs(actual.R - cursor[at])
+                + Math.Abs(actual.G - cursor[at + 1])
+                + Math.Abs(actual.B - cursor[at + 2]);
+            if (distance <= 3) _uiCursorMatched++;
+        }
+
+        _uiCursorTop = ReadUiPixel(size, _uiCursorTarget.X, _uiCursorTarget.Y);
+        Console.WriteLine(
+            $"ui-check    cursor      {_uiCursorMatched}/{_uiCursorOpaque} opaque texels exact at "
+            + $"{_uiCursorCellPixels}px each; over text {_uiCursorTop.R} {_uiCursorTop.G} {_uiCursorTop.B}, "
+            + $"counted stack {_uiCursorCarried}, integer grid {_uiCursorIntegerGrid}");
+        Console.Out.Flush();
+
+        _hudScreen.Carried = ItemStack.Empty;
+        _hudScreen.Pointer = new Vector2(size.X / (float)scale - 24f, size.Y / (float)scale - 24f);
+        _hudScreen.Hovered = null;
+    }
+
+    /// <summary>Reads the same tab glyph one frame later, with the pointer parked elsewhere.</summary>
+    private unsafe void CaptureCursorControl(Vector2D<int> size)
+    {
+        if (_uiCursorTarget.X < 0) return;
+
+        _uiCursorControl = ReadUiPixel(size, _uiCursorTarget.X, _uiCursorTarget.Y);
+        Console.WriteLine(
+            $"ui-check    cursor ctl  tab ink {_uiCursorControl.R} {_uiCursorControl.G} {_uiCursorControl.B} "
+            + $"where cursor graphite was {_uiCursorTop.R} {_uiCursorTop.G} {_uiCursorTop.B}");
+        Console.Out.Flush();
+    }
+
+    /// <summary>Reads one top-origin overlay pixel from the current framebuffer.</summary>
+    private unsafe (byte R, byte G, byte B) ReadUiPixel(Vector2D<int> size, int x, int y)
+    {
+        if (x < 0 || y < 0 || x >= size.X || y >= size.Y) return default;
+
+        Span<byte> pixel = stackalloc byte[4];
+        fixed (byte* p = pixel)
+            _gl.ReadPixels(x, size.Y - 1 - y, 1, 1, PixelFormat.Rgba, PixelType.UnsignedByte, p);
+        return (pixel[0], pixel[1], pixel[2]);
     }
 
     private static PlayerSkinData UiCheckSlimSkin()
@@ -11808,6 +11972,39 @@ public sealed class ClientHost : IDisposable
             faults.Add(
                 $"selecting a new slim skin/model changed only {_uiFigureLivePixels} inventory-preview pixels "
                 + "on the next frame");
+
+        // ⛔ A TRUE FINAL PASS, asked of the framebuffer rather than of the batch count. The target
+        // is a live white glyph and the control is the very same pixel one frame after the pointer
+        // leaves it. A cursor left in _iconQuads reads as that white control because _text flushes
+        // later; a dedicated final cursor pass reads its graphite source texel instead.
+        if (!_uiCursorAimed)
+            faults.Add("the cursor check found no inked tab cell to aim at");
+        if (!_uiCursorCarried)
+            faults.Add("the cursor stacking frame did not carry its counted stone control");
+        if (!_uiCursorIntegerGrid || _uiCursorCellPixels <= 0)
+            faults.Add(
+                $"the 16px cursor did not land on an integer texel grid ({_uiCursorCellPixels}px per texel)");
+        if (_uiCursorOpaque <= 0)
+            faults.Add("the cursor's opaque texels were never sampled from the framebuffer");
+        else if (_uiCursorMatched != _uiCursorOpaque)
+            faults.Add(
+                $"only {_uiCursorMatched} of {_uiCursorOpaque} cursor texels reached the framebuffer "
+                + "unchanged, so a later overlay may be covering it");
+
+        var cursorDistance = Math.Abs(_uiCursorTop.R - _uiCursorExpected.R)
+            + Math.Abs(_uiCursorTop.G - _uiCursorExpected.G)
+            + Math.Abs(_uiCursorTop.B - _uiCursorExpected.B);
+        if (cursorDistance > 3)
+            faults.Add(
+                $"the cursor-over-text pixel read {_uiCursorTop.R} {_uiCursorTop.G} {_uiCursorTop.B}, "
+                + $"not its graphite {_uiCursorExpected.R} {_uiCursorExpected.G} {_uiCursorExpected.B}");
+
+        if (_uiCursorControl.R < 180 || _uiCursorControl.G < 180 || _uiCursorControl.B < 180)
+            faults.Add(
+                $"the cursor stacking control read {_uiCursorControl.R} {_uiCursorControl.G} "
+                + $"{_uiCursorControl.B}, so it did not land on live tab text");
+        else if (_uiCursorTop == _uiCursorControl)
+            faults.Add("the tab text read identically with the cursor over it and moved away");
 
         if (!_uiSkinRows)
             faults.Add("the skin tab is missing its shelf, preview, import, or community controls");

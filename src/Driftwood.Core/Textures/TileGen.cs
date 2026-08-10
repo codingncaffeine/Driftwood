@@ -2486,22 +2486,22 @@ public static class TileGen
     /// </remarks>
     public static byte[] Cursor() => FromArt(
     [
-        "#...............",
-        "##..............",
-        "#@#.............",
-        "#@@#............",
-        "#@@@#...........",
-        "#@@@@#..........",
-        "#@@@@@#.........",
-        "#@@@@@@#........",
-        "#@@@@@@@#.......",
-        "#@@@@@@@@#......",
-        "#@@@@@@@@@#.....",
-        "#@@@@@######....",
-        "#@@#@@#.........",
-        "#@#.#@@#........",
-        "##..#@@#........",
-        "....####........",
+        "X...............",
+        "XX..............",
+        "XOX.............",
+        "X+OX............",
+        "X++OX...........",
+        "X+OOOX..........",
+        "XOOOO:X.........",
+        "XOOOO::X........",
+        "XOOO:XXXXX......",
+        "XOO:X...........",
+        "XOX.XX..........",
+        "XX..X:X.........",
+        "....X::X........",
+        ".....X::X.......",
+        ".....X::X.......",
+        "......XXX.......",
     ]);
 
     /// <summary>
@@ -2644,7 +2644,9 @@ public static class TileGen
     ];
 
     /// <summary>
-    /// A tile from rows of characters: <c>#</c> is black, <c>@</c> is white, anything else is air.
+    /// A tile from rows of characters: <c>#</c>/<c>@</c> are pure black/white silhouettes;
+    /// <c>X</c>/<c>O</c> are cursor graphite/pearl; <c>+</c> is the interface's mint focus colour;
+    /// <c>:</c> is pewter shade; and anything else is air.
     /// </summary>
     /// <remarks>
     /// The same idea the font is drawn with, and for the same reason: noise makes a material, not a
@@ -2662,6 +2664,10 @@ public static class TileGen
             {
                 case '#': Put(tile, x, y, 0, 0, 0, 255); break;
                 case '@': Put(tile, x, y, 255, 255, 255, 255); break;
+                case 'X': Put(tile, x, y, 18, 20, 24, 255); break;
+                case 'O': Put(tile, x, y, 238, 241, 236, 255); break;
+                case '+': Put(tile, x, y, 140, 250, 199, 255); break;
+                case ':': Put(tile, x, y, 88, 94, 104, 255); break;
             }
         }
 
