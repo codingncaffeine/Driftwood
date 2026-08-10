@@ -392,6 +392,10 @@ public sealed class ClientHost : IDisposable
 
     private PlayerRenderer _playerRenderer = null!;
 
+    /// <summary>The resolved skin this run is wearing, and the shelf path behind it if it has one.</summary>
+    private PlayerSkinData _skinData = null!;
+    private string? _skinPath;
+
     /// <summary>Null on a machine with no creature geometry, which is the ordinary case.</summary>
     private CreatureRenderer? _creatureRenderer;
     private CreatureHerd? _herd;
@@ -1075,7 +1079,8 @@ public sealed class ClientHost : IDisposable
 
         _startup.Mark("texture upload");
 
-        var skin = PlayerSkin.Build(_options.SkinPath, _options.Arms);
+        var skin = ResolveSkin();
+        _skinData = skin;
 
         // ⚠ Opened once and handed to both, rather than a path each. Two openings of a quarter-
         // gigabyte zip to answer twelve lookups is a load turned into a wait — and it is the same
@@ -2723,6 +2728,8 @@ public sealed class ClientHost : IDisposable
             // does with it. Shift walks back.
             case Key.Tab when tabbed && _hudScreen.TabNames.Length > 1:
                 var count = _hudScreen.TabNames.Length;
+                var leavingSkins = OnTab(GameTab.Skins);
+                if (leavingSkins) CancelSkinNetwork();
                 if (_hudScreen.Kind == HudScreenKind.Game) _tabRow[_hudScreen.Tab] = _hudScreen.Selected;
                 _hudScreen.Tab = (_hudScreen.Tab + (many ? count - 1 : 1)) % count;
                 if (_hudScreen.Kind == HudScreenKind.Game) _hudScreen.Selected = _tabRow[_hudScreen.Tab];
@@ -2732,10 +2739,12 @@ public sealed class ClientHost : IDisposable
                 // way in is OpenGame. Missing this is how a tab shows an empty list until it is
                 // opened a second time.
                 if (OnTab(GameTab.Saves)) ReadSavesFolder();
-        if (OnTab(GameTab.Packs)) ReadPacksFolder();
+                if (OnTab(GameTab.Packs)) ReadPacksFolder();
+                if (OnTab(GameTab.Skins)) ReadSkinsFolder();
 
                 RefreshScreen();
                 ShowSelectedRow();
+                if (OnTab(GameTab.Skins)) PreviewSkinAtRow();
                 return true;
 
             case Key.Enter or Key.KeypadEnter or Key.Space:
@@ -2824,15 +2833,19 @@ public sealed class ClientHost : IDisposable
         switch (at.Value.Kind)
         {
             case ZoneKind.Tab:
+                var leavingSkins = OnTab(GameTab.Skins) && at.Value.Index != _hudScreen.Tab;
+                if (leavingSkins) CancelSkinNetwork();
                 if (_hudScreen.Kind == HudScreenKind.Game) _tabRow[_hudScreen.Tab] = _hudScreen.Selected;
                 _hudScreen.Tab = at.Value.Index;
                 if (_hudScreen.Kind == HudScreenKind.Game) _hudScreen.Selected = _tabRow[_hudScreen.Tab];
                 _hudScreen.Scroll = 0;
                 if (OnTab(GameTab.Saves)) ReadSavesFolder();
-        if (OnTab(GameTab.Packs)) ReadPacksFolder();
+                if (OnTab(GameTab.Packs)) ReadPacksFolder();
+                if (OnTab(GameTab.Skins)) ReadSkinsFolder();
                 _shown.Clear();
                 RefreshScreen();
                 ShowSelectedRow();
+                if (OnTab(GameTab.Skins)) PreviewSkinAtRow();
                 return;
 
             // The whole track, not a thumb with two arrows on the ends. Clicking anywhere on it puts
@@ -2944,6 +2957,8 @@ public sealed class ClientHost : IDisposable
 
     private bool _draggingMap;
     private Vector2 _mapDragAt;
+    private bool _draggingSkinPreview;
+    private Vector2 _skinDragAt;
 
     /// <summary>Puts the pointer's share of the track on screen.</summary>
     private void DragScrollbar(Zone track)
@@ -3429,6 +3444,7 @@ public sealed class ClientHost : IDisposable
 
         _hudScreen.Selected = at;
         ShowSelectedRow();
+        if (OnTab(GameTab.Skins)) PreviewSkinAtRow();
     }
 
     /// <summary>The names across the top of each screen. Lower case, because the font has both.</summary>
@@ -3512,6 +3528,7 @@ public sealed class ClientHost : IDisposable
         // Once, here, rather than in the row builder that runs every frame the screen is up.
         if (tab == GameTab.Saves) ReadSavesFolder();
         if (tab == GameTab.Packs) ReadPacksFolder();
+        if (tab == GameTab.Skins) ReadSkinsFolder();
 
         StopHands();
         TakeThePointer();
@@ -3679,6 +3696,8 @@ public sealed class ClientHost : IDisposable
         // way out is the row, and WakeUp clears the kind itself before coming through here.
         if (_hudScreen.Kind is HudScreenKind.Start or HudScreenKind.Death) return;
 
+        if (OnTab(GameTab.Skins)) CancelSkinNetwork();
+
         if (_atStartScreen && _hudScreen.Kind == HudScreenKind.Game)
         {
             _tabRow[_hudScreen.Tab] = _hudScreen.Selected;
@@ -3729,6 +3748,7 @@ public sealed class ClientHost : IDisposable
         _hudScreen.Stored = null;
         _hudScreen.Hovered = null;
         _draggingMap = false;
+        _draggingSkinPreview = false;
         _shown.Clear();
         _hudScreen.Recipes.Clear();
         _hudScreen.Payable.Clear();
@@ -3952,6 +3972,9 @@ public sealed class ClientHost : IDisposable
                 $"arrows pick, enter chooses, wheel scrolls, tab changes tab, {close} closes",
             _ when OnTab(GameTab.Controls) =>
                 $"up and down pick, enter listens for a key, left clears it{wheel}, {close} closes",
+            _ when OnTab(GameTab.Skins) =>
+                $"drag the model or use left and right to turn, enter chooses{wheel}, "
+                + $"tab changes tab, {close} closes",
             _ => $"up and down pick, left and right change it, tab changes tab{wheel}, {close} closes",
         };
     }
@@ -4196,6 +4219,10 @@ public sealed class ClientHost : IDisposable
                 BuildPackRows();
                 break;
 
+            case GameTab.Skins:
+                BuildSkinRows();
+                break;
+
             default:
                 var p = _walking ? _player.Position : _camera.Position;
 
@@ -4380,6 +4407,14 @@ public sealed class ClientHost : IDisposable
                 }
                 break;
 
+            case GameTab.Skins:
+                switch (label)
+                {
+                    case SkinModelRow: ChangeSkinModel(by); return;
+                    case SkinAngleRow: TurnSkinPreview(by); return;
+                    default: return;
+                }
+
             default:
                 switch (label)
                 {
@@ -4408,6 +4443,78 @@ public sealed class ClientHost : IDisposable
 
         _settingsDirty = true;
         ApplySettings();
+    }
+
+    /// <summary>Resolves the command-line override or remembered shelf name into the startup skin.</summary>
+    private PlayerSkinData ResolveSkin()
+    {
+        if (!string.IsNullOrWhiteSpace(_options.SkinPath))
+        {
+            byte[] encoded;
+            try
+            {
+                if (new FileInfo(_options.SkinPath).Length > SkinLibrary.MaximumBytes)
+                    throw new InvalidDataException(
+                        $"could not use --skin: the PNG is larger than {SkinLibrary.MaximumBytes / 1024} KiB");
+                encoded = File.ReadAllBytes(_options.SkinPath);
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+                throw new InvalidDataException($"could not read --skin: {error.Message}");
+            }
+
+            // Reusing the same command-line file does not manufacture another collision copy on
+            // every launch. A genuinely different file with the same name still receives (2).
+            SkinLibrary.Entry? installed = null;
+            if (SkinLibrary.Resolve(_settings.PlayerSkin, out _) is { } remembered)
+            {
+                try
+                {
+                    if (File.ReadAllBytes(remembered.Path).AsSpan().SequenceEqual(encoded)) installed = remembered;
+                }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
+            }
+
+            if (installed is null)
+            {
+                installed = SkinLibrary.Install(
+                    encoded, Path.GetFileNameWithoutExtension(_options.SkinPath), _options.Arms,
+                    "command line", "", out var why);
+                if (installed is null) throw new InvalidDataException($"could not use --skin: {why}");
+            }
+
+            if (_options.Arms is { } forced) SkinLibrary.SetArms(installed.Value.Name, forced);
+            installed = SkinLibrary.Find(installed.Value.Name) ?? installed;
+            _settings.PlayerSkin = installed.Value.Name;
+            _settings.Save();
+            _skinPath = installed.Value.Path;
+            return PlayerSkin.Build(_skinPath, _options.Arms ?? installed.Value.Arms);
+        }
+
+        // Like packs, visual checks are deterministic and do not inherit whichever personal skin
+        // happens to be selected on the machine running the gate.
+        if (_options.UiCheck || _options.ShotPath is not null)
+        {
+            _skinPath = null;
+            return PlayerSkin.Paint(_options.Arms ?? ArmStyle.Classic);
+        }
+
+        if (string.IsNullOrWhiteSpace(_settings.PlayerSkin))
+        {
+            _skinPath = null;
+            return PlayerSkin.Paint(_options.Arms ?? ArmStyle.Classic);
+        }
+
+        if (SkinLibrary.Resolve(_settings.PlayerSkin, out var missing) is not { } entry)
+        {
+            _skinPath = null;
+            _skinNote = $"{missing} — wearing Driftwood's default";
+            Console.WriteLine($"skin        {_skinNote}");
+            return PlayerSkin.Paint(_options.Arms ?? ArmStyle.Classic);
+        }
+
+        _skinPath = entry.Path;
+        return PlayerSkin.Build(entry.Path, _options.Arms ?? entry.Arms);
     }
 
     /// <summary>The pack actually being worn this run, resolved from the setting or the switch.</summary>
@@ -4482,6 +4589,41 @@ public sealed class ClientHost : IDisposable
 
     /// <summary>What the pack being worn carries that we have nothing to put it on.</summary>
     private PackCoverage.Summary? _packTally;
+
+    /// <summary>The skin shelf's two import boxes and its non-blocking native picker.</summary>
+    private readonly TextField _skinBox = new(240) { Placeholder = "a 64x64 or 64x32 PNG" };
+    private readonly TextField _playerSkinBox = new(40) { Placeholder = "username or UUID" };
+    private readonly NativeFilePicker _skinPicker = new();
+
+    private const string BrowseSkinRow = "browse for a skin";
+    private const string SkinPathRow = "from a path";
+    private const string PlayerSkinRow = "from player";
+    private const string SkinModelRow = "model";
+    private const string SkinAngleRow = "preview angle";
+    private const string DownloadSkinRow = "download & use";
+    private const string SkinSourceRow = "source link";
+    private const string PreviousSkinsRow = "previous community page";
+    private const string NextSkinsRow = "next community page";
+
+    private IReadOnlyList<SkinLibrary.Entry> _skins = [];
+    private string _skinNote = "";
+    private readonly MineSkinProvider _mineSkin = new();
+    private readonly PlayerSkinLookup _playerSkinLookup = new();
+    private SkinPage? _skinPage;
+    private Task<SkinPage>? _skinPageTask;
+    private CancellationTokenSource? _skinPageCancel;
+    private readonly List<string?> _skinCursors = [null];
+    private int _skinPageIndex;
+    private readonly Dictionary<string, RemoteSkin> _remoteSkinRows = new(StringComparer.Ordinal);
+    private Task<RemoteSkinFile>? _remoteSkinTask;
+    private CancellationTokenSource? _remoteSkinCancel;
+    private string _remoteSkinTaskKey = "";
+    private RemoteSkin? _pendingRemoteSkin;
+    private string? _pendingPlayerSkin;
+    private RemoteSkinFile? _remoteSkinPreview;
+    private PlayerSkinData? _skinPreviewData;
+    private string _skinPreviewKey = "";
+    private string _skinPreviewLocal = "";
 
     private void ReadPacksFolder()
     {
@@ -4760,6 +4902,561 @@ public sealed class ClientHost : IDisposable
         RefreshScreen();
     }
 
+    /// <summary>Reads MY SKINS and starts the public feed only while this tab is open.</summary>
+    private void ReadSkinsFolder()
+    {
+        _skins = SkinLibrary.List();
+
+        if (_skinPreviewData is null)
+        {
+            _skinPreviewData = _skinData;
+            _skinPreviewKey = string.IsNullOrWhiteSpace(_settings.PlayerSkin)
+                ? "default"
+                : "local:" + _settings.PlayerSkin;
+            _skinPreviewLocal = _settings.PlayerSkin;
+            _hud.SetSkinPreview(_skinData);
+        }
+
+        // Third-party uptime is never part of --ui-check. The deterministic provider controls run
+        // in --audit; the UI check exercises the screen and model with local data only.
+        if (!_options.UiCheck && _skinPage is null && _skinPageTask is null)
+            StartSkinPage(_skinPageIndex);
+    }
+
+    private void BuildSkinRows()
+    {
+        _remoteSkinRows.Clear();
+        var worn = _settings.PlayerSkin;
+        var defaultWorn = _skinPath is null;
+
+        _hudScreen.Rows.Add(new MenuRow(
+            $"MY SKINS — {_skins.Count} installed", Heading: true));
+        _hudScreen.Rows.Add(new MenuRow(
+            "Driftwood's default", defaultWorn ? "worn" : "",
+            Note: _skinNote.Length > 0 && defaultWorn
+                ? _skinNote
+                : "Always available. Enter wears it and clears a missing or installed selection"));
+
+        foreach (var skin in _skins)
+        {
+            var source = skin.Source.Length > 0 ? skin.Source : "installed skin";
+            _hudScreen.Rows.Add(new MenuRow(
+                skin.Name,
+                !skin.Readable ? "cannot read"
+                    : string.Equals(worn, skin.Name, StringComparison.OrdinalIgnoreCase) && !defaultWorn ? "worn"
+                    : "",
+                Note: skin.Readable
+                    ? $"{skin.Kind}; {source}. Move here to preview; enter wears it now"
+                    : $"{skin.Kind}. Enter removes the unreadable file from the shelf"));
+        }
+
+        _hudScreen.Rows.Add(new MenuRow("PREVIEW", Heading: true));
+        _hudScreen.Rows.Add(new MenuRow(
+            SkinModelRow,
+            _skinPreviewData?.Arms == ArmStyle.Slim ? "slim" : "classic",
+            Note: "left/right or enter changes arm width; installed skins remember their own choice"));
+        _hudScreen.Rows.Add(new MenuRow(
+            SkinAngleRow, SkinAngleName(_hudScreen.SkinPreviewYaw),
+            Note: "left/right turns a quarter turn; drag the model for any angle"));
+
+        _hudScreen.Rows.Add(new MenuRow("IMPORT", Heading: true));
+        string Said(string otherwise) => _skinNote.Length > 0 ? _skinNote : otherwise;
+
+        if (NativeFilePicker.Available)
+            _hudScreen.Rows.Add(new MenuRow(
+                BrowseSkinRow, _skinPicker.Busy ? "choosing" : "",
+                Note: Said("Opens a file browser for a modern 64x64 or legacy 64x32 PNG")));
+
+        _hudScreen.Rows.Add(new MenuRow(
+            SkinPathRow, Edits: _skinBox,
+            Note: Said("Enter opens the box; enter again validates and copies the PNG onto Driftwood's shelf")));
+        _hudScreen.Rows.Add(new MenuRow(
+            PlayerSkinRow, Edits: _playerSkinBox,
+            Note: Said("A username or UUID. mcskin.me is keyless; the result is previewed before download")));
+        _hudScreen.Rows.Add(new MenuRow(
+            "the skin shelf", "", Note: $"Skins live in {SkinLibrary.Folder}; dropping a PNG there works too"));
+
+        var capability = _mineSkin.Capabilities;
+        _hudScreen.Rows.Add(new MenuRow("COMMUNITY — MineSkin", Heading: true));
+        _hudScreen.Rows.Add(new MenuRow(
+            "recent public feed",
+            _skinPageTask is not null ? "loading"
+                : _skinPage is null ? (_options.UiCheck ? "offline check" : "unavailable")
+                : $"page {_skinPageIndex + 1}",
+            Note: $"{(capability.Paging ? "paged" : "not paged")}; "
+                + $"search {(capability.Search ? "available" : "not offered")}, "
+                + $"tags {(capability.Tags ? "available" : "not offered")}, "
+                + $"model filter {(capability.ModelFilter ? "available" : "not offered")}. "
+                + "The feed may contain unnamed entries"));
+
+        if (_skinPage is { } page)
+        {
+            foreach (var remote in page.Skins)
+            {
+                var label = DisplaySkinName(remote);
+                _remoteSkinRows[label] = remote;
+                _hudScreen.Rows.Add(new MenuRow(
+                    label,
+                    _remoteSkinPreview?.Remote.Id == remote.Id ? "previewed" : "",
+                    Note: "MineSkin recent-public entry. Enter fetches a preview; it does not save or wear it"));
+            }
+
+            if (_skinPageIndex > 0)
+                _hudScreen.Rows.Add(new MenuRow(PreviousSkinsRow, "", Note: "loads the previous feed page"));
+            if (!string.IsNullOrWhiteSpace(page.NextCursor))
+                _hudScreen.Rows.Add(new MenuRow(NextSkinsRow, "", Note: "loads the next feed page"));
+        }
+
+        if (_remoteSkinPreview is { } preview)
+        {
+            _hudScreen.Rows.Add(new MenuRow(
+                DownloadSkinRow, preview.Remote.Name,
+                Note: $"Explicitly copies this validated {preview.Skin.Size}x"
+                    + $"{(preview.Skin.Legacy ? 32 : 64)} PNG onto MY SKINS and wears it"));
+            _hudScreen.Rows.Add(new MenuRow(
+                SkinSourceRow, preview.Remote.Provider,
+                Note: preview.Remote.SourceUri.ToString()));
+        }
+
+        _hudScreen.Rows.Add(new MenuRow(
+            "community notice", "",
+            Note: "Community skins belong to their creators, are not bundled, and are not a Driftwood endorsement"));
+    }
+
+    private static string DisplaySkinName(RemoteSkin remote)
+    {
+        var readable = new string(remote.Name.Select(c => c is >= ' ' and <= '~' ? c : '?').Take(44).ToArray());
+        var id = remote.Id.Length >= 8 ? remote.Id[..8] : remote.Id;
+        return $"{readable} [{id}]";
+    }
+
+    private void BrowseForSkin()
+    {
+        if (_skinPicker.Busy) return;
+        var opened = _skinPicker.Ask(
+            NativeFilePicker.Want.File,
+            _window.Native?.Win32?.Hwnd ?? nint.Zero,
+            "Choose a player skin",
+            SkinLibrary.FilterLabel,
+            SkinLibrary.FilterSpec);
+
+        _skinNote = opened
+            ? "choosing — the window is in front of the game"
+            : "the file browser would not open; paste the path below instead";
+        RefreshScreen();
+    }
+
+    private void TakePickedSkin()
+    {
+        if (!_skinPicker.TryTake(out var picked, out var why)) return;
+        if (picked is null)
+        {
+            _skinNote = why.Length > 0 ? $"could not choose a skin: {why}" : "";
+            if (OnTab(GameTab.Skins)) RefreshScreen();
+            return;
+        }
+
+        ImportSkin(picked);
+    }
+
+    private void ImportSkin(string from)
+    {
+        var entry = SkinLibrary.Install(from, null, out var why);
+        if (entry is { } added)
+        {
+            _skinNote = $"'{added.Name}' added — {added.Kind}. Enter its row to wear it";
+            _skinBox.Clear();
+        }
+        else _skinNote = $"could not add that skin: {why}";
+
+        _skins = SkinLibrary.List();
+        if (OnTab(GameTab.Skins)) RefreshScreen();
+    }
+
+    private void StartSkinPage(int index)
+    {
+        if (_options.UiCheck || _skinPageTask is not null) return;
+        index = Math.Clamp(index, 0, _skinCursors.Count - 1);
+        _skinPageIndex = index;
+        _skinPage = null;
+        _skinNote = $"loading MineSkin community page {index + 1}";
+        _skinPageCancel?.Dispose();
+        _skinPageCancel = new CancellationTokenSource();
+        _skinPageTask = _mineSkin.PageAsync(_skinCursors[index], _skinPageCancel.Token);
+    }
+
+    private void NextSkinPage()
+    {
+        if (_skinPage?.NextCursor is not { Length: > 0 } cursor) return;
+        var next = _skinPageIndex + 1;
+        if (_skinCursors.Count <= next) _skinCursors.Add(cursor);
+        else _skinCursors[next] = cursor;
+        StartSkinPage(next);
+        RefreshScreen();
+    }
+
+    private void PreviousSkinPage()
+    {
+        if (_skinPageIndex <= 0) return;
+        StartSkinPage(_skinPageIndex - 1);
+        RefreshScreen();
+    }
+
+    private void SelectRemoteSkin(RemoteSkin remote)
+    {
+        var key = "remote:" + remote.Provider + ":" + remote.Id;
+        if (_remoteSkinTask is not null)
+        {
+            if (_remoteSkinTaskKey == key) return;
+            _remoteSkinCancel?.Cancel();
+            _pendingRemoteSkin = remote;
+            _pendingPlayerSkin = null;
+            _remoteSkinPreview = null;
+            _skinPreviewLocal = "";
+            _skinPreviewKey = key;
+            _skinNote = $"switching the preview to '{remote.Name}'";
+            RefreshScreen();
+            return;
+        }
+
+        StartRemoteSkin(remote, key);
+    }
+
+    private void StartRemoteSkin(RemoteSkin remote, string? key = null)
+    {
+        _remoteSkinCancel?.Cancel();
+        _remoteSkinCancel?.Dispose();
+        _remoteSkinCancel = new CancellationTokenSource();
+        _remoteSkinPreview = null;
+        _skinPreviewLocal = "";
+        _skinPreviewKey = key ?? "remote:" + remote.Provider + ":" + remote.Id;
+        _remoteSkinTaskKey = _skinPreviewKey;
+        _skinNote = $"loading a preview of '{remote.Name}' from {remote.Provider}";
+        _remoteSkinTask = remote.Provider == _mineSkin.Name
+            ? _mineSkin.PreviewAsync(remote, _remoteSkinCancel.Token)
+            : throw new InvalidOperationException($"no preview provider for {remote.Provider}");
+        RefreshScreen();
+    }
+
+    private void LookupPlayerSkin()
+    {
+        if (_playerSkinBox.Empty) { _skinNote = "enter a username or UUID"; RefreshScreen(); return; }
+
+        var player = _playerSkinBox.Text;
+        var key = "player:" + player;
+        if (_remoteSkinTask is not null)
+        {
+            if (_remoteSkinTaskKey == key) return;
+            _remoteSkinCancel?.Cancel();
+            _pendingRemoteSkin = null;
+            _pendingPlayerSkin = player;
+            _remoteSkinPreview = null;
+            _skinPreviewLocal = "";
+            _skinPreviewKey = key;
+            _skinNote = $"switching the preview to player '{player}'";
+            RefreshScreen();
+            return;
+        }
+
+        StartPlayerSkin(player, key);
+    }
+
+    private void StartPlayerSkin(string player, string? key = null)
+    {
+        _remoteSkinCancel?.Cancel();
+        _remoteSkinCancel?.Dispose();
+        _remoteSkinCancel = new CancellationTokenSource();
+        _remoteSkinPreview = null;
+        _skinPreviewLocal = "";
+        _skinPreviewKey = key ?? "player:" + player;
+        _remoteSkinTaskKey = _skinPreviewKey;
+        _skinNote = $"looking up '{player}' through mcskin.me";
+
+        try { _remoteSkinTask = _playerSkinLookup.LookupAsync(player, _remoteSkinCancel.Token); }
+        catch (SkinProviderException error) { _skinNote = error.Message; _remoteSkinTask = null; }
+        RefreshScreen();
+    }
+
+    /// <summary>Moves completed network work onto the game/GL thread.</summary>
+    private void PollSkinWork()
+    {
+        if (_skinPageTask is { IsCompleted: true } pageTask)
+        {
+            _skinPageTask = null;
+            var cancelled = false;
+            try
+            {
+                _skinPage = pageTask.GetAwaiter().GetResult();
+                _skinNote = _skinPage.Skins.Count == 0
+                    ? "MineSkin returned an empty public page"
+                    : $"MineSkin page {_skinPageIndex + 1}: {_skinPage.Skins.Count} recent public skins";
+            }
+            catch (OperationCanceledException) { cancelled = true; }
+            catch (Exception error)
+            {
+                _skinPage = null;
+                _skinNote = error is SkinProviderException ? error.Message : $"community feed failed: {error.Message}";
+            }
+            _skinPageCancel?.Dispose();
+            _skinPageCancel = null;
+            if (cancelled && OnTab(GameTab.Skins) && _skinPage is null) StartSkinPage(_skinPageIndex);
+            if (OnTab(GameTab.Skins)) RefreshScreen();
+        }
+
+        if (_remoteSkinTask is not { IsCompleted: true } previewTask) return;
+        _remoteSkinTask = null;
+        var applies = string.Equals(_skinPreviewKey, _remoteSkinTaskKey, StringComparison.Ordinal);
+        try
+        {
+            var preview = previewTask.GetAwaiter().GetResult();
+            if (applies)
+            {
+                _remoteSkinPreview = preview;
+                _skinPreviewData = preview.Skin;
+                _skinPreviewLocal = "";
+                _hud.SetSkinPreview(preview.Skin);
+                _skinNote = $"previewing '{preview.Remote.Name}' from {preview.Remote.Provider}; nothing saved yet";
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception error)
+        {
+            if (applies)
+            {
+                _remoteSkinPreview = null;
+                _skinNote = error is SkinProviderException ? error.Message : $"skin preview failed: {error.Message}";
+            }
+        }
+        _remoteSkinCancel?.Dispose();
+        _remoteSkinCancel = null;
+        _remoteSkinTaskKey = "";
+
+        var nextRemote = _pendingRemoteSkin;
+        var nextPlayer = _pendingPlayerSkin;
+        _pendingRemoteSkin = null;
+        _pendingPlayerSkin = null;
+
+        if (OnTab(GameTab.Skins))
+        {
+            if (nextRemote is not null) StartRemoteSkin(nextRemote);
+            else if (nextPlayer is not null) StartPlayerSkin(nextPlayer);
+            else if (_skinPreviewKey.Length == 0) PreviewSkinAtRow();
+            RefreshScreen();
+        }
+    }
+
+    private void CancelSkinNetwork()
+    {
+        _skinPageCancel?.Cancel();
+        _remoteSkinCancel?.Cancel();
+        _pendingRemoteSkin = null;
+        _pendingPlayerSkin = null;
+        if (_remoteSkinTask is not null
+            && (_skinPreviewKey.StartsWith("remote:", StringComparison.Ordinal)
+                || _skinPreviewKey.StartsWith("player:", StringComparison.Ordinal)))
+            _skinPreviewKey = "";
+    }
+
+    private void PreviewSkinAtRow()
+    {
+        if (!OnTab(GameTab.Skins)
+            || _hudScreen.Selected < 0 || _hudScreen.Selected >= _hudScreen.Rows.Count) return;
+
+        var label = _hudScreen.Rows[_hudScreen.Selected].Label;
+        if (label == "Driftwood's default")
+        {
+            if (_skinPreviewKey == "default") return;
+            SetLocalSkinPreview("", PlayerSkin.Paint(ArmStyle.Classic));
+            return;
+        }
+
+        foreach (var entry in _skins)
+        {
+            if (!entry.Readable || !string.Equals(entry.Name, label, StringComparison.Ordinal)) continue;
+            if (_skinPreviewKey == "local:" + entry.Name) return;
+            try { SetLocalSkinPreview(entry.Name, PlayerSkin.Build(entry.Path, entry.Arms)); }
+            catch (Exception error) { _skinNote = $"could not preview '{entry.Name}': {error.Message}"; }
+            return;
+        }
+
+        if (_remoteSkinRows.TryGetValue(label, out var remote)
+            && _skinPreviewKey != "remote:" + remote.Provider + ":" + remote.Id)
+            SelectRemoteSkin(remote);
+    }
+
+    private void SetLocalSkinPreview(string name, PlayerSkinData preview)
+    {
+        _remoteSkinCancel?.Cancel();
+        _pendingRemoteSkin = null;
+        _pendingPlayerSkin = null;
+        _remoteSkinPreview = null;
+        _skinPreviewData = preview;
+        _skinPreviewLocal = name;
+        _skinPreviewKey = name.Length == 0 ? "default" : "local:" + name;
+        _hud.SetSkinPreview(preview);
+    }
+
+    private void ChooseSkin(string label)
+    {
+        if (label == "Driftwood's default") { WearSkin(""); return; }
+
+        foreach (var entry in _skins)
+        {
+            if (!string.Equals(entry.Name, label, StringComparison.Ordinal)) continue;
+            if (!entry.Readable)
+            {
+                _skinNote = SkinLibrary.Remove(entry.Name)
+                    ? $"'{entry.Name}' removed from the shelf"
+                    : $"'{entry.Name}' could not be removed";
+                ReadSkinsFolder();
+                RefreshScreen();
+                return;
+            }
+
+            WearSkin(entry.Name);
+            return;
+        }
+    }
+
+    /// <summary>Applies a skin immediately to first person, world player and both previews.</summary>
+    private void WearSkin(string name, ArmStyle? defaultArms = null)
+    {
+        PlayerSkinData next;
+        string? path = null;
+
+        if (name.Length == 0) next = PlayerSkin.Paint(defaultArms ?? ArmStyle.Classic);
+        else if (SkinLibrary.Resolve(name, out var why) is { } entry)
+        {
+            path = entry.Path;
+            next = PlayerSkin.Build(path, entry.Arms);
+        }
+        else
+        {
+            _skinNote = $"could not wear that skin: {why}";
+            RefreshScreen();
+            return;
+        }
+
+        using (var pack = string.IsNullOrWhiteSpace(_packPath) ? null : TexturePack.Open(_packPath))
+        {
+            var replacement = new PlayerRenderer(_gl, next, pack);
+            var previous = _playerRenderer;
+            _playerRenderer = replacement;
+            _hud.SetSkin(next, pack);
+            previous.Dispose();
+        }
+
+        _skinData = next;
+        _skinPath = path;
+        _settings.PlayerSkin = name;
+        _settingsDirty = true;
+        _settings.Save();
+        _skinNote = name.Length == 0 ? "wearing Driftwood's default" : $"wearing '{name}' now";
+        SetLocalSkinPreview(name, next);
+        _skins = SkinLibrary.List();
+        RefreshScreen();
+    }
+
+    private void ChangeSkinModel(int by)
+    {
+        if (_skinPreviewData is null) return;
+        var arms = _skinPreviewData.Arms == ArmStyle.Classic ? ArmStyle.Slim : ArmStyle.Classic;
+
+        if (_remoteSkinPreview is { } remote)
+        {
+            if (!PlayerSkin.TryBuild(remote.Encoded, remote.Remote.Name + ".png", arms, exactSize: true,
+                    out var rebuilt, out var why))
+            {
+                _skinNote = why;
+                return;
+            }
+            _remoteSkinPreview = remote with { Skin = rebuilt! };
+            _skinPreviewData = rebuilt;
+            _hud.SetSkinPreview(rebuilt!);
+        }
+        else if (_skinPreviewLocal.Length > 0)
+        {
+            if (!SkinLibrary.SetArms(_skinPreviewLocal, arms)
+                || SkinLibrary.Find(_skinPreviewLocal) is not { Readable: true } entry)
+            {
+                _skinNote = "could not remember that model choice";
+                return;
+            }
+
+            var rebuilt = PlayerSkin.Build(entry.Path, arms);
+            _skinPreviewData = rebuilt;
+            _hud.SetSkinPreview(rebuilt);
+            _skins = SkinLibrary.List();
+
+            if (string.Equals(_settings.PlayerSkin, entry.Name, StringComparison.OrdinalIgnoreCase))
+                WearSkin(entry.Name);
+        }
+        else
+        {
+            var rebuilt = PlayerSkin.Paint(arms);
+            _skinPreviewData = rebuilt;
+            _hud.SetSkinPreview(rebuilt);
+            if (_skinPath is null) WearSkin("", arms);
+        }
+
+        _skinNote = $"preview uses {(arms == ArmStyle.Slim ? "slim" : "classic")} arms";
+        RefreshScreen();
+    }
+
+    private void TurnSkinPreview(int by)
+    {
+        _hudScreen.SkinPreviewYaw = NormalAngle(_hudScreen.SkinPreviewYaw + by * 90f);
+        RefreshScreen();
+    }
+
+    private static float NormalAngle(float degrees) => ((degrees % 360f) + 360f) % 360f;
+
+    private static string SkinAngleName(float degrees)
+    {
+        var angle = NormalAngle(degrees);
+        return angle switch
+        {
+            < 45f or >= 315f => "front",
+            < 135f => "right side",
+            < 225f => "back",
+            _ => "left side",
+        };
+    }
+
+    private void DownloadAndWearSkin()
+    {
+        if (_remoteSkinPreview is not { } preview) return;
+        var entry = SkinLibrary.Install(
+            preview.Encoded, preview.Remote.Name, preview.Skin.Arms,
+            preview.Remote.Provider, preview.Remote.SourceUri.ToString(), out var why);
+        if (entry is null) { _skinNote = $"could not download that skin: {why}"; RefreshScreen(); return; }
+
+        _skinNote = $"'{entry.Value.Name}' downloaded from {preview.Remote.Provider}";
+        _remoteSkinPreview = null;
+        _skins = SkinLibrary.List();
+        WearSkin(entry.Value.Name);
+    }
+
+    private void OpenSkinSource()
+    {
+        var text = _remoteSkinPreview?.Remote.SourceUri.ToString();
+        if (text is null && _skinPreviewLocal.Length > 0)
+            text = SkinLibrary.Find(_skinPreviewLocal)?.SourceUrl;
+
+        if (!Uri.TryCreate(text, UriKind.Absolute, out var uri)
+            || uri.Scheme != Uri.UriSchemeHttps
+            || uri.Host is not ("api.mineskin.org" or "api.mcskin.me"))
+        {
+            _skinNote = "that skin has no safe external source link";
+            RefreshScreen();
+            return;
+        }
+
+        try { Process.Start(new ProcessStartInfo(uri.ToString()) { UseShellExecute = true }); }
+        catch (Exception error) { _skinNote = $"could not open the source link: {error.Message}"; }
+        RefreshScreen();
+    }
+
     /// <summary>Enter, on a settings row. Toggles what toggles and listens for a key on a binding.</summary>
     private void ActivateRow()
     {
@@ -4768,9 +5465,17 @@ public sealed class ClientHost : IDisposable
         if (_hudScreen.Selected >= 0 && _hudScreen.Selected < _hudScreen.Rows.Count
             && _hudScreen.Rows[_hudScreen.Selected].Edits is { } box)
         {
-            // ⛳ The pack box is the one that DOES something when it is accepted rather than merely
-            // remembering what was typed — a path is not a setting, it is an instruction.
-            StartTyping(box, box == _packBox ? kept => { if (kept) ImportPack(_packBox.Text); } : null);
+            // The three path/lookup boxes do something when accepted rather than merely
+            // remembering what was typed. Keep that work at the field boundary so clicking or
+            // pressing enter follows exactly the same path.
+            Action<bool>? accepted = box == _packBox
+                ? kept => { if (kept) ImportPack(_packBox.Text); }
+                : box == _skinBox
+                    ? kept => { if (kept) ImportSkin(_skinBox.Text); }
+                    : box == _playerSkinBox
+                        ? kept => { if (kept) LookupPlayerSkin(); }
+                        : null;
+            StartTyping(box, accepted);
             return;
         }
 
@@ -4801,6 +5506,30 @@ public sealed class ClientHost : IDisposable
             if (ActionAtRow() is { } action) _rebinding = action;
             RefreshScreen();
             return;
+        }
+
+        if (OnTab(GameTab.Skins)
+            && _hudScreen.Selected >= 0
+            && _hudScreen.Selected < _hudScreen.Rows.Count)
+        {
+            var row = _hudScreen.Rows[_hudScreen.Selected];
+            if (row.Heading) return;
+
+            switch (row.Label)
+            {
+                case BrowseSkinRow: BrowseForSkin(); return;
+                case SkinModelRow: ChangeSkinModel(1); return;
+                case SkinAngleRow: TurnSkinPreview(1); return;
+                case DownloadSkinRow: DownloadAndWearSkin(); return;
+                case SkinSourceRow: OpenSkinSource(); return;
+                case PreviousSkinsRow: PreviousSkinPage(); return;
+                case NextSkinsRow: NextSkinPage(); return;
+                case "the skin shelf" or "community notice" or "recent public feed": return;
+                default:
+                    if (_remoteSkinRows.TryGetValue(row.Label, out var remote)) SelectRemoteSkin(remote);
+                    else ChooseSkin(row.Label);
+                    return;
+            }
         }
 
         if (OnTab(GameTab.Packs)
@@ -6002,6 +6731,15 @@ public sealed class ClientHost : IDisposable
                 return;
             }
 
+            if (button == MouseButton.Left
+                && OnTab(GameTab.Skins)
+                && _layout.At(_hudScreen.Pointer.X, _hudScreen.Pointer.Y) is { Kind: ZoneKind.SkinPreview })
+            {
+                _draggingSkinPreview = true;
+                _skinDragAt = _hudScreen.Pointer;
+                return;
+            }
+
             ScreenClick(button);
             return;
         }
@@ -6038,6 +6776,7 @@ public sealed class ClientHost : IDisposable
                 _holdingBreak = false;
                 _draggingScrollbar = false;
                 _draggingMap = false;
+                _draggingSkinPreview = false;
                 break;
             case MouseButton.Right: _holdingPlace = false; break;
         }
@@ -6101,6 +6840,15 @@ public sealed class ClientHost : IDisposable
                 var zoom = Math.Clamp(_hudScreen.MapZoom, 0.25f, 4f);
                 _hudScreen.MapPan -= moved / (Chunk.Size * zoom);
                 _mapDragAt = _hudScreen.Pointer;
+                RefreshScreen();
+            }
+
+            if (_draggingSkinPreview)
+            {
+                var moved = _hudScreen.Pointer - _skinDragAt;
+                _hudScreen.SkinPreviewYaw = NormalAngle(
+                    _hudScreen.SkinPreviewYaw + moved.X * 1.4f);
+                _skinDragAt = _hudScreen.Pointer;
                 RefreshScreen();
             }
 
@@ -6250,6 +6998,8 @@ public sealed class ClientHost : IDisposable
         // world keeps drawing behind it, which means nothing here waits — this is one volatile read
         // a frame and the only place the picked path crosses back onto the game's thread.
         TakePickedPack();
+        TakePickedSkin();
+        PollSkinWork();
 
         StepArmour();
 
@@ -9368,13 +10118,34 @@ public sealed class ClientHost : IDisposable
 
             case 360: SampleUi(size, "map"); ProbeMapTab(size); break;
 
+            // P7.5's shelf is measured as pixels and worked through both of its turn controls. The
+            // first frame is kept before either control moves it; two later frames distinguish the
+            // deliberate turn from the model's tiny idle sway.
+            case 361:
+                CloseScreen();
+                OpenGame(GameTab.Skins);
+                break;
+
+            case 370:
+                SampleUi(size, "skins");
+                ProbeSkinTab(size);
+                break;
+
+            case 371:
+                CaptureTurnedSkin(size);
+                break;
+
+            case 372:
+                JudgeSkinTurn(size);
+                CloseScreen();
+                OpenFireForCheck();
+                break;
+
             // ⛔⛔ THE FIRE'S BOOK, WHICH IS THE THING A USER HAD TO REPORT: "I'm not seeing any
             // recipes for food when i look in the furnace." There was no list at all, and no screen
             // in this script had ever opened a furnace. A page counted here is a page that exists;
             // the sample beside it is a page that arrived.
-            case 361: CloseScreen(); OpenFireForCheck(); break;
-
-            case 370:
+            case 390:
                 SampleUi(size, "furnace");
                 ProbeFireBook(size);
 
@@ -10329,6 +11100,18 @@ public sealed class ClientHost : IDisposable
     private bool _uiMapZoomed;
     private int _uiMapTiles = -1;
 
+    private bool _uiSkinRows;
+    private bool _uiSkinCanvas;
+    private bool _uiSkinButton;
+    private bool _uiSkinDragged;
+    private int _uiSkinQuads = -1;
+    private int _uiSkinInk = -1;
+    private int _uiSkinTurnPixels = -1;
+    private int _uiSkinTurnNoise = -1;
+    private byte[]? _uiSkinFront;
+    private byte[]? _uiSkinTurned;
+    private (int X0, int Y0, int X1, int Y1) _uiSkinRegion = (-1, -1, -1, -1);
+
     private void ProbeProgressTab()
     {
         var labels = _hudScreen.Rows.Select(row => row.Label).ToHashSet(StringComparer.Ordinal);
@@ -10392,6 +11175,128 @@ public sealed class ClientHost : IDisposable
         Console.WriteLine(
             $"ui-check    map         {_uiMapTiles} tiles, canvas {_uiMapCanvas}, "
             + $"drag {_uiMapDragged}, zoom {zoom:0.##} to {_hudScreen.MapZoom:0.##}");
+        Console.Out.Flush();
+    }
+
+    /// <summary>
+    /// Measures the skin tab's actual model, then works its quarter-turn row and drag surface.
+    /// </summary>
+    private void ProbeSkinTab(Vector2D<int> size)
+    {
+        var labels = _hudScreen.Rows.Select(row => row.Label).ToArray();
+        bool Has(string label) => labels.Contains(label, StringComparer.Ordinal);
+
+        _uiSkinRows = _hudScreen.TabNames.Length == Enum.GetValues<GameTab>().Length
+            && labels.Any(label => label.StartsWith("MY SKINS — ", StringComparison.Ordinal))
+            && Has("Driftwood's default")
+            && Has("PREVIEW")
+            && Has(SkinModelRow)
+            && Has(SkinAngleRow)
+            && Has("IMPORT")
+            && Has(SkinPathRow)
+            && Has(PlayerSkinRow)
+            && Has("the skin shelf")
+            && Has("COMMUNITY — MineSkin")
+            && Has("recent public feed")
+            && Has("community notice")
+            && (!NativeFilePicker.Available || Has(BrowseSkinRow));
+
+        var canvas = _layout.Zones.FirstOrDefault(zone => zone.Kind == ZoneKind.SkinPreview);
+        _uiSkinCanvas = canvas.W > 0f && canvas.H > 0f
+            && _layout.At(canvas.CentreX, canvas.CentreY) is { Kind: ZoneKind.SkinPreview };
+        _uiSkinQuads = _hudScreen.SkinPreviewQuads;
+        _frameWidth = size.X;
+        _uiSkinFront = ReadFrame(size);
+        _uiSkinRegion = FramebufferRect(_hudScreen.SkinPreviewBounds, size);
+        _uiSkinInk = CountSkinInk(
+            _uiSkinFront, _uiSkinRegion, _hudScreen.SkinPreviewBox, size);
+
+        var angleRow = Array.FindIndex(labels, label => label == SkinAngleRow);
+        if (angleRow >= 0)
+        {
+            _hudScreen.Selected = angleRow;
+            var before = _hudScreen.SkinPreviewYaw;
+            AdjustRow(1);
+            _uiSkinButton = MathF.Abs(_hudScreen.SkinPreviewYaw - before) > 1f;
+        }
+
+        if (_uiSkinCanvas)
+        {
+            var scale = HudRenderer.ScaleFor(size.Y);
+            _hudScreen.Pointer = new Vector2(canvas.CentreX, canvas.CentreY);
+            var before = _hudScreen.SkinPreviewYaw;
+            OnMouseDown(MouseButton.Left);
+            var grabbed = _draggingSkinPreview;
+            var toX = MathF.Min(canvas.X + canvas.W - 3f, canvas.CentreX + 32f);
+            OnMouseMove(new Vector2(toX * scale, canvas.CentreY * scale));
+            OnMouseUp(MouseButton.Left);
+            _uiSkinDragged = grabbed && MathF.Abs(_hudScreen.SkinPreviewYaw - before) > 1f;
+        }
+
+        Console.WriteLine(
+            $"ui-check    skins      rows {_uiSkinRows}, canvas {_uiSkinCanvas}, "
+            + $"{_uiSkinQuads} model faces, {_uiSkinInk} non-background pixels, "
+            + $"row turn {_uiSkinButton}, drag {_uiSkinDragged}");
+        Console.Out.Flush();
+    }
+
+    /// <summary>Turns a top-origin layout rectangle into an inclusive framebuffer rectangle.</summary>
+    private static (int X0, int Y0, int X1, int Y1) FramebufferRect(
+        Vector4 box, Vector2D<int> size)
+    {
+        if (box.Z <= 0f || box.W <= 0f) return (-1, -1, -1, -1);
+
+        var scale = HudRenderer.ScaleFor(size.Y);
+        var x0 = Math.Clamp((int)MathF.Floor(box.X * scale), 0, size.X - 1);
+        var x1 = Math.Clamp((int)MathF.Ceiling((box.X + box.Z) * scale) - 1, 0, size.X - 1);
+        var y0 = Math.Clamp(size.Y - (int)MathF.Ceiling((box.Y + box.W) * scale), 0, size.Y - 1);
+        var y1 = Math.Clamp(size.Y - 1 - (int)MathF.Floor(box.Y * scale), 0, size.Y - 1);
+        return x1 < x0 || y1 < y0 ? (-1, -1, -1, -1) : (x0, y0, x1, y1);
+    }
+
+    /// <summary>Counts model pixels against the preview card's own flat background colour.</summary>
+    private static int CountSkinInk(
+        byte[] frame, (int X0, int Y0, int X1, int Y1) region,
+        Vector4 preview, Vector2D<int> size)
+    {
+        if (region.X0 < 0 || frame.Length != size.X * size.Y * 4) return -1;
+
+        var scale = HudRenderer.ScaleFor(size.Y);
+        var backgroundX = Math.Clamp((int)((preview.X + 2f) * scale), 0, size.X - 1);
+        var backgroundY = Math.Clamp(size.Y - 1 - (int)((preview.Y + 2f) * scale), 0, size.Y - 1);
+        var background = (backgroundY * size.X + backgroundX) * 4;
+        var red = frame[background];
+        var green = frame[background + 1];
+        var blue = frame[background + 2];
+
+        var ink = 0;
+        for (var y = region.Y0; y <= region.Y1; y++)
+        for (var x = region.X0; x <= region.X1; x++)
+        {
+            var at = (y * size.X + x) * 4;
+            var distance = Math.Abs(frame[at] - red)
+                + Math.Abs(frame[at + 1] - green)
+                + Math.Abs(frame[at + 2] - blue);
+            if (distance > 12) ink++;
+        }
+
+        return ink;
+    }
+
+    private void CaptureTurnedSkin(Vector2D<int> size) => _uiSkinTurned = ReadFrame(size);
+
+    /// <summary>Compares a deliberate turn with the adjacent-frame idle-motion control.</summary>
+    private void JudgeSkinTurn(Vector2D<int> size)
+    {
+        if (_uiSkinFront is null || _uiSkinTurned is null || _uiSkinRegion.X0 < 0) return;
+
+        var stillTurned = ReadFrame(size);
+        _uiSkinTurnPixels = Differ(_uiSkinFront, _uiSkinTurned, out _, _uiSkinRegion);
+        _uiSkinTurnNoise = Differ(_uiSkinTurned, stillTurned, out _, _uiSkinRegion);
+
+        Console.WriteLine(
+            $"ui-check    skin turn  {_uiSkinTurnPixels} model pixels changed by the controls, "
+            + $"against {_uiSkinTurnNoise} while held at the same angle");
         Console.Out.Flush();
     }
 
@@ -10633,6 +11538,7 @@ public sealed class ClientHost : IDisposable
         var progressPanel = Read("progress");
         var handbookPanel = Read("handbook");
         var mapPanel = Read("map");
+        var skinsPanel = Read("skins");
         var world = Read("no screen corner");
 
         // The crosshair sits at the exact middle of an untouched frame and is nearly white. If the
@@ -10650,6 +11556,7 @@ public sealed class ClientHost : IDisposable
         if (progressPanel == bare) faults.Add("opening progress changed nothing on screen");
         if (handbookPanel == bare) faults.Add("opening the handbook changed nothing on screen");
         if (mapPanel == bare) faults.Add("opening the map changed nothing on screen");
+        if (skinsPanel == bare) faults.Add("opening the skin shelf changed nothing on screen");
 
         if (!_uiProgressTab)
             faults.Add("the progress tab did not show all eight counters, unlocks and its reset row");
@@ -10663,6 +11570,27 @@ public sealed class ClientHost : IDisposable
             faults.Add("dragging the map canvas did not pan it");
         if (!_uiMapZoomed)
             faults.Add("scrolling over the map did not zoom it");
+
+        if (!_uiSkinRows)
+            faults.Add("the skin tab is missing its shelf, preview, import, or community controls");
+        if (!_uiSkinCanvas)
+            faults.Add("the skin preview drew no canvas that can answer a pointer");
+        if (_uiSkinQuads <= 0)
+            faults.Add("the skin preview emitted no faces from the player model");
+        if (_uiSkinInk < 100)
+            faults.Add(
+                $"the skin preview put only {_uiSkinInk} non-background pixels inside its model bounds");
+        if (!_uiSkinButton)
+            faults.Add("the preview-angle row did not turn the skin model");
+        if (!_uiSkinDragged)
+            faults.Add("dragging the skin preview did not turn it");
+        // A held-front model still moves a few hundred edge pixels as its arms idle. A real turn
+        // changes tens of thousands on the default skin; two thousand stays well clear of that
+        // measured noise floor while refusing motion that never changed orientation.
+        if (_uiSkinTurnPixels < Math.Max(2_000, _uiSkinTurnNoise * 4 + 200))
+            faults.Add(
+                $"turning the skin changed {_uiSkinTurnPixels} model pixels against "
+                + $"{_uiSkinTurnNoise} at a held angle, so the framebuffer did not show the turn");
 
         // A chest slot with something in it must not read as one without. Both are wells drawn from
         // the panel, so this is the only sample that says the screen is reading the chest at all.
@@ -11038,7 +11966,7 @@ public sealed class ClientHost : IDisposable
         foreach (var (screen, middle) in (ReadOnlySpan<(string, (byte R, byte G, byte B))>)
                  [("items", items), ("book", book), ("bench", bench), ("chest", chestPanel),
                   ("cutter", cutter), ("game", game), ("progress", progressPanel),
-                  ("handbook", handbookPanel), ("map", mapPanel)])
+                  ("handbook", handbookPanel), ("map", mapPanel), ("skins", skinsPanel)])
         {
             var outside = Read($"{screen} corner");
             if (middle != outside) continue;
@@ -11151,7 +12079,7 @@ public sealed class ClientHost : IDisposable
         if (faults.Count == 0)
         {
             Console.WriteLine(
-                "OK  the overlay reaches the screen: crosshair, eleven screen states, panels in grey, "
+                "OK  the overlay reaches the screen: crosshair, twelve screen states, panels in grey, "
                 + $"{_uiProbes.Sum(p => p.Value.Hits)} squares answering for their own middles");
         }
         else
@@ -11484,6 +12412,7 @@ public sealed class ClientHost : IDisposable
     {
         if (_shutdown) return;
         _shutdown = true;
+        CancelSkinNetwork();
 
         // ⛳ First, and before the streamer is torn down — it owns the world being written. Closing
         // the window is the one save every player makes and the only one they never think about,

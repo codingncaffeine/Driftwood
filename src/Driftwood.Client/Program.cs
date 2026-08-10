@@ -728,7 +728,7 @@ public static class Program
               --texture-size n  tile size to build the texture array at; omit it and the pack's own
                                 resolution is used, which is almost always what is wanted. Clamped
                                 to what the card reports and a memory budget allows.
-              --skin <path>     wear a skin PNG: 64x64, or 64x32 for an old one, at any scale
+              --skin <path>     wear a skin PNG: exactly 64x64, or 64x32 for an old one
               --skin-model m    'classic' or 'slim' arms, overriding what the sheet looks like
               --time <hour>     hour of the day to open at, 0 to 23 (default 8)
               --daylength <s>   seconds in a full day (default 1200); short values walk a sunset

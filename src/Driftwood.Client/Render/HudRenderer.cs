@@ -3,6 +3,7 @@ using Driftwood.Core.Blocks;
 using Driftwood.Core.Entities;
 using Driftwood.Core.Gen;
 using Driftwood.Core.Items;
+using Driftwood.Core.Physics;
 using Driftwood.Core.Textures;
 using Driftwood.Core.Ui;
 using Driftwood.Core.World;
@@ -104,6 +105,9 @@ public enum GameTab
 
     /// <summary>The shelf of texture packs, and the box that puts one on it.</summary>
     Packs,
+
+    /// <summary>The local skin shelf, player lookup, and recent-public community feed.</summary>
+    Skins,
 }
 
 /// <summary>
@@ -179,6 +183,16 @@ public sealed class HudScreen
     public float MapZoom = 0.5f;
 
     public Vector2 MapPan;
+
+    /// <summary>The rotatable skin preview on the SKINS tab, in degrees around the model.</summary>
+    public float SkinPreviewYaw;
+
+    /// <summary>Published geometry for the UI check; cleared whenever the preview is not drawn.</summary>
+    public int SkinPreviewQuads;
+
+    public Vector4 SkinPreviewBox;
+
+    public Vector4 SkinPreviewBounds;
 
     /// <summary>The current swing cooldown, so the crosshair can show when the next strike lands.</summary>
     public bool AttackCooling;
@@ -425,6 +439,7 @@ public sealed class HudRenderer : IDisposable
     private readonly List<float> _iconQuads = new(2048);
     private readonly List<float> _text = new(8192);
     private readonly List<float> _skinQuads = new(256);
+    private readonly List<float> _previewQuads = new(512);
 
     private readonly List<float> _armourQuads = new(256);
     private readonly List<float> _guiUnder = new(512);
@@ -432,6 +447,15 @@ public sealed class HudRenderer : IDisposable
 
     /// <summary>The player's own sheet, as a single-layer array so the batcher can sample it.</summary>
     private BlockTextureArray? _skin;
+
+    /// <summary>A candidate may be inspected without becoming the skin worn by the world model.</summary>
+    private BlockTextureArray? _previewSkin;
+
+    private ModelBox[] _previewBoxes = [];
+    private ModelVertex[][] _previewVertices = [];
+    private readonly List<(float Depth, Vector2 A, Vector2 B, Vector2 C, Vector2 D,
+                           Vector2 Ua, Vector2 Ub, Vector2 Uc, Vector2 Ud, Vector4 Tint)>
+        _previewFaces = new(48);
 
     private BlockTextureArray? _gui;
     private bool[] _guiPresent = [];
@@ -574,6 +598,7 @@ public sealed class HudRenderer : IDisposable
         _iconQuads.Clear();
         _text.Clear();
         _skinQuads.Clear();
+        _previewQuads.Clear();
         _armourQuads.Clear();
         _guiUnder.Clear();
         _guiOver.Clear();
@@ -700,6 +725,7 @@ public sealed class HudRenderer : IDisposable
         Flush(_guiUnder, textured: true, _gui);
         Flush(_plain, textured: false, null);
         Flush(_skinQuads, textured: true, _skin);
+        Flush(_previewQuads, textured: true, _previewSkin);
 
         // ⚠ After the skin and before the items, because these three are one picture in painter's
         // order: a plate goes over the body it is worn on and under the thing the hand is holding.
@@ -939,6 +965,13 @@ public sealed class HudRenderer : IDisposable
             return;
         }
 
+        if (screen.Kind == HudScreenKind.Game && screen.Tab == (int)GameTab.Skins)
+        {
+            SkinScreen(screen, layout, w, h);
+            Footer(screen, w, h);
+            return;
+        }
+
         const float Panel = MenuPanel;
         var left = MathF.Round((w - Panel) / 2f);
 
@@ -957,6 +990,149 @@ public sealed class HudRenderer : IDisposable
         Rows(screen, layout, left, top + 22f, Panel, h);
 
         Footer(screen, w, h);
+    }
+
+    /// <summary>The skin shelf's rows beside a real, rotatable projection of the player model.</summary>
+    private void SkinScreen(HudScreen screen, ScreenLayout layout, float w, float h)
+    {
+        const float rowsWide = MenuPanel;
+        const float gap = 14f;
+        const float previewWide = 132f;
+        const float totalWide = rowsWide + gap + previewWide;
+
+        var shown = Math.Min(screen.Rows.Count, ScreenLayout.MenuLines(h));
+        var tall = 22f + shown * ScreenLayout.MenuLine + 12f;
+        var left = MathF.Round((w - totalWide) * 0.5f);
+        var top = MathF.Round((h - tall) * 0.42f);
+
+        var cell = TitleCell(w);
+        var titleTop = MathF.Max(6f, top - TitleArt.LetterHeight * cell - 26f);
+        Title(screen, left + totalWide * 0.5f, titleTop, cell, screen.Drift);
+
+        Tabs(screen, layout, left, top, totalWide);
+        Rows(screen, layout, left, top + 22f, rowsWide, h);
+
+        var px = left + rowsWide + gap;
+        var py = top + 20f;
+        var ph = MathF.Max(126f, shown * ScreenLayout.MenuLine + 10f);
+        Frame(px - 4f, py - 4f, previewWide + 8f, ph + 8f);
+        Rect(_plain, px, py, previewWide, ph, new Vector4(0.075f, 0.08f, 0.09f, 1f));
+        layout.Add(ZoneKind.SkinPreview, 0, px, py, previewWide, ph);
+
+        screen.SkinPreviewBox = new Vector4(px, py, previewWide, ph);
+        DrawSkinPreview(screen, px, py, previewWide, ph);
+
+        TextCentred(PreviewFacing(screen.SkinPreviewYaw), px + previewWide * 0.5f, py + ph - 10f, 8f, InkDim);
+    }
+
+    private static string PreviewFacing(float degrees)
+    {
+        var turn = ((degrees % 360f) + 360f) % 360f;
+        return turn switch
+        {
+            < 45f or >= 315f => "front",
+            < 135f => "side",
+            < 225f => "back",
+            _ => "side",
+        };
+    }
+
+    /// <summary>
+    /// Projects the model's emitted faces into the preview. Boxes, UVs and outer layers all come
+    /// from <see cref="PlayerModel"/>; this is a small orthographic camera, not a paper-doll copy.
+    /// </summary>
+    private void DrawSkinPreview(HudScreen screen, float x, float y, float w, float h)
+    {
+        screen.SkinPreviewQuads = 0;
+        screen.SkinPreviewBounds = Vector4.Zero;
+        if (_previewSkin is null || _previewBoxes.Length == 0) return;
+
+        _previewFaces.Clear();
+
+        var yaw = float.DegreesToRadians(screen.SkinPreviewYaw);
+        var turn = Matrix4x4.CreateRotationY(yaw);
+        var view = Vector3.Normalize(new Vector3(0f, 0.14f, -1f));
+        var light = Vector3.Normalize(new Vector3(-0.45f, 0.7f, -0.55f));
+        var scale = MathF.Min((w - 18f) / 1.05f, (h - 22f) / PlayerBody.Height);
+        var centreX = x + w * 0.5f;
+        var floor = y + h - 16f;
+        var idle = MathF.Sin(screen.Drift * 0.8f) * 0.025f;
+
+        var minX = float.MaxValue;
+        var minY = float.MaxValue;
+        var maxX = float.MinValue;
+        var maxY = float.MinValue;
+
+        Span<Vector3> points = stackalloc Vector3[4];
+        Span<Vector2> uv = stackalloc Vector2[4];
+
+        for (var boxIndex = 0; boxIndex < _previewBoxes.Length; boxIndex++)
+        {
+            var box = _previewBoxes[boxIndex];
+            var vertices = _previewVertices[boxIndex];
+
+            var pose = box.Part switch
+            {
+                PlayerPart.RightArm => Matrix4x4.CreateRotationX(0.08f + idle),
+                PlayerPart.LeftArm => Matrix4x4.CreateRotationX(-0.08f - idle),
+                PlayerPart.RightLeg => Matrix4x4.CreateRotationX(-idle * 0.5f),
+                PlayerPart.LeftLeg => Matrix4x4.CreateRotationX(idle * 0.5f),
+                _ => Matrix4x4.Identity,
+            };
+
+            for (var face = 0; face < vertices.Length / 4; face++)
+            {
+                var mean = 0f;
+                var normal = Vector3.Zero;
+
+                for (var corner = 0; corner < 4; corner++)
+                {
+                    var vertex = vertices[face * 4 + corner];
+                    var local = Vector3.Transform(vertex.Position, pose);
+                    var world = local + box.Pivot * PlayerModel.Unit;
+                    world = Vector3.Transform(world, turn);
+                    points[corner] = world;
+                    uv[corner] = vertex.Uv;
+                    mean += world.Z;
+                    normal = Vector3.TransformNormal(vertex.Normal, pose);
+                }
+
+                normal = Vector3.Normalize(Vector3.TransformNormal(normal, turn));
+                if (Vector3.Dot(normal, view) <= 0.02f) continue;
+
+                Vector2 Project(Vector3 point) => new(
+                    centreX + point.X * scale,
+                    floor - (point.Y + point.Z * 0.10f) * scale);
+
+                var a = Project(points[0]);
+                var b = Project(points[1]);
+                var c = Project(points[2]);
+                var d = Project(points[3]);
+
+                minX = MathF.Min(minX, MathF.Min(MathF.Min(a.X, b.X), MathF.Min(c.X, d.X)));
+                minY = MathF.Min(minY, MathF.Min(MathF.Min(a.Y, b.Y), MathF.Min(c.Y, d.Y)));
+                maxX = MathF.Max(maxX, MathF.Max(MathF.Max(a.X, b.X), MathF.Max(c.X, d.X)));
+                maxY = MathF.Max(maxY, MathF.Max(MathF.Max(a.Y, b.Y), MathF.Max(c.Y, d.Y)));
+
+                var shade = 0.72f + MathF.Max(0f, Vector3.Dot(normal, light)) * 0.28f;
+                _previewFaces.Add((mean * 0.25f, a, b, c, d, uv[0], uv[1], uv[2], uv[3],
+                    new Vector4(shade, shade, shade, 1f)));
+            }
+        }
+
+        // Camera sits on negative Z: larger Z is farther and is painted first. Inflated overlay
+        // faces then naturally land over the base face beneath their transparent texels.
+        _previewFaces.Sort(static (a, b) => b.Depth.CompareTo(a.Depth));
+        foreach (var face in _previewFaces)
+            Quad(_previewQuads, 0, face.Tint,
+                face.A.X, face.A.Y, face.Ua.X, face.Ua.Y,
+                face.B.X, face.B.Y, face.Ub.X, face.Ub.Y,
+                face.C.X, face.C.Y, face.Uc.X, face.Uc.Y,
+                face.D.X, face.D.Y, face.Ud.X, face.Ud.Y);
+
+        screen.SkinPreviewQuads = _previewFaces.Count;
+        if (_previewFaces.Count > 0)
+            screen.SkinPreviewBounds = new Vector4(minX, minY, maxX - minX, maxY - minY);
     }
 
     /// <summary>The visited surface, centred on the player unless it has been panned away.</summary>
@@ -2146,6 +2322,22 @@ public sealed class HudRenderer : IDisposable
 
         BuildArmourSheets(pack);
         BuildGui(pack);
+    }
+
+    /// <summary>Uploads a candidate for the SKINS preview without changing the worn player.</summary>
+    public void SetSkinPreview(PlayerSkinData skin)
+    {
+        _previewSkin?.Dispose();
+        _previewSkin = new BlockTextureArray(_gl, [skin.Pixels], skin.Size);
+        _previewBoxes = PlayerModel.Build(skin.Arms, skin.Legacy);
+        _previewVertices = new ModelVertex[_previewBoxes.Length][];
+        for (var i = 0; i < _previewBoxes.Length; i++)
+        {
+            var vertices = new List<ModelVertex>(24);
+            var indices = new List<uint>(36);
+            PlayerModel.Emit(_previewBoxes[i], vertices, indices);
+            _previewVertices[i] = [.. vertices];
+        }
     }
 
     private void BuildGui(TexturePack? pack)
@@ -3519,6 +3711,8 @@ public sealed class HudRenderer : IDisposable
         _icons.Dispose();
         _font.Dispose();
         _skin?.Dispose();
+        _previewSkin?.Dispose();
+        _armour?.Dispose();
         _gui?.Dispose();
         _shader.Dispose();
     }

@@ -3,7 +3,7 @@ using Driftwood.Core.Entities;
 namespace Driftwood.Core.Textures;
 
 /// <summary>A skin sheet ready to upload: square, RGBA, top row first.</summary>
-/// <param name="Size">Edge in pixels. Always a multiple of 64; a sheet may be drawn at any scale.</param>
+/// <param name="Size">Edge in pixels. Shelf skins are always 64 after legacy expansion.</param>
 /// <param name="Legacy">
 /// True when the sheet came in at 64×32 and has no left limbs of its own. The model answers this
 /// by pointing a mirrored left arm and leg at the right ones' patches.
@@ -40,17 +40,63 @@ public static class PlayerSkin
         var full = Path.GetFullPath(path);
         if (!File.Exists(full)) throw new FileNotFoundException($"no skin at '{full}'");
 
-        if (!Png.TryDecode(File.ReadAllBytes(full), out var image, out var error))
-            throw new InvalidDataException($"skin '{Path.GetFileName(full)}': {error}");
+        if (!TryBuild(File.ReadAllBytes(full), Path.GetFileName(full), forcedArms, exactSize: true,
+                out var skin, out var why))
+            throw new InvalidDataException(why);
+
+        return skin!;
+    }
+
+    /// <summary>
+    /// Decodes a skin already in memory. Shelf and command-line imports require exact dimensions;
+    /// the flag remains explicit so validation controls can exercise the underlying layout reader.
+    /// </summary>
+    public static bool TryBuild(
+        byte[] encoded, string name, ArmStyle? forcedArms, bool exactSize,
+        out PlayerSkinData? skin, out string why)
+    {
+        skin = null;
+        why = "";
+
+        if (exactSize)
+        {
+            if (!Png.TryReadDimensions(encoded, out var width, out var height, out var headerError))
+            {
+                why = $"skin '{name}': {headerError}";
+                return false;
+            }
+            if ((width, height) is not ((64, 64) or (64, 32)))
+            {
+                why = $"skin '{name}' is {width}x{height}; wanted 64x64 or legacy 64x32";
+                return false;
+            }
+        }
+
+        if (!Png.TryDecode(encoded, out var image, out var error))
+        {
+            why = $"skin '{name}': {error}";
+            return false;
+        }
+
+        if (exactSize
+            && (image.Width, image.Height) is not ((64, 64) or (64, 32)))
+        {
+            why = $"skin '{name}' is {image.Width}x{image.Height}; wanted 64x64 or legacy 64x32";
+            return false;
+        }
 
         var legacy = image.Height * 2 == image.Width;
         if (!legacy && image.Width != image.Height)
-            throw new InvalidDataException(
-                $"skin '{Path.GetFileName(full)}' is {image.Width}x{image.Height}; wanted a square sheet or a 2:1 one");
+        {
+            why = $"skin '{name}' is {image.Width}x{image.Height}; wanted a square sheet or a 2:1 one";
+            return false;
+        }
 
         if (image.Width % Sheet != 0)
-            throw new InvalidDataException(
-                $"skin '{Path.GetFileName(full)}' is {image.Width} wide; wanted a multiple of {Sheet}");
+        {
+            why = $"skin '{name}' is {image.Width} wide; wanted a multiple of {Sheet}";
+            return false;
+        }
 
         var size = image.Width;
         var pixels = new byte[size * size * 4];
@@ -63,13 +109,14 @@ public static class PlayerSkin
         var arms = forcedArms ?? DetectArms(pixels, size, legacy);
         var scale = size / Sheet;
 
-        var summary = $"{Path.GetFileName(full)} {size}x{image.Height}"
+        var summary = $"{name} {size}x{image.Height}"
                     + (scale > 1 ? $" ({scale}x)" : "")
                     + $", {(arms == ArmStyle.Slim ? "slim" : "classic")} arms"
                     + (forcedArms is null ? "" : ", forced")
                     + (legacy ? ", 64x32 layout" : "");
 
-        return new PlayerSkinData(pixels, size, arms, legacy, summary);
+        skin = new PlayerSkinData(pixels, size, arms, legacy, summary);
+        return true;
     }
 
     /// <summary>

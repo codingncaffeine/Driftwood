@@ -145,7 +145,7 @@ across seeds, so one seed does not hand you a continent and the next an archipel
 | Hold right | place, or use what you are looking at | |
 | `E` | your own pockets, equipment and a two-by-two | |
 | `B` | fold the recipe book out beside them | |
-| `Esc` | options — controls, video, audio, world, saves, packs | |
+| `Esc` | options — controls, video, audio, world, saves, packs, skins | |
 | `F3` / `F5` | walk or fly / cycle the view | |
 
 The button does not edit the world; it starts a swing, and the swing edits the world. That is why
@@ -216,14 +216,26 @@ undead burn off at dawn, which is what makes morning a resource.
 
 ## Skins
 
-The player model reads a skin sheet you already have, in either layout the format has used.
+The **SKINS** tab keeps a per-user shelf at `%APPDATA%\Driftwood\skins`. Import a PNG with the
+native chooser or a typed path, move through MY SKINS to preview one on the actual layered player
+model, and press enter to wear it immediately. The preview turns by drag or keyboard and remembers
+classic/slim arms separately for every installed skin. A missing chosen file falls back to
+Driftwood's own skin and says why.
+
+COMMUNITY pages MineSkin's recent-public feed, and FROM PLAYER looks up a username or UUID through
+mcskin.me. Both are keyless HTTPS providers. A remote skin remains only a preview until **DOWNLOAD
+& USE** is chosen; then it passes through the same decoder, size limit and collision-safe shelf copy
+as a local import. Provider failures leave MY SKINS usable, and no community skin is bundled with
+the game.
+
+The command-line path installs and remembers a valid skin through that same shelf:
 
 ```
 Driftwood.exe --skin C:\skins\somebody.png
 Driftwood.exe --skin C:\skins\somebody.png --skin-model classic
 ```
 
-64×64 or the older 64×32, at any multiple of 64. Arm width is detected by looking for the texels
+Exactly 64×64 or the older 64×32. Arm width is detected by looking for the texels
 only a four-wide arm can reach, since a bare PNG carries that nowhere else; `--skin-model` says so
 outright when a sheet is drawn ambiguously. Driftwood paints its own skin in code, so a build with
 no art folder still has a player in it.

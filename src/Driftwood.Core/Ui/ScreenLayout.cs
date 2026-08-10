@@ -75,6 +75,9 @@ public enum ZoneKind
     /// <summary>The explored map canvas; dragging it pans without stealing clicks from its tabs.</summary>
     Map,
 
+    /// <summary>The rotatable player model on the skin shelf.</summary>
+    SkinPreview,
+
     /// <summary>
     /// A box to type into, sitting on a row. The index is that row's.
     /// </summary>

@@ -87,6 +87,9 @@ public sealed class GameSettings
     /// </remarks>
     public string TexturePack { get; set; } = "";
 
+    /// <summary>The player skin to wear, by name on <see cref="Textures.SkinLibrary"/>.</summary>
+    public string PlayerSkin { get; set; } = "";
+
     public Bindings Keys { get; set; } = Bindings.Defaults();
 
     /// <summary>Lines the reader did not recognise, kept so a newer build's file survives an older one.</summary>
@@ -163,6 +166,7 @@ public sealed class GameSettings
                 // characters every other value here would reject, and one of them is a backslash.
                 case "world.creaturegeometry": settings.CreatureGeometry = value; break;
                 case "video.texturepack": settings.TexturePack = value; break;
+                case "player.skin": settings.PlayerSkin = value; break;
                 default: settings._unknown[key] = value; break;
             }
         }
@@ -239,6 +243,12 @@ public sealed class GameSettings
         if (TexturePack.Length > 0)
         {
             text.AppendLine($"video.texturepack={TexturePack}");
+            text.AppendLine();
+        }
+
+        if (PlayerSkin.Length > 0)
+        {
+            text.AppendLine($"player.skin={PlayerSkin}");
             text.AppendLine();
         }
 

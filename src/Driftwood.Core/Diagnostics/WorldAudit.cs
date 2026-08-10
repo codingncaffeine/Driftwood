@@ -666,6 +666,14 @@ public static class WorldAudit
         Check("a pack can be put on the shelf and named", shelfFaults.Count == 0,
             shelfFaults.Count == 0 ? shelfDetail : string.Join("; ", shelfFaults));
 
+        var skinShelfFaults = SkinShelfFaults(out var skinShelfDetail);
+        Check("a skin can be kept, chosen, and recovered", skinShelfFaults.Count == 0,
+            skinShelfFaults.Count == 0 ? skinShelfDetail : string.Join("; ", skinShelfFaults));
+
+        var providerFaults = SkinProviderSelfTest.Run(out var providerDetail);
+        Check("skin providers fail safely offline", providerFaults.Count == 0,
+            providerFaults.Count == 0 ? providerDetail : string.Join("; ", providerFaults));
+
         var tierFaults = ToolTierColourFaults(out var tierDetail);
         Check("a tool is the colour of what it is made of", tierFaults.Count == 0,
             tierFaults.Count == 0 ? tierDetail : string.Join("; ", tierFaults));
@@ -6176,6 +6184,8 @@ public static class WorldAudit
             Volume = 43,
             Mute = true,
             MouseSensitivity = 175,
+            TexturePack = "weathered",
+            PlayerSkin = "salt wanderer",
             Keys = Bindings.Defaults(),
         };
 
@@ -6203,6 +6213,8 @@ public static class WorldAudit
         if (read.Volume != 43) faults.Add($"volume came back {read.Volume}, not 43");
         if (!read.Mute) faults.Add("mute came back off");
         if (read.MouseSensitivity != 175) faults.Add($"sensitivity came back {read.MouseSensitivity}, not 175");
+        if (read.TexturePack != "weathered") faults.Add($"texture pack came back '{read.TexturePack}'");
+        if (read.PlayerSkin != "salt wanderer") faults.Add($"player skin came back '{read.PlayerSkin}'");
 
         foreach (var action in GameActions.All)
         {
@@ -6255,7 +6267,7 @@ public static class WorldAudit
         if (bare.Keys.Faults().Count > 0)
             faults.Add("a missing settings file left the game with no keys on it");
 
-        detail = $"{GameActions.All.Length} actions and 7 settings out and back unchanged, "
+        detail = $"{GameActions.All.Length} actions and 9 settings out and back unchanged, "
                + "a rebind takes the key off whatever had it, a missing file keeps the shipped keys";
 
         return faults;
@@ -9716,6 +9728,113 @@ public static class WorldAudit
                + $"{SpawnRules.NextAttempt(0.0):F0}-{SpawnRules.NextAttempt(1.0):F0}s, places at "
                + $"most {SpawnRules.HostileBatch} of {SpawnRules.HostileCap} at "
                + $"{SpawnRules.HostileMinRadius:F0} blocks, and stops pushing as it fills";
+
+        return faults;
+    }
+
+    /// <summary>Exercises the skin shelf against real PNG files in an isolated folder.</summary>
+    private static List<string> SkinShelfFaults(out string detail)
+    {
+        var faults = new List<string>();
+        var root = Path.Combine(Path.GetTempPath(), "driftwood-skins-" + Guid.NewGuid().ToString("N"));
+        var source = Path.Combine(root, "source");
+        var shelf = Path.Combine(root, "shelf");
+        detail = "";
+
+        static byte[] Sheet(int width, int height, byte shade)
+        {
+            var pixels = new byte[width * height * 4];
+            for (var i = 0; i < pixels.Length; i += 4)
+            {
+                pixels[i] = shade;
+                pixels[i + 1] = (byte)(shade / 2 + 40);
+                pixels[i + 2] = (byte)(180 - shade / 3);
+                pixels[i + 3] = 255;
+            }
+            return Png.Encode(new Image(width, height, pixels));
+        }
+
+        try
+        {
+            Directory.CreateDirectory(source);
+            var modern = Path.Combine(source, "wanderer.png");
+            var legacy = Path.Combine(source, "old sailor.png");
+            var wrong = Path.Combine(source, "too-small.png");
+            var broken = Path.Combine(source, "broken.png");
+            var corrupt = Path.Combine(source, "bad-checksum.png");
+            File.WriteAllBytes(modern, Sheet(64, 64, 90));
+            File.WriteAllBytes(legacy, Sheet(64, 32, 130));
+            File.WriteAllBytes(wrong, Sheet(32, 32, 170));
+            File.WriteAllText(broken, "not a png");
+            var corruptBytes = Sheet(64, 64, 110);
+            corruptBytes[^1] ^= 0x01;
+            File.WriteAllBytes(corrupt, corruptBytes);
+
+            var first = SkinLibrary.Install(modern, ArmStyle.Classic, out var firstWhy, shelf);
+            var second = SkinLibrary.Install(modern, ArmStyle.Slim, out var secondWhy, shelf);
+            var old = SkinLibrary.Install(legacy, ArmStyle.Classic, out var oldWhy, shelf);
+
+            if (first is null) faults.Add($"a modern skin was refused: {firstWhy}");
+            if (second is null) faults.Add($"a same-named skin was refused: {secondWhy}");
+            if (old is null) faults.Add($"a legacy skin was refused: {oldWhy}");
+            if (faults.Count > 0) return faults;
+
+            if (first!.Value.Name == second!.Value.Name)
+                faults.Add("two same-named imports overwrote one another instead of receiving collision-safe names");
+            if (!second.Value.Name.EndsWith("(2)", StringComparison.Ordinal))
+                faults.Add($"the collision copy was called '{second.Value.Name}'");
+
+            if (SkinLibrary.PathOf(first.Value.Name, shelf) is null)
+                faults.Add("a skin on the shelf could not be resolved by its remembered name");
+
+            var expanded = PlayerSkin.Build(old!.Value.Path, old.Value.Arms);
+            if (!expanded.Legacy || expanded.Size != 64 || expanded.Pixels.Length != 64 * 64 * 4)
+                faults.Add("a legal 64x32 skin did not expand into the shared 64x64 sheet");
+
+            if (!SkinLibrary.SetArms(first.Value.Name, ArmStyle.Slim, shelf)
+                || SkinLibrary.Find(first.Value.Name, shelf) is not { Arms: ArmStyle.Slim })
+                faults.Add("a per-skin slim-arm choice did not persist in its sidecar");
+
+            if (SkinLibrary.Install(wrong, null, out var wrongWhy, shelf) is not null)
+                faults.Add("a 32x32 PNG was accepted as a skin");
+            else if (!wrongWhy.Contains("64x64", StringComparison.Ordinal))
+                faults.Add($"a wrong-size skin failed unclearly: '{wrongWhy}'");
+
+            if (SkinLibrary.Install(broken, null, out var brokenWhy, shelf) is not null)
+                faults.Add("unreadable bytes were accepted as a skin");
+            else if (brokenWhy.Length == 0)
+                faults.Add("unreadable skin bytes were refused without a reason");
+
+            if (SkinLibrary.Install(corrupt, null, out var corruptWhy, shelf) is not null)
+                faults.Add("a PNG with a bad chunk checksum was accepted as a skin");
+            else if (!corruptWhy.Contains("checksum", StringComparison.OrdinalIgnoreCase))
+                faults.Add($"a corrupt PNG failed unclearly: '{corruptWhy}'");
+
+            if (SkinLibrary.Install(
+                    new byte[SkinLibrary.MaximumBytes + 1], "too-large", null,
+                    "control", "", out var largeWhy, shelf) is not null)
+                faults.Add("an oversized skin response was accepted");
+            else if (!largeWhy.Contains("512 KiB", StringComparison.Ordinal))
+                faults.Add($"an oversized skin failed unclearly: '{largeWhy}'");
+
+            File.Delete(first.Value.Path);
+            if (SkinLibrary.Resolve(first.Value.Name, out var missingWhy, shelf) is not null)
+                faults.Add("a missing remembered skin still resolved");
+            else if (!missingWhy.Contains("no longer", StringComparison.Ordinal))
+                faults.Add($"a missing remembered skin failed silently: '{missingWhy}'");
+
+            detail = "modern 64x64 and legacy 64x32 decoded, legacy expanded, duplicate names kept, "
+                   + "model choice persisted, missing selection fell back, and oversized/malformed/checksum/32x32 controls were refused";
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            faults.Add($"could not exercise the skin shelf: {error.Message}");
+        }
+        finally
+        {
+            try { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); }
+            catch (IOException) { }
+        }
 
         return faults;
     }

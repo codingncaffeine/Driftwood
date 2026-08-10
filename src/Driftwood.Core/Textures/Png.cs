@@ -102,12 +102,44 @@ public static class Png
         return table;
     }
 
-    private static uint Crc32(byte[] type, byte[] body)
+    private static uint Crc32(ReadOnlySpan<byte> type, ReadOnlySpan<byte> body)
     {
         var c = 0xFFFFFFFFu;
         foreach (var b in type) c = CrcTable[(c ^ b) & 0xFF] ^ (c >> 8);
         foreach (var b in body) c = CrcTable[(c ^ b) & 0xFF] ^ (c >> 8);
         return c ^ 0xFFFFFFFFu;
+    }
+
+    /// <summary>Reads only the mandatory first chunk, before any compressed bytes are expanded.</summary>
+    public static bool TryReadDimensions(
+        ReadOnlySpan<byte> data, out int width, out int height, out string error)
+    {
+        width = height = 0;
+        error = "";
+        if (data.Length < 33 || !data[..8].SequenceEqual(Signature))
+        {
+            error = "not a PNG";
+            return false;
+        }
+
+        var length = BinaryPrimitives.ReadUInt32BigEndian(data[8..]);
+        if (length != 13 || !data.Slice(12, 4).SequenceEqual("IHDR"u8))
+        {
+            error = "the first PNG chunk is not a 13-byte IHDR";
+            return false;
+        }
+
+        var wide = BinaryPrimitives.ReadUInt32BigEndian(data[16..]);
+        var high = BinaryPrimitives.ReadUInt32BigEndian(data[20..]);
+        if (wide is 0 or > int.MaxValue || high is 0 or > int.MaxValue)
+        {
+            error = "the PNG dimensions are empty or too large";
+            return false;
+        }
+
+        width = (int)wide;
+        height = (int)high;
+        return true;
     }
 
     public static bool TryDecode(ReadOnlySpan<byte> data, out Image image, out string error)
@@ -127,21 +159,46 @@ public static class Png
         var idat = new MemoryStream();
         var offset = 8;
 
-        while (offset + 8 <= data.Length)
+        var ended = false;
+        while (offset + 12 <= data.Length)
         {
             var length = (int)BinaryPrimitives.ReadUInt32BigEndian(data[offset..]);
-            var type = System.Text.Encoding.ASCII.GetString(data.Slice(offset + 4, 4));
+            var typed = data.Slice(offset + 4, 4);
+            var type = System.Text.Encoding.ASCII.GetString(typed);
             var body = offset + 8;
 
-            if (length < 0 || body + length > data.Length)
+            if (offset == 8 && type != "IHDR")
+            {
+                error = "the first PNG chunk is not IHDR";
+                return false;
+            }
+
+            if (length < 0 || body + (long)length + 4 > data.Length)
             {
                 error = $"chunk '{type}' runs past the end of the file";
+                return false;
+            }
+
+            var storedCrc = BinaryPrimitives.ReadUInt32BigEndian(data[(body + length)..]);
+            if (Crc32(typed, data.Slice(body, length)) != storedCrc)
+            {
+                error = $"chunk '{type}' has a bad checksum";
                 return false;
             }
 
             switch (type)
             {
                 case "IHDR":
+                    if (width != 0 || height != 0)
+                    {
+                        error = "PNG has more than one IHDR";
+                        return false;
+                    }
+                    if (length != 13)
+                    {
+                        error = "IHDR is not 13 bytes";
+                        return false;
+                    }
                     width = (int)BinaryPrimitives.ReadUInt32BigEndian(data[body..]);
                     height = (int)BinaryPrimitives.ReadUInt32BigEndian(data[(body + 4)..]);
                     bitDepth = data[body + 8];
@@ -166,16 +223,27 @@ public static class Png
                     break;
 
                 case "IEND":
-                    offset = data.Length;
+                    if (length != 0)
+                    {
+                        error = "IEND is not empty";
+                        return false;
+                    }
+                    ended = true;
                     break;
             }
 
             offset = body + length + 4;   // skip the trailing CRC
+            if (ended) break;
         }
 
         if (width <= 0 || height <= 0)
         {
             error = "missing or empty IHDR";
+            return false;
+        }
+        if (!ended)
+        {
+            error = "missing IEND";
             return false;
         }
 
@@ -201,13 +269,40 @@ public static class Png
             return false;
         }
 
+        var bitsPerPixel = channels * bitDepth;
+        var bytesPerRowLong = ((long)width * bitsPerPixel + 7) / 8;
+        var expectedRaw = (bytesPerRowLong + 1) * height;
+        var expectedPixels = (long)width * height * 4;
+        const long MaximumDecodedBytes = 512L * 1024 * 1024;
+        if (bytesPerRowLong > int.MaxValue
+            || expectedRaw <= 0 || expectedRaw > MaximumDecodedBytes
+            || expectedPixels <= 0 || expectedPixels > MaximumDecodedBytes)
+        {
+            error = "decoded PNG is larger than 512 MiB";
+            return false;
+        }
+
+        var bytesPerRow = (int)bytesPerRowLong;
+        var filterStride = Math.Max(1, bitsPerPixel / 8);
+
         idat.Position = 0;
         byte[] raw;
         try
         {
             using var inflate = new ZLibStream(idat, CompressionMode.Decompress);
-            using var output = new MemoryStream();
-            inflate.CopyTo(output);
+            using var output = new MemoryStream((int)expectedRaw);
+            var buffer = new byte[8192];
+            while (true)
+            {
+                var read = inflate.Read(buffer, 0, buffer.Length);
+                if (read == 0) break;
+                if (output.Length + read > expectedRaw)
+                {
+                    error = "inflated pixel data is longer than the declared image";
+                    return false;
+                }
+                output.Write(buffer, 0, read);
+            }
             raw = output.ToArray();
         }
         catch (Exception ex)
@@ -216,11 +311,7 @@ public static class Png
             return false;
         }
 
-        var bitsPerPixel = channels * bitDepth;
-        var bytesPerRow = (width * bitsPerPixel + 7) / 8;
-        var filterStride = Math.Max(1, bitsPerPixel / 8);
-
-        if (raw.Length < (bytesPerRow + 1) * (long)height)
+        if (raw.Length < expectedRaw)
         {
             error = $"pixel data is short: {raw.Length} bytes for {height} rows of {bytesPerRow}";
             return false;
