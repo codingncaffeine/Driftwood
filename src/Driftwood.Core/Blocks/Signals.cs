@@ -70,6 +70,12 @@ public sealed class SignalTable
 
     private readonly bool[] _sink;
 
+    /// <summary>
+    /// Sinks whose visible state can also be chosen by hand. Unlike a lamp, a door follows a
+    /// signal <em>edge</em>: an unchanged quiet wire must not undo the player's right click.
+    /// </summary>
+    private readonly bool[] _handToggle;
+
     private readonly bool[] _pressedButton;
 
     /// <summary>The way to a door's other half, or -1 — copied off the registry.</summary>
@@ -86,6 +92,7 @@ public sealed class SignalTable
         _sinkTwin = new ushort[registry.Count];
         _sinkPowered = new bool[registry.Count];
         _sink = new bool[registry.Count];
+        _handToggle = new bool[registry.Count];
         _pressedButton = new bool[registry.Count];
         _partner = new int[registry.Count];
 
@@ -173,6 +180,7 @@ public sealed class SignalTable
                 && TwinByOpen(registry, name) is { } twin)
             {
                 _sink[id] = true;
+                _handToggle[id] = true;
                 _sinkPowered[id] = name.Contains("_open", StringComparison.Ordinal);
                 _sinkTwin[id] = twin;
             }
@@ -244,6 +252,8 @@ public sealed class SignalTable
 
     public bool IsSink(ushort id) => _sink[id];
 
+    public bool CanToggleByHand(ushort id) => _handToggle[id];
+
     public bool SinkPowered(ushort id) => _sinkPowered[id];
 
     public BlockId SinkTwin(ushort id) => new(_sinkTwin[id]);
@@ -296,6 +306,13 @@ public sealed class SignalPass
     private readonly HashSet<(int X, int Y, int Z)> _dirtyGates = [];
     private readonly HashSet<(int X, int Y, int Z)> _followed = [];
 
+    /// <summary>
+    /// The last signal level seen by each hand-operated sink. Doors and trapdoors have one visible
+    /// open bit serving two masters: the player's latch and a signal's edge. Remembering the level
+    /// keeps an unchanged unpowered neighbourhood from immediately erasing a manual choice.
+    /// </summary>
+    private readonly Dictionary<(int X, int Y, int Z), bool> _handPower = [];
+
     /// <summary>How a changed cell reaches the world: light, mesh and fluid, but never back here.</summary>
     public delegate void Write(int x, int y, int z, BlockId id);
 
@@ -314,6 +331,37 @@ public sealed class SignalPass
     private static readonly (int X, int Z)[] Sides = [(1, 0), (-1, 0), (0, 1), (0, -1)];
 
     /// <summary>
+    /// Remembers hand-operated sinks before an ordinary world edit changes their inputs.
+    /// </summary>
+    /// <remarks>
+    /// This is the missing half of edge-triggered doors. Looking only after a lever was changed
+    /// can say whether a door is powered now, but not whether that level actually changed. The
+    /// pre-edit walk covers the old wire component as well as the edit's ring, including a lever
+    /// fixed straight to a door with no wire between them.
+    /// </remarks>
+    public void CapturePoweredSinks(VoxelWorld world, int x, int y, int z)
+    {
+        _component.Clear();
+        _frontier.Clear();
+        _followed.Clear();
+
+        Collect(world, x, y, z);
+        for (var face = 0; face < Faces.Count; face++)
+        {
+            var (dx, dy, dz) = Faces.Normals[face];
+            Collect(world, x + dx, y + dy, z + dz);
+        }
+
+        RememberAround(world, (x, y, z));
+        for (var face = 0; face < Faces.Count; face++)
+        {
+            var (dx, dy, dz) = Faces.Normals[face];
+            RememberAround(world, (x + dx, y + dy, z + dz));
+        }
+        foreach (var cell in _component) RememberAround(world, cell);
+    }
+
+    /// <summary>
     /// Reconsiders the wiring around one edit: the component's strengths, the sinks touching it,
     /// and which gates now want to think.
     /// </summary>
@@ -324,6 +372,7 @@ public sealed class SignalPass
     {
         _component.Clear();
         _strength.Clear();
+        _frontier.Clear();
         _followed.Clear();
 
         // The component: every wire cell reachable from the edit and its ring, walking wire to
@@ -508,6 +557,41 @@ public sealed class SignalPass
         return false;
     }
 
+    /// <summary>
+    /// The level a sink follows. Either half can power a two-cell door, so both halves must see
+    /// the same aggregate answer even when the lever is beside only the upper one.
+    /// </summary>
+    private bool SinkPoweredAt(VoxelWorld world, int x, int y, int z, ushort id)
+    {
+        if (PoweredAt(world, x, y, z)) return true;
+
+        var partner = _table.PartnerFace(id);
+        if (partner < 0) return false;
+
+        var (px, py, pz) = Faces.Normals[partner];
+        var other = world.GetBlock(x + px, y + py, z + pz).Value;
+        if (_table.PartnerFace(other) != Placeable.Opposite(partner)) return false;
+
+        return PoweredAt(world, x + px, y + py, z + pz);
+    }
+
+    /// <summary>Snapshots hand-operated sinks around one affected cell, once per pre-edit walk.</summary>
+    private void RememberAround(VoxelWorld world, (int X, int Y, int Z) cell)
+    {
+        for (var face = 0; face < Faces.Count; face++)
+        {
+            var (dx, dy, dz) = Faces.Normals[face];
+            var at = (X: cell.X + dx, Y: cell.Y + dy, Z: cell.Z + dz);
+            if (!_followed.Add(at)) continue;
+
+            var id = world.GetBlock(at.X, at.Y, at.Z).Value;
+            if (_table.CanToggleByHand(id))
+                _handPower[at] = SinkPoweredAt(world, at.X, at.Y, at.Z, id);
+            else
+                _handPower.Remove(at);
+        }
+    }
+
     /// <summary>Re-asks the sinks and gates around one cell, once per pass.</summary>
     private void FollowAround(
         VoxelWorld world, (int X, int Y, int Z) cell, Write write,
@@ -521,6 +605,8 @@ public sealed class SignalPass
 
             var id = world.GetBlock(at.X, at.Y, at.Z).Value;
 
+            if (!_table.CanToggleByHand(id)) _handPower.Remove(at);
+
             if (_table.KindOf(id) != GateKind.None)
             {
                 _dirtyGates.Add(at);
@@ -529,7 +615,20 @@ public sealed class SignalPass
 
             if (!_table.IsSink(id)) continue;
 
-            var powered = PoweredAt(world, at.X, at.Y, at.Z);
+            var powered = SinkPoweredAt(world, at.X, at.Y, at.Z, id);
+
+            // Lamps and powered rails continuously follow the level. A wooden door or trapdoor
+            // instead follows a CHANGE of level and otherwise keeps the state a hand chose. With
+            // no earlier observation, live power still opens it while quiet preserves a saved or
+            // manually selected state.
+            if (_table.CanToggleByHand(id))
+            {
+                var observed = _handPower.TryGetValue(at, out var before);
+                _handPower[at] = powered;
+
+                if ((observed && before == powered) || (!observed && !powered)) continue;
+            }
+
             if (powered == _table.SinkPowered(id)) continue;
 
             Swap(world, at.X, at.Y, at.Z, id, write, switched);

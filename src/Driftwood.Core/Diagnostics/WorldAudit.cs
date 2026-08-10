@@ -10763,10 +10763,14 @@ public static class WorldAudit
             if (registry[At(world, 2, 1, 0)].Name != "tidelamp")
                 faults.Add("an unfed tidelamp stayed lit, so the pass powers and never un-powers");
 
-            // A door straight against a lever, no wire at all — and BOTH halves swing.
+            // A door straight against a lever, no wire at all — and BOTH halves swing. Unlike a
+            // lamp, its open state is also a hand-operated latch: an unchanged quiet neighbourhood
+            // must not erase a right click merely because every edit visits the signal pass.
             var door = Box();
-            Put(door, 0, 1, 0, registry.ByName("door_east_south_lower").Id);
-            Put(door, 0, 2, 0, registry.ByName("door_east_south_upper").Id);
+            var shutLower = registry.ByName("door_east_south_lower").Id;
+            var shutUpper = registry.ByName("door_east_south_upper").Id;
+            Put(door, 0, 1, 0, shutLower);
+            Put(door, 0, 2, 0, shutUpper);
             Put(door, 1, 1, 0, leverOn);
             pass.Update(door, 1, 1, 0, W2);
             void W2(int x, int y, int z, BlockId id) => door.SetBlock(x, y, z, id);
@@ -10774,6 +10778,35 @@ public static class WorldAudit
             if (!registry[At(door, 0, 1, 0)].Name.Contains("_open")
                 || !registry[At(door, 0, 2, 0)].Name.Contains("_open"))
                 faults.Add("a powered door did not open both halves");
+
+            // Falling power closes it. Capture before the lever edit is the fact that separates a
+            // falling edge from merely finding an unpowered, hand-opened door after the edit.
+            pass.CapturePoweredSinks(door, 1, 1, 0);
+            Put(door, 1, 1, 0, leverOff);
+            pass.Update(door, 1, 1, 0, W2);
+            if (At(door, 0, 1, 0) != shutLower || At(door, 0, 2, 0) != shutUpper)
+                faults.Add("a powered door did not close both halves when its lever fell");
+
+            // The client's right-click path writes the struck half and then its partner through
+            // ordinary edits. Reproduce that exact order, starting at the upper half.
+            var openUpper = table.SinkTwin(shutUpper.Value);
+            var openLower = table.SinkTwin(shutLower.Value);
+            pass.CapturePoweredSinks(door, 0, 2, 0);
+            W2(0, 2, 0, openUpper);
+            pass.Update(door, 0, 2, 0, W2);
+            pass.CapturePoweredSinks(door, 0, 1, 0);
+            W2(0, 1, 0, openLower);
+            pass.Update(door, 0, 1, 0, W2);
+
+            if (At(door, 0, 1, 0) != openLower || At(door, 0, 2, 0) != openUpper)
+                faults.Add("a hand-opened door was immediately shut again by the signal pass");
+
+            // Nor may placing an ordinary block beside it look like a falling signal edge.
+            pass.CapturePoweredSinks(door, 0, 1, 1);
+            Put(door, 0, 1, 1, ids.Stone);
+            pass.Update(door, 0, 1, 1, W2);
+            if (At(door, 0, 1, 0) != openLower || At(door, 0, 2, 0) != openUpper)
+                faults.Add("an unrelated edit beside a hand-opened door silently closed it");
         }
 
         // ── The gates: truth tables through the tick, and the latch remembers ────────────────────
@@ -10860,7 +10893,8 @@ public static class WorldAudit
         }
 
         detail = "a lever's run measured at all 16 cells, broken in the middle and killed at the "
-               + "switch; the lamp and a wireless door follow the level both ways; nine truth-table "
+               + "switch; the lamp follows its level while a door follows power edges and keeps a "
+               + "hand toggle; nine truth-table "
                + "rows, the inverter both ways, and the latch set, held and reset through the tick";
         return faults;
     }

@@ -245,6 +245,11 @@ public sealed class WorldStreamer : IDisposable
         var pos = ChunkPos.FromWorld(wx, wy, wz);
         if (!_world.TryGetChunk(pos, out _)) return;
 
+        // A lamp follows the current signal level; a door also remembers what a hand chose. The
+        // signal pass therefore needs the old neighbourhood before this write so it can distinguish
+        // a real power edge from an unrelated edit beside an already-open door.
+        Signals?.CapturePoweredSinks(_world, wx, wy, wz);
+
         _world.SetBlock(wx, wy, wz, id);
         _editQueue.Enqueue((wx, wy, wz));
         _lightWork.Release();
