@@ -499,6 +499,23 @@ public sealed class ClientHost : IDisposable
     /// <summary>The action waiting for a key, while the controls tab is listening.</summary>
     private GameAction? _rebinding;
 
+    /// <summary>The action waiting for a physical pad control on the controller tab.</summary>
+    private ControllerAction? _padRebinding;
+
+    private readonly ControllerInput _controller = new();
+    private readonly ControllerRepeat _padHorizontalRepeat = new();
+    private readonly ControllerRepeat _padVerticalRepeat = new();
+    private Vector2 _controllerMove;
+    private Vector2 _controllerLook;
+    private bool _lastInputWasController;
+    private bool _movingControllerPointer;
+    private bool _firstFrameDrawn;
+    private bool _mouseBreakHeld;
+    private bool _mousePlaceHeld;
+    private bool _controllerBreakHeld;
+    private bool _controllerPlaceHeld;
+    private bool _controllerLookSuppressed;
+
     /// <summary>What the player has changed, and the keys they did it with.</summary>
     private GameSettings _settings = null!;
     private InputMap _keys = null!;
@@ -977,9 +994,8 @@ public sealed class ClientHost : IDisposable
         // ⛔ NOT _window.CreateInput(). That built thirty two joystick and gamepad wrappers, and the
         // first of them made the platform initialise its whole joystick stack — measured at 10.3
         // seconds here, ninety seven percent of the entire startup, against twelve milliseconds to
-        // build every texture in the game. Nothing in Driftwood reads a controller yet, so nothing
-        // needed to be paid. See RawInput for the whole measurement and for the rule P8 has to
-        // follow when controller support does land.
+        // build every texture in the game. SDL3 controller discovery now happens separately after
+        // the first frame. See RawInput and StepController for the boundary.
         _input = new RawInput(_window);
 
         if (_input.Failed)
@@ -2435,6 +2451,20 @@ public sealed class ClientHost : IDisposable
 
     private void OnKeyDown(Key key)
     {
+        _lastInputWasController = false;
+
+        // Keyboard escape is still an exit from a controller listen. A player who reached this
+        // tab with the mouse should never need the pad in hand merely to change their mind.
+        if (_padRebinding is not null)
+        {
+            if (key == Key.Escape)
+            {
+                _padRebinding = null;
+                RefreshScreen();
+            }
+            return;
+        }
+
         // The controls tab is listening. It takes the key raw — before it is looked up — because
         // the whole point is to bind whatever was pressed, including the key that already does
         // something else.
@@ -2449,8 +2479,12 @@ public sealed class ClientHost : IDisposable
         // into a wall.
         if (_hudScreen.IsOpen && ScreenKey(key)) return;
 
-        if (_keys.ActionFor(key) is not { } action) return;
+        if (_keys.ActionFor(key) is { } action) RunAction(action);
+    }
 
+    /// <summary>Runs an intent shared by keyboard and controller press paths.</summary>
+    private void RunAction(GameAction action)
+    {
         switch (action)
         {
             // What this character is carrying and can make. The bench a player always has is two by
@@ -2735,25 +2769,7 @@ public sealed class ClientHost : IDisposable
             // Tab walks the tabs, which is where a hand already is and what every other program
             // does with it. Shift walks back.
             case Key.Tab when tabbed && _hudScreen.TabNames.Length > 1:
-                var count = _hudScreen.TabNames.Length;
-                var leavingSkins = OnTab(GameTab.Skins);
-                if (leavingSkins) CancelSkinNetwork();
-                if (_hudScreen.Kind == HudScreenKind.Game) _tabRow[_hudScreen.Tab] = _hudScreen.Selected;
-                _hudScreen.Tab = (_hudScreen.Tab + (many ? count - 1 : 1)) % count;
-                if (_hudScreen.Kind == HudScreenKind.Game) _hudScreen.Selected = _tabRow[_hudScreen.Tab];
-                _hudScreen.Scroll = 0;
-
-                // Arriving at the list is when it is worth walking the folder, and the only other
-                // way in is OpenGame. Missing this is how a tab shows an empty list until it is
-                // opened a second time.
-                if (OnTab(GameTab.Saves)) ReadSavesFolder();
-                if (OnTab(GameTab.Packs)) ReadPacksFolder();
-                if (OnTab(GameTab.Audio)) ReadSoundPacksFolder();
-                if (OnTab(GameTab.Skins)) ReadSkinsFolder();
-
-                RefreshScreen();
-                ShowSelectedRow();
-                if (OnTab(GameTab.Skins)) PreviewSkinAtRow();
+                ChangeScreenTab(many ? -1 : 1);
                 return true;
 
             case Key.Enter or Key.KeypadEnter or Key.Space:
@@ -2799,6 +2815,31 @@ public sealed class ClientHost : IDisposable
         }
     }
 
+    /// <summary>Walks a tab strip from either Tab or the controller shoulders.</summary>
+    private void ChangeScreenTab(int by)
+    {
+        if (_hudScreen.TabNames.Length <= 1) return;
+
+        _rebinding = null;
+        _padRebinding = null;
+        var count = _hudScreen.TabNames.Length;
+        if (OnTab(GameTab.Skins)) CancelSkinNetwork();
+        if (_hudScreen.Kind == HudScreenKind.Game) _tabRow[_hudScreen.Tab] = _hudScreen.Selected;
+        _hudScreen.Tab = (_hudScreen.Tab + Math.Sign(by) + count) % count;
+        if (_hudScreen.Kind == HudScreenKind.Game) _hudScreen.Selected = _tabRow[_hudScreen.Tab];
+        _hudScreen.Scroll = 0;
+
+        // Network and disk shelves are opened only on arrival, never once per drawn frame.
+        if (OnTab(GameTab.Saves)) ReadSavesFolder();
+        if (OnTab(GameTab.Packs)) ReadPacksFolder();
+        if (OnTab(GameTab.Audio)) ReadSoundPacksFolder();
+        if (OnTab(GameTab.Skins)) ReadSkinsFolder();
+
+        RefreshScreen();
+        ShowSelectedRow();
+        if (OnTab(GameTab.Skins)) PreviewSkinAtRow();
+    }
+
     /// <summary>
     /// A click on the open screen, wherever the pointer is.
     /// </summary>
@@ -2842,6 +2883,8 @@ public sealed class ClientHost : IDisposable
         switch (at.Value.Kind)
         {
             case ZoneKind.Tab:
+                _rebinding = null;
+                _padRebinding = null;
                 var leavingSkins = OnTab(GameTab.Skins) && at.Value.Index != _hudScreen.Tab;
                 if (leavingSkins) CancelSkinNetwork();
                 if (_hudScreen.Kind == HudScreenKind.Game) _tabRow[_hudScreen.Tab] = _hudScreen.Selected;
@@ -3426,7 +3469,9 @@ public sealed class ClientHost : IDisposable
         // The window's own pointer goes with it, so picking a square with the arrows and then
         // reaching for the mouse does not teleport the cursor back to where it was left.
         var scale = HudRenderer.ScaleFor(_window.Size.Y);
+        _movingControllerPointer = _lastInputWasController;
         _input.MoveTo(_hudScreen.Pointer * scale);
+        _movingControllerPointer = false;
     }
 
     /// <summary>How many recipes a row of the book holds. The same number the overlay lays out.</summary>
@@ -3554,8 +3599,15 @@ public sealed class ClientHost : IDisposable
     /// <summary>Puts the hands down. A screen opening must not leave a swing half-taken.</summary>
     private void StopHands()
     {
+        _padHorizontalRepeat.Reset();
+        _padVerticalRepeat.Reset();
+        _controllerLookSuppressed |= _hudScreen.RadialHotbar;
+        _mouseBreakHeld = _mousePlaceHeld = false;
+        _controllerBreakHeld = _controllerPlaceHeld = false;
         _holdingBreak = false;
         _holdingPlace = false;
+        _hudScreen.RadialHotbar = false;
+        _hudScreen.RadialSlot = -1;
         _mining.Cancel();
     }
 
@@ -3567,9 +3619,7 @@ public sealed class ClientHost : IDisposable
         _hudScreen.Grid = null;
         _laidOut = null;
         _station = (x, y, z);
-        _holdingBreak = false;
-        _holdingPlace = false;
-        _mining.Cancel();
+        StopHands();
 
         // ⛔ Emptied here, like every other opener. The book is built once per opening and only
         // rebuilt when this is empty, so a list carried over from the last station is the list that
@@ -3717,6 +3767,7 @@ public sealed class ClientHost : IDisposable
         {
             _tabRow[_hudScreen.Tab] = _hudScreen.Selected;
             _rebinding = null;
+            _padRebinding = null;
             if (_settingsDirty) { _settings.Save(); _settingsDirty = false; }
 
             // The same way in as every other, so the folder is read here too rather than only on
@@ -3754,6 +3805,7 @@ public sealed class ClientHost : IDisposable
         _hudScreen.Cut = -1;
 
         _rebinding = null;
+        _padRebinding = null;
         _hudScreen.Kind = HudScreenKind.None;
         _hudScreen.Grid = null;
         _laidOut = null;
@@ -3958,8 +4010,36 @@ public sealed class ClientHost : IDisposable
 
     private string FooterHint()
     {
+        if (_padRebinding is { } padWaiting)
+            return $"press a controller button for {ControllerActions.Label(padWaiting)}, or view / back to cancel";
+
         if (_rebinding is { } waiting)
             return $"press a key for {GameActions.Label(waiting)}, or escape to leave it alone";
+
+        if (_lastInputWasController && _controller.Current.Connected)
+        {
+            if (_hudScreen.IsContainer)
+                return $"{_controller.Label(ControllerControl.South)} takes and puts, "
+                    + $"{_controller.Label(ControllerControl.West)} halves, "
+                    + $"{_controller.Label(ControllerControl.North)} opens the book, "
+                    + $"{_controller.Label(ControllerControl.East)} closes";
+
+            var tabs = _hudScreen.TabNames.Length > 1
+                ? $", {_controller.Label(ControllerControl.LeftShoulder)} and "
+                    + $"{_controller.Label(ControllerControl.RightShoulder)} change tab"
+                : "";
+            return _hudScreen.Kind switch
+            {
+                HudScreenKind.Start => $"left stick or d-pad picks, {_controller.Label(ControllerControl.South)} chooses",
+                HudScreenKind.Player when _hudScreen.Tab == (int)PlayerTab.Map =>
+                    $"left stick pans{tabs}, {_controller.Label(ControllerControl.East)} closes",
+                _ when OnTab(GameTab.Controller) =>
+                    $"left stick or d-pad picks and changes, {_controller.Label(ControllerControl.South)} listens"
+                    + $"{tabs}, {_controller.Label(ControllerControl.East)} closes",
+                _ => $"left stick or d-pad picks and changes, {_controller.Label(ControllerControl.South)} chooses"
+                    + $"{tabs}, {_controller.Label(ControllerControl.East)} closes",
+            };
+        }
 
         var close = _settings.Keys.Primary(
             _hudScreen.Kind == HudScreenKind.Game ? GameAction.OpenOptions : GameAction.OpenInventory);
@@ -3989,6 +4069,8 @@ public sealed class ClientHost : IDisposable
                 $"arrows pick, enter chooses, wheel scrolls, tab changes tab, {close} closes",
             _ when OnTab(GameTab.Controls) =>
                 $"up and down pick, enter listens for a key, left clears it{wheel}, {close} closes",
+            _ when OnTab(GameTab.Controller) =>
+                $"up and down pick, enter listens for a controller button, left clears it{wheel}, {close} closes",
             _ when OnTab(GameTab.Skins) =>
                 $"drag the model or use left and right to turn, enter chooses{wheel}, "
                 + $"tab changes tab, {close} closes",
@@ -4120,6 +4202,49 @@ public sealed class ClientHost : IDisposable
                     _hudScreen.Rows.Add(new MenuRow(
                         GameActions.Label(action),
                         listening ? "press a key" : _settings.Keys.Describe(action)));
+                }
+                break;
+
+            case GameTab.Controller:
+                _hudScreen.Rows.Add(new MenuRow("controller", Heading: true));
+                _hudScreen.Rows.Add(new MenuRow(
+                    "controller input", OnOff(_settings.ControllerEnabled),
+                    Note: "discovery begins after the first frame, never while the window is starting"));
+                _hudScreen.Rows.Add(new MenuRow(
+                    "device", _controller.ActiveName,
+                    Note: _controller.Started
+                        ? $"{_controller.ConnectedCount} connected; the last one used is active"
+                        : _settings.ControllerEnabled ? "waiting for the first frame" : "turn controller input on to scan"));
+                _hudScreen.Rows.Add(new MenuRow(
+                    "driver", _controller.Provider,
+                    Note: _controller.Fault.Length > 0 ? _controller.Fault : "SDL3 names and normalizes the connected pad"));
+
+                _hudScreen.Rows.Add(new MenuRow("feel", Heading: true));
+                _hudScreen.Rows.Add(new MenuRow(
+                    "stick deadzone", $"{_settings.ControllerDeadzone}%",
+                    Note: "radial, then the surviving range is restored to full travel"));
+                _hudScreen.Rows.Add(new MenuRow("look speed", $"{_settings.ControllerLookSpeed}%"));
+                _hudScreen.Rows.Add(new MenuRow("invert vertical look", OnOff(_settings.ControllerInvertY)));
+                _hudScreen.Rows.Add(new MenuRow(
+                    "target assist", _settings.ControllerTargetAssist == 0 ? "off" : $"{_settings.ControllerTargetAssist}%",
+                    Note: "a small attack-only nudge inside eight degrees; walls still win"));
+                _hudScreen.Rows.Add(new MenuRow(
+                    "rumble", _settings.ControllerRumble == 0 ? "off" : $"{_settings.ControllerRumble}%"));
+
+                var padGroup = "";
+                foreach (var action in ControllerActions.All)
+                {
+                    var heading = ControllerActions.GroupOf(action);
+                    if (heading != padGroup)
+                    {
+                        padGroup = heading;
+                        _hudScreen.Rows.Add(new MenuRow(heading, Heading: true));
+                    }
+
+                    var control = _settings.Pad.Control(action);
+                    _hudScreen.Rows.Add(new MenuRow(
+                        ControllerActions.Label(action),
+                        _padRebinding == action ? "press a control" : _controller.Label(control)));
                 }
                 break;
 
@@ -4385,6 +4510,37 @@ public sealed class ClientHost : IDisposable
                 if (by >= 0 || ActionAtRow() is not { } action) break;
                 _settings.Keys.Bind(action, "");
                 AfterRebind();
+                break;
+
+            case GameTab.Controller:
+                switch (label)
+                {
+                    case "controller input":
+                        _settings.ControllerEnabled = !_settings.ControllerEnabled;
+                        break;
+                    case "stick deadzone":
+                        _settings.ControllerDeadzone = Nudge(_settings.ControllerDeadzone, by, 0, 50);
+                        break;
+                    case "look speed":
+                        _settings.ControllerLookSpeed = Nudge(_settings.ControllerLookSpeed, by * 5, 25, 300);
+                        break;
+                    case "invert vertical look":
+                        _settings.ControllerInvertY = !_settings.ControllerInvertY;
+                        break;
+                    case "target assist":
+                        _settings.ControllerTargetAssist = Nudge(_settings.ControllerTargetAssist, by * 5, 0, 100);
+                        break;
+                    case "rumble":
+                        _settings.ControllerRumble = Nudge(_settings.ControllerRumble, by * 5, 0, 100);
+                        if (activated) Rumble(0.4f, 0.75f, 140);
+                        break;
+                    default:
+                        // Left clears a binding. Everything else on a binding row is handled by
+                        // ActivateRow, which listens for the next physical control.
+                        if (by >= 0 || ControllerActionAtRow() is not { } padAction) return;
+                        _settings.Pad.Bind(padAction, ControllerControl.None);
+                        break;
+                }
                 break;
 
             case GameTab.Video:
@@ -6090,6 +6246,20 @@ public sealed class ClientHost : IDisposable
             return;
         }
 
+        if (OnTab(GameTab.Controller))
+        {
+            if (ControllerActionAtRow() is { } action)
+            {
+                _padRebinding = action;
+                RefreshScreen();
+            }
+            else
+            {
+                AdjustRow(1, activated: true);
+            }
+            return;
+        }
+
         if (OnTab(GameTab.Skins)
             && _hudScreen.Selected >= 0
             && _hudScreen.Selected < _hudScreen.Rows.Count)
@@ -6303,6 +6473,17 @@ public sealed class ClientHost : IDisposable
             seen++;
         }
 
+        return null;
+    }
+
+    private ControllerAction? ControllerActionAtRow()
+    {
+        if (!OnTab(GameTab.Controller)
+            || _hudScreen.Selected < 0 || _hudScreen.Selected >= _hudScreen.Rows.Count) return null;
+
+        var label = _hudScreen.Rows[_hudScreen.Selected].Label;
+        foreach (var action in ControllerActions.All)
+            if (ControllerActions.Label(action) == label) return action;
         return null;
     }
 
@@ -6778,6 +6959,7 @@ public sealed class ClientHost : IDisposable
         foreach (var blow in _herd.TakeAttacks())
         {
             _vitals.Hurt(blow.HalfHearts);
+            Rumble(0.72f, 1f, 150);
 
             _audio?.Play(Pick(CreatureSounds.Blows), blow.Position, 0.62f, Wobble());
 
@@ -7003,7 +7185,11 @@ public sealed class ClientHost : IDisposable
 
         // Whoever was standing in it — the player from their middle, every animal from its own.
         var hurt = Explosion.HurtAt(centre, _player.Position + new Vector3(0f, 0.9f, 0f));
-        if (hurt > 0) _vitals.Hurt(hurt);
+        if (hurt > 0)
+        {
+            _vitals.Hurt(hurt);
+            Rumble(1f, 0.75f, 280);
+        }
 
         if (_herd is not null)
         {
@@ -7169,6 +7355,7 @@ public sealed class ClientHost : IDisposable
 
         // Still ringing from the last blow, so nothing happened and nothing should be heard.
         if (quarry.Health == before) return;
+        Rumble(0.22f, 0.72f, 75);
 
         // The gains here are levelled against the VOICES rather than picked. The user's animal
         // recordings were normalised to about 0.84 and play at 0.7, so a voice lands near 0.59; the
@@ -7228,6 +7415,7 @@ public sealed class ClientHost : IDisposable
     private void OnScroll(float wheelY)
     {
         if (wheelY == 0f) return;
+        _lastInputWasController = false;
 
         if (_hudScreen.Kind == HudScreenKind.Player
             && _hudScreen.Tab == (int)PlayerTab.Map)
@@ -7296,6 +7484,7 @@ public sealed class ClientHost : IDisposable
     /// </remarks>
     private void OnMouseDown(MouseButton button)
     {
+        _lastInputWasController = false;
         if (_bench is not null) return;
 
         // A screen takes the buttons. It used to swallow them, which is the whole of the fault
@@ -7347,12 +7536,14 @@ public sealed class ClientHost : IDisposable
         switch (button)
         {
             case MouseButton.Left:
+                _mouseBreakHeld = true;
                 _holdingBreak = true;
                 _lastStrikeWasBreak = true;
                 _animator.Strike();
                 break;
 
             case MouseButton.Right:
+                _mousePlaceHeld = true;
                 _holdingPlace = true;
                 _lastStrikeWasBreak = false;
                 _animator.Strike();
@@ -7362,16 +7553,21 @@ public sealed class ClientHost : IDisposable
 
     private void OnMouseUp(MouseButton button)
     {
+        _lastInputWasController = false;
         switch (button)
         {
             case MouseButton.Left:
-                _holdingBreak = false;
+                _mouseBreakHeld = false;
+                _holdingBreak = _controllerBreakHeld;
                 _draggingScrollbar = false;
                 _draggingMap = false;
                 _draggingSkinPreview = false;
                 _draggingFigure = false;
                 break;
-            case MouseButton.Right: _holdingPlace = false; break;
+            case MouseButton.Right:
+                _mousePlaceHeld = false;
+                _holdingPlace = _controllerPlaceHeld;
+                break;
         }
     }
 
@@ -7382,7 +7578,12 @@ public sealed class ClientHost : IDisposable
 
         // Letting the cursor go stops the mining. A button-up outside the window never arrives, so
         // without this, releasing the mouse mid-swing leaves the player digging forever.
-        if (!captured) _holdingBreak = _holdingPlace = false;
+        if (!captured)
+        {
+            _mouseBreakHeld = _mousePlaceHeld = false;
+            _controllerBreakHeld = _controllerPlaceHeld = false;
+            _holdingBreak = _holdingPlace = false;
+        }
     }
 
     /// <summary>
@@ -7409,6 +7610,14 @@ public sealed class ClientHost : IDisposable
 
     private void OnMouseMove(Vector2 position)
     {
+        // A GLFW cursor warp can report on this call or a later one. Keep controller prompts when
+        // that report lands exactly where snap navigation put the shared pointer.
+        var controllerWarp = _hudScreen.IsOpen
+            && _lastInputWasController
+            && Vector2.DistanceSquared(
+                position,
+                _hudScreen.Pointer * HudRenderer.ScaleFor(_window.Size.Y)) <= 1f;
+        if (!_movingControllerPointer && !controllerWarp) _lastInputWasController = false;
         // Under a screen the position is real window coordinates, so the pointer is simply where
         // the mouse is, divided down into layout units. No accumulation, nothing to drift, and
         // nothing to re-anchor when the window is resized under it.
@@ -7473,6 +7682,324 @@ public sealed class ClientHost : IDisposable
         if (_mouseCaptured) _camera.ApplyMouseDelta(delta.X, delta.Y);
     }
 
+    /// <summary>Starts purposeful controller discovery after a picture is already on screen.</summary>
+    private void StartControllerScan()
+    {
+        _controller.Start();
+        Console.WriteLine(
+            $"controller  {_controller.Provider}, {_controller.ConnectedCount} connected, "
+            + $"scan {_controller.ScanMilliseconds:F0} ms"
+            + (_controller.Fault.Length > 0 ? $" — {_controller.Fault}" : ""));
+        Console.Out.Flush();
+
+        if (_controller.ScanMilliseconds > SlowControllerScanMs)
+            PushToast("controller scan finished", $"took {_controller.ScanMilliseconds / 1000:F1}s", playSound: false);
+    }
+
+    /// <summary>Polls one provider and turns its frame into either screen or world intent.</summary>
+    private void StepController(float dt)
+    {
+        // Native discovery is not part of the startup critical path, nor of a benchmark or visual
+        // instrument. A normal run pays for it once, on the main thread, after the first frame.
+        if (!_controller.Started && _firstFrameDrawn && _settings.ControllerEnabled
+            && !_options.UiCheck && _options.BenchSeconds <= 0 && _options.ShotPath is null)
+            StartControllerScan();
+
+        if (!_controller.Started) return;
+        _controller.Update();
+
+        var controllerListChanged = false;
+        while (_controller.TryTakeNotice(out var notice))
+        {
+            controllerListChanged = true;
+            var connected = notice.Kind == ControllerNoticeKind.Connected;
+            PushToast(connected ? "controller connected" : "controller disconnected", notice.Name);
+            Console.WriteLine(
+                $"controller  {(connected ? "connected" : "disconnected")}: {notice.Name} ({notice.Provider})");
+            Console.Out.Flush();
+        }
+        if (controllerListChanged && OnTab(GameTab.Controller)) RefreshScreen();
+
+        if (!_controller.Current.Connected)
+        {
+            _controllerMove = _controllerLook = Vector2.Zero;
+            _controllerLookSuppressed = false;
+            _controllerBreakHeld = _controllerPlaceHeld = false;
+            _holdingBreak = _mouseBreakHeld;
+            _holdingPlace = _mousePlaceHeld;
+            _hudScreen.RadialHotbar = false;
+            return;
+        }
+
+        _controllerMove = ControllerTuning.Stick(_controller.Current.Move, _settings.ControllerDeadzone);
+        _controllerLook = ControllerTuning.Stick(_controller.Current.Look, _settings.ControllerDeadzone);
+        if (_controller.HadInputThisFrame) _lastInputWasController = true;
+
+        // Once discovered, a disabled controller remains able to turn itself back on from this
+        // screen. It cannot move, look, or act on the world while off.
+        if (!_settings.ControllerEnabled)
+        {
+            _controllerMove = _controllerLook = Vector2.Zero;
+            _controllerLookSuppressed = false;
+            _controllerBreakHeld = _controllerPlaceHeld = false;
+            _holdingBreak = _mouseBreakHeld;
+            _holdingPlace = _mousePlaceHeld;
+            _hudScreen.RadialHotbar = false;
+            if (_hudScreen.IsOpen) StepControllerScreen(dt);
+            return;
+        }
+
+        // Listening owns the whole pad. Back is deliberately the unbindable escape from this mode,
+        // just as Escape itself is on the keyboard controls tab.
+        if (_padRebinding is { } waiting)
+        {
+            if (_controller.Pressed(ControllerControl.Back))
+            {
+                _padRebinding = null;
+                RefreshScreen();
+                return;
+            }
+
+            var pressed = _controller.FirstPressedControl();
+            if (pressed != ControllerControl.None)
+            {
+                _settings.Pad.Bind(waiting, pressed);
+                _padRebinding = null;
+                _settingsDirty = true;
+                RefreshScreen();
+            }
+            return;
+        }
+
+        if (_hudScreen.IsOpen)
+        {
+            StepControllerScreen(dt);
+            return;
+        }
+
+        StepControllerWorld(dt);
+    }
+
+    private void StepControllerWorld(float dt)
+    {
+        var pad = _settings.Pad;
+
+        if (_controller.Pressed(ControllerAction.OpenInventory, pad))
+            RunAction(GameAction.OpenInventory);
+        if (_controller.Pressed(ControllerAction.OpenOptions, pad))
+            RunAction(GameAction.OpenOptions);
+        if (_controller.Pressed(ControllerAction.ToggleView, pad))
+            RunAction(GameAction.ToggleView);
+        if (_controller.Pressed(ControllerAction.SwapHands, pad))
+            RunAction(GameAction.SwapHands);
+
+        if (_hudScreen.IsOpen) return;
+
+        if (_controller.Pressed(ControllerAction.PreviousSlot, pad))
+            _inventory.Select(_inventory.Selected - 1);
+        if (_controller.Pressed(ControllerAction.NextSlot, pad))
+            _inventory.Select(_inventory.Selected + 1);
+
+        var radial = _controller.Held(ControllerAction.RadialHotbar, pad);
+        if (radial)
+        {
+            _controllerLookSuppressed = true;
+            if (!_hudScreen.RadialHotbar) _hudScreen.RadialSlot = _inventory.Selected;
+            _hudScreen.RadialHotbar = true;
+            var picked = ControllerTuning.RadialSlot(_controllerLook);
+            if (picked >= 0) _hudScreen.RadialSlot = picked;
+        }
+        else if (_hudScreen.RadialHotbar)
+        {
+            if (_hudScreen.RadialSlot >= 0) _inventory.Select(_hudScreen.RadialSlot);
+            _hudScreen.RadialHotbar = false;
+            _hudScreen.RadialSlot = -1;
+        }
+
+        if (!radial && _controllerLookSuppressed && _controllerLook == Vector2.Zero)
+            _controllerLookSuppressed = false;
+
+        if (!radial && !_controllerLookSuppressed)
+        {
+            _camera.ApplyControllerLook(
+                _controllerLook, dt, _settings.ControllerLookSpeed, _settings.ControllerInvertY);
+        }
+
+        var breaking = !radial && _controller.Held(ControllerAction.BreakOrAttack, pad);
+        var placing = !radial && _controller.Held(ControllerAction.UseOrPlace, pad);
+        if (breaking && !_controllerBreakHeld)
+        {
+            _lastStrikeWasBreak = true;
+            _animator.Strike();
+        }
+        if (placing && !_controllerPlaceHeld)
+        {
+            _lastStrikeWasBreak = false;
+            _animator.Strike();
+        }
+
+        _controllerBreakHeld = breaking;
+        _controllerPlaceHeld = placing;
+        _holdingBreak = _mouseBreakHeld || _controllerBreakHeld;
+        _holdingPlace = _mousePlaceHeld || _controllerPlaceHeld;
+
+        if (breaking) ApplyControllerTargetAssist(dt);
+    }
+
+    /// <summary>Small, attack-only creature magnetism; never changes mouse aim.</summary>
+    private void ApplyControllerTargetAssist(float dt)
+    {
+        if (_settings.ControllerTargetAssist <= 0 || _herd is null) return;
+
+        const float coneDegrees = 8f;
+        var minimumDot = MathF.Cos(float.DegreesToRadians(coneDegrees));
+        Creature? best = null;
+        var bestScore = float.MaxValue;
+        var bestDirection = Vector3.Zero;
+
+        foreach (var creature in _herd.All)
+        {
+            if (!creature.Alive) continue;
+            var toward = creature.Middle - _camera.Position;
+            var distance = toward.Length();
+            if (distance < 0.2f || distance > Combat.Reach + 1.25f) continue;
+            var direction = toward / distance;
+            var dot = Vector3.Dot(_camera.Forward, direction);
+            if (dot < minimumDot) continue;
+
+            // A hill, wall or door wins over the animal behind it. The little tolerance keeps a
+            // target touching a wall from being rejected by the wall directly behind its body.
+            if (BlockRay.TryCast(
+                    _streamer.World, _targetable, _camera.Position, direction, distance, out var wall)
+                && wall.Distance + 0.15f < distance) continue;
+
+            var score = (1f - dot) * 20f + distance * 0.015f;
+            if (score >= bestScore) continue;
+            best = creature;
+            bestScore = score;
+            bestDirection = direction;
+        }
+
+        if (best is null) return;
+        var strength = _settings.ControllerTargetAssist / 100f;
+        _camera.AssistToward(bestDirection, 55f * strength * Math.Max(0f, dt));
+    }
+
+    private void StepControllerScreen(float dt)
+    {
+        // A controller cannot type arbitrary text, but it can accept or abandon what is already in
+        // the field and immediately resume navigating the screen.
+        if (_hudScreen.Typing is not null)
+        {
+            if (_controller.Pressed(ControllerControl.South)) StopTyping(accept: true);
+            else if (_controller.Pressed(ControllerControl.East)) StopTyping(accept: false);
+            return;
+        }
+
+        if (_controller.Pressed(ControllerControl.East)
+            || _controller.Pressed(ControllerAction.OpenInventory, _settings.Pad)
+            || _controller.Pressed(ControllerAction.OpenOptions, _settings.Pad))
+        {
+            CloseScreen();
+            return;
+        }
+
+        var tabbed = _hudScreen.Kind is HudScreenKind.Player or HudScreenKind.Game or HudScreenKind.Start;
+        if (tabbed && _hudScreen.TabNames.Length > 1)
+        {
+            if (_controller.Pressed(ControllerControl.LeftShoulder)) { ChangeScreenTab(-1); return; }
+            if (_controller.Pressed(ControllerControl.RightShoulder)) { ChangeScreenTab(1); return; }
+        }
+
+        var x = _controller.Held(ControllerControl.DPadRight) ? 1f
+            : _controller.Held(ControllerControl.DPadLeft) ? -1f
+            : _controllerMove.X;
+        var y = _controller.Held(ControllerControl.DPadDown) ? 1f
+            : _controller.Held(ControllerControl.DPadUp) ? -1f
+            : -_controllerMove.Y;
+
+        // One dominant direction at a time keeps a diagonal from skipping a square or changing a
+        // setting while it moves to the next row.
+        if (MathF.Abs(x) > MathF.Abs(y)) y = 0f;
+        else if (MathF.Abs(y) > 0f) x = 0f;
+
+        var horizontal = _padHorizontalRepeat.Step(x, dt);
+        var vertical = _padVerticalRepeat.Step(y, dt);
+
+        if (_hudScreen.IsContainer)
+        {
+            SnapControllerPointer();
+            if (horizontal != 0) MovePointer(horizontal, 0);
+            if (vertical != 0) MovePointer(0, vertical);
+
+            if (_controller.Pressed(ControllerControl.South))
+            {
+                ScreenClick(MouseButton.Left);
+                RefreshScreen();
+            }
+            else if (_controller.Pressed(ControllerControl.West))
+            {
+                ScreenClick(MouseButton.Right);
+                RefreshScreen();
+            }
+            else if (_controller.Pressed(ControllerControl.North))
+            {
+                _hudScreen.BookOut = !_hudScreen.BookOut;
+                RefreshScreen();
+            }
+            return;
+        }
+
+        if (_hudScreen.Kind == HudScreenKind.Player && _hudScreen.Tab == (int)PlayerTab.Map)
+        {
+            if (horizontal != 0) _hudScreen.MapPan.X += horizontal;
+            if (vertical != 0) _hudScreen.MapPan.Y += vertical;
+            if (horizontal != 0 || vertical != 0) RefreshScreen();
+            return;
+        }
+
+        if (vertical != 0) MoveRow(vertical);
+        if (horizontal != 0) AdjustRow(horizontal);
+        if (_controller.Pressed(ControllerControl.South)) ActivateRow();
+    }
+
+    private void SnapControllerPointer()
+    {
+        if (_hudScreen.Hovered is { Kind: ZoneKind.Slot or ZoneKind.Recipe or ZoneKind.Button }) return;
+
+        Zone? nearest = null;
+        var distance = float.MaxValue;
+        foreach (var zone in _layout.Zones)
+        {
+            if (zone.Kind is not (ZoneKind.Slot or ZoneKind.Recipe or ZoneKind.Button)) continue;
+            var d = Vector2.DistanceSquared(_hudScreen.Pointer, new Vector2(zone.CentreX, zone.CentreY));
+            if (d >= distance) continue;
+            distance = d;
+            nearest = zone;
+        }
+
+        if (nearest is not { } at) return;
+        _hudScreen.Pointer = new Vector2(at.CentreX, at.CentreY);
+        _hudScreen.Hovered = at;
+        var scale = HudRenderer.ScaleFor(_window.Size.Y);
+        _movingControllerPointer = true;
+        _input.MoveTo(_hudScreen.Pointer * scale);
+        _movingControllerPointer = false;
+    }
+
+    private void PushToast(string title, string line, bool playSound = true)
+    {
+        _toasts.Add(new Toast(title, line, -1, ToastSeconds));
+        while (_toasts.Count > MaxToasts) _toasts.RemoveAt(0);
+        if (playSound) _audio?.Play(Pick(ActionSounds.ToastIn), _viewPosition, 0.35f, Wobble());
+    }
+
+    private void Rumble(float low, float high, int milliseconds)
+    {
+        if (_settings.ControllerEnabled)
+            _controller.Rumble(low, high, milliseconds, _settings.ControllerRumble);
+    }
+
     private void OnUpdate(double dt)
     {
         // ⛔ CAPPED, AND THE FIRST UPDATE IS WHY. The window's clock starts when the window does, so
@@ -7508,6 +8035,8 @@ public sealed class ClientHost : IDisposable
         _frameOpen = true;
         _uploadsThisFrame = 0;
 
+        StepController((float)dt);
+
         if (_benchPath is not null)
         {
             // The path clock is the measured time itself, so the camera is exactly where the
@@ -7535,6 +8064,14 @@ public sealed class ClientHost : IDisposable
         else
         {
             _camera.Update((float)dt, _input);
+            if (_settings.ControllerEnabled && _controller.Current.Connected)
+            {
+                _camera.UpdateController(
+                    (float)dt, _controllerMove,
+                    _controller.Held(ControllerAction.Jump, _settings.Pad),
+                    _controller.Held(ControllerAction.Sneak, _settings.Pad),
+                    _controller.Held(ControllerAction.Sprint, _settings.Pad));
+            }
         }
 
         _elapsed += dt;
@@ -7856,6 +8393,9 @@ public sealed class ClientHost : IDisposable
         // A landing worth noticing, sized by how far it fell.
         if (landed > 1.2f)
         {
+            Rumble(
+                Math.Clamp(landed / 9f, 0.12f, 0.75f), 0.08f,
+                70 + Math.Min((int)(landed * 10f), 130));
             _particles.Puff(type, _player.Position, Math.Min(4 + (int)landed * 2, 20), MathF.Min(landed / 3f, 2.4f));
             PlaySound(type, SoundEvent.Step, _player.Position, MathF.Min(0.6f + landed * 0.15f, 1.4f));
             _stepDistance = 0f;
@@ -8162,7 +8702,9 @@ public sealed class ClientHost : IDisposable
         _vitals.ShieldRaised =
             _walking && _spawned && !_hudScreen.IsOpen && _bench is null
             && _vitals.ShieldShare > 0f
-            && (_shotGuard || _keys.Held(_input, GameAction.RaiseShield));
+            && (_shotGuard || _keys.Held(_input, GameAction.RaiseShield)
+                || (_settings.ControllerEnabled
+                    && _controller.Held(ControllerAction.RaiseShield, _settings.Pad)));
     }
 
     /// <summary>Which material each worn slot has on, as an index, or −1 for bare.</summary>
@@ -8322,6 +8864,7 @@ public sealed class ClientHost : IDisposable
 
             var at = new Vector3(cart.X + 0.5f, cart.Y + 0.5f, cart.Z + 0.5f);
             DropCart(cart, at);
+            Rumble(0.5f, 0.2f, 90);
             return;
         }
 
@@ -8340,6 +8883,7 @@ public sealed class ClientHost : IDisposable
             hit.X, hit.Y, hit.Z,
             _waterlogging.Remains(_streamer.World.GetBlock(hit.X, hit.Y, hit.Z)));
         _progress.Broke();
+        Rumble(0.48f, 0.18f, 85);
         ShedUnsupported(hit.X, hit.Y, hit.Z);
 
         // ⛳ Digging is work, and it is most of what a player does. Charged here rather than per
@@ -9356,7 +9900,9 @@ public sealed class ClientHost : IDisposable
         // want to go" is the whole of driving — back brakes, and sneak steps off beside the rail.
         if (_ridingCart is { } riding)
         {
-            if (_keys.Held(_input, GameAction.Sneak))
+            if (_keys.Held(_input, GameAction.Sneak)
+                || (_settings.ControllerEnabled
+                    && _controller.Held(ControllerAction.Sneak, _settings.Pad)))
             {
                 var offAt = _player.Position + new Vector3(0.8f, 0.2f, 0f);
                 _ridingCart = null;
@@ -9372,10 +9918,19 @@ public sealed class ClientHost : IDisposable
                     var along = RailForms.Heading(form, riding.T);
                     var look = Vector3.Dot(new Vector3(flat.X, 0f, flat.Z), along) >= 0f ? 1f : -1f;
 
-                    if (_keys.Held(_input, GameAction.MoveForward))
-                        riding.Velocity += look * 4f * dt;
-                    if (_keys.Held(_input, GameAction.MoveBack))
-                        riding.Velocity -= MathF.Sign(riding.Velocity) * MathF.Min(MathF.Abs(riding.Velocity), 6f * dt);
+                    var controllerDrive = _controllerMove.Y;
+                    var throttle = _keys.Held(_input, GameAction.MoveForward)
+                        ? 1f
+                        : MathF.Max(0f, controllerDrive);
+                    var brake = _keys.Held(_input, GameAction.MoveBack)
+                        ? 1f
+                        : MathF.Max(0f, -controllerDrive);
+
+                    if (throttle > 0.08f)
+                        riding.Velocity += look * 4f * dt * throttle;
+                    if (brake > 0.08f)
+                        riding.Velocity -= MathF.Sign(riding.Velocity)
+                            * MathF.Min(MathF.Abs(riding.Velocity), 6f * dt * brake);
                 }
 
                 _camera.Position = _player.EyePosition;
@@ -9389,9 +9944,21 @@ public sealed class ClientHost : IDisposable
         if (_keys.Held(_input, GameAction.MoveRight)) wish += right;
         if (_keys.Held(_input, GameAction.MoveLeft)) wish -= right;
 
-        var jump = _keys.Held(_input, GameAction.Jump);
-        var sneak = _keys.Held(_input, GameAction.Sneak);
-        var sprint = _keys.Held(_input, GameAction.Sprint) && !sneak;
+        if (_settings.ControllerEnabled)
+        {
+            wish += forward * _controllerMove.Y;
+            wish += right * _controllerMove.X;
+        }
+
+        var jump = _keys.Held(_input, GameAction.Jump)
+            || (_settings.ControllerEnabled
+                && _controller.Held(ControllerAction.Jump, _settings.Pad));
+        var sneak = _keys.Held(_input, GameAction.Sneak)
+            || (_settings.ControllerEnabled
+                && _controller.Held(ControllerAction.Sneak, _settings.Pad));
+        var sprint = (_keys.Held(_input, GameAction.Sprint)
+            || (_settings.ControllerEnabled
+                && _controller.Held(ControllerAction.Sprint, _settings.Pad))) && !sneak;
 
         var before = _player.Position;
         _player.Step(_streamer.World, dt, wish, jump, sneak, sprint);
@@ -9632,6 +10199,7 @@ public sealed class ClientHost : IDisposable
         // a player is actually waiting for and it is later than the moment the loading code stops.
         // Reports once and then costs a bool.
         _startup.Report("first frame drawn");
+        _firstFrameDrawn = true;
     }
 
     /// <summary>How many frames the shot run has drawn.</summary>
@@ -10623,7 +11191,21 @@ public sealed class ClientHost : IDisposable
 
             case 210: SampleUi(size, "cutter"); ProbeSquares(); ProbeCuts(); break;
 
-            case 211: CloseScreen(); OpenGame(GameTab.Controls); break;
+            case 211: CloseScreen(); OpenGame(GameTab.Controller); break;
+            case 220:
+                SampleUi(size, "controller");
+                ProbeControllerTab();
+                CloseScreen();
+                _hudScreen.RadialHotbar = true;
+                _hudScreen.RadialSlot = 3;
+                break;
+            case 221:
+                SampleUi(size, "radial");
+                ProbeRadialHotbar();
+                _hudScreen.RadialHotbar = false;
+                _hudScreen.RadialSlot = -1;
+                OpenGame(GameTab.Controls);
+                break;
             case 240: SampleUi(size, "game"); ProbeRows("top"); SampleTitle(size); break;
 
             case 241: ScrollRows(int.MaxValue); break;
@@ -12138,6 +12720,42 @@ public sealed class ClientHost : IDisposable
         Console.Out.Flush();
     }
 
+    private bool _uiControllerRows;
+    private int _uiRadialSlots = -1;
+    private bool _uiRadialBounds;
+
+    private void ProbeControllerTab()
+    {
+        var labels = _hudScreen.Rows.Select(row => row.Label).ToHashSet(StringComparer.Ordinal);
+        _uiControllerRows = _hudScreen.TabNames.Length == Enum.GetValues<GameTab>().Length
+            && labels.Contains("controller input")
+            && labels.Contains("device")
+            && labels.Contains("driver")
+            && labels.Contains("stick deadzone")
+            && labels.Contains("look speed")
+            && labels.Contains("invert vertical look")
+            && labels.Contains("target assist")
+            && labels.Contains("rumble")
+            && ControllerActions.All.All(action => labels.Contains(ControllerActions.Label(action)))
+            && _settings.Pad.Faults().Count == 0;
+
+        Console.WriteLine(
+            $"ui-check    controller  {_hudScreen.Rows.Count} rows, {ControllerActions.All.Length} bindings, "
+            + $"provider {_controller.Provider}, complete {_uiControllerRows}");
+        Console.Out.Flush();
+    }
+
+    private void ProbeRadialHotbar()
+    {
+        _uiRadialSlots = _hudScreen.RadialDrawnSlots;
+        _uiRadialBounds = _hudScreen.RadialBounds.Z > 0f && _hudScreen.RadialBounds.W > 0f;
+        Console.WriteLine(
+            $"ui-check    radial      {_uiRadialSlots} slots, selected {_hudScreen.RadialSlot + 1}, "
+            + $"bounds {_hudScreen.RadialBounds.X:F0},{_hudScreen.RadialBounds.Y:F0} "
+            + $"{_hudScreen.RadialBounds.Z:F0}x{_hudScreen.RadialBounds.W:F0}");
+        Console.Out.Flush();
+    }
+
     /// <summary>Proves the Audio tab exposes fallback, shelf, licenses and explicit download.</summary>
     private void ProbeAudioTab()
     {
@@ -12540,6 +13158,8 @@ public sealed class ClientHost : IDisposable
         var chestPanel = Read("chest");
         var cutter = Read("cutter");
         var game = Read("game");
+        var controllerPanel = Read("controller");
+        var radialPanel = Read("radial");
         var progressPanel = Read("progress");
         var handbookPanel = Read("handbook");
         var mapPanel = Read("map");
@@ -12558,10 +13178,17 @@ public sealed class ClientHost : IDisposable
         if (bench == bare) faults.Add("opening a bench changed nothing on screen");
         if (chestPanel == bare) faults.Add("opening a chest changed nothing on screen");
         if (game == bare) faults.Add("opening the game screen changed nothing on screen");
+        if (controllerPanel == bare) faults.Add("opening the controller tab changed nothing on screen");
+        if (radialPanel == bare) faults.Add("holding the radial hotbar changed nothing on screen");
         if (progressPanel == bare) faults.Add("opening progress changed nothing on screen");
         if (handbookPanel == bare) faults.Add("opening the handbook changed nothing on screen");
         if (mapPanel == bare) faults.Add("opening the map changed nothing on screen");
         if (skinsPanel == bare) faults.Add("opening the skin shelf changed nothing on screen");
+
+        if (!_uiControllerRows)
+            faults.Add("the controller tab is missing discovery, feel, rumble, or rebinding controls");
+        if (_uiRadialSlots != Inventory.HotbarSlots || !_uiRadialBounds)
+            faults.Add($"the radial hotbar drew {_uiRadialSlots} slots or published no bounds, not all nine");
 
         if (!_uiProgressTab)
             faults.Add("the progress tab did not show all eight counters, unlocks and its reset row");
@@ -12729,6 +13356,9 @@ public sealed class ClientHost : IDisposable
         // libraries' key numbers ever stop agreeing, every key in the game silently becomes a
         // different key — not a crash, a game where W walks left.
         foreach (var fault in RawInput.KeyNumbersMatch()) faults.Add(fault);
+        var controllerInteropFaults = ControllerInput.SelfTest(out var controllerInterop);
+        foreach (var fault in controllerInteropFaults) faults.Add(fault);
+        Console.WriteLine($"ui-check    controller interop  {controllerInterop}");
 
         // The station IS the list. Two wells and no offers is a stonecutter nothing comes out of,
         // and it draws exactly the same as one that works.
@@ -13161,7 +13791,7 @@ public sealed class ClientHost : IDisposable
         if (faults.Count == 0)
         {
             Console.WriteLine(
-                "OK  the overlay reaches the screen: crosshair, twelve screen states, panels in grey, "
+                "OK  the overlay reaches the screen: crosshair, controller radial, fourteen screen states, panels in grey, "
                 + $"{_uiProbes.Sum(p => p.Value.Hits)} squares answering for their own middles");
         }
         else
@@ -13524,6 +14154,7 @@ public sealed class ClientHost : IDisposable
         _soundSearchCancel?.Dispose();
         _soundDownloadCancel?.Cancel();
         _soundDownloadCancel?.Dispose();
+        _controller.Dispose();
         _audio?.Dispose();
         _blockTextures?.Dispose();
         _playerRenderer?.Dispose();

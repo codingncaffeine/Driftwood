@@ -50,6 +50,32 @@ public sealed class FlyCamera
         Pitch = Math.Clamp(Pitch, -PitchLimit, PitchLimit);
     }
 
+    /// <summary>Frame-rate-independent right-stick look, in a genre-sized degrees-per-second rate.</summary>
+    public void ApplyControllerLook(Vector2 stick, float dt, int speedPercent, bool invertY)
+    {
+        var rate = 190f * Math.Clamp(speedPercent, 25, 300) / 100f;
+        Yaw += stick.X * rate * Math.Max(0f, dt);
+        Pitch -= stick.Y * rate * Math.Max(0f, dt) * (invertY ? -1f : 1f);
+        Pitch = Math.Clamp(Pitch, -PitchLimit, PitchLimit);
+    }
+
+    /// <summary>Nudges toward a nearby target without ever snapping farther than one frame allows.</summary>
+    public void AssistToward(Vector3 direction, float maximumDegrees)
+    {
+        if (direction.LengthSquared() < 1e-8f || maximumDegrees <= 0f) return;
+        direction = Vector3.Normalize(direction);
+
+        var targetYaw = float.RadiansToDegrees(MathF.Atan2(direction.Z, direction.X));
+        var targetPitch = float.RadiansToDegrees(MathF.Asin(Math.Clamp(direction.Y, -1f, 1f)));
+        var yawDelta = targetYaw - Yaw;
+        while (yawDelta > 180f) yawDelta -= 360f;
+        while (yawDelta < -180f) yawDelta += 360f;
+
+        Yaw += Math.Clamp(yawDelta, -maximumDegrees, maximumDegrees);
+        Pitch += Math.Clamp(targetPitch - Pitch, -maximumDegrees, maximumDegrees);
+        Pitch = Math.Clamp(Pitch, -PitchLimit, PitchLimit);
+    }
+
     public void Update(float dt, RawInput keyboard)
     {
         var speed = MoveSpeed * dt;
@@ -71,6 +97,46 @@ public sealed class FlyCamera
         if (keyboard.IsKeyPressed(Key.Left) || keyboard.IsKeyPressed(Key.A)) Position -= right * speed;
         if (keyboard.IsKeyPressed(Key.Space) || keyboard.IsKeyPressed(Key.PageUp)) Position += Vector3.UnitY * speed;
         if (keyboard.IsKeyPressed(Key.ControlLeft) || keyboard.IsKeyPressed(Key.PageDown)) Position -= Vector3.UnitY * speed;
+    }
+
+    public void UpdateController(float dt, Vector2 move, bool rise, bool fall, bool boost)
+    {
+        var speed = MoveSpeed * Math.Max(0f, dt) * (boost ? BoostMultiplier : 1f);
+        var flat = new Vector3(Forward.X, 0f, Forward.Z);
+        if (flat.LengthSquared() > 1e-6f) flat = Vector3.Normalize(flat);
+
+        Position += flat * (move.Y * speed);
+        Position += Right * (move.X * speed);
+        if (rise) Position += Vector3.UnitY * speed;
+        if (fall) Position -= Vector3.UnitY * speed;
+    }
+
+    /// <summary>Deterministic controller-camera checks that need no native provider or window.</summary>
+    public static List<string> ControllerFaults()
+    {
+        var faults = new List<string>();
+        var oneFrame = new FlyCamera();
+        var manyFrames = new FlyCamera();
+        var stick = new Vector2(0.55f, -0.4f);
+        oneFrame.ApplyControllerLook(stick, 0.5f, 100, invertY: false);
+        for (var i = 0; i < 50; i++)
+            manyFrames.ApplyControllerLook(stick, 0.01f, 100, invertY: false);
+
+        if (MathF.Abs(oneFrame.Yaw - manyFrames.Yaw) > 0.001f
+            || MathF.Abs(oneFrame.Pitch - manyFrames.Pitch) > 0.001f)
+            faults.Add("right-stick look changes with frame rate");
+
+        var inverted = new FlyCamera();
+        inverted.ApplyControllerLook(new Vector2(0f, -0.5f), 0.1f, 100, invertY: true);
+        if (oneFrame.Pitch <= 0f || inverted.Pitch >= 0f)
+            faults.Add("vertical look or invert-Y points the wrong way");
+
+        var assisted = new FlyCamera();
+        assisted.AssistToward(Vector3.UnitX, 5f);
+        if (MathF.Abs(assisted.Yaw - -85f) > 0.001f || MathF.Abs(assisted.Pitch) > 0.001f)
+            faults.Add("target assist did not take exactly its bounded five-degree step");
+
+        return faults;
     }
 
     public Matrix4x4 ViewProjection(float aspect) => View(Position, Forward) * Projection(aspect);

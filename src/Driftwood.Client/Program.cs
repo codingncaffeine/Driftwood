@@ -53,6 +53,9 @@ public static class Program
                 return AudioCheck(soundPack);
             }
 
+            if (args.Contains("--controller-check"))
+                return ControllerCheck();
+
             // ⛳ THE INSTRUMENT THIS PROJECT WAS MISSING, AND THE ONE IT NEEDED MOST. Every tile in
             // the game is drawn in code, and until now the only way to see one was to start the game
             // and look at a square the size of a fingernail. Three separate redraws of the tools
@@ -536,6 +539,39 @@ public static class Program
         return 1;
     }
 
+    /// <summary>Loads the shipped SDL native binary, enumerates safely, and requires no hardware.</summary>
+    private static int ControllerCheck()
+    {
+        var faults = ControllerInput.SelfTest(out var interop);
+        faults.AddRange(FlyCamera.ControllerFaults());
+        Console.WriteLine($"interop     {interop}");
+
+        using var input = new ControllerInput();
+        input.Start();
+        input.Update();
+
+        Console.WriteLine($"provider    {input.Provider}");
+        Console.WriteLine($"scan        {input.ScanMilliseconds:F0} ms");
+        Console.WriteLine($"connected   {input.ConnectedCount}");
+        Console.WriteLine($"active      {input.ActiveName}");
+        if (input.Fault.Length > 0) Console.WriteLine($"note        {input.Fault}");
+
+        while (input.TryTakeNotice(out var notice))
+            Console.WriteLine($"device      {notice.Name} ({notice.Provider})");
+
+        // The fallback is for a player's damaged or unavailable SDL installation. The release
+        // check is stricter: this Windows artifact claims to contain SDL, so silently reaching
+        // XInput here means single-file publishing dropped the native dependency.
+        if (input.Provider != "SDL3")
+            faults.Add($"the published controller provider is {input.Provider}, not its bundled SDL3");
+
+        foreach (var fault in faults) Console.WriteLine($"FAULT       {fault}");
+        Console.WriteLine(faults.Count == 0
+            ? "OK          SDL3 loaded; controller hardware is optional"
+            : $"FAILED      {faults.Count} controller checks");
+        return faults.Count == 0 ? 0 : 1;
+    }
+
     private static ClientOptions ParseArgs(string[] args)
     {
         var options = new ClientOptions();
@@ -647,6 +683,7 @@ public static class Program
                     break;
                 case "--audit":
                 case "--version":
+                case "--controller-check":
                 case "--pack-coverage":
                 case "--pack-report":
                 case "--packs":
@@ -739,6 +776,9 @@ public static class Program
               --audio-check [sound-pack.zip]
                                 decode Driftwood's owned fallback; with a pack, require and report
                                 every sound slot the game names
+              --controller-check
+                                load bundled SDL3, verify the XInput fallback ABI, enumerate any
+                                connected pads by name, and pass when no controller is attached
               --pack-coverage   with --pack, report what the pack has art for that we do not
               --creature-geometry <dir>
                                 put animals in the world, wearing skeletons read from this folder.

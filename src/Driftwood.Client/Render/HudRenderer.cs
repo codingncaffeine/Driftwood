@@ -98,6 +98,7 @@ public enum PlayerTab
 public enum GameTab
 {
     Controls,
+    Controller,
     Video,
     Audio,
     World,
@@ -216,6 +217,17 @@ public sealed class HudScreen
     public bool AttackCooling;
 
     public float AttackReady = 1f;
+
+    /// <summary>Whether the controller's hold-to-pick nine-way hotbar is over the world.</summary>
+    public bool RadialHotbar;
+
+    /// <summary>The highlighted radial slot, or -1 while the stick is centred.</summary>
+    public int RadialSlot = -1;
+
+    /// <summary>Published geometry for the framebuffer check.</summary>
+    public int RadialDrawnSlots;
+
+    public Vector4 RadialBounds;
 
     /// <summary>The lines of whichever settings tab is open.</summary>
     public readonly List<MenuRow> Rows = [];
@@ -638,6 +650,8 @@ public sealed class HudRenderer : IDisposable
         screen.FigureBox = Vector4.Zero;
         screen.FigureBounds = Vector4.Zero;
         screen.CursorBox = Vector4.Zero;
+        screen.RadialDrawnSlots = 0;
+        screen.RadialBounds = Vector4.Zero;
 
         // A whole number of screen pixels per layout unit, never a half. Everything here is pixel
         // art — a font drawn at twice its authored size, two-pixel bevels, hard edges — and all of
@@ -697,6 +711,9 @@ public sealed class HudRenderer : IDisposable
             Hotbar(catalogue, inventory, w, h);
             Offhand(catalogue, equipment, vitals, w, h);
         }
+
+        if (!screen.IsOpen && screen.RadialHotbar)
+            RadialPicker(catalogue, inventory, screen, w, h);
 
         if (!screen.IsOpen)
         {
@@ -967,6 +984,47 @@ public sealed class HudRenderer : IDisposable
 
             if (stack.Count > 1) Number(stack.Count, x + icon + 1f, top + 14f);
         }
+    }
+
+    /// <summary>Nine real hotbar slots around the right stick's nine deterministic wedges.</summary>
+    private void RadialPicker(
+        ItemRegistry catalogue, Inventory inventory, HudScreen screen, float w, float h)
+    {
+        const float slot = 22f;
+        const float radius = 48f;
+        var centre = new Vector2(MathF.Round(w * 0.5f), MathF.Round(h * 0.52f));
+        var shade = new Vector4(0.02f, 0.025f, 0.03f, 0.86f);
+
+        // A quiet centre makes the ring legible over snow and caves alike without turning it into a
+        // rectangular menu. The nine pockets themselves carry the shape.
+        Bevel(centre.X - 26f, centre.Y - 10f, 52f, 20f, raised: true, shade);
+
+        for (var i = 0; i < Inventory.HotbarSlots; i++)
+        {
+            var angle = -MathF.PI * 0.5f + MathF.Tau * i / Inventory.HotbarSlots;
+            var x = MathF.Round(centre.X + MathF.Cos(angle) * radius - slot * 0.5f);
+            var y = MathF.Round(centre.Y + MathF.Sin(angle) * radius - slot * 0.5f);
+            Bevel(x, y, slot, slot, raised: false, SlotFill with { W = 0.96f });
+            if (i == screen.RadialSlot) Select(x, y, slot, slot);
+
+            var stack = inventory[i];
+            if (!stack.IsEmpty)
+            {
+                SlotIcon(catalogue, stack, x + 3f, y + 3f, slot - 6f, Vector4.One);
+                if (stack.Count > 1) Number(stack.Count, x + slot - 1f, y + slot - 7f, 5f);
+            }
+
+            screen.RadialDrawnSlots++;
+        }
+
+        var selected = Math.Clamp(screen.RadialSlot, 0, Inventory.HotbarSlots - 1);
+        var held = inventory[selected];
+        var words = held.IsEmpty ? $"slot {selected + 1}" : catalogue[held.Item].Label;
+        if (words.Length > 17) words = words[..16] + "…";
+        TextCentred(words, centre.X, centre.Y - 4f, 7f, Highlight);
+        screen.RadialBounds = new Vector4(
+            centre.X - radius - slot * 0.5f, centre.Y - radius - slot * 0.5f,
+            radius * 2f + slot, radius * 2f + slot);
     }
 
     /// <summary>

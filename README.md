@@ -34,7 +34,7 @@ reachable from bare hands, in seven rounds, with no starting kit.
 | **A texture-pack shelf and importer, in the menu** | working |
 | **An audio shelf, local importer and verified Modrinth browser** | working |
 | Armour, hunger, signals, rails, farming | working |
-| Controller support | not started |
+| Controller support — SDL3 hot-plug, named devices, snap-nav, radial hotbar, assist, rumble, rebinding | working |
 
 ## The world
 
@@ -133,6 +133,7 @@ Driftwood.exe --ocean 10               less water; default is 25% of the surface
 Driftwood.exe --chunks 24 --vsync      wider view, capped to display refresh
 Driftwood.exe --audit --seed 12345     headless: generate, mesh, run every check, exit
 Driftwood.exe --audio-check             decode the five embedded fallback recordings, exit
+Driftwood.exe --controller-check        load SDL3, enumerate pads by name, verify fallback interop
 Driftwood.exe --bench                  fly a fixed path, report frame-time percentiles, exit
 Driftwood.exe --packs                  list the texture packs on the shelf, exit
 ```
@@ -151,8 +152,30 @@ across seeds, so one seed does not hand you a continent and the next an archipel
 | Hold right | place, or use what you are looking at | |
 | `E` | your own pockets, equipment and a two-by-two | |
 | `B` | fold the recipe book out beside them | |
-| `Esc` | options — controls, video, audio, world, saves, packs, skins | |
+| `Esc` | options — keys, controller, video, audio, world, saves, packs, skins | |
 | `F3` / `F5` | walk or fly / cycle the view | |
+
+Controllers are discovered through **SDL3 after the first frame is already visible**, so a slow or
+sleeping Bluetooth device never holds the window's startup hostage. Connection and hot-plug notices
+use the device's reported name. XInput is a thin Windows fallback only when SDL cannot start; the
+two are never scanned together, so one Xbox pad cannot appear twice.
+
+| Controller | Playing |
+| --- | --- |
+| Left stick | analogue move; press to sprint |
+| Right stick | frame-rate-independent look; press to cycle view |
+| Bottom / right face | jump / sneak and dismount |
+| Left / top face | swap hands / inventory |
+| Right / left trigger | break or attack / use or place |
+| D-pad left / right | walk the hotbar |
+| Hold D-pad up + right stick | radial hotbar; release to choose |
+| Left shoulder | raise a shield |
+| Menu | options |
+
+Every screen uses left-stick or d-pad snap navigation, the bottom face button confirms, the right
+face button backs out, and the shoulders change tabs. Face prompts follow the attached layout (A/B
+on Xbox, cross/circle on PlayStation). The CONTROLLER tab exposes radial deadzone, look speed,
+invert-Y, attack-only target assist, rumble strength, and every discrete binding.
 
 The figure in your pockets is the same projected, layered player model used by the SKINS preview:
 it updates as soon as a skin or classic/slim model is chosen, keeps worn armour and both held items,
@@ -162,8 +185,9 @@ The button does not edit the world; it starts a swing, and the swing edits the w
 holding one mines at a readable pace rather than at the speed of the event queue, and why there is
 always something on screen causing the block to go.
 
-Every key is rebindable, and bindings are stored as **names** rather than codes, so the settings
-file can be read, checked and edited by hand without the game's input library being involved.
+Every key and discrete controller action is rebindable. Both are stored as **names** rather than
+codes, so the settings file can be read, checked and edited by hand without either input library
+being involved.
 
 ## Crafting
 
@@ -437,6 +461,7 @@ testable from the command line. The player's pose, the camera boom, where a held
 fist and where an animal puts its feet all live there too, so they can be stepped at a fixed rate
 and measured without opening a window.
 
-No third-party packages beyond Silk.NET. **PNG, WAV and Ogg Vorbis decoding are ours**, which is what
-lets the game read a texture pack, a skin sheet and a sound without taking on another decoder
-licence to answer for.
+Runtime packages are [Silk.NET](https://github.com/dotnet/Silk.NET) and the
+[SDL3-CS bindings](https://github.com/edwardgushchin/SDL3-CS), including the SDL3 Windows runtime;
+SDL3-CS and SDL use the permissive zlib licence. **PNG, WAV and Ogg Vorbis decoding are ours**, which
+is what lets the game read a texture pack, a skin sheet and a sound without another decoder.

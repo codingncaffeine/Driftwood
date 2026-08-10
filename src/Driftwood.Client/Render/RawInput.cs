@@ -9,7 +9,7 @@ using GlfwButton = Silk.NET.GLFW.MouseButton;
 namespace Driftwood.Client.Render;
 
 /// <summary>
-/// Keyboard and mouse, taken straight off the window, without ever asking about controllers.
+/// Keyboard and mouse, taken straight off the window, without making controller discovery eager.
 /// </summary>
 /// <remarks>
 /// <para>⛔ <b>This exists for one measured reason.</b> Asking the input library for a context builds
@@ -19,13 +19,10 @@ namespace Driftwood.Client.Render;
 /// build every texture in the game. It is not work: three runs varied by eighteen milliseconds,
 /// which is a device being waited on rather than something being counted. A controller that is
 /// paired and switched off is enough to do it.</para>
-/// <para>Nothing in the game reads a controller yet, so nothing needed to be paid. This sets the
-/// four callbacks the game actually uses and asks for nothing else, and startup drops to what
-/// Driftwood itself costs.</para>
-/// <para>⚠ <b>When controller support lands (P8) it must not come back through this door.</b> The
-/// enumeration has to happen once, on purpose, at a moment somebody chose — opening the controls
-/// screen, or a "look for controllers" the player presses — and never on the path between
-/// double-clicking the game and seeing it.</para>
+/// <para>This sets only the callbacks keyboard and mouse need. P8's controller path is a separate
+/// SDL3 owner, initialized on the main thread only after the first rendered frame; it never comes
+/// back through Silk's eager context or onto the path between double-clicking and seeing the game.
+/// </para>
 /// <para><b>The key numbers are the same numbers.</b> <see cref="Key"/> and the window library's own
 /// key enum are both the underlying platform's key codes, so a cast is the whole translation. That
 /// is an assumption about somebody else's two enums agreeing, so the audit pins a handful of them

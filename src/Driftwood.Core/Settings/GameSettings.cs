@@ -62,6 +62,25 @@ public sealed class GameSettings
     /// <summary>How fast looking around is, as a percentage of the old fixed rate.</summary>
     public int MouseSensitivity { get; set; } = 100;
 
+    /// <summary>Whether Driftwood should discover and read controllers after its first frame.</summary>
+    public bool ControllerEnabled { get; set; } = true;
+
+    /// <summary>Radial deadzone applied independently to both sticks, as a percentage.</summary>
+    public int ControllerDeadzone { get; set; } = 18;
+
+    /// <summary>Controller look rate as a percentage of the shipped rate.</summary>
+    public int ControllerLookSpeed { get; set; } = 100;
+
+    public bool ControllerInvertY { get; set; }
+
+    /// <summary>Strength of the small controller-only creature aim nudge, 0 to 100.</summary>
+    public int ControllerTargetAssist { get; set; } = 35;
+
+    /// <summary>Strength of controller vibration, 0 to 100.</summary>
+    public int ControllerRumble { get; set; } = 80;
+
+    public ControllerBindings Pad { get; set; } = ControllerBindings.Defaults();
+
     /// <summary>
     /// Whether to say so in the corner the first time something becomes makeable.
     /// </summary>
@@ -137,6 +156,8 @@ public sealed class GameSettings
         // Only replace the defaults once a file has said something about bindings, so a file with
         // no bind lines in it keeps the shipped keys rather than ending up with none.
         var boundAnything = false;
+        var boundPadAnything = false;
+        var namedPadActions = new HashSet<ControllerAction>();
 
         foreach (var raw in lines)
         {
@@ -155,6 +176,13 @@ public sealed class GameSettings
                 continue;
             }
 
+            if (key.StartsWith("padbind.", StringComparison.Ordinal))
+            {
+                if (!settings.ReadControllerBinding(key, value, ref boundPadAnything, namedPadActions))
+                    settings._unknown[key] = value;
+                continue;
+            }
+
             switch (key)
             {
                 case "video.viewdistance": settings.ViewDistance = Int(value, 2, 32, settings.ViewDistance); break;
@@ -169,6 +197,12 @@ public sealed class GameSettings
                 case "audio.mute": settings.Mute = Bool(value, settings.Mute); break;
                 case "audio.soundpack": settings.SoundPack = value; break;
                 case "input.sensitivity": settings.MouseSensitivity = Int(value, 10, 400, settings.MouseSensitivity); break;
+                case "controller.enabled": settings.ControllerEnabled = Bool(value, settings.ControllerEnabled); break;
+                case "controller.deadzone": settings.ControllerDeadzone = Int(value, 0, 50, settings.ControllerDeadzone); break;
+                case "controller.lookspeed": settings.ControllerLookSpeed = Int(value, 25, 300, settings.ControllerLookSpeed); break;
+                case "controller.inverty": settings.ControllerInvertY = Bool(value, settings.ControllerInvertY); break;
+                case "controller.targetassist": settings.ControllerTargetAssist = Int(value, 0, 100, settings.ControllerTargetAssist); break;
+                case "controller.rumble": settings.ControllerRumble = Int(value, 0, 100, settings.ControllerRumble); break;
                 case "ui.recipenotices": settings.RecipeNotices = Bool(value, settings.RecipeNotices); break;
 
                 // ⚠ Taken verbatim, not trimmed of anything but its edges. A Windows path is full of
@@ -189,6 +223,8 @@ public sealed class GameSettings
         // is current and is the difference between a rename and a player who cannot open their
         // inventory. A key already taken by something else is left alone rather than duplicated.
         if (boundAnything) settings.Keys.FillGapsFrom(Bindings.Defaults());
+        if (boundPadAnything)
+            settings.Pad.FillGapsFrom(ControllerBindings.Defaults(), namedPadActions);
 
         return settings;
     }
@@ -239,6 +275,13 @@ public sealed class GameSettings
         text.AppendLine();
         text.AppendLine($"input.sensitivity={MouseSensitivity}");
         text.AppendLine();
+        text.AppendLine($"controller.enabled={Text(ControllerEnabled)}");
+        text.AppendLine($"controller.deadzone={ControllerDeadzone}");
+        text.AppendLine($"controller.lookspeed={ControllerLookSpeed}");
+        text.AppendLine($"controller.inverty={Text(ControllerInvertY)}");
+        text.AppendLine($"controller.targetassist={ControllerTargetAssist}");
+        text.AppendLine($"controller.rumble={ControllerRumble}");
+        text.AppendLine();
         text.AppendLine($"ui.recipenotices={Text(RecipeNotices)}");
         text.AppendLine();
 
@@ -270,6 +313,13 @@ public sealed class GameSettings
 
             if (Keys.Secondary(action).Length == 0) continue;
             text.AppendLine($"bind.{name}.2={Keys.Secondary(action)}");
+        }
+
+        text.AppendLine();
+        foreach (var action in ControllerActions.All)
+        {
+            var name = action.ToString().ToLowerInvariant();
+            text.AppendLine($"padbind.{name}={Pad.Control(action)}");
         }
 
         if (_unknown.Count > 0)
@@ -304,6 +354,29 @@ public sealed class GameSettings
             secondary ? Keys.Primary(action) : value,
             secondary ? value : Keys.Secondary(action));
 
+        return true;
+    }
+
+    private bool ReadControllerBinding(
+        string key,
+        string value,
+        ref bool boundAnything,
+        HashSet<ControllerAction> namedActions)
+    {
+        var name = key[8..];
+        if (!Enum.TryParse<ControllerAction>(name, ignoreCase: true, out var action)
+            || !Enum.IsDefined(action)) return false;
+        if (!Enum.TryParse<ControllerControl>(value, ignoreCase: true, out var control)
+            || !Enum.IsDefined(control)) return false;
+
+        if (!boundAnything)
+        {
+            boundAnything = true;
+            Pad = new ControllerBindings();
+        }
+
+        Pad.Set(action, control);
+        namedActions.Add(action);
         return true;
     }
 

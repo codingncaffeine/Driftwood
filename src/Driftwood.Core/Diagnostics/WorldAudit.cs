@@ -6293,6 +6293,8 @@ public static class WorldAudit
 
         var defaults = new GameSettings();
         foreach (var fault in defaults.Keys.Faults()) faults.Add($"the shipped keys: {fault}");
+        foreach (var fault in defaults.Pad.Faults()) faults.Add($"the shipped controller: {fault}");
+        foreach (var fault in ControllerTuning.Faults()) faults.Add($"controller shaping: {fault}");
 
         // Every value moved off its default, so a writer that emits nothing cannot pass.
         var written = new GameSettings
@@ -6305,13 +6307,22 @@ public static class WorldAudit
             Mute = true,
             SoundPack = "mr-Ab12Cd34",
             MouseSensitivity = 175,
+            ControllerEnabled = false,
+            ControllerDeadzone = 27,
+            ControllerLookSpeed = 145,
+            ControllerInvertY = true,
+            ControllerTargetAssist = 62,
+            ControllerRumble = 35,
             TexturePack = "weathered",
             PlayerSkin = "salt wanderer",
             Keys = Bindings.Defaults(),
+            Pad = ControllerBindings.Defaults(),
         };
 
         written.Keys.Bind(GameAction.Jump, "Y");
         written.Keys.Bind(GameAction.MoveForward, "I");
+        written.Pad.Bind(ControllerAction.Jump, ControllerControl.RightShoulder);
+        written.Pad.Bind(ControllerAction.ToggleView, ControllerControl.None);
 
         var path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "driftwood-settings-check.txt");
         var text = written.Write();
@@ -6335,6 +6346,12 @@ public static class WorldAudit
         if (!read.Mute) faults.Add("mute came back off");
         if (read.SoundPack != "mr-Ab12Cd34") faults.Add($"sound pack came back '{read.SoundPack}'");
         if (read.MouseSensitivity != 175) faults.Add($"sensitivity came back {read.MouseSensitivity}, not 175");
+        if (read.ControllerEnabled) faults.Add("controller enabled came back on");
+        if (read.ControllerDeadzone != 27) faults.Add($"controller deadzone came back {read.ControllerDeadzone}, not 27");
+        if (read.ControllerLookSpeed != 145) faults.Add($"controller look speed came back {read.ControllerLookSpeed}, not 145");
+        if (!read.ControllerInvertY) faults.Add("controller invert Y came back off");
+        if (read.ControllerTargetAssist != 62) faults.Add($"target assist came back {read.ControllerTargetAssist}, not 62");
+        if (read.ControllerRumble != 35) faults.Add($"rumble came back {read.ControllerRumble}, not 35");
         if (read.TexturePack != "weathered") faults.Add($"texture pack came back '{read.TexturePack}'");
         if (read.PlayerSkin != "salt wanderer") faults.Add($"player skin came back '{read.PlayerSkin}'");
 
@@ -6350,6 +6367,18 @@ public static class WorldAudit
 
         foreach (var fault in read.Keys.Faults()) faults.Add($"after a round trip: {fault}");
 
+        foreach (var action in ControllerActions.All)
+        {
+            if (read.Pad.Control(action) == written.Pad.Control(action)) continue;
+            faults.Add(
+                $"controller '{ControllerActions.Label(action)}' went out as '{written.Pad.Describe(action)}' "
+                + $"and came back as '{read.Pad.Describe(action)}'");
+        }
+        foreach (var fault in read.Pad.Faults(requireEveryAction: false))
+            faults.Add($"after a controller round trip: {fault}");
+        if (read.Pad.Control(ControllerAction.ToggleView) != ControllerControl.None)
+            faults.Add("a controller action explicitly cleared to None came back bound after restart");
+
         // Binding steals rather than refusing, so the key it took has to actually be gone.
         var stealing = Bindings.Defaults();
         var had = stealing.Primary(GameAction.Jump);
@@ -6359,6 +6388,13 @@ public static class WorldAudit
             faults.Add($"binding '{had}' to sneak left it on jump as well");
         if (stealing.ActionFor(had) != GameAction.Sneak)
             faults.Add($"'{had}' does not run sneak after being bound to it");
+
+        var padStealing = ControllerBindings.Defaults();
+        padStealing.Bind(ControllerAction.Sneak, ControllerControl.South);
+        if (padStealing.Control(ControllerAction.Jump) == ControllerControl.South)
+            faults.Add("binding the south button to sneak left it on jump as well");
+        if (padStealing.ActionFor(ControllerControl.South) != ControllerAction.Sneak)
+            faults.Add("the south button does not run sneak after being bound to it");
 
         // A file from an older build names actions that no longer exist. The first line that IS
         // recognised throws away the defaults, so without filling the gaps afterwards a renamed
@@ -6389,8 +6425,18 @@ public static class WorldAudit
         if (bare.Keys.Faults().Count > 0)
             faults.Add("a missing settings file left the game with no keys on it");
 
-        detail = $"{GameActions.All.Length} actions and 9 settings out and back unchanged, "
-               + "a rebind takes the key off whatever had it, a missing file keeps the shipped keys";
+        if (bare.Pad.Faults().Count > 0)
+            faults.Add("a missing settings file left the game with no controller bindings");
+
+        var repeat = new ControllerRepeat();
+        if (repeat.Step(1f, 0f) != 1) faults.Add("a menu stick did not move on its first frame");
+        if (repeat.Step(1f, 0.1f) != 0) faults.Add("a held menu stick repeated before its initial delay");
+        if (repeat.Step(1f, 0.25f) != 1) faults.Add("a held menu stick did not repeat after its initial delay");
+        if (repeat.Step(0f, 0.1f) != 0 || repeat.Step(-1f, 0f) != -1)
+            faults.Add("releasing and reversing a menu stick did not reset its repeat");
+
+        detail = $"{GameActions.All.Length} keyboard and {ControllerActions.All.Length} controller actions, "
+               + "16 settings out and back unchanged; radial deadzone, nine-way selection and UI repeat pinned";
 
         return faults;
     }
