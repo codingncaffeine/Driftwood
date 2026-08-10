@@ -1,91 +1,157 @@
 namespace Driftwood.Core.Audio;
 
 /// <summary>
-/// Every sound file on disk, found by name and decoded on first use.
+/// A sparse stack of local sounds and one optional Minecraft resource-pack ZIP, decoded on first use.
 /// </summary>
-/// <remarks>
-/// <para>Indexed by path relative to the sounds folder, without its extension and with forward
-/// slashes — <c>mob/wolf/step1</c> — because the pack layout this library now reads repeats bare
-/// names on purpose: <c>dig/stone1</c> and <c>step/stone1</c> are different recordings of the same
-/// rock. A bare name still resolves when only one file anywhere carries it, which keeps the tables
-/// readable for sounds that never had a twin; a bare name two folders share is refused with both
-/// candidates named, never answered with whichever indexed first.</para>
-/// <para>Decoded on demand and kept. Twenty megabytes of source audio is not worth loading at
-/// startup when a session might only ever hear a dozen of the files, and it is not worth decoding
-/// twice when it hears one of them a thousand times.</para>
-/// </remarks>
 public sealed class SoundLibrary
 {
-    private readonly Dictionary<string, string> _paths = new(StringComparer.OrdinalIgnoreCase);
+    private sealed record ClipSource(
+        string Extension,
+        string Description,
+        string? FilePath = null,
+        string? ArchivePath = null,
+        string? ArchiveEntry = null,
+        string? ResourceName = null);
+
+    private static readonly (string Key, string Resource)[] Embedded =
+    [
+        ("animals/frog", "Driftwood.Core.Sounds.animals/frog.wav"),
+        ("enemies/bat", "Driftwood.Core.Sounds.enemies/bat.wav"),
+        ("enemies/spider", "Driftwood.Core.Sounds.enemies/spider.wav"),
+        ("enemies/spider_attack", "Driftwood.Core.Sounds.enemies/spider_attack.wav"),
+        ("enemies/zombie", "Driftwood.Core.Sounds.enemies/zombie.wav"),
+    ];
+
+    private readonly Dictionary<string, ClipSource> _sources = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string?> _bare = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, WavClip?> _clips = new(StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>Where the sounds were found, or the folder that was looked in and was not there.</summary>
+    /// <summary>The local fallback folder, whether or not it exists in a single-file build.</summary>
     public string Root { get; }
 
-    /// <summary>Files indexed.</summary>
-    public int Count => _paths.Count;
+    /// <summary>The selected original ZIP, or null for local fallback only.</summary>
+    public string? ActivePack { get; }
 
-    /// <summary>Anything that would not decode or resolve, named with the reason.</summary>
+    public int Count => _sources.Count;
+    public int LocalCount { get; private set; }
+    public int PackCount { get; private set; }
     public List<string> Faults { get; } = [];
 
-    public SoundLibrary(string root)
+    public static IReadOnlySet<string> BuiltInNames { get; } =
+        new HashSet<string>(Embedded.Select(item => item.Key), StringComparer.OrdinalIgnoreCase);
+
+    public SoundLibrary(string root, string? packPath = null)
     {
         Root = root;
+        ActivePack = string.IsNullOrWhiteSpace(packPath) ? null : packPath;
+
+        IndexFolder(root);
+        IndexEmbeddedFallback();
+        LocalCount = _sources.Count;
+
+        if (ActivePack is not null) IndexPack(ActivePack);
+        BuildBareIndex();
+    }
+
+    private void IndexFolder(string root)
+    {
         if (!Directory.Exists(root)) return;
 
-        foreach (var path in Directory.EnumerateFiles(root, "*.*", SearchOption.AllDirectories))
+        try
         {
-            var extension = Path.GetExtension(path);
-            var wav = extension.Equals(".wav", StringComparison.OrdinalIgnoreCase);
-            var ogg = extension.Equals(".ogg", StringComparison.OrdinalIgnoreCase);
-            if (!wav && !ogg) continue;
-
-            var relative = Path.GetRelativePath(root, path);
-            var key = relative[..^extension.Length].Replace('\\', '/');
-
-            // The same clip in both formats is an ambiguous reference, not a silent choice.
-            if (!_paths.TryAdd(key, path))
+            foreach (var path in Directory.EnumerateFiles(root, "*.*", SearchOption.AllDirectories))
             {
-                Faults.Add($"'{key}' is on disk more than once");
-                continue;
-            }
+                var extension = Path.GetExtension(path);
+                if (!AudioExtension(extension)) continue;
 
-            // A bare name maps to its one file, or to null once a second file claims it — the
-            // null is what lets a lookup say "ambiguous" instead of guessing.
-            var bare = Path.GetFileNameWithoutExtension(path);
+                var relative = Path.GetRelativePath(root, path);
+                var key = relative[..^extension.Length].Replace('\\', '/');
+                Add(key, new ClipSource(extension, path, FilePath: path), replace: false);
+            }
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            Faults.Add($"could not index local sounds: {error.Message}");
+        }
+    }
+
+    private void IndexEmbeddedFallback()
+    {
+        foreach (var (key, resource) in Embedded)
+        {
+            if (_sources.ContainsKey(key)) continue;
+            Add(key, new ClipSource(".wav", resource, ResourceName: resource), replace: false);
+        }
+    }
+
+    private void IndexPack(string path)
+    {
+        try
+        {
+            var inspection = SoundPackArchive.Inspect(path);
+            PackCount = inspection.Clips;
+
+            foreach (var (key, entry) in inspection.Entries)
+            {
+                var extension = Path.GetExtension(entry);
+                Add(key, new ClipSource(
+                    extension, $"{Path.GetFileName(path)}:{entry}",
+                    ArchivePath: path, ArchiveEntry: entry), replace: true);
+            }
+        }
+        catch (Exception error) when (
+            error is IOException or UnauthorizedAccessException or InvalidDataException or NotSupportedException)
+        {
+            Faults.Add($"could not use sound pack '{Path.GetFileName(path)}': {error.Message}");
+        }
+    }
+
+    private void Add(string key, ClipSource source, bool replace)
+    {
+        key = key.Replace('\\', '/').Trim('/');
+        if (key.Length == 0) return;
+
+        if (replace)
+        {
+            _sources[key] = source;
+            return;
+        }
+
+        if (!_sources.TryAdd(key, source)) Faults.Add($"'{key}' is available more than once locally");
+    }
+
+    private void BuildBareIndex()
+    {
+        foreach (var key in _sources.Keys)
+        {
+            var slash = key.LastIndexOf('/');
+            var bare = slash >= 0 ? key[(slash + 1)..] : key;
             if (!_bare.TryAdd(bare, key) && _bare[bare] != key) _bare[bare] = null;
         }
     }
 
-    /// <summary>Resolves a reference to its index key, or explains why it cannot.</summary>
     private string? Resolve(string name, out string fault)
     {
         fault = "";
         var key = name.Replace('\\', '/');
-        if (_paths.ContainsKey(key)) return key;
+        if (_sources.ContainsKey(key)) return key;
 
         if (_bare.TryGetValue(name, out var owner))
         {
             if (owner is not null) return owner;
-            fault = $"'{name}' names more than one file — say which folder's";
+            fault = $"'{name}' names more than one sound — say which folder's";
             return null;
         }
 
-        fault = $"'{name}' is not in {Shorten(Root)}";
+        fault = ActivePack is null
+            ? $"'{name}' is not in Driftwood's local fallback; install a sound pack from Options > Audio"
+            : $"'{name}' is not in {Path.GetFileName(ActivePack)} or Driftwood's local fallback";
         return null;
     }
 
-    /// <summary>True when a name resolves to a file on disk, decoded or not.</summary>
     public bool Has(string name) => Resolve(name, out _) is not null;
+    public IEnumerable<string> AllKeys => _sources.Keys;
 
-    /// <summary>Every index key on disk, for the check that decodes the whole shelf.</summary>
-    public IEnumerable<string> AllKeys => _paths.Keys;
-
-    /// <summary>
-    /// Decodes a clip, or returns null and records why. Cached either way, so a broken file is
-    /// read once rather than on every hit.
-    /// </summary>
     public WavClip? Load(string name)
     {
         var key = Resolve(name, out var whyNot);
@@ -99,32 +165,43 @@ public sealed class SoundLibrary
         if (_clips.TryGetValue(key, out var cached)) return cached;
 
         WavClip? clip = null;
+        var source = _sources[key];
         try
         {
-            var bytes = File.ReadAllBytes(_paths[key]);
-            var decoded = _paths[key].EndsWith(".ogg", StringComparison.OrdinalIgnoreCase)
+            var bytes = Read(source);
+            var decoded = source.Extension.Equals(".ogg", StringComparison.OrdinalIgnoreCase)
                 ? OggVorbis.TryDecode(bytes, out clip, out var fault)
                 : Wav.TryDecode(bytes, out clip, out fault);
-            if (!decoded) Faults.Add($"'{key}': {fault}");
+            if (!decoded) Faults.Add($"'{key}' from {source.Description}: {fault}");
         }
-        catch (IOException ex)
+        catch (Exception error) when (
+            error is IOException or UnauthorizedAccessException or InvalidDataException)
         {
-            Faults.Add($"'{key}': {ex.Message}");
+            Faults.Add($"'{key}' from {source.Description}: {error.Message}");
         }
 
         _clips[key] = clip;
         return clip;
     }
 
-    /// <summary>
-    /// Finds the sounds folder from wherever the game was started.
-    /// </summary>
-    /// <remarks>
-    /// The published artifact carries them beside the exe; a build run out of <c>bin</c> is several
-    /// folders down from the repository they live in. Walking up until the folder appears covers
-    /// both without either one having to know about the other, and stops rather than climbing off
-    /// the top of the drive.
-    /// </remarks>
+    private static byte[] Read(ClipSource source)
+    {
+        if (source.FilePath is not null) return File.ReadAllBytes(source.FilePath);
+        if (source.ArchivePath is not null && source.ArchiveEntry is not null)
+            return SoundPackArchive.Read(source.ArchivePath, source.ArchiveEntry);
+
+        if (source.ResourceName is null) throw new InvalidDataException("a sound has no source");
+        using var stream = typeof(SoundLibrary).Assembly.GetManifestResourceStream(source.ResourceName)
+            ?? throw new InvalidDataException($"embedded sound '{source.ResourceName}' is missing");
+        using var bytes = new MemoryStream();
+        stream.CopyTo(bytes);
+        return bytes.ToArray();
+    }
+
+    private static bool AudioExtension(string extension) =>
+        extension.Equals(".wav", StringComparison.OrdinalIgnoreCase)
+        || extension.Equals(".ogg", StringComparison.OrdinalIgnoreCase);
+
     public static string FindRoot(string? explicitPath = null)
     {
         if (!string.IsNullOrWhiteSpace(explicitPath)) return explicitPath;
@@ -142,6 +219,4 @@ public sealed class SoundLibrary
 
         return Path.Combine(AppContext.BaseDirectory, "assets", "sounds");
     }
-
-    private static string Shorten(string path) => Path.GetFileName(Path.GetDirectoryName(path)) ?? path;
 }

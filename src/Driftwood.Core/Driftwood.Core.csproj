@@ -45,6 +45,20 @@
          light with nothing in it, so unlike the heart there is nothing to flood. Measured: 1207x124,
          seven cells, a white mask at 18% coverage. -->
     <EmbeddedResource Include="..\..\assets\bubbles.png" LogicalName="Driftwood.Core.bubbles.png" />
+
+    <!-- The five recordings Driftwood owns are the whole offline audio fallback. They live in the
+         assembly so a single-file release never grows an assets folder; downloaded sound packs stay
+         outside the executable under AppData and sparsely override these names. -->
+    <EmbeddedResource Include="..\..\assets\sounds\animals\frog.wav"
+                      LogicalName="Driftwood.Core.Sounds.animals/frog.wav" />
+    <EmbeddedResource Include="..\..\assets\sounds\enemies\bat.wav"
+                      LogicalName="Driftwood.Core.Sounds.enemies/bat.wav" />
+    <EmbeddedResource Include="..\..\assets\sounds\enemies\spider.wav"
+                      LogicalName="Driftwood.Core.Sounds.enemies/spider.wav" />
+    <EmbeddedResource Include="..\..\assets\sounds\enemies\spider_attack.wav"
+                      LogicalName="Driftwood.Core.Sounds.enemies/spider_attack.wav" />
+    <EmbeddedResource Include="..\..\assets\sounds\enemies\zombie.wav"
+                      LogicalName="Driftwood.Core.Sounds.enemies/zombie.wav" />
   </ItemGroup>
 
 </Project>

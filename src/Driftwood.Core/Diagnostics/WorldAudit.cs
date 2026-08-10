@@ -666,6 +666,14 @@ public static class WorldAudit
         Check("a pack can be put on the shelf and named", shelfFaults.Count == 0,
             shelfFaults.Count == 0 ? shelfDetail : string.Join("; ", shelfFaults));
 
+        var soundShelfFaults = SoundPackLibrarySelfTest.Run(out var soundShelfDetail);
+        Check("a sound pack stays separate, bounded, and attributable", soundShelfFaults.Count == 0,
+            soundShelfFaults.Count == 0 ? soundShelfDetail : string.Join("; ", soundShelfFaults));
+
+        var soundProviderFaults = ModrinthSoundPackSelfTest.Run(out var soundProviderDetail);
+        Check("the sound-pack catalog downloads only what it verified", soundProviderFaults.Count == 0,
+            soundProviderFaults.Count == 0 ? soundProviderDetail : string.Join("; ", soundProviderFaults));
+
         var skinShelfFaults = SkinShelfFaults(out var skinShelfDetail);
         Check("a skin can be kept, chosen, and recovered", skinShelfFaults.Count == 0,
             skinShelfFaults.Count == 0 ? skinShelfDetail : string.Join("; ", skinShelfFaults));
@@ -923,7 +931,7 @@ public static class WorldAudit
                 : $"{vitalsFaults.Count} faults: {vitalsFaults[0]}");
 
         var soundFaults = SoundSelfTest(registry, out var soundDetail);
-        Check("every material has a sound", soundFaults.Count == 0, soundFaults.Count == 0
+        Check("local audio and sound-pack slots are valid", soundFaults.Count == 0, soundFaults.Count == 0
             ? soundDetail
             : $"{soundFaults.Count} faults: {soundFaults[0]}");
 
@@ -6295,6 +6303,7 @@ public static class WorldAudit
             VSync = true,
             Volume = 43,
             Mute = true,
+            SoundPack = "mr-Ab12Cd34",
             MouseSensitivity = 175,
             TexturePack = "weathered",
             PlayerSkin = "salt wanderer",
@@ -6324,6 +6333,7 @@ public static class WorldAudit
         if (!read.VSync) faults.Add("vsync came back off");
         if (read.Volume != 43) faults.Add($"volume came back {read.Volume}, not 43");
         if (!read.Mute) faults.Add("mute came back off");
+        if (read.SoundPack != "mr-Ab12Cd34") faults.Add($"sound pack came back '{read.SoundPack}'");
         if (read.MouseSensitivity != 175) faults.Add($"sensitivity came back {read.MouseSensitivity}, not 175");
         if (read.TexturePack != "weathered") faults.Add($"texture pack came back '{read.TexturePack}'");
         if (read.PlayerSkin != "salt wanderer") faults.Add($"player skin came back '{read.PlayerSkin}'");
@@ -7182,13 +7192,10 @@ public static class WorldAudit
                 faults.Add($"'{name}' runs {clip.Seconds:F1}s against the {longest:F0}s allowed for {owner}");
         }
 
-        foreach (var name in MaterialSounds.AllNames()) Gate(name, "the block table", 8f);
-        foreach (var name in CreatureSounds.All.Distinct()) Gate(name, "the creatures", 8f);
-        foreach (var name in ActionSounds.AllOneShots) Gate(name, "the action table", 8f);
-
-        // Ambience is supposed to run long; sixty seconds is the line between a recording of a
-        // place and somebody's whole album shipped by mistake.
-        foreach (var name in ActionSounds.Ambience.Distinct()) Gate(name, "the ambience", 60f);
+        // These five are the only recordings Driftwood redistributes. Everything else is a slot an
+        // installed pack may fill, so absence is a valid offline fallback rather than a release
+        // failure. The pack shelf's synthetic ZIP proves that those slots resolve and decode.
+        foreach (var name in SoundLibrary.BuiltInNames) Gate(name, "the local fallback", 8f);
 
         foreach (var material in MaterialSounds.Materials)
         foreach (var which in Enum.GetValues<SoundEvent>())
@@ -7206,7 +7213,8 @@ public static class WorldAudit
 
         foreach (var fault in library.Faults) faults.Add(fault);
 
-        detail = $"{named} clips over {registry.Count - 1} blocks, quietest peak {quietest:F2}";
+        detail = $"{named} owned clips, {SoundPackArchive.RequiredNames.Count} optional pack slots over "
+               + $"{registry.Count - 1} blocks, quietest local peak {quietest:F2}";
         return faults;
     }
 

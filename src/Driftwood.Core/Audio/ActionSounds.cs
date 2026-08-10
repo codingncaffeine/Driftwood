@@ -5,9 +5,8 @@ namespace Driftwood.Core.Audio;
 /// </summary>
 /// <remarks>
 /// <para>The same our-name / their-file shape as <see cref="MaterialSounds"/> and
-/// <c>CreatureSounds</c>, and the third leg of the audio check: every name here is proved to be on
-/// disk and to decode, because a table pointing at a sound nobody shipped is silent in exactly the
-/// way a working game is silent.</para>
+/// <c>CreatureSounds</c>. These are optional sound-pack slots rather than bundled recordings;
+/// <c>--audio-check pack.zip</c> is the full resolution and decode gate for a chosen archive.</para>
 /// <para><see cref="Ambience"/> is listed apart because the length gate differs: a cave murmur or
 /// an underwater drone is <i>supposed</i> to run long, where a door that creaks for fifteen seconds
 /// is a broken export. One-shots are gated at eight seconds, ambience at sixty.</para>

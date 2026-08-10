@@ -12,6 +12,9 @@ namespace Driftwood.Client;
 
 public static class Program
 {
+    private static readonly string ProductVersion =
+        typeof(Program).Assembly.GetName().Version?.ToString(3) ?? "unknown";
+
     /// <summary>
     /// Long enough that the flight ends further from its start than the streaming drop radius, so
     /// the whole loaded set turns over at least once.
@@ -26,6 +29,12 @@ public static class Program
             return 0;
         }
 
+        if (args.Contains("--version"))
+        {
+            Console.WriteLine($"Driftwood v{ProductVersion}");
+            return 0;
+        }
+
         try
         {
             var options = ParseArgs(args);
@@ -37,7 +46,12 @@ public static class Program
                 return result.Passed ? 0 : 1;
             }
 
-            if (args.Contains("--audio-check")) return AudioCheck();
+            if (args.Contains("--audio-check"))
+            {
+                var at = Array.IndexOf(args, "--audio-check");
+                var soundPack = at + 1 < args.Length && !args[at + 1].StartsWith('-') ? args[at + 1] : null;
+                return AudioCheck(soundPack);
+            }
 
             // ⛳ THE INSTRUMENT THIS PROJECT WAS MISSING, AND THE ONE IT NEEDED MOST. Every tile in
             // the game is drawn in code, and until now the only way to see one was to start the game
@@ -374,16 +388,17 @@ public static class Program
         return 0;
     }
 
-    private static int AudioCheck()
+    private static int AudioCheck(string? soundPack)
     {
         var registry = new BlockRegistry();
         StarterBlocks.Register(registry);
         registry.Seal();
 
         var root = SoundLibrary.FindRoot();
-        var library = new SoundLibrary(root);
+        var library = new SoundLibrary(root, soundPack);
 
         Console.WriteLine($"root        {root}");
+        Console.WriteLine($"pack        {(soundPack is null ? "none — local fallback only" : soundPack)}");
         Console.WriteLine($"indexed     {library.Count} clips");
 
         using var engine = new AudioEngine(library);
@@ -393,97 +408,77 @@ public static class Program
         var faults = new List<string>();
         double shortest = double.MaxValue, longest = 0;
 
-        Console.WriteLine("clips the block table names");
-        foreach (var name in MaterialSounds.AllNames().Order(StringComparer.Ordinal))
+        if (soundPack is null)
+        {
+            Console.WriteLine("Driftwood's local fallback");
+            foreach (var name in SoundLibrary.BuiltInNames.Order(StringComparer.Ordinal))
+            {
+                var clip = library.Load(name);
+                if (clip is null)
+                {
+                    Console.WriteLine($"  {name,-32} MISSING");
+                    faults.Add($"{name} is missing or would not decode");
+                    continue;
+                }
+
+                shortest = Math.Min(shortest, clip.Seconds);
+                longest = Math.Max(longest, clip.Seconds);
+                Console.WriteLine(
+                    $"  {name,-32} {clip.Seconds,6:F2}s  {clip.Channels}ch {clip.SampleRate}Hz  peak {clip.Peak:F2}");
+                if (clip.ToMono().Peak < 0.02f) faults.Add($"{name} plays as near silence");
+                if (clip.Seconds > 8f) faults.Add($"{name} is {clip.Seconds:F1}s, which is not a one-shot");
+            }
+
+            Console.WriteLine(
+                $"optional    {SoundPackArchive.RequiredNames.Count} named slots wait for a downloaded sound pack");
+        }
+        else
+        {
+            Console.WriteLine("clips the block table names");
+            foreach (var name in MaterialSounds.AllNames().Order(StringComparer.Ordinal))
+            {
+                Gate(name, 8f, 32);
+            }
+
+            // The animals, actions and ambience are measured after the mono fold, which is what the
+            // positional engine actually uploads.
+            Console.WriteLine(
+                "\nclips the creatures name");
+            foreach (var name in CreatureSounds.All.Distinct().Order(StringComparer.Ordinal))
+            {
+                Gate(name, 8f, 32);
+            }
+
+            Console.WriteLine("\nclips the actions name");
+            foreach (var (name, allowed) in ActionSounds.AllOneShots.Select(n => (n, 8f))
+                         .Concat(ActionSounds.Ambience.Distinct().Select(n => (n, 60f)))
+                         .OrderBy(pair => pair.Item1, StringComparer.Ordinal))
+                Gate(name, allowed, 44);
+        }
+
+        void Gate(string name, float allowed, int width)
         {
             var clip = library.Load(name);
             if (clip is null)
             {
-                Console.WriteLine($"  {name,-32} MISSING");
+                Console.WriteLine($"  {name.PadRight(width)} MISSING");
                 faults.Add($"{name} is missing or would not decode");
-                continue;
+                return;
             }
 
-            var peak = clip.Peak;
+            var played = clip.ToMono();
             shortest = Math.Min(shortest, clip.Seconds);
             longest = Math.Max(longest, clip.Seconds);
-
             Console.WriteLine(
-                $"  {name,-32} {clip.Seconds,6:F2}s  {clip.Channels}ch {clip.SampleRate}Hz  peak {peak:F2}");
-
-            // A file that decodes to silence is indistinguishable from one that never plays, and
-            // is the failure this whole check exists to be able to see.
-            if (peak < 0.02f) faults.Add($"{name} decodes to near silence (peak {peak:F3})");
-            if (clip.Seconds > 8f) faults.Add($"{name} is {clip.Seconds:F1}s, which is a loop not a one-shot");
-        }
-
-        // ⛳ The animals, on the same terms. A creature that says nothing and a creature whose clip
-        // is missing are the same silence from inside the game, and sound is the one thing this
-        // machine cannot judge by playing it.
-        Console.WriteLine();
-        Console.WriteLine("clips the creatures name");
-        foreach (var name in CreatureSounds.All.Distinct().Order(StringComparer.Ordinal))
-        {
-            var clip = library.Load(name);
-            if (clip is null)
-            {
-                Console.WriteLine($"  {name,-32} MISSING");
-                faults.Add($"{name} is missing or would not decode");
-                continue;
-            }
-
-            // ⛔ MEASURED AFTER THE DOWNMIX, WHICH IS WHAT ACTUALLY PLAYS. The engine folds every
-            // clip to one channel on its way into a buffer (AudioEngine.BufferFor), so a stereo file
-            // on disk is positional exactly like a mono one — this check used to call two channels a
-            // fault and would have failed a correct build the moment any of the pack's own stereo
-            // recordings were used. What a fold genuinely risks is the opposite: two channels out of
-            // phase cancel, and a clip that was loud on disk arrives silent. So the peak that is
-            // gated is the played one, and the file's own channel count is reported rather than
-            // judged.
-            var played = clip.ToMono();
-
-            Console.WriteLine(
-                $"  {name,-32} {clip.Seconds,6:F2}s  {clip.Channels}ch {clip.SampleRate}Hz  "
-                + $"peak {clip.Peak:F2}" + (clip.Channels > 1 ? $" -> {played.Peak:F2} mono" : ""));
-
-            if (played.Peak < 0.02f)
-                faults.Add($"{name} plays as near silence (peak {played.Peak:F3} after the fold to mono)");
-
-            if (clip.Seconds > 8f) faults.Add($"{name} is {clip.Seconds:F1}s, which is a loop not a one-shot");
-        }
-
-        // ⛳ The action table, on the same terms — doors, fires, falls, buckets and the rest of the
-        // verbs. One-shots are gated at eight seconds; the cave and lava ambience is supposed to
-        // run long and is gated at sixty.
-        Console.WriteLine();
-        Console.WriteLine("clips the actions name");
-        foreach (var (name, allowed) in ActionSounds.AllOneShots.Select(n => (n, 8f))
-                     .Concat(ActionSounds.Ambience.Distinct().Select(n => (n, 60f)))
-                     .OrderBy(pair => pair.Item1, StringComparer.Ordinal))
-        {
-            var clip = library.Load(name);
-            if (clip is null)
-            {
-                Console.WriteLine($"  {name,-44} MISSING");
-                faults.Add($"{name} is missing or would not decode");
-                continue;
-            }
-
-            var played = clip.ToMono();
-            shortest = Math.Min(shortest, clip.Seconds);
-
-            Console.WriteLine(
-                $"  {name,-44} {clip.Seconds,6:F2}s  {clip.Channels}ch {clip.SampleRate}Hz  peak {played.Peak:F2}");
-
+                $"  {name.PadRight(width)} {clip.Seconds,6:F2}s  {clip.Channels}ch {clip.SampleRate}Hz  peak {played.Peak:F2}");
             if (played.Peak < 0.02f)
                 faults.Add($"{name} plays as near silence (peak {played.Peak:F3} after the fold to mono)");
             if (clip.Seconds > allowed)
                 faults.Add($"{name} is {clip.Seconds:F1}s against the {allowed:F0}s its table allows");
         }
 
-        // ⛳ And then the whole shelf, summarised: every file on disk decodes, referenced by a
-        // table or not. This is the one place all six-hundred-odd recordings are proven on this
-        // machine's own build of the decoder.
+        // And then the whole selected stack, including pack clips not named by a table. This proves
+        // every recording present can be decoded by this machine's own decoder.
         Console.WriteLine();
         var swept = 0;
         var sweepFaults = 0;
@@ -531,7 +526,9 @@ public static class Program
         Console.WriteLine();
         if (faults.Count == 0)
         {
-            Console.WriteLine("OK  every material resolves, every clip decodes, nothing is silent");
+            Console.WriteLine(soundPack is null
+                ? "OK  every owned fallback clip decodes; optional pack slots are structurally valid"
+                : "OK  every named slot resolves through the pack or fallback, every clip decodes, nothing is silent");
             return 0;
         }
 
@@ -645,8 +642,11 @@ public static class Program
                 case "--creatures":
                     if (i + 1 < args.Length && !args[i + 1].StartsWith('-')) i++;
                     break;
-                case "--audit":
                 case "--audio-check":
+                    if (i + 1 < args.Length && !args[i + 1].StartsWith('-')) i++;
+                    break;
+                case "--audit":
+                case "--version":
                 case "--pack-coverage":
                 case "--pack-report":
                 case "--packs":
@@ -734,8 +734,11 @@ public static class Program
               --daylength <s>   seconds in a full day (default 1200); short values walk a sunset
               --vsync           cap to the display refresh rate, for this run only
               --mute            open no audio device at all
+              --version         print this build's Driftwood version and exit
               --audit           generate and mesh headlessly, print a census and checks, then exit
-              --audio-check     resolve every sound the block table names and report, silently
+              --audio-check [sound-pack.zip]
+                                decode Driftwood's owned fallback; with a pack, require and report
+                                every sound slot the game names
               --pack-coverage   with --pack, report what the pack has art for that we do not
               --creature-geometry <dir>
                                 put animals in the world, wearing skeletons read from this folder.

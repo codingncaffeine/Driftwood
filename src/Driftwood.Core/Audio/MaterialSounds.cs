@@ -55,9 +55,9 @@ public enum SoundEvent
 /// The one place a material is turned into file names.
 /// </summary>
 /// <remarks>
-/// <para>Every entry is a real file in <c>assets/sounds</c>, and the audit refuses a build where
-/// one is not — a table pointing at a sound nobody shipped is silent in exactly the way a working
-/// game is silent, and there is no other way to notice.</para>
+/// <para>Every entry is a slot a selected sound pack may fill. Driftwood's embedded recordings are
+/// a deliberately sparse offline fallback; the archive audit proves these names are structurally
+/// valid, and <c>--audio-check pack.zip</c> can require and decode a pack's complete table.</para>
 /// <para>Names are paths from the sounds folder because the pack repeats bare names on purpose:
 /// <c>dig/stone1</c> and <c>step/stone1</c> are different recordings of the same rock. The layout
 /// is the pack author's and is kept as shipped — these tables are the translation, exactly as

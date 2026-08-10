@@ -51,6 +51,14 @@ public sealed class GameSettings
 
     public bool Mute { get; set; }
 
+    /// <summary>The sound pack to use, by stable ID on <see cref="Audio.SoundPackLibrary"/>.</summary>
+    /// <remarks>
+    /// Empty means Driftwood's five owned fallback recordings. The setting never stores a CDN URL
+    /// or a downloads-folder path: the original archive is copied to AppData first, so an author's
+    /// update or a tidied Downloads folder cannot silently change what the player selected.
+    /// </remarks>
+    public string SoundPack { get; set; } = "";
+
     /// <summary>How fast looking around is, as a percentage of the old fixed rate.</summary>
     public int MouseSensitivity { get; set; } = 100;
 
@@ -159,6 +167,7 @@ public sealed class GameSettings
                 case "video.framecap": settings.FrameCap = Int(value, 0, 1000, settings.FrameCap); break;
                 case "audio.volume": settings.Volume = Int(value, 0, 100, settings.Volume); break;
                 case "audio.mute": settings.Mute = Bool(value, settings.Mute); break;
+                case "audio.soundpack": settings.SoundPack = value; break;
                 case "input.sensitivity": settings.MouseSensitivity = Int(value, 10, 400, settings.MouseSensitivity); break;
                 case "ui.recipenotices": settings.RecipeNotices = Bool(value, settings.RecipeNotices); break;
 
@@ -226,6 +235,7 @@ public sealed class GameSettings
         text.AppendLine();
         text.AppendLine($"audio.volume={Volume}");
         text.AppendLine($"audio.mute={Text(Mute)}");
+        if (SoundPack.Length > 0) text.AppendLine($"audio.soundpack={SoundPack}");
         text.AppendLine();
         text.AppendLine($"input.sensitivity={MouseSensitivity}");
         text.AppendLine();

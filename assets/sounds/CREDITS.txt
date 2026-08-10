@@ -1,2 +1,5 @@
-Sounds by frawzy (members/frawzy).
-Files under enemies/ and animals/ are Driftwood's own recordings.
+The five WAV recordings under animals/ and enemies/ are original Driftwood recordings.
+
+Third-party sound packs are not distributed with Driftwood. Players may download their own
+original pack archives from the Audio tab; those archives and their license metadata remain in
+the player's AppData sound-pack shelf and are never copied into Driftwood's executable or source.

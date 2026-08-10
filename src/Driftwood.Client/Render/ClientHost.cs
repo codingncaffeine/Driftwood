@@ -213,6 +213,9 @@ public enum ViewMode
 /// </remarks>
 public sealed class ClientHost : IDisposable
 {
+    private static readonly string ProductVersion =
+        typeof(ClientHost).Assembly.GetName().Version?.ToString(3) ?? "unknown";
+
     private readonly ClientOptions _options;
     private readonly IWindow _window;
 
@@ -576,6 +579,10 @@ public sealed class ClientHost : IDisposable
     /// <summary>Voices, and the clips they play. Null when the run asked for silence.</summary>
     private AudioEngine? _audio;
 
+    /// <summary>The user's sound-pack shelf and the archive selected for this run.</summary>
+    private readonly SoundPackLibrary _soundPackLibrary = new();
+    private string? _soundPackPath;
+
     /// <summary>Health, breath, and what a fall costs.</summary>
     private PlayerVitals _vitals = null!;
 
@@ -733,7 +740,7 @@ public sealed class ClientHost : IDisposable
         var windowOptions = WindowOptions.Default with
         {
             Size = new Vector2D<int>(options.Width, options.Height),
-            Title = "Driftwood",
+            Title = $"Driftwood v{ProductVersion}",
             VSync = options.VSync,
             API = new GraphicsAPI(
                 ContextAPI.OpenGL,
@@ -1014,9 +1021,10 @@ public sealed class ClientHost : IDisposable
 
         // The benchmark opens no device at all. It flies a scripted path and hears nothing worth
         // hearing, and a measurement run that makes noise on somebody's machine is rude twice over.
+        ResolveSoundPack();
         if (_options.BenchSeconds <= 0 && !_options.Mute)
         {
-            _audio = new AudioEngine(new SoundLibrary(SoundLibrary.FindRoot()));
+            _audio = new AudioEngine(new SoundLibrary(SoundLibrary.FindRoot(), _soundPackPath));
             Console.WriteLine($"sound       {_audio.Summary}");
         }
 
@@ -2740,6 +2748,7 @@ public sealed class ClientHost : IDisposable
                 // opened a second time.
                 if (OnTab(GameTab.Saves)) ReadSavesFolder();
                 if (OnTab(GameTab.Packs)) ReadPacksFolder();
+                if (OnTab(GameTab.Audio)) ReadSoundPacksFolder();
                 if (OnTab(GameTab.Skins)) ReadSkinsFolder();
 
                 RefreshScreen();
@@ -2841,6 +2850,7 @@ public sealed class ClientHost : IDisposable
                 _hudScreen.Scroll = 0;
                 if (OnTab(GameTab.Saves)) ReadSavesFolder();
                 if (OnTab(GameTab.Packs)) ReadPacksFolder();
+                if (OnTab(GameTab.Audio)) ReadSoundPacksFolder();
                 if (OnTab(GameTab.Skins)) ReadSkinsFolder();
                 _shown.Clear();
                 RefreshScreen();
@@ -2857,6 +2867,7 @@ public sealed class ClientHost : IDisposable
                 return;
 
             case ZoneKind.Row:
+                if (_hudScreen.Selected != at.Value.Index) _soundRemoveArmed = false;
                 _hudScreen.Selected = at.Value.Index;
 
                 // Left acts on the row the way enter does; right walks a setting the other way,
@@ -3442,6 +3453,7 @@ public sealed class ClientHost : IDisposable
         {
             DisarmDelete();
             _progressResetArmed = false;
+            _soundRemoveArmed = false;
         }
 
         _hudScreen.Selected = at;
@@ -3530,6 +3542,7 @@ public sealed class ClientHost : IDisposable
         // Once, here, rather than in the row builder that runs every frame the screen is up.
         if (tab == GameTab.Saves) ReadSavesFolder();
         if (tab == GameTab.Packs) ReadPacksFolder();
+        if (tab == GameTab.Audio) ReadSoundPacksFolder();
         if (tab == GameTab.Skins) ReadSkinsFolder();
 
         StopHands();
@@ -4025,7 +4038,7 @@ public sealed class ClientHost : IDisposable
             return;
         }
 
-        _hudScreen.Rows.Add(new MenuRow("Driftwood", Heading: true));
+        _hudScreen.Rows.Add(new MenuRow($"Driftwood v{ProductVersion}", Heading: true));
 
         _hudScreen.Rows.Add(_loadedWorld
             ? new MenuRow("carry on", _worldName, Note: $"played {Spoken(_playedBefore)}")
@@ -4152,9 +4165,7 @@ public sealed class ClientHost : IDisposable
                 break;
 
             case GameTab.Audio:
-                _hudScreen.Rows.Add(new MenuRow("sound", Heading: true));
-                _hudScreen.Rows.Add(new MenuRow("volume", $"{_settings.Volume}"));
-                _hudScreen.Rows.Add(new MenuRow("mute", OnOff(_settings.Mute)));
+                BuildAudioRows();
                 break;
 
             case GameTab.Saves:
@@ -4408,6 +4419,11 @@ public sealed class ClientHost : IDisposable
                 {
                     case "volume": _settings.Volume = Nudge(_settings.Volume, by * 5, 0, 100); break;
                     case "mute": _settings.Mute = !_settings.Mute; break;
+                    case SoundOpenOnlyRow:
+                        _soundOpenOnly = !_soundOpenOnly;
+                        StartSoundSearch(0);
+                        return;
+                    default: return;
                 }
                 break;
 
@@ -4521,6 +4537,49 @@ public sealed class ClientHost : IDisposable
         return PlayerSkin.Build(entry.Path, _options.Arms ?? entry.Arms);
     }
 
+    /// <summary>Resolves the remembered sound-pack ID without ever remembering its download URL.</summary>
+    private void ResolveSoundPack()
+    {
+        // Personal packs do not get to repaint a deterministic instrument run. The sound-pack
+        // parser and downloader have their own offline controls in --audit.
+        if (_options.UiCheck || _options.ShotPath is not null)
+        {
+            _soundPackPath = null;
+            return;
+        }
+
+        var wanted = _settings.SoundPack;
+        if (string.IsNullOrWhiteSpace(wanted))
+        {
+            _soundPackPath = null;
+            return;
+        }
+
+        _soundPackPath = _soundPackLibrary.PathOf(wanted);
+        if (_soundPackPath is null)
+        {
+            _soundPackNote = $"'{wanted}' is no longer on the sound shelf — using the local fallback";
+            Console.WriteLine($"sound pack  {_soundPackNote}");
+        }
+        else
+        {
+            Console.WriteLine($"sound pack  {Path.GetFileName(_soundPackPath)}");
+        }
+    }
+
+    /// <summary>Stops the old voices and immediately rebuilds them over the selected sparse ZIP.</summary>
+    private void ReloadSoundPack()
+    {
+        ResolveSoundPack();
+        _audio?.Dispose();
+        _audio = null;
+
+        if (_options.BenchSeconds > 0 || _options.Mute) return;
+        _audio = new AudioEngine(new SoundLibrary(SoundLibrary.FindRoot(), _soundPackPath));
+        ApplySettings();
+        Console.WriteLine($"sound       {_audio.Summary}");
+    }
+
     /// <summary>The pack actually being worn this run, resolved from the setting or the switch.</summary>
     private string? _packPath;
 
@@ -4593,6 +4652,38 @@ public sealed class ClientHost : IDisposable
 
     /// <summary>What the pack being worn carries that we have nothing to put it on.</summary>
     private PackCoverage.Summary? _packTally;
+
+    /// <summary>The Audio tab's local shelf, Modrinth browser and non-blocking install work.</summary>
+    private readonly TextField _soundSearchBox = new(80) { Placeholder = "name or style; blank shows popular" };
+    private readonly TextField _soundPackBox = new(240) { Placeholder = "a Minecraft sound-pack ZIP" };
+    private readonly NativeFilePicker _soundPackPicker = new();
+    private readonly ModrinthSoundPackProvider _modrinthSounds = new();
+
+    private const string LocalSoundRow = "Driftwood local sounds";
+    private const string SoundSearchRow = "search Modrinth";
+    private const string SoundOpenOnlyRow = "open-source only";
+    private const string BrowseSoundPackRow = "browse for a sound pack";
+    private const string SoundPackPathRow = "from a sound-pack path";
+    private const string DownloadSoundPackRow = "download & use";
+    private const string SoundPackSourceRow = "project page";
+    private const string PreviousSoundPacksRow = "previous sound-pack page";
+    private const string NextSoundPacksRow = "next sound-pack page";
+    private const string RemoveSoundPackRow = "remove active sound pack";
+
+    private IReadOnlyList<SoundPackLibrary.Entry> _soundPacks = [];
+    private readonly Dictionary<string, SoundPackLibrary.Entry> _installedSoundRows =
+        new(StringComparer.Ordinal);
+    private readonly Dictionary<string, RemoteSoundPack> _remoteSoundRows = new(StringComparer.Ordinal);
+    private string _soundPackNote = "";
+    private bool _soundOpenOnly;
+    private bool _soundRemoveArmed;
+    private SoundPackPage? _soundPage;
+    private Task<SoundPackPage>? _soundSearchTask;
+    private CancellationTokenSource? _soundSearchCancel;
+    private int _soundPageOffset;
+    private RemoteSoundPack? _selectedRemoteSound;
+    private Task<RemoteSoundPackFile>? _soundDownloadTask;
+    private CancellationTokenSource? _soundDownloadCancel;
 
     /// <summary>The skin shelf's two import boxes and its non-blocking native picker.</summary>
     private readonly TextField _skinBox = new(240) { Placeholder = "a 64x64 or 64x32 PNG" };
@@ -4903,6 +4994,456 @@ public sealed class ClientHost : IDisposable
         }
 
         ReadPacksFolder();
+        RefreshScreen();
+    }
+
+    /// <summary>Reads the audio shelf and, only while its tab is open, starts the public catalog.</summary>
+    private void ReadSoundPacksFolder()
+    {
+        _installedSoundRows.Clear();
+
+        if (_options.UiCheck)
+        {
+            // Deterministic rows for the framebuffer check: no AppData and no third-party uptime.
+            _soundPacks =
+            [
+                new SoundPackLibrary.Entry(
+                    "fixture-open", "Open Field Recordings", "", "fixture maker", "CC0-1.0", "r1",
+                    "https://modrinth.com/resourcepack/open-field-recordings", 48, 23,
+                    SoundPackArchive.RequiredNames.Count, "48 sounds; 23 Driftwood slots", Readable: true),
+            ];
+            var enhanced = new RemoteSoundPack(
+                "UinPYBF7", "enhanced-audio", "Enhanced Audio", "Frawzy",
+                "LicenseRef-All-Rights-Reserved", 2_500_000, "realistic replacement sounds",
+                new Uri("https://modrinth.com/resourcepack/enhanced-audio"));
+            var open = new RemoteSoundPack(
+                "Open1234", "open-sounds", "Open Sounds", "fixture maker", "CC0-1.0", 42_000,
+                "open field recordings", new Uri("https://modrinth.com/resourcepack/open-sounds"));
+            _soundPage = new SoundPackPage([enhanced, open], 0, 2, false, false);
+            _selectedRemoteSound = enhanced;
+            return;
+        }
+
+        _soundPacks = _soundPackLibrary.List();
+        if (_soundPage is null && _soundSearchTask is null) StartSoundSearch(0);
+    }
+
+    private void BuildAudioRows()
+    {
+        _remoteSoundRows.Clear();
+        _hudScreen.Rows.Add(new MenuRow("sound", Heading: true));
+        _hudScreen.Rows.Add(new MenuRow("volume", $"{_settings.Volume}"));
+        _hudScreen.Rows.Add(new MenuRow("mute", OnOff(_settings.Mute)));
+
+        _hudScreen.Rows.Add(new MenuRow(
+            _soundPacks.Count == 1 ? "1 sound pack installed" : $"{_soundPacks.Count} sound packs installed",
+            Heading: true));
+
+        var localActive = _soundPackPath is null;
+        _hudScreen.Rows.Add(new MenuRow(
+            LocalSoundRow, localActive ? "active" : "",
+            Note: "Five Driftwood-owned creature recordings are built into the executable. "
+                + "They keep the game playable offline; a pack supplies the world, action and ambience sounds"));
+
+        _installedSoundRows.Clear();
+        foreach (var pack in _soundPacks)
+        {
+            var label = UniqueSoundLabel(pack.Name, _installedSoundRows.Keys.Concat(_remoteSoundRows.Keys));
+            _installedSoundRows[label] = pack;
+            var active = pack.Readable
+                && string.Equals(pack.Id, _settings.SoundPack, StringComparison.OrdinalIgnoreCase)
+                && _soundPackPath is not null;
+
+            _hudScreen.Rows.Add(new MenuRow(
+                label,
+                !pack.Readable ? "cannot read" : active ? "active" : "",
+                Note: !pack.Readable
+                    ? $"{pack.Kind}. Enter removes the broken archive from the shelf"
+                    : $"{pack.Kind}. {pack.Author} · {FriendlyLicense(pack.License)}. Enter uses it now"));
+        }
+
+        if (_soundPackPath is not null)
+        {
+            _hudScreen.Rows.Add(new MenuRow(
+                RemoveSoundPackRow,
+                _soundRemoveArmed ? "enter again" : "",
+                Note: _soundRemoveArmed
+                    ? "The original downloaded ZIP and its metadata will be deleted from this machine"
+                    : "Enter twice removes the active archive; Driftwood's local sounds take over first"));
+        }
+
+        _hudScreen.Rows.Add(new MenuRow("find sound packs", Heading: true));
+        _hudScreen.Rows.Add(new MenuRow(
+            SoundSearchRow, Edits: _soundSearchBox,
+            Note: SaidSound("Searches Modrinth's audio resource packs. Blank shows the most downloaded")));
+        _hudScreen.Rows.Add(new MenuRow(
+            SoundOpenOnlyRow, OnOff(_soundOpenOnly),
+            Note: "Off includes every license and says which one before download. On asks Modrinth for open-source packs only"));
+        _hudScreen.Rows.Add(new MenuRow(
+            "search now", _soundSearchTask is null ? "" : "searching",
+            Note: SaidSound("Enter refreshes the first page. No account or API key is used")));
+
+        if (_soundSearchTask is not null)
+        {
+            _hudScreen.Rows.Add(new MenuRow("Modrinth — searching", Heading: true));
+        }
+        else if (_soundPage is { } page)
+        {
+            var first = page.Total == 0 ? 0 : page.Offset + 1;
+            var last = Math.Min(page.Total, page.Offset + page.Packs.Count);
+            _hudScreen.Rows.Add(new MenuRow(
+                page.Total == 0 ? "Modrinth — no matches" : $"Modrinth — {first:N0}-{last:N0} of {page.Total:N0}",
+                Heading: true));
+
+            foreach (var remote in page.Packs)
+            {
+                var label = UniqueSoundLabel(remote.Name,
+                    _installedSoundRows.Keys.Concat(_remoteSoundRows.Keys));
+                _remoteSoundRows[label] = remote;
+                var installed = _soundPacks.Any(pack =>
+                    string.Equals(pack.Id, "mr-" + remote.Id, StringComparison.OrdinalIgnoreCase));
+                var selected = _selectedRemoteSound?.Id == remote.Id;
+
+                _hudScreen.Rows.Add(new MenuRow(
+                    label,
+                    installed ? "installed" : selected ? "selected" : "",
+                    Note: $"by {remote.Author} · {FriendlyLicense(remote.License)} · "
+                        + $"{remote.Downloads:N0} downloads. Enter shows the install choice"));
+            }
+
+            if (page.HasPrevious)
+                _hudScreen.Rows.Add(new MenuRow(PreviousSoundPacksRow, "", Note: "The previous ten matches"));
+            if (page.HasNext)
+                _hudScreen.Rows.Add(new MenuRow(NextSoundPacksRow, "", Note: "The next ten matches"));
+        }
+
+        if (_selectedRemoteSound is { } selectedPack)
+        {
+            _hudScreen.Rows.Add(new MenuRow($"selected — {selectedPack.Name}", Heading: true));
+            _hudScreen.Rows.Add(new MenuRow(
+                "license", FriendlyLicense(selectedPack.License), Note: LicenseNote(selectedPack.License)));
+            _hudScreen.Rows.Add(new MenuRow(
+                SoundPackSourceRow, "Modrinth",
+                Note: "Opens the author's project page in the browser before you decide"));
+            _hudScreen.Rows.Add(new MenuRow(
+                DownloadSoundPackRow,
+                _soundDownloadTask is null
+                    ? _soundPacks.Any(pack => pack.Id == "mr-" + selectedPack.Id) ? "update" : ""
+                    : "downloading",
+                Note: SaidSound("Downloads the author's original ZIP directly from Modrinth, verifies its SHA-512, "
+                    + "checks its size and paths, stores it in AppData, then activates it immediately")));
+        }
+
+        _hudScreen.Rows.Add(new MenuRow("add a local archive", Heading: true));
+        if (NativeFilePicker.Available)
+            _hudScreen.Rows.Add(new MenuRow(
+                BrowseSoundPackRow, _soundPackPicker.Busy ? "choosing" : "",
+                Note: SaidSound($"Opens a file browser for {SoundPackLibrary.FilterLabel}")));
+        _hudScreen.Rows.Add(new MenuRow(
+            SoundPackPathRow, Edits: _soundPackBox,
+            Note: SaidSound("A Minecraft resource-pack ZIP from any source. Its license is shown as not supplied until metadata is available")));
+        _hudScreen.Rows.Add(new MenuRow(
+            "the sound shelf", "",
+            Note: $"Original archives and attribution metadata live in {_soundPackLibrary.Folder}"));
+    }
+
+    private string SaidSound(string otherwise) => _soundPackNote.Length > 0 ? _soundPackNote : otherwise;
+
+    private static string FriendlyLicense(string license) => license switch
+    {
+        "LicenseRef-All-Rights-Reserved" => "All Rights Reserved",
+        "CC0-1.0" => "CC0 1.0",
+        "GPL-3.0-only" => "GPL-3.0-only",
+        _ => license.Length == 0 ? "not supplied" : license,
+    };
+
+    private static string LicenseNote(string license) => license == "LicenseRef-All-Rights-Reserved"
+        ? "The author keeps all rights. Driftwood does not ship or relicense this pack; this button downloads the author's archive for your personal installation"
+        : "The pack remains under its author's license and is kept separate from Driftwood's GPL-3.0-only code";
+
+    private static string UniqueSoundLabel(string wanted, IEnumerable<string> existing)
+    {
+        var names = new HashSet<string>(existing, StringComparer.Ordinal);
+        if (!names.Contains(wanted)) return wanted;
+        for (var copy = 2; ; copy++)
+        {
+            var candidate = $"{wanted} ({copy})";
+            if (!names.Contains(candidate)) return candidate;
+        }
+    }
+
+    private void StartSoundSearch(int offset)
+    {
+        if (_options.UiCheck) return;
+
+        if (_soundSearchTask is { } previous)
+        {
+            var previousCancel = _soundSearchCancel;
+            previousCancel?.Cancel();
+
+            // A new query supersedes the old one, but the old request still gets observed and its
+            // token source lives until it actually finishes. This keeps quick typing/filter changes
+            // from leaking an abandoned fault or racing a disposed cancellation source.
+            _ = previous.ContinueWith(
+                completed =>
+                {
+                    if (completed.IsFaulted) _ = completed.Exception;
+                    previousCancel?.Dispose();
+                },
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+        }
+        else
+        {
+            _soundSearchCancel?.Dispose();
+        }
+
+        _soundSearchCancel = new CancellationTokenSource();
+        _soundPageOffset = Math.Max(0, offset);
+        _selectedRemoteSound = null;
+        _soundPackNote = "searching Modrinth…";
+        _soundSearchTask = _modrinthSounds.SearchAsync(
+            _soundSearchBox.Text, _soundOpenOnly, _soundPageOffset, _soundSearchCancel.Token);
+        if (OnTab(GameTab.Audio)) RefreshScreen();
+    }
+
+    private void SelectRemoteSound(RemoteSoundPack remote)
+    {
+        _selectedRemoteSound = remote;
+        _soundPackNote = $"'{remote.Name}' selected — review {FriendlyLicense(remote.License)} below";
+        RefreshScreen();
+    }
+
+    private void DownloadSelectedSoundPack()
+    {
+        if (_selectedRemoteSound is not { } remote)
+        {
+            _soundPackNote = "choose a Modrinth result first";
+            RefreshScreen();
+            return;
+        }
+
+        if (_soundDownloadTask is not null)
+        {
+            _soundPackNote = "a sound pack is already downloading";
+            RefreshScreen();
+            return;
+        }
+
+        _soundDownloadCancel?.Dispose();
+        _soundDownloadCancel = new CancellationTokenSource();
+        _soundPackNote = $"downloading '{remote.Name}' from Modrinth…";
+        _soundDownloadTask = _modrinthSounds.DownloadAsync(remote, _soundDownloadCancel.Token);
+        RefreshScreen();
+    }
+
+    private void PollSoundPackWork()
+    {
+        if (_soundSearchTask is { IsCompleted: true } search)
+        {
+            _soundSearchTask = null;
+            try
+            {
+                _soundPage = search.GetAwaiter().GetResult();
+                _soundPageOffset = _soundPage.Offset;
+                _soundPackNote = _soundPage.Packs.Count == 0
+                    ? "Modrinth found no audio resource packs for that search"
+                    : $"Modrinth found {_soundPage.Total:N0} audio resource packs";
+            }
+            catch (OperationCanceledException) { }
+            catch (SoundPackProviderException error) { _soundPackNote = error.Message; }
+            catch (Exception error) { _soundPackNote = $"could not search Modrinth: {error.Message}"; }
+            finally
+            {
+                _soundSearchCancel?.Dispose();
+                _soundSearchCancel = null;
+            }
+
+            if (OnTab(GameTab.Audio)) RefreshScreen();
+        }
+
+        if (_soundDownloadTask is not { IsCompleted: true } download) return;
+        _soundDownloadTask = null;
+
+        try
+        {
+            var file = download.GetAwaiter().GetResult();
+            var installed = _soundPackLibrary.Install(file, out var why);
+            if (installed is null)
+            {
+                _soundPackNote = $"could not install that sound pack: {why}";
+            }
+            else
+            {
+                _settings.SoundPack = installed.Id;
+                _settingsDirty = true;
+                _settings.Save();
+                ReloadSoundPack();
+                _soundPacks = _soundPackLibrary.List();
+                _soundPackNote = $"'{installed.Name}' installed, verified and active — {installed.Kind}";
+            }
+        }
+        catch (OperationCanceledException) { _soundPackNote = "the sound-pack download was cancelled"; }
+        catch (SoundPackProviderException error) { _soundPackNote = error.Message; }
+        catch (Exception error) { _soundPackNote = $"could not download that sound pack: {error.Message}"; }
+        finally
+        {
+            _soundDownloadCancel?.Dispose();
+            _soundDownloadCancel = null;
+        }
+
+        if (OnTab(GameTab.Audio)) RefreshScreen();
+    }
+
+    private void ChooseSoundPack(string label)
+    {
+        _soundRemoveArmed = false;
+        if (label == LocalSoundRow)
+        {
+            UseSoundPack("");
+            return;
+        }
+
+        if (_installedSoundRows.TryGetValue(label, out var installed))
+        {
+            if (!installed.Readable)
+            {
+                // A pack can become unreadable after it was selected. Stop referring to its path
+                // before deleting it, exactly as the explicit active-pack removal does.
+                if (string.Equals(_settings.SoundPack, installed.Id, StringComparison.OrdinalIgnoreCase))
+                {
+                    _settings.SoundPack = "";
+                    _settingsDirty = true;
+                    _settings.Save();
+                    ReloadSoundPack();
+                }
+
+                _soundPackNote = _soundPackLibrary.Remove(installed.Id)
+                    ? $"'{installed.Name}' removed from the sound shelf"
+                    : $"'{installed.Name}' could not be removed — it may be open elsewhere";
+                _soundPacks = _soundPackLibrary.List();
+                RefreshScreen();
+                return;
+            }
+
+            UseSoundPack(installed.Id);
+            return;
+        }
+
+        if (_remoteSoundRows.TryGetValue(label, out var remote)) SelectRemoteSound(remote);
+    }
+
+    private void UseSoundPack(string id)
+    {
+        if (string.Equals(_settings.SoundPack, id, StringComparison.OrdinalIgnoreCase)
+            && (id.Length == 0 || _soundPackPath is not null))
+        {
+            _soundPackNote = id.Length == 0
+                ? "already using Driftwood's local sounds"
+                : "that sound pack is already active";
+            RefreshScreen();
+            return;
+        }
+
+        _settings.SoundPack = id;
+        _settingsDirty = true;
+        _settings.Save();
+        ReloadSoundPack();
+        _soundPackNote = id.Length == 0
+            ? "using Driftwood's five local recordings; downloaded packs remain on the shelf"
+            : $"'{_soundPackLibrary.Find(id)?.Name ?? id}' is active now";
+        RefreshScreen();
+    }
+
+    private void RemoveActiveSoundPack()
+    {
+        if (_soundPackPath is null) return;
+        if (!_soundRemoveArmed)
+        {
+            _soundRemoveArmed = true;
+            _soundPackNote = "enter remove again to delete the active archive";
+            RefreshScreen();
+            return;
+        }
+
+        var id = _settings.SoundPack;
+        var name = _soundPackLibrary.Find(id)?.Name ?? id;
+        _settings.SoundPack = "";
+        _settingsDirty = true;
+        _settings.Save();
+        ReloadSoundPack();
+
+        _soundPackNote = _soundPackLibrary.Remove(id)
+            ? $"'{name}' removed; Driftwood's local sounds are active"
+            : $"'{name}' is no longer active but its archive could not be deleted";
+        _soundRemoveArmed = false;
+        _soundPacks = _soundPackLibrary.List();
+        RefreshScreen();
+    }
+
+    private void BrowseForSoundPack()
+    {
+        if (_soundPackPicker.Busy) return;
+        var opened = _soundPackPicker.Ask(
+            NativeFilePicker.Want.File,
+            _window.Native?.Win32?.Hwnd ?? nint.Zero,
+            "Choose a sound pack",
+            SoundPackLibrary.FilterLabel,
+            SoundPackLibrary.FilterSpec);
+        _soundPackNote = opened
+            ? "choosing — the window is in front of the game"
+            : "the file browser would not open; paste the path below instead";
+        RefreshScreen();
+    }
+
+    private void TakePickedSoundPack()
+    {
+        if (!_soundPackPicker.TryTake(out var picked, out var why)) return;
+        if (picked is null)
+        {
+            _soundPackNote = why.Length > 0 ? $"could not choose a sound pack: {why}" : "";
+            if (OnTab(GameTab.Audio)) RefreshScreen();
+            return;
+        }
+
+        ImportSoundPack(picked);
+    }
+
+    private void ImportSoundPack(string from)
+    {
+        var installed = _soundPackLibrary.InstallLocal(from, out var why);
+        if (installed is null)
+        {
+            _soundPackNote = $"could not add that sound pack: {why}";
+        }
+        else
+        {
+            _soundPackBox.Clear();
+            _settings.SoundPack = installed.Id;
+            _settingsDirty = true;
+            _settings.Save();
+            ReloadSoundPack();
+            _soundPackNote = $"'{installed.Name}' added and active — {installed.Kind}";
+        }
+
+        _soundPacks = _soundPackLibrary.List();
+        if (OnTab(GameTab.Audio)) RefreshScreen();
+    }
+
+    private void OpenSoundPackSource()
+    {
+        if (_selectedRemoteSound is not { } selected
+            || selected.ProjectUri.Scheme != Uri.UriSchemeHttps
+            || !selected.ProjectUri.Host.Equals("modrinth.com", StringComparison.OrdinalIgnoreCase))
+        {
+            _soundPackNote = "that result has no safe Modrinth project link";
+            RefreshScreen();
+            return;
+        }
+
+        try { Process.Start(new ProcessStartInfo(selected.ProjectUri.ToString()) { UseShellExecute = true }); }
+        catch (Exception error) { _soundPackNote = $"could not open the project page: {error.Message}"; }
         RefreshScreen();
     }
 
@@ -5477,6 +6018,10 @@ public sealed class ClientHost : IDisposable
             // pressing enter follows exactly the same path.
             Action<bool>? accepted = box == _packBox
                 ? kept => { if (kept) ImportPack(_packBox.Text); }
+                : box == _soundSearchBox
+                    ? kept => { if (kept) StartSoundSearch(0); }
+                    : box == _soundPackBox
+                        ? kept => { if (kept) ImportSoundPack(_soundPackBox.Text); }
                 : box == _skinBox
                     ? kept => { if (kept) ImportSkin(_skinBox.Text); }
                     : box == _playerSkinBox
@@ -5506,6 +6051,36 @@ public sealed class ClientHost : IDisposable
         {
             CloseScreen();
             return;
+        }
+
+        if (OnTab(GameTab.Audio)
+            && _hudScreen.Selected >= 0
+            && _hudScreen.Selected < _hudScreen.Rows.Count)
+        {
+            var row = _hudScreen.Rows[_hudScreen.Selected];
+            if (row.Heading) return;
+
+            switch (row.Label)
+            {
+                case "volume" or "mute": AdjustRow(1, activated: true); return;
+                case SoundOpenOnlyRow:
+                    _soundOpenOnly = !_soundOpenOnly;
+                    StartSoundSearch(0);
+                    return;
+                case "search now": StartSoundSearch(0); return;
+                case BrowseSoundPackRow: BrowseForSoundPack(); return;
+                case DownloadSoundPackRow: DownloadSelectedSoundPack(); return;
+                case SoundPackSourceRow: OpenSoundPackSource(); return;
+                case PreviousSoundPacksRow:
+                    StartSoundSearch(Math.Max(0, _soundPageOffset - ModrinthSoundPackProvider.PageSize));
+                    return;
+                case NextSoundPacksRow:
+                    StartSoundSearch(_soundPageOffset + ModrinthSoundPackProvider.PageSize);
+                    return;
+                case RemoveSoundPackRow: RemoveActiveSoundPack(); return;
+                case "license" or "the sound shelf": return;
+                default: ChooseSoundPack(row.Label); return;
+            }
         }
 
         if (OnTab(GameTab.Controls))
@@ -7024,7 +7599,9 @@ public sealed class ClientHost : IDisposable
         // world keeps drawing behind it, which means nothing here waits — this is one volatile read
         // a frame and the only place the picked path crosses back onto the game's thread.
         TakePickedPack();
+        TakePickedSoundPack();
         TakePickedSkin();
+        PollSoundPackWork();
         PollSkinWork();
 
         StepArmour();
@@ -7075,10 +7652,10 @@ public sealed class ClientHost : IDisposable
             var queued = _streamer.PendingGenerate + _streamer.PendingLight + _streamer.PendingMesh;
             _window.Title = _bench is not null
                 ? (_benchWarmingUp
-                    ? $"Driftwood bench — settling ({_streamer.PendingGenerate + _streamer.PendingLight + _streamer.PendingMesh} queued) | {_fps:F0} fps"
-                    : $"Driftwood bench — {_bench.ElapsedSeconds:F1}/{_bench.DurationSeconds:F0} s | {_fps:F0} fps | "
+                    ? $"Driftwood v{ProductVersion} bench — settling ({_streamer.PendingGenerate + _streamer.PendingLight + _streamer.PendingMesh} queued) | {_fps:F0} fps"
+                    : $"Driftwood v{ProductVersion} bench — {_bench.ElapsedSeconds:F1}/{_bench.DurationSeconds:F0} s | {_fps:F0} fps | "
                       + $"{_drawnChunks}/{_meshes.Count} drawn")
-                : $"Driftwood — {_fps:F0} fps | seed {_seed} | "
+                : $"Driftwood v{ProductVersion} — {_fps:F0} fps | seed {_seed} | "
                   + $"xyz {p.X:F0} {p.Y:F0} {p.Z:F0} | "
                   + $"{ClockFace(_clock.TimeOfDay)}{(_clock.Running ? "" : " held")} | "
                   + $"holding {_inventory.Selected + 1}. "
@@ -10195,6 +10772,15 @@ public sealed class ClientHost : IDisposable
             case 372:
                 JudgeSkinTurn(size);
                 CloseScreen();
+                OpenGame(GameTab.Audio);
+                break;
+
+            // The sound-pack browser is planted entirely in memory: the check must prove the
+            // license/install UI without depending on Modrinth or touching somebody's AppData.
+            case 380:
+                SampleUi(size, "audio");
+                ProbeAudioTab();
+                CloseScreen();
                 OpenFireForCheck();
                 break;
 
@@ -11157,6 +11743,12 @@ public sealed class ClientHost : IDisposable
     private bool _uiMapZoomed;
     private int _uiMapTiles = -1;
 
+    private bool _uiAudioRows;
+    private bool _uiAudioLicense;
+    private bool _uiAudioToggle;
+    private int _uiAudioInstalled = -1;
+    private int _uiAudioRemote = -1;
+
     private bool _uiSkinRows;
     private bool _uiSkinCanvas;
     private bool _uiSkinButton;
@@ -11543,6 +12135,51 @@ public sealed class ClientHost : IDisposable
         Console.WriteLine(
             $"ui-check    map         {_uiMapTiles} tiles, canvas {_uiMapCanvas}, "
             + $"drag {_uiMapDragged}, zoom {zoom:0.##} to {_hudScreen.MapZoom:0.##}");
+        Console.Out.Flush();
+    }
+
+    /// <summary>Proves the Audio tab exposes fallback, shelf, licenses and explicit download.</summary>
+    private void ProbeAudioTab()
+    {
+        var rows = _hudScreen.Rows.ToArray();
+        var labels = rows.Select(row => row.Label).ToArray();
+        bool Has(string label) => labels.Contains(label, StringComparer.Ordinal);
+
+        _uiAudioInstalled = _installedSoundRows.Count;
+        _uiAudioRemote = _remoteSoundRows.Count;
+        _uiAudioRows = _hudScreen.TabNames.Length == Enum.GetValues<GameTab>().Length
+            && Has("volume")
+            && Has("mute")
+            && Has(LocalSoundRow)
+            && Has("Open Field Recordings")
+            && Has(SoundSearchRow)
+            && Has(SoundOpenOnlyRow)
+            && Has("search now")
+            && Has("Enhanced Audio")
+            && Has("Open Sounds")
+            && Has(SoundPackSourceRow)
+            && Has(DownloadSoundPackRow)
+            && Has(SoundPackPathRow)
+            && Has("the sound shelf")
+            && (!NativeFilePicker.Available || Has(BrowseSoundPackRow));
+
+        _uiAudioLicense = rows.Any(row =>
+            row.Label == "license"
+            && row.Value == "All Rights Reserved"
+            && row.Note.Contains("does not ship", StringComparison.Ordinal));
+
+        var toggle = Array.FindIndex(labels, label => label == SoundOpenOnlyRow);
+        if (toggle >= 0)
+        {
+            _hudScreen.Selected = toggle;
+            var before = _soundOpenOnly;
+            AdjustRow(1);
+            _uiAudioToggle = _soundOpenOnly != before;
+        }
+
+        Console.WriteLine(
+            $"ui-check    audio       rows {_uiAudioRows}, {_uiAudioInstalled} installed, "
+            + $"{_uiAudioRemote} remote, ARR warning {_uiAudioLicense}, open filter {_uiAudioToggle}");
         Console.Out.Flush();
     }
 
@@ -12005,6 +12642,16 @@ public sealed class ClientHost : IDisposable
                 + $"{_uiCursorControl.B}, so it did not land on live tab text");
         else if (_uiCursorTop == _uiCursorControl)
             faults.Add("the tab text read identically with the cursor over it and moved away");
+
+        if (!_uiAudioRows)
+            faults.Add("the audio tab is missing its fallback, shelf, Modrinth search, or install controls");
+        if (_uiAudioInstalled != 1 || _uiAudioRemote != 2)
+            faults.Add(
+                $"the planted audio tab mapped {_uiAudioInstalled} installed and {_uiAudioRemote} remote rows, not 1 and 2");
+        if (!_uiAudioLicense)
+            faults.Add("the selected ARR sound pack did not show its license and non-redistribution warning");
+        if (!_uiAudioToggle)
+            faults.Add("the audio tab's open-source-only control did not change its filter");
 
         if (!_uiSkinRows)
             faults.Add("the skin tab is missing its shelf, preview, import, or community controls");
@@ -12873,6 +13520,10 @@ public sealed class ClientHost : IDisposable
         _particleRenderer?.Dispose();
         _itemRenderer?.Dispose();
         _hud?.Dispose();
+        _soundSearchCancel?.Cancel();
+        _soundSearchCancel?.Dispose();
+        _soundDownloadCancel?.Cancel();
+        _soundDownloadCancel?.Dispose();
         _audio?.Dispose();
         _blockTextures?.Dispose();
         _playerRenderer?.Dispose();

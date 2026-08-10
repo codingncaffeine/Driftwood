@@ -32,7 +32,8 @@ reachable from bare hands, in seven rounds, with no starting kit.
 | **Flowing water and lava, buckets, swimming, burning** | working |
 | **Fire and smoke — anything alight shows it, anything that dies leaves a puff** | working |
 | **A texture-pack shelf and importer, in the menu** | working |
-| Armour, hunger, signals, rails, farming | not started |
+| **An audio shelf, local importer and verified Modrinth browser** | working |
+| Armour, hunger, signals, rails, farming | working |
 | Controller support | not started |
 
 ## The world
@@ -120,6 +121,10 @@ Or `dotnet build Driftwood.sln -c Release`. Output lands at
 
 ## Running
 
+Prebuilt Windows x64 versions are published on the
+[GitHub releases page](https://github.com/codingncaffeine/Driftwood/releases). They are portable,
+self-contained builds; the .NET SDK is needed only when building from source.
+
 ```
 Driftwood.exe                          the menu, over a world it is already flying
 Driftwood.exe --seed driftwood         named seed; words are hashed, digits are literal
@@ -127,6 +132,7 @@ Driftwood.exe --world stonebreak       open a named world, or make one
 Driftwood.exe --ocean 10               less water; default is 25% of the surface
 Driftwood.exe --chunks 24 --vsync      wider view, capped to display refresh
 Driftwood.exe --audit --seed 12345     headless: generate, mesh, run every check, exit
+Driftwood.exe --audio-check             decode the five embedded fallback recordings, exit
 Driftwood.exe --bench                  fly a fixed path, report frame-time percentiles, exit
 Driftwood.exe --packs                  list the texture packs on the shelf, exit
 ```
@@ -243,6 +249,32 @@ Exactly 64×64 or the older 64×32. Arm width is detected by looking for the tex
 only a four-wide arm can reach, since a bare PNG carries that nowhere else; `--skin-model` says so
 outright when a sheet is drawn ambiguously. Driftwood paints its own skin in code, so a build with
 no art folder still has a player in it.
+
+## Sound packs
+
+Driftwood redistributes only five recordings it owns: frog, bat, spider, spider attack and zombie.
+They are embedded in the executable as the offline fallback. World, action and ambience slots are
+filled by a sound pack chosen in the **AUDIO** tab. Packs are sparse: each file fills one slot, a
+partial archive still works, and a missing slot uses a local fallback whenever one exists.
+
+The tab can import a local Minecraft resource-pack ZIP or search Modrinth's audio resource packs
+without an account or API key. Search results show author, license and download count before the
+explicit **DOWNLOAD & USE** action. An open-source-only switch uses Modrinth's corresponding catalog
+filter. All Rights Reserved projects remain visibly marked: Driftwood does not ship, relicense or
+hide their files, and the license shown by the author remains the license that applies.
+
+A download goes straight from Modrinth to the player, is held to fixed archive and expanded-size
+limits, checked for unsafe paths, and accepted only when its byte count and SHA-512 match Modrinth's
+metadata. The original, unmodified archive and a small attribution record live in
+`%APPDATA%\Driftwood\sound-packs`; nothing is unpacked or copied back into Driftwood. Selecting or
+installing a pack rebuilds the audio layer immediately, while removing the active one hands playback
+back to the embedded recordings before deleting it.
+
+For a full decode sweep without installing an archive:
+
+```
+Driftwood.exe --audio-check C:\packs\SomeSoundPack.zip
+```
 
 ## Texture packs
 
@@ -405,5 +437,6 @@ testable from the command line. The player's pose, the camera boom, where a held
 fist and where an animal puts its feet all live there too, so they can be stepped at a fixed rate
 and measured without opening a window.
 
-No third-party packages beyond Silk.NET. **PNG and WAV decoding are both ours**, which is what lets
-the game read a texture pack, a skin sheet and a sound without taking on a licence to answer for.
+No third-party packages beyond Silk.NET. **PNG, WAV and Ogg Vorbis decoding are ours**, which is what
+lets the game read a texture pack, a skin sheet and a sound without taking on another decoder
+licence to answer for.
