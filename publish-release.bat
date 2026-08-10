@@ -29,23 +29,33 @@ if errorlevel 1 goto :failed_publish
 dotnet publish src\Driftwood.Client\Driftwood.Client.csproj -c Release -r win-x64 --self-contained true -o "%OUT%" -v quiet --nologo -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:IncludeAllContentForSelfExtract=true -p:DebugType=embedded
 if errorlevel 1 goto :failed_publish
 
+REM The public app must be a Windows GUI executable so a normal launch never opens a console. Its
+REM explicit tools attach to the caller instead; the captured --version check below proves that half.
+powershell.exe -NoProfile -Command ^
+  "$bytes = [IO.File]::ReadAllBytes((Join-Path (Get-Location) '%OUT%\Driftwood.exe'));" ^
+  "$pe = [BitConverter]::ToInt32($bytes, 0x3c);" ^
+  "$subsystem = [BitConverter]::ToUInt16($bytes, $pe + 24 + 68);" ^
+  "if ($subsystem -ne 2) { throw ('Driftwood.exe uses PE subsystem ' + $subsystem + ', not Windows GUI (2).') }"
+if errorlevel 1 goto :failed_publish
+
 REM Gate on the published binary, not the build output: this is the thing that ships, and it
 REM catches a publish that dropped a native dependency the build had sitting beside it.
 echo [3/7] checking release identity and embedded offline audio...
-"%OUT%\Driftwood.exe" --version
-"%OUT%\Driftwood.exe" --version | findstr.exe /x /c:"Driftwood v%VERSION%" >nul
+set "DRIFTWOOD_EXPECT=Driftwood v%VERSION%"
+call :run_windowed --version
+set "DRIFTWOOD_EXPECT="
 if errorlevel 1 goto :failed_version
-"%OUT%\Driftwood.exe" --audio-check
+call :run_windowed --audio-check
 if errorlevel 1 goto :failed_audio
 
 REM SDL is a bundled native dependency and controllers are optional hardware. This requires the
 REM former to load from the single EXE while explicitly allowing zero of the latter.
 echo [4/7] checking bundled SDL3 and controller interop...
-"%OUT%\Driftwood.exe" --controller-check
+call :run_windowed --controller-check
 if errorlevel 1 goto :failed_controller
 
 echo [5/7] auditing the published build...
-"%OUT%\Driftwood.exe" --audit --seed driftwood --chunks 12
+call :run_windowed --audit --seed driftwood --chunks 12
 if errorlevel 1 goto :failed_audit
 
 REM Opens a window for about two seconds and reads its own pixels back off the framebuffer.
@@ -53,7 +63,7 @@ REM The audit runs headless and cannot see the screen at all, and the overlay sp
 REM life being back-face culled: built correctly, submitted correctly, no GL error reported, and
 REM never once drawn. Every check in the project passed throughout. Nothing but this catches it.
 echo [6/7] checking every interface reaches the screen...
-"%OUT%\Driftwood.exe" --ui-check --chunks 6 --seed driftwood
+call :run_windowed --ui-check --chunks 6 --seed driftwood
 if errorlevel 1 goto :failed_ui
 
 REM The public asset is a versioned ZIP containing exactly the gated executable, plus a checksum
@@ -90,6 +100,28 @@ echo OK  %PACKAGE%
 echo     %CHECKSUM%
 popd
 exit /b 0
+
+REM A GUI-subsystem process does not make cmd.exe wait for it. Run explicit instruments through a
+REM console parent that waits and captures their output, or every release check races the next one.
+:run_windowed
+powershell.exe -NoProfile -Command ^
+  "$ErrorActionPreference = 'Stop';" ^
+  "$exe = Join-Path (Get-Location) '%OUT%\Driftwood.exe';" ^
+  "$stdout = Join-Path ([IO.Path]::GetDirectoryName($exe)) '.release-gate.stdout';" ^
+  "$stderr = Join-Path ([IO.Path]::GetDirectoryName($exe)) '.release-gate.stderr';" ^
+  "$code = 1;" ^
+  "try {" ^
+  "$process = Start-Process -FilePath $exe -ArgumentList '%*' -NoNewWindow -Wait -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr;" ^
+  "$out = if (Test-Path -LiteralPath $stdout) { [IO.File]::ReadAllText($stdout) } else { '' };" ^
+  "$err = if (Test-Path -LiteralPath $stderr) { [IO.File]::ReadAllText($stderr) } else { '' };" ^
+  "if ($out.Length -gt 0) { [Console]::Out.Write($out) };" ^
+  "if ($err.Length -gt 0) { [Console]::Error.Write($err) };" ^
+  "$code = $process.ExitCode;" ^
+  "if ($code -eq 0 -and $env:DRIFTWOOD_EXPECT -and $out.TrimEnd() -cne $env:DRIFTWOOD_EXPECT) { [Console]::Error.WriteLine('Expected exact output: ' + $env:DRIFTWOOD_EXPECT); $code = 1 }" ^
+  "} catch { [Console]::Error.WriteLine($_); $code = 1 }" ^
+  "finally { Remove-Item -LiteralPath $stdout, $stderr -Force -ErrorAction SilentlyContinue };" ^
+  "exit $code"
+exit /b %errorlevel%
 
 :failed_package
 echo.

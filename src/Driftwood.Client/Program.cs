@@ -1,4 +1,5 @@
 using Driftwood.Client.Audio;
+using Driftwood.Client.Platform;
 using Driftwood.Client.Render;
 using Driftwood.Core.Audio;
 using Driftwood.Core.Blocks;
@@ -23,6 +24,8 @@ public static class Program
 
     public static int Main(string[] args)
     {
+        var commandLine = ProcessConsole.Prepare(args);
+
         if (args.Contains("--help") || args.Contains("-h"))
         {
             PrintUsage();
@@ -184,7 +187,7 @@ public static class Program
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"driftwood: {ex.Message}");
+            ProcessConsole.ReportFailure(ex, commandLine);
             return 1;
         }
     }

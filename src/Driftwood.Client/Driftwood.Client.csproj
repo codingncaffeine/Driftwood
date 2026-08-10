@@ -1,7 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <OutputType>Exe</OutputType>
+    <!-- A normal double-click is a game window, not a game window with a terminal parked behind it.
+         Explicit diagnostic modes attach to their parent terminal in ProcessConsole, so the CLI and
+         release gate retain their output without making ordinary players watch it. -->
+    <OutputType>WinExe</OutputType>
     <RootNamespace>Driftwood.Client</RootNamespace>
     <AssemblyName>Driftwood</AssemblyName>
 
