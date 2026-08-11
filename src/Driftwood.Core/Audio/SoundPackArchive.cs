@@ -319,6 +319,7 @@ public static class SoundPackArchive
         names.UnionWith(CreatureSounds.All);
         names.UnionWith(ActionSounds.AllOneShots);
         names.UnionWith(ActionSounds.Ambience);
+        names.UnionWith(MagicSounds.All);
         return names;
     }
 }

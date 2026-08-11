@@ -8,6 +8,7 @@ using Driftwood.Core.Exploration;
 using Driftwood.Core.Gen;
 using Driftwood.Core.Items;
 using Driftwood.Core.Lighting;
+using Driftwood.Core.Magic;
 using Driftwood.Core.Meshing;
 using Driftwood.Core.Particles;
 using Driftwood.Core.Physics;
@@ -1946,6 +1947,9 @@ public static class WorldAudit
         // bounds is how long after a swing the world looks right, and a tenth of a frame is far
         // below noticing.
         Check("relight is interactive", worstRelightMs < 2.0, $"worst single edit {worstRelightMs:F2} ms (want under 2)");
+
+        var magicFaults = MagicAudit.Run(out var magicDetail);
+        Check("level-20 classless magic holds", magicFaults.Count == 0, magicDetail);
 
         return new Result(sb.ToString(), passed);
     }
@@ -6683,6 +6687,12 @@ public static class WorldAudit
             ControllerInvertY = true,
             ControllerTargetAssist = 62,
             ControllerRumble = 35,
+            CompanionWindowLocked = false,
+            CompanionWindowX = 37,
+            CompanionWindowY = -18,
+            SpellbookWindowLocked = false,
+            SpellbookWindowX = -42,
+            SpellbookWindowY = 23,
             TexturePack = "weathered",
             PlayerSkin = "salt wanderer",
             Keys = Bindings.Defaults(),
@@ -6731,6 +6741,10 @@ public static class WorldAudit
         if (!read.ControllerInvertY) faults.Add("controller invert Y came back off");
         if (read.ControllerTargetAssist != 62) faults.Add($"target assist came back {read.ControllerTargetAssist}, not 62");
         if (read.ControllerRumble != 35) faults.Add($"rumble came back {read.ControllerRumble}, not 35");
+        if (read.CompanionWindowLocked || read.CompanionWindowX != 37 || read.CompanionWindowY != -18)
+            faults.Add("the unlocked companion-window position did not survive settings round trip");
+        if (read.SpellbookWindowLocked || read.SpellbookWindowX != -42 || read.SpellbookWindowY != 23)
+            faults.Add("the unlocked spellbook position did not survive settings round trip");
         if (read.TexturePack != "weathered") faults.Add($"texture pack came back '{read.TexturePack}'");
         if (read.PlayerSkin != "salt wanderer") faults.Add($"player skin came back '{read.PlayerSkin}'");
 
@@ -7617,9 +7631,8 @@ public static class WorldAudit
                 faults.Add($"'{name}' runs {clip.Seconds:F1}s against the {longest:F0}s allowed for {owner}");
         }
 
-        // These five are the only recordings Driftwood redistributes. Everything else is a slot an
-        // installed pack may fill, so absence is a valid offline fallback rather than a release
-        // failure. The pack shelf's synthetic ZIP proves that those slots resolve and decode.
+        // The five owned recordings plus the compact original magic synthesis are Driftwood's
+        // redistributable fallback. Everything else is a slot an installed pack may fill.
         foreach (var name in SoundLibrary.BuiltInNames) Gate(name, "the local fallback", 8f);
 
         foreach (var material in MaterialSounds.Materials)

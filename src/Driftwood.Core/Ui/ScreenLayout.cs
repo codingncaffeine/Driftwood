@@ -66,6 +66,18 @@ public enum ZoneKind
     Row,
     Recipe,
 
+    /// <summary>One of the character's eight prepared spell slots.</summary>
+    Spell,
+
+    /// <summary>One command on the compact owned-companion panel.</summary>
+    CompanionCommand,
+
+    /// <summary>The grab strip of a movable magic window; its index is a <see cref="MagicWindowKind"/>.</summary>
+    MagicWindowTitle,
+
+    /// <summary>The lock/unlock entry opened by right-clicking a magic window.</summary>
+    MagicWindowOption,
+
     /// <summary>The bar down the side of a list too long to show at once.</summary>
     Scrollbar,
 
@@ -91,6 +103,13 @@ public enum ZoneKind
     /// ⚠ Added after its row, since the later zone is the one on top.
     /// </remarks>
     Field,
+}
+
+/// <summary>Player-positionable pieces of the P10.5 interface.</summary>
+public enum MagicWindowKind
+{
+    Companion,
+    Spellbook,
 }
 
 /// <summary>Which button. The index of a <see cref="ZoneKind.Button"/> zone.</summary>

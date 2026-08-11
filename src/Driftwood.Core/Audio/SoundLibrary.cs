@@ -11,7 +11,8 @@ public sealed class SoundLibrary
         string? FilePath = null,
         string? ArchivePath = null,
         string? ArchiveEntry = null,
-        string? ResourceName = null);
+        string? ResourceName = null,
+        string? ProceduralKey = null);
 
     private readonly record struct WeightedSource(ClipSource Source, int Weight);
     private sealed record SourceLayer(IReadOnlyList<WeightedSource> Choices, SourceLayer? Fallback = null);
@@ -47,7 +48,8 @@ public sealed class SoundLibrary
     public List<string> Faults { get; } = [];
 
     public static IReadOnlySet<string> BuiltInNames { get; } =
-        new HashSet<string>(Embedded.Select(item => item.Key), StringComparer.OrdinalIgnoreCase);
+        new HashSet<string>(Embedded.Select(item => item.Key).Concat(MagicSounds.All),
+            StringComparer.OrdinalIgnoreCase);
 
     public SoundLibrary(string root, string? packPath = null)
         : this(root, texturePackPath: null, soundPackPath: packPath)
@@ -64,6 +66,7 @@ public sealed class SoundLibrary
 
         IndexFolder(root);
         IndexEmbeddedFallback();
+        IndexProceduralFallback();
         LocalCount = _sources.Count;
 
         if (!string.IsNullOrWhiteSpace(texturePackPath))
@@ -102,6 +105,16 @@ public sealed class SoundLibrary
         {
             if (_sources.ContainsKey(key)) continue;
             Add(key, new ClipSource(".wav", resource, ResourceName: resource), replace: false);
+        }
+    }
+
+    private void IndexProceduralFallback()
+    {
+        foreach (var key in MagicSounds.All)
+        {
+            if (_sources.ContainsKey(key)) continue;
+            Add(key, new ClipSource(".synth", $"Driftwood synthesis:{key}", ProceduralKey: key),
+                replace: false);
         }
     }
 
@@ -221,6 +234,12 @@ public sealed class SoundLibrary
         WavClip? clip = null;
         try
         {
+            if (source.ProceduralKey is { } procedural)
+            {
+                clip = MagicSoundSynthesis.Create(procedural);
+                _clips[cacheKey] = clip;
+                return clip;
+            }
             var bytes = ReadSource(source);
             var decoded = source.Extension.Equals(".ogg", StringComparison.OrdinalIgnoreCase)
                 ? OggVorbis.TryDecode(bytes, out clip, out var fault)

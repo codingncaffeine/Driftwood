@@ -3,7 +3,7 @@ using Driftwood.Core.Entities;
 
 namespace Driftwood.Core.Exploration;
 
-public enum Profession : byte { Shorewright, Forager, Waykeeper }
+public enum Profession : byte { Shorewright, Forager, Waykeeper, Lorekeeper }
 
 public sealed class Inhabitant
 {
@@ -23,7 +23,8 @@ public sealed class Inhabitant
     {
         Profession.Shorewright => "shorewright",
         Profession.Forager => "forager",
-        _ => "waykeeper",
+        Profession.Waykeeper => "waykeeper",
+        _ => "lorekeeper",
     };
 }
 
@@ -54,7 +55,7 @@ public sealed class InhabitantSystem
             || _all.Any(one => one.SettlementId == settlement.Id)) return;
 
         var professions = Enum.GetValues<Profession>();
-        var names = new[] { "Mara", "Tovin", "Elow" };
+        var names = new[] { "Mara", "Tovin", "Elow", "Sable" };
         var residents = generator.Residents(settlement);
         for (var i = 0; i < residents.Count; i++)
         {
@@ -79,8 +80,10 @@ public sealed class InhabitantSystem
         float dt,
         float dayTime,
         Func<int, int, int, bool> solid,
-        Func<int, int, int, bool>? known = null)
+        Func<int, int, int, bool>? known = null,
+        Func<int, int, int, bool>? spawnSupport = null)
     {
+        spawnSupport ??= solid;
         foreach (var one in _all)
         {
             var cellX = (int)MathF.Floor(one.Position.X);
@@ -88,12 +91,29 @@ public sealed class InhabitantSystem
             var cellZ = (int)MathF.Floor(one.Position.Z);
             if (known is not null && !known(cellX, cellY, cellZ)) continue;
 
+            // Generated and restored residents are resolved against the decorated live world, not
+            // merely the terrain height their settlement was authored from. This prevents a tree
+            // canopy from becoming their first floor while retaining the exact saved pose whenever
+            // it is still a legal stand.
+            if (!CanStand(cellX, cellY, cellZ, solid, spawnSupport, known))
+            {
+                if (!TryStandNear(cellX, cellY, cellZ, solid, spawnSupport, known, out var safe))
+                    continue;
+                one.Position = safe;
+                one.Path.Clear();
+                one.Repath = 0f;
+                cellX = (int)MathF.Floor(safe.X);
+                cellY = (int)MathF.Floor(safe.Y);
+                cellZ = (int)MathF.Floor(safe.Z);
+                Dirty = true;
+            }
+
             one.Repath -= dt;
             var target = Scheduled(one, dayTime);
             if (one.Repath <= 0f && (one.Path.Count == 0 || Vector3.DistanceSquared(one.Path.Last(), target) > 3f))
             {
                 one.Path.Clear();
-                foreach (var step in FindPath(one.Position, target, solid)) one.Path.Enqueue(step);
+                foreach (var step in FindPath(one.Position, target, solid, spawnSupport)) one.Path.Enqueue(step);
                 one.Repath = 2.5f;
             }
 
@@ -177,7 +197,8 @@ public sealed class InhabitantSystem
     private static IReadOnlyList<Vector3> FindPath(
         Vector3 from,
         Vector3 to,
-        Func<int, int, int, bool> solid)
+        Func<int, int, int, bool> solid,
+        Func<int, int, int, bool> spawnSupport)
     {
         var start = (X: (int)MathF.Floor(from.X), Y: (int)MathF.Floor(from.Y), Z: (int)MathF.Floor(from.Z));
         var goal = (X: (int)MathF.Floor(to.X), Y: (int)MathF.Floor(to.Y), Z: (int)MathF.Floor(to.Z));
@@ -202,7 +223,7 @@ public sealed class InhabitantSystem
                 if (Math.Abs(nx - start.Item1) > SearchRadius || Math.Abs(nz - start.Item3) > SearchRadius)
                     continue;
 
-                var ny = WalkY(solid, nx, at.Y, nz);
+                var ny = WalkY(solid, spawnSupport, nx, at.Y, nz);
                 if (ny is null) continue;
                 var next = (nx, ny.Value, nz);
                 var nextCost = cost[at] + 10 + Math.Abs(next.Item2 - at.Y) * 4;
@@ -221,15 +242,61 @@ public sealed class InhabitantSystem
         return reverse;
     }
 
-    private static int? WalkY(Func<int, int, int, bool> solid, int x, int aroundY, int z)
+    private static int? WalkY(
+        Func<int, int, int, bool> solid,
+        Func<int, int, int, bool> spawnSupport,
+        int x,
+        int aroundY,
+        int z)
     {
         for (var offset = 1; offset >= -1; offset--)
         {
             var feet = aroundY + offset;
-            if (!solid(x, feet - 1, z) || solid(x, feet, z) || solid(x, feet + 1, z)) continue;
+            if (!solid(x, feet - 1, z) || !spawnSupport(x, feet - 1, z)
+                || solid(x, feet, z) || solid(x, feet + 1, z)) continue;
             return feet;
         }
         return null;
+    }
+
+    private static bool CanStand(
+        int x,
+        int feet,
+        int z,
+        Func<int, int, int, bool> solid,
+        Func<int, int, int, bool> spawnSupport,
+        Func<int, int, int, bool>? known) =>
+        (known is null || known(x, feet - 1, z) && known(x, feet + 1, z))
+        && solid(x, feet - 1, z)
+        && spawnSupport(x, feet - 1, z)
+        && !solid(x, feet, z)
+        && !solid(x, feet + 1, z);
+
+    private static bool TryStandNear(
+        int centreX,
+        int centreY,
+        int centreZ,
+        Func<int, int, int, bool> solid,
+        Func<int, int, int, bool> spawnSupport,
+        Func<int, int, int, bool>? known,
+        out Vector3 at)
+    {
+        for (var radius = 0; radius <= 12; radius++)
+        for (var dz = -radius; dz <= radius; dz++)
+        for (var dx = -radius; dx <= radius; dx++)
+        {
+            if (radius > 0 && Math.Max(Math.Abs(dx), Math.Abs(dz)) != radius) continue;
+            var x = centreX + dx;
+            var z = centreZ + dz;
+            if (!CreatureHerd.TryGround(solid, spawnSupport, x, z, centreY + 8, out var y)) continue;
+            var feet = (int)y;
+            if (!CanStand(x, feet, z, solid, spawnSupport, known)) continue;
+            at = new Vector3(x + 0.5f, y, z + 0.5f);
+            return true;
+        }
+
+        at = default;
+        return false;
     }
 
     private static int Manhattan((int X, int Y, int Z) a, (int X, int Y, int Z) b) =>

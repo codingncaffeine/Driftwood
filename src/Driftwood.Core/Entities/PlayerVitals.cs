@@ -280,11 +280,14 @@ public sealed class PlayerVitals
     /// <summary>Half-hearts remaining, 0 to <see cref="MaxHealth"/>.</summary>
     public int Health { get; private set; } = MaxHealth;
 
+    /// <summary>The character-derived ceiling; the legacy/default body remains ten hearts.</summary>
+    public int MaximumHealth { get; private set; } = MaxHealth;
+
     /// <summary>Half-drumsticks remaining, 0 to <see cref="MaxFood"/>.</summary>
     public int Food { get; private set; } = MaxFood;
 
     /// <summary>True when health is coming back on its own rather than draining.</summary>
-    public bool Mending => Food >= WellFed && Health < MaxHealth;
+    public bool Mending => Food >= WellFed && Health < MaximumHealth;
 
     /// <summary>True when there is nothing left to burn and health is going instead.</summary>
     public bool StarvingNow => Food <= Starving && Health > StarvationFloor;
@@ -423,7 +426,7 @@ public sealed class PlayerVitals
     /// <summary>Full health, full breath, nothing pending. What a respawn does.</summary>
     public void Restore()
     {
-        Health = MaxHealth;
+        Health = MaximumHealth;
         Food = MaxFood;
         Breath = MaxBreath;
         _sinceHurt = 0f;
@@ -447,7 +450,7 @@ public sealed class PlayerVitals
     public void Restore(int health, int breath, int food = MaxFood)
     {
         Restore();
-        Health = Math.Clamp(health, 0, MaxHealth);
+        Health = Math.Clamp(health, 0, MaximumHealth);
         Breath = Math.Clamp(breath, 0, MaxBreath);
 
         // ⚠ Defaulted to full rather than to zero, because a save written before hunger existed
@@ -552,8 +555,21 @@ public sealed class PlayerVitals
         if (halfHearts <= 0 || !Alive) return 0;
 
         var before = Health;
-        Health = Math.Min(MaxHealth, Health + halfHearts);
+        Health = Math.Min(MaximumHealth, Health + halfHearts);
         return Health - before;
+    }
+
+    public void SetMaximumHealth(int halfHearts, bool preserveFraction = true)
+    {
+        var maximum = Math.Clamp(halfHearts, 2, 200);
+        if (maximum == MaximumHealth) return;
+        var oldMaximum = Math.Max(1, MaximumHealth);
+        var alive = Health > 0;
+        MaximumHealth = maximum;
+        Health = !alive ? 0
+            : preserveFraction
+                ? Math.Clamp((int)MathF.Ceiling(Health / (float)oldMaximum * maximum), 1, maximum)
+                : Math.Min(Health, maximum);
     }
 
     /// <summary>
@@ -717,10 +733,10 @@ public sealed class PlayerVitals
 
         _starvingFor = 0f;
 
-        if (Food >= WellFed && Health < MaxHealth && _sinceHurt >= RegenerationDelay)
+        if (Food >= WellFed && Health < MaximumHealth && _sinceHurt >= RegenerationDelay)
         {
             _regenerating += dt;
-            while (_regenerating >= RegenerationPeriod && Health < MaxHealth)
+            while (_regenerating >= RegenerationPeriod && Health < MaximumHealth)
             {
                 _regenerating -= RegenerationPeriod;
                 Health++;
@@ -773,7 +789,7 @@ public sealed class PlayerVitals
         var toFood = Math.Min(halfDrumsticks, MaxFood - Food);
         Food += toFood;
 
-        var toHearts = Math.Min(halfDrumsticks - toFood, MaxHealth - Health);
+        var toHearts = Math.Min(halfDrumsticks - toFood, MaximumHealth - Health);
         Health += toHearts;
 
         if (toFood + toHearts > 0) _effort = 0f;

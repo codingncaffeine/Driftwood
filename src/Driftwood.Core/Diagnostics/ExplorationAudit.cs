@@ -92,7 +92,7 @@ internal static class ExplorationAudit
 
         detail = $"{sites.Count}/{Enum.GetValues<StructureKind>().Length} site kinds, "
                + $"{ExplorationGenerator.PaletteNames.Length} named palette cells, deterministic seams, "
-               + $"{WorldLoot.PossibleItemNames.Count()} loot entries, three scheduled residents, "
+               + $"{WorldLoot.PossibleItemNames.Count()} loot entries, four scheduled residents, "
                + "real trades and two late-join-safe reward tiers";
         return faults;
     }
@@ -260,13 +260,27 @@ internal static class ExplorationAudit
         var inhabitants = new InhabitantSystem();
         inhabitants.EnsureSettlement(authored, settlement);
         inhabitants.EnsureSettlement(authored, settlement);
-        if (inhabitants.All.Count != 3)
-            faults.Add($"a settlement owns {inhabitants.All.Count} residents rather than three");
+        if (inhabitants.All.Count != 4)
+            faults.Add($"a settlement owns {inhabitants.All.Count} residents rather than four");
         if (inhabitants.All.Select(one => one.Id).Distinct(StringComparer.Ordinal).Count()
             != inhabitants.All.Count)
             faults.Add("two settlement residents share one persistent identity");
         if (inhabitants.All.Any(one => one.SettlementId != settlement.Id))
             faults.Add("a resident lost the settlement that owns them");
+
+        // Collision leaves the canopy solid, while legal spawn/path support excludes it. A
+        // resident restored on that canopy must step down to real ground before scheduling begins.
+        var treeResidents = new InhabitantSystem();
+        treeResidents.Reload(inhabitants.Capture());
+        var treeResident = treeResidents.All[0];
+        var treeX = (int)MathF.Floor(treeResident.Position.X);
+        var treeZ = (int)MathF.Floor(treeResident.Position.Z);
+        treeResident.Position = new Vector3(treeX + 0.5f, 71f, treeZ + 0.5f);
+        bool TreeWorld(int x, int y, int z) => y < 64 || x == treeX && z == treeZ && y == 70;
+        static bool SoilOnly(int x, int y, int z) => y < 64;
+        treeResidents.Update(0.1f, 0.35f, TreeWorld, spawnSupport: SoilOnly);
+        if (treeResidents.All[0].Position.Y >= 70f)
+            faults.Add("a resident accepted a tree canopy as spawn support");
 
         var before = inhabitants.All.Select(one => one.Position).ToArray();
         for (var i = 0; i < 240; i++)
@@ -290,6 +304,11 @@ internal static class ExplorationAudit
         foreach (var profession in Enum.GetValues<Profession>())
         {
             var offers = Trading.For(profession);
+            if (profession == Profession.Lorekeeper)
+            {
+                if (offers.Count != 0) faults.Add("the Lorekeeper incorrectly owns inventory-token trades");
+                continue;
+            }
             if (offers.Count < 3) faults.Add($"{profession} offers only {offers.Count} trades");
             foreach (var offer in offers)
             {
@@ -319,7 +338,7 @@ internal static class ExplorationAudit
     {
         foreach (var name in new[]
                  {
-                     "shorewright", "forager", "waykeeper", "storm_sentinel", "starwarden",
+                     "shorewright", "forager", "waykeeper", "lorekeeper", "storm_sentinel", "starwarden",
                  })
         {
             var kind = CreatureSet.All.FirstOrDefault(one => one.Name == name);

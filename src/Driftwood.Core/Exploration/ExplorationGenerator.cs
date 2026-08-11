@@ -319,7 +319,7 @@ public sealed class ExplorationGenerator
         _ => null,
     };
 
-    /// <summary>Three owned home/work/commons anchors for a generated settlement.</summary>
+    /// <summary>Four owned home/work/commons anchors for a generated settlement.</summary>
     public IReadOnlyList<(int X, int Y, int Z, int HomeX, int HomeZ, int WorkX, int WorkZ)> Residents(
         StructureSite site)
     {
@@ -330,6 +330,7 @@ public sealed class ExplorationGenerator
             (site.X - 8, y, site.Z - 5, site.X - 9, site.Z - 7, site.X, site.Z),
             (site.X + 8, y, site.Z - 4, site.X + 9, site.Z - 7, site.X + 3, site.Z + 5),
             (site.X, y, site.Z + 9, site.X - 1, site.Z + 10, site.X - 5, site.Z + 4),
+            (site.X, y, site.Z - 10, site.X + 1, site.Z - 11, site.X - 3, site.Z - 4),
         ];
     }
 

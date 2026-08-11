@@ -158,6 +158,8 @@ public static class CreatureSet
             ["textures/entity/villager/profession/farmer.png", "textures/entity/villager/villager.png"]),
         new("waykeeper", "waykeeper", CreatureFamily.Inhabitant, "villager",
             ["textures/entity/villager/profession/cartographer.png", "textures/entity/villager/villager.png"]),
+        new("lorekeeper", "lorekeeper", CreatureFamily.Inhabitant, "villager",
+            ["textures/entity/villager/profession/librarian.png", "textures/entity/villager/villager.png"]),
         new("storm_sentinel", "storm sentinel", CreatureFamily.Encounter, "pillager",
             ["textures/entity/illager/pillager.png"]),
         new("starwarden", "starwarden", CreatureFamily.Encounter, "evoker",

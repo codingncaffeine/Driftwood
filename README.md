@@ -35,6 +35,7 @@ reachable from bare hands, in seven rounds, with no starting kit.
 | **An audio shelf, local importer and verified Modrinth browser** | working |
 | Armour, hunger, signals, rails, farming | working |
 | Controller support — SDL3 hot-plug, named devices, snap-nav, radial hotbar, assist, rumble, rebinding | working |
+| **Level-20 classless progression, gold, 19 ranked spells, spellbook and four commanded companions** | working |
 
 ## The world
 
@@ -161,7 +162,9 @@ Driftwood.exe --world stonebreak       open a named world, or make one
 Driftwood.exe --ocean 10               less water; default is 25% of the surface
 Driftwood.exe --chunks 24 --vsync      wider view, capped to display refresh
 Driftwood.exe --audit --seed 12345     headless: generate, mesh, run every check, exit
-Driftwood.exe --audio-check             decode the five embedded fallback recordings, exit
+Driftwood.exe --audio-check             decode all 86 owned recording/synth fallback clips, exit
+Driftwood.exe --magic-check             audit progression, exact spells, effects, pets and wiki export
+Driftwood.exe --magic-reference <dir>   generate mechanics-backed handbook and magic references
 Driftwood.exe --controller-check        load SDL3, enumerate pads by name, verify fallback interop
 Driftwood.exe --bench                  fly a fixed path, report frame-time percentiles, exit
 Driftwood.exe --packs                  list the texture packs on the shelf, exit
@@ -181,6 +184,7 @@ across seeds, so one seed does not hand you a continent and the next an archipel
 | Hold right | place, or use what you are looking at | |
 | `E` | your own pockets, equipment and a two-by-two | |
 | `B` | fold the recipe book out beside them | |
+| Hold `R` | release mouse-look and click one of eight prepared spells; movement stays live | |
 | `Esc` | options — keys, controller, video, audio, world, saves, packs, skins | |
 | `F3` / `F5` | walk or fly / cycle the view | |
 
@@ -192,14 +196,14 @@ two are never scanned together, so one Xbox pad cannot appear twice.
 | Controller | Playing |
 | --- | --- |
 | Left stick | analogue move; press to sprint |
-| Right stick | frame-rate-independent look; press to cycle view |
+| Right stick | frame-rate-independent look; press to raise a shield |
 | Bottom / right face | jump / sneak and dismount |
 | Left / top face | swap hands / inventory |
-| Right / left trigger | break or attack / use or place |
+| Right / left shoulder | break or attack / use or place |
+| Hold left / right trigger | spell slots 1–4 / 5–8 on the four face buttons |
 | D-pad left / right | walk the hotbar |
 | Hold D-pad up + right stick | radial hotbar; release to choose |
-| Left shoulder | raise a shield |
-| Menu | options |
+| Back / Menu | cycle view / options |
 
 Every screen uses left-stick or d-pad snap navigation, the bottom face button confirms, the right
 face button backs out, and the shoulders change tabs. Face prompts follow the attached layout (A/B
@@ -221,6 +225,42 @@ always something on screen causing the block to go.
 Every key and discrete controller action is rebindable. Both are stored as **names** rather than
 codes, so the settings file can be read, checked and edited by hand without either input library
 being involved.
+
+## Progression and magic
+
+Driftwood's progression is classless. The maximum level is 20, and one character may learn any mix
+of the four open spell lines: five Beacon Rites, five Gravecalling spells, four Tidecalling spells
+and five Arcanistry spells. Spell rank follows level automatically—Rank I at levels 1–5, Rank II at
+6–10, Rank III at 11–15 and Rank IV at 16–20. There are no purchased ranks, class gates, spell
+reagents or appearance-changing forms.
+
+Creatures, first discoveries, authored encounters and bounded survival milestones award
+once-settled XP. Generated chests and encounters also settle personal coin rewards; the first chest
+at an authored site offers one deterministic Rank-I–IV gear cache appropriate to that site's danger.
+Gold, silver and copper are one 64-bit per-player wallet shown on the HUD. Physical gold ingots stay
+crafting material, and P14 trade tokens remain the ordinary residents' separate barter currency.
+Sable, the Driftstead Lorekeeper, shows all 19 spells to a funded level-one player and sells each
+stable spell name once.
+
+All learned spells live in the spellbook, while at most eight are prepared on the casting bar.
+Three memory loadouts can save or swap the entire bar when no cast or channel is active. Direct,
+projectile, cast and channel delivery share Focus, simulation-time cooldowns, target/range/line-of-
+sight preflight and one authoritative effect service. Fire Bolt uses the bounded projectile pool;
+Draw Lifeforce and Leech heal only from damage actually accepted; Gateway Rift is a two-sided
+world-space vortex that returns each entrant to that entrant's own safe bed or bind.
+
+Summon Bones, Animate Zombie, Spirit Wolf and Earth Elemental share a hard one-pet-per-player cap.
+The persistent panel shows exact health, role, rank and current Attack, Guard, Follow, Stop or Go
+Away order. Guard and Follow defend automatically and a nearby pet may intercept a hostile blow.
+The Spirit Wolf uses its own dark coat and blue eyes; the Earth Elemental is an original irregular
+stone biped about half player height. Every pet has identity-specific movement, idle, attack, hurt,
+low-health and death audio semantics.
+
+The spellbook and pet panel have original pixel-art frames and accents. Right-click either panel to
+unlock it, drag its decorated title strip, then right-click to lock it again; bounded positions are
+remembered. For the world-space pet panel, hold the spell cursor first. Complete generated rank
+tables and practical spell guidance live in the
+[Driftwood wiki](https://github.com/codingncaffeine/Driftwood/wiki).
 
 ## Crafting
 
@@ -253,16 +293,16 @@ the pool. Emitters compose those shapes as sprays, spheres, rings, trails and co
 effects carry fractional rate between simulation steps, so the same elapsed second emits the same
 amount at 30 or 200 fps.
 
-The future P10.5 magic runtime already has a semantic particle catalogue for its exact 19 spells:
+The P10.5 magic runtime uses a semantic particle catalogue for its exact 19 spells:
 cast, travel, impact, sustain and end events name a spell, two positions and current Rank I–IV. The
-renderer does not know spell names. This lets heals, drains, shields, binds, summons, elemental hits
-and Gateway Rift share one bounded visual grammar when the authoritative spell/effect work lands.
+renderer does not know spell names. Heals, drains, shields, binds, summons, elemental hits and
+Gateway Rift therefore share one bounded visual grammar without duplicating effect logic.
 
 Those same 19 semantic ids now own 19 original painted icons. IconForge crops only the clean 80×80
 picture wells from the local source sheet into a compact embedded atlas, which runtime samples with
 nearest-neighbour filtering; decorative frames and printed labels never enter the texture array. The
-future spellbook can put its own font, rank and cooldown treatment around the unchanged paintings.
-Gateway Rift is reserved for a true floating world-space vortex—a breathing elliptical rim,
+spellbook puts its own font, rank and cooldown treatment around the unchanged paintings. Gateway
+Rift is a true floating world-space vortex—a breathing elliptical rim,
 counter-rotating polar swirls, inward motes and a dark depth core—rather than stretching its inventory
 icon into the world.
 
@@ -336,10 +376,12 @@ no art folder still has a player in it.
 
 ## Sound packs
 
-Driftwood redistributes only five recordings it owns: frog, bat, spider, spider attack and zombie.
-They are embedded in the executable as the offline fallback. World, action and ambience slots are
-filled by a sound pack chosen in the **AUDIO** tab. Packs are sparse: each file fills one slot, a
-partial archive still works, and a missing slot uses a local fallback whenever one exists.
+Driftwood redistributes only five recorded clips it owns: frog, bat, spider, spider attack and
+zombie. Those recordings plus original deterministic synth voices for progression, all 19 spells,
+portal lifecycle and every four-pet semantic make an 86-clip embedded offline fallback. World,
+action and ambience slots can be filled by a sound pack chosen in the **AUDIO** tab. Packs are
+sparse: each file fills one semantic slot, a partial archive still works, and a missing slot uses a
+local fallback whenever one exists.
 
 The tab can import a local Minecraft resource-pack ZIP or search Modrinth's audio resource packs
 without an account or API key. Search results show author, license, download count and the latest
@@ -360,7 +402,7 @@ installing a pack rebuilds the audio layer immediately, while removing the activ
 back to the embedded recordings before deleting it.
 
 A texture pack's standard sounds are also used automatically. The layers are, from lowest to
-highest priority: five embedded Driftwood fallbacks, sounds in the active texture pack, then the
+highest priority: embedded Driftwood fallbacks, sounds in the active texture pack, then the
 pack explicitly selected on the AUDIO tab. Every layer is sparse. If an active pack appears silent,
 check the **MUTE** row first; the volume and active-pack rows both say when mute is on.
 

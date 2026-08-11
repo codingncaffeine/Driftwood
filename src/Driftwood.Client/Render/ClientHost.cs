@@ -12,6 +12,7 @@ using Driftwood.Core.Exploration;
 using Driftwood.Core.Gen;
 using Driftwood.Core.Items;
 using Driftwood.Core.Lighting;
+using Driftwood.Core.Magic;
 using Driftwood.Core.Meshing;
 using Driftwood.Core.Particles;
 using Driftwood.Core.Projectiles;
@@ -217,6 +218,7 @@ public sealed class ClientHost : IDisposable
 {
     private static readonly string ProductVersion =
         typeof(ClientHost).Assembly.GetName().Version?.ToString(3) ?? "unknown";
+    private const string SunlightEffectSource = "world:sunlight";
 
     private readonly ClientOptions _options;
     private readonly IWindow _window;
@@ -391,6 +393,7 @@ public sealed class ClientHost : IDisposable
 
     private PlayerBody _player = null!;
     private BlockOutline _outline = null!;
+    private GatewayRiftRenderer _gatewayRenderer = null!;
     private BlockTextureArray _blockTextures = null!;
     private BlockTextureArray _normalTextures = null!;
     private BlockTextureArray _materialTextures = null!;
@@ -543,6 +546,26 @@ public sealed class ClientHost : IDisposable
     /// <summary>What has become makeable, and the notices on screen saying so.</summary>
     private readonly RecipeUnlocks _unlocks = new();
     private readonly PlayerProgress _progress = new();
+    private readonly CharacterProgression _character = new(LocalPlayerId);
+    private readonly CompanionService _companions = new();
+    private readonly SpellCastingService _spellCasting = new();
+    private readonly SpellEffectService _spellEffects = new();
+    private readonly GatewayRiftService _gatewayRifts = new();
+    private readonly HashSet<string> _playerContributions = new(StringComparer.Ordinal);
+    private long _magicEventSequence;
+    private float _petAttackClock;
+    private bool _petLowHealthWarned;
+    private float _petMovementSoundClock;
+    private float _petIdleSoundClock;
+    private float _riftParticleClock;
+    private float _riftEntryCooldown;
+    private float _progressionRewardScan;
+    private bool _spellCursorOpen;
+    private int _spellControllerBank;
+    private int _spellLastControllerBank = 1;
+    private readonly string[] _spellFaceLabels = new string[4];
+    private Vector2 _companionWindowOffset;
+    private Vector2 _spellbookWindowOffset;
     private readonly WorldMap _map = new();
     private readonly List<Recipe> _justUnlocked = [];
     private readonly List<Toast> _toasts = [];
@@ -669,6 +692,12 @@ public sealed class ClientHost : IDisposable
     /// </summary>
     private bool _spawned;
     private Vector3 _spawnPoint;
+
+    /// <summary>
+    /// A new world gets one loaded-world placement pass before physics starts. Saved positions are
+    /// respected; this exists only to keep a freshly created player off generated tree canopies.
+    /// </summary>
+    private bool _newWorldSpawnPending = true;
 
     /// <summary>
     /// Ceiling on chunk uploads per frame. Buffer creation blocks the driver, so an unbounded
@@ -996,6 +1025,10 @@ public sealed class ClientHost : IDisposable
         // Whatever the player changed last time, before anything reads a key or a field of view.
         // A bad file costs the setting it names and nothing else — see GameSettings.Load.
         _settings = GameSettings.Load();
+        _companionWindowOffset = new Vector2(
+            _settings.CompanionWindowX, _settings.CompanionWindowY);
+        _spellbookWindowOffset = new Vector2(
+            _settings.SpellbookWindowX, _settings.SpellbookWindowY);
         if (_options.UiCheck || _options.ShotPath is not null)
         {
             // Framebuffer instruments must exercise the shipped visual path, not inherit a local
@@ -1064,6 +1097,7 @@ public sealed class ClientHost : IDisposable
         _visuals = new VisualPipeline(_gl);
         _shadows = new CascadedShadowMap(_gl);
         _outline = new BlockOutline(_gl);
+        _gatewayRenderer = new GatewayRiftRenderer(_gl);
 
         _particleRenderer = new ParticleRenderer(_gl);
         _itemRenderer = new ItemRenderer(_gl);
@@ -1250,6 +1284,17 @@ public sealed class ClientHost : IDisposable
                 new CreatureKind("cargo_cart", "cargo_cart", default, "cargo_cart", []),
                 StarterCreatures.CargoCart(), "ours", "", 0, 0));
 
+            // Commanded summons are presentation-only additions here: they never join the natural
+            // creature census, spawn tables, drops or XP identities.
+            foreach (var model in new[]
+                     {
+                         StarterCreatures.SummonedSkeleton(), StarterCreatures.SummonedZombie(),
+                         StarterCreatures.SpiritWolf(), StarterCreatures.EarthElemental(),
+                     })
+                resolved.Add(new CreatureSet.Resolved(
+                    new CreatureKind(model.Name, model.Name, default, model.Name, []),
+                    model, "ours", "", 0, 0));
+
             // ⚠ The renderer only. The herd is made when the player spawns, because a herd made here
             // is one SpawnCreatures finds already present and declines to fill — which is a world
             // with every animal loaded, none of them placed, and nothing anywhere saying so.
@@ -1270,6 +1315,23 @@ public sealed class ClientHost : IDisposable
     /// <summary>Whether a cell would hold an animal up. The herd's whole view of the world.</summary>
     private bool SolidForCreature(int x, int y, int z) =>
         _registry[_streamer.World.GetBlock(x, y, z)].Solid;
+
+    /// <summary>
+    /// Collision answers whether a block stops a body; spawn support answers whether a body may be
+    /// introduced on its top. Leaves and trunks remain solid but can never be the latter.
+    /// </summary>
+    private bool TreeFreeSpawnSupport(int x, int y, int z)
+    {
+        var block = _streamer.World.GetBlock(x, y, z);
+        return _registry[block].Solid
+               && block != _ids.Log && block != _ids.CherryLog
+               && block != _ids.Leaves && block != _ids.CherryLeaves;
+    }
+
+    private bool DryTreeFreeSpawnSupport(int x, int y, int z) =>
+        TreeFreeSpawnSupport(x, y, z)
+        && _registry[_streamer.World.GetBlock(x, y + 1, z)].Fluid == FluidKind.None
+        && _registry[_streamer.World.GetBlock(x, y + 2, z)].Fluid == FluidKind.None;
 
     /// <summary>How many animals to keep in the world around the player.</summary>
     private const int HerdSize = 12;
@@ -1362,7 +1424,8 @@ public sealed class ClientHost : IDisposable
             SolidForCreature, kinds, _player.Position, WaterLifeCount - living,
             where: (x, y, z) =>
                 _registry[_streamer.World.GetBlock(x, y, z)].Fluid == FluidKind.Water,
-            minRadius: 8f);
+            minRadius: 8f,
+            spawnSupport: TreeFreeSpawnSupport);
     }
 
     /// <summary>Puts a few harmless things in the dark under the ground.</summary>
@@ -1388,7 +1451,8 @@ public sealed class ClientHost : IDisposable
 
         _herd.Spawn(
             SolidForCreature, kinds, _player.Position, CaveLifeCount - living,
-            where: Buried, minRadius: 8f);
+            where: Buried, minRadius: 8f,
+            spawnSupport: TreeFreeSpawnSupport);
     }
 
     /// <summary>How many cave things are kept about. Fewer than a herd: they are atmosphere.</summary>
@@ -1423,7 +1487,9 @@ public sealed class ClientHost : IDisposable
         if (kinds.Count == 0) return;
 
         var before = _herd.Count;
-        _herd.Spawn(SolidForCreature, kinds, _player.Position, HerdSize - beasts);
+        _herd.Spawn(
+            SolidForCreature, kinds, _player.Position, HerdSize - beasts,
+            spawnSupport: TreeFreeSpawnSupport);
 
         if (_herd.Count == before) return;
         Console.WriteLine($"creatures   {beasts + _herd.Count - before} of {HerdSize} standing, {kinds.Count} kinds to draw from");
@@ -1478,7 +1544,8 @@ public sealed class ClientHost : IDisposable
 
         _herd.Spawn(
             SolidForCreature, kinds, _player.Position, want,
-            where: Dark, minRadius: SpawnRules.HostileMinRadius);
+            where: Dark, minRadius: SpawnRules.HostileMinRadius,
+            spawnSupport: TreeFreeSpawnSupport);
 
         TopUpDrowned();
     }
@@ -1502,7 +1569,8 @@ public sealed class ClientHost : IDisposable
             where: (x, y, z) =>
                 _registry[_streamer.World.GetBlock(x, y, z)].Fluid == FluidKind.Water
                 && Dark(x, y, z),
-            minRadius: SpawnRules.HostileMinRadius);
+            minRadius: SpawnRules.HostileMinRadius,
+            spawnSupport: TreeFreeSpawnSupport);
     }
 
     /// <summary>True where a creature's feet would stand in the dark.</summary>
@@ -1907,6 +1975,7 @@ public sealed class ClientHost : IDisposable
 
         _player.Teleport(state.Position);
         _spawnPoint = state.Position;
+        _newWorldSpawnPending = false;
         _camera.Yaw = state.Yaw;
         _camera.Pitch = state.Pitch;
         _camera.Position = _player.EyePosition;
@@ -1918,6 +1987,8 @@ public sealed class ClientHost : IDisposable
         _savedCreatures.AddRange(state.Creatures);
 
         _bedSpawn = state.BedSpawn;
+        if (_character.Bind is null && _bedSpawn is { } legacyBind)
+            _character.SetBind(legacyBind);
 
         // The carts stand back on the track exactly where they were; nobody is aboard, which is
         // also how they were written. A hold comes back as the chest it was.
@@ -1981,6 +2052,8 @@ public sealed class ClientHost : IDisposable
             Map = _map,
             Exploration = _exploration,
             Inhabitants = _inhabitants,
+            Character = _character,
+            Companions = _companions,
         };
 
         if (_herd is not null) state.Creatures.AddRange(_herd.Capture());
@@ -2284,7 +2357,8 @@ public sealed class ClientHost : IDisposable
         _sinceSave += dt;
         if (_sinceSave < AutosaveSeconds) return;
         if (!_streamer.World.Changed && !_unlocks.Dirty && !_progress.Dirty && !_map.Dirty
-            && !_exploration.Dirty && !_inhabitants.Dirty) return;
+            && !_exploration.Dirty && !_inhabitants.Dirty && !_character.Dirty
+            && !_companions.Dirty) return;
 
         _autosaves++;
         SaveWorld("automatically");
@@ -3101,6 +3175,8 @@ public sealed class ClientHost : IDisposable
     private Vector2 _skinDragAt;
     private bool _draggingFigure;
     private Vector2 _figureDragAt;
+    private MagicWindowKind? _draggingMagicWindow;
+    private Vector2 _magicWindowDragAt;
 
     /// <summary>Puts the pointer's share of the track on screen.</summary>
     private void DragScrollbar(Zone track)
@@ -3725,6 +3801,7 @@ public sealed class ClientHost : IDisposable
         _holdingPlace = false;
         _hudScreen.RadialHotbar = false;
         _hudScreen.RadialSlot = -1;
+        _spellControllerBank = 0;
         _mining.Cancel();
     }
 
@@ -3848,11 +3925,18 @@ public sealed class ClientHost : IDisposable
         // A generated chest becomes state the first time it is opened. ChestBank keeps even an
         // emptied chest, so revisiting or save/load can never roll it a second time.
         var authored = WorldLoot.TryFindChest(
-            _terrain.Exploration, x, y, z, out var site, out _);
+            _terrain.Exploration, x, y, z, out var site, out var chestIndex);
         if (authored)
         {
             if (HandleEncounterChest(site)) return;
             WorldLoot.TryInitialize(_seed, _terrain.Exploration, _chests, _items, x, y, z, out _);
+            SettleCharacterReward(
+                $"chest:{site.Id}:{chestIndex}:{LocalPlayerId}",
+                CharacterRewards.Chest(_seed, site, chestIndex), XpSource.Discovery,
+                "coin cache found", StarterBlocks.LayerGoldIngot);
+            SettleLeveledGear(
+                $"chest:{site.Id}:{chestIndex}:{LocalPlayerId}",
+                CharacterRewards.Gear(_seed, site, chestIndex));
         }
 
         _hudScreen.Kind = HudScreenKind.Chest;
@@ -4042,6 +4126,8 @@ public sealed class ClientHost : IDisposable
         _draggingMap = false;
         _draggingSkinPreview = false;
         _draggingFigure = false;
+        _draggingMagicWindow = null;
+        _hudScreen.MagicWindowContext = -1;
         _shown.Clear();
         _hudScreen.Recipes.Clear();
         _hudScreen.Payable.Clear();
@@ -4415,6 +4501,34 @@ public sealed class ClientHost : IDisposable
 
             _hudScreen.Rows.Add(new MenuRow(
                 $"{resident.Name} · {resident.Profession.ToString().ToLowerInvariant()}", Heading: true));
+
+            if (resident.Profession == Profession.Lorekeeper)
+            {
+                _hudScreen.Rows.Add(new MenuRow(
+                    "your gold", CharacterProgression.CoinsText(_character.Coins),
+                    Note: "every spell is available now; rank improves automatically at levels 6, 11 and 16"));
+                foreach (var group in Enum.GetValues<SpellGroup>())
+                {
+                    _hudScreen.Rows.Add(new MenuRow(SpellGroupName(group), Heading: true));
+                    foreach (var spell in SpellCatalogue.All.Where(one => one.Group == group))
+                    {
+                        var learned = _character.Learned.Contains(spell.StableName);
+                        var prepared = _character.IsPrepared(spell.StableName);
+                        _hudScreen.Rows.Add(new MenuRow(
+                            spell.DisplayName,
+                            learned
+                                ? $"{(prepared ? "prepared" : "learned")} · {CharacterProgression.RankName(_character.Rank)}"
+                                : CharacterProgression.CoinsText(spell.Price),
+                            Note: learned
+                                ? $"{spell.Description} {SpellNumbers(spell)}"
+                                : $"{spell.Description} Enter buys it once. {SpellNumbers(spell)}",
+                            Icon: SpellIconAtlas.LayerFor(spell.Particle)));
+                    }
+                }
+                _hudScreen.Rows.Add(new MenuRow("done", "close trading"));
+                return;
+            }
+
             foreach (var offer in Trading.For(resident.Profession))
             {
                 var cost = _items.ByName(offer.Cost);
@@ -4700,6 +4814,112 @@ public sealed class ClientHost : IDisposable
     {
         switch ((PlayerTab)_hudScreen.Tab)
         {
+            case PlayerTab.Character:
+                var stats = _character.Statistics;
+                var xpProgress = _character.Level >= CharacterProgression.MaximumLevel
+                    ? 1f
+                    : _character.Experience / (float)Math.Max(1, _character.ExperienceNeeded);
+                _hudScreen.Rows.Add(new MenuRow(
+                    $"level {_character.Level} · {CharacterProgression.RankName(_character.Rank)}", Heading: true));
+                _hudScreen.Rows.Add(new MenuRow("player", _character.PlayerId,
+                    Note: "one stable identity owns this level, wallet, spellbook and companion"));
+                _hudScreen.Rows.Add(new MenuRow(
+                    "experience",
+                    _character.Level >= CharacterProgression.MaximumLevel
+                        ? "maximum level"
+                        : $"{_character.Experience:N0} / {_character.ExperienceNeeded:N0}",
+                    Note: "creatures, discoveries, encounters and survival award XP once",
+                    Progress: xpProgress));
+                var nextRankLevel = _character.Rank switch { 1 => 6, 2 => 11, 3 => 16, _ => 0 };
+                _hudScreen.Rows.Add(new MenuRow(
+                    "next spell rank",
+                    nextRankLevel == 0 ? "Rank IV · final rank"
+                        : $"{CharacterProgression.RankName(_character.Rank + 1)} at level {nextRankLevel}",
+                    Note: "automatic for every learned spell and the active companion; never purchased"));
+                _hudScreen.Rows.Add(new MenuRow("gold", CharacterProgression.CoinsText(_character.Coins),
+                    Note: "kept in your wallet; Sable the Lorekeeper accepts it for spells"));
+                _hudScreen.Rows.Add(new MenuRow("focus", $"{_character.Focus} / {stats.MaximumFocus}",
+                    Note: "spent by spells and restored steadily outside each cast",
+                    Progress: _character.Focus / (float)Math.Max(1, stats.MaximumFocus)));
+
+                _hudScreen.Rows.Add(new MenuRow(
+                    $"attributes · {_character.AttributePoints} point{(_character.AttributePoints == 1 ? "" : "s")} free",
+                    Heading: true));
+                AddAttributeRow("might", _character.Attributes.Might, "weapon damage");
+                AddAttributeRow("finesse", _character.Attributes.Finesse, "critical chance and haste");
+                AddAttributeRow("insight", _character.Attributes.Insight, "spell potency, Focus and haste");
+                AddAttributeRow("resolve", _character.Attributes.Resolve, "health and armour");
+
+                _hudScreen.Rows.Add(new MenuRow("combat statistics", Heading: true));
+                _hudScreen.Rows.Add(new MenuRow("maximum health", $"{stats.MaximumHealth / 2f:0.#} hearts"));
+                _hudScreen.Rows.Add(new MenuRow("armour", $"{stats.Armour} half-heart reduction"));
+                _hudScreen.Rows.Add(new MenuRow("weapon damage", $"+{stats.WeaponDamage} half-hearts"));
+                _hudScreen.Rows.Add(new MenuRow("spell potency", $"{stats.SpellPotency * 100f:0}%"));
+                _hudScreen.Rows.Add(new MenuRow("critical chance", $"{stats.CriticalChance * 100f:0.#}%"));
+                _hudScreen.Rows.Add(new MenuRow("haste", $"{stats.Haste * 100f:0.#}%"));
+                _hudScreen.Rows.Add(new MenuRow(
+                    "equipment armour", $"{Armour.PointsOf(_equipment, _items)} / {Armour.MaxPoints} points",
+                    Note: "the live worn pieces beside the paper doll reduce incoming damage"));
+                _hudScreen.Rows.Add(new MenuRow(
+                    "main hand", _inventory.HeldType?.Label ?? "empty",
+                    Note: "weapon base damage is added to the character's derived weapon damage"));
+                _hudScreen.Rows.Add(new MenuRow(
+                    "prepared spells", $"{_character.Prepared.Count(one => one is not null)} / {CharacterProgression.PreparedCapacity}"));
+                if (_companions.For(LocalPlayerId) is { Alive: true } pet)
+                {
+                    var companion = CompanionService.Definition(pet.Kind);
+                    _hudScreen.Rows.Add(new MenuRow(
+                        "active companion", $"{companion.Name} · {companion.Role} · R{pet.Rank}",
+                        Note: $"{pet.Health}/{pet.MaxHealth} health · {pet.Command.ToString().ToLowerInvariant()}"));
+                }
+                break;
+
+            case PlayerTab.Spells:
+                _hudScreen.Rows.Add(new MenuRow(
+                    $"prepared · {_character.Prepared.Count(one => one is not null)} of {CharacterProgression.PreparedCapacity}",
+                    Heading: true));
+                for (var slot = 0; slot < CharacterProgression.PreparedCapacity; slot++)
+                {
+                    var stable = _character.Prepared[slot];
+                    var prepared = stable is not null && SpellCatalogue.TryByStableName(stable, out var known)
+                        ? known : null;
+                    _hudScreen.Rows.Add(new MenuRow(
+                        $"slot {slot + 1}", prepared?.DisplayName ?? "empty",
+                        Note: prepared is null
+                            ? "choose a learned spell below to put it in the first empty slot"
+                            : $"Enter clears this slot. {SpellNumbers(prepared)}",
+                        Icon: prepared is null ? -1 : SpellIconAtlas.LayerFor(prepared.Particle)));
+                }
+
+                _hudScreen.Rows.Add(new MenuRow("memory loadouts", Heading: true));
+                for (var loadout = 1; loadout <= 3; loadout++)
+                {
+                    var name = $"loadout {loadout}";
+                    _hudScreen.Rows.Add(new MenuRow(
+                        name, _character.HasLoadout(name) ? "saved" : "empty",
+                        Note: _character.HasLoadout(name)
+                            ? "Enter applies all eight slots. Left or right-click overwrites it with the current bar."
+                            : "Enter saves the current eight prepared slots here."));
+                }
+
+                foreach (var group in Enum.GetValues<SpellGroup>())
+                {
+                    _hudScreen.Rows.Add(new MenuRow(SpellGroupName(group), Heading: true));
+                    foreach (var spell in SpellCatalogue.All.Where(one => one.Group == group))
+                    {
+                        var learned = _character.Learned.Contains(spell.StableName);
+                        var prepared = _character.IsPrepared(spell.StableName);
+                        _hudScreen.Rows.Add(new MenuRow(
+                            spell.DisplayName,
+                            learned ? prepared ? "prepared" : CharacterProgression.RankName(_character.Rank) : "not learned",
+                            Note: learned
+                                ? $"{spell.Description} Enter {(prepared ? "removes it from memory" : "prepares it")}. {SpellNumbers(spell)}"
+                                : $"{spell.Description} Buy it from Sable in a Driftstead.",
+                            Icon: SpellIconAtlas.LayerFor(spell.Particle)));
+                    }
+                }
+                break;
+
             case PlayerTab.Progress:
                 _hudScreen.Rows.Add(new MenuRow("this journey", Heading: true));
                 _hudScreen.Rows.Add(new MenuRow("blocks broken", $"{_progress.BlocksBroken:N0}"));
@@ -4759,6 +4979,38 @@ public sealed class ClientHost : IDisposable
         }
     }
 
+    private void AddAttributeRow(string name, int value, string does)
+    {
+        _hudScreen.Rows.Add(new MenuRow(
+            name, value.ToString(),
+            Note: _character.AttributePoints > 0
+                ? $"Enter spends one point; improves {does}"
+                : $"improves {does}; gain one point each level"));
+    }
+
+    private string SpellNumbers(SpellDefinition spell)
+    {
+        var rank = spell.AtRank(_character.Rank);
+        var power = rank.Primary > 0 ? $" {rank.Primary} {spell.Mechanic};" : "";
+        var secondary = rank.Secondary > 0 ? $" secondary {rank.Secondary};" : "";
+        var duration = rank.Duration > 0f ? $" {rank.Duration:0.#}s duration;" : "";
+        var cast = rank.CastTime > 0f ? $" {rank.CastTime:0.##}s {spell.Delivery.ToString().ToLowerInvariant()};" : " instant;";
+        var current = $"{CharacterProgression.RankName(_character.Rank)}:{power}{secondary}{duration}{cast} "
+            + $"{rank.Focus} Focus, {rank.Cooldown:0.#}s cooldown, {rank.Range:0.#} block range.";
+        if (_character.Rank >= 4) return current + " Final automatic rank.";
+        var next = spell.AtRank(_character.Rank + 1);
+        return current + $" Next: {CharacterProgression.RankName(_character.Rank + 1)} "
+            + $"{next.Primary}/{next.Secondary}, {next.Duration:0.#}s, {next.Focus} Focus.";
+    }
+
+    private static string SpellGroupName(SpellGroup group) => group switch
+    {
+        SpellGroup.BeaconRites => "Beacon Rites",
+        SpellGroup.Gravecalling => "Gravecalling",
+        SpellGroup.Tidecalling => "Tidecalling",
+        _ => "Arcanistry",
+    };
+
     private static string HandbookKind(ItemType item) => item.IsFood ? "food"
         : item.IsTool ? "tool"
         : item.Wears is not null ? "armour"
@@ -4790,6 +5042,86 @@ public sealed class ClientHost : IDisposable
 
         if (_hudScreen.Kind == HudScreenKind.Player)
         {
+            if (_hudScreen.Tab == (int)PlayerTab.Character && activated)
+            {
+                if (_character.SpendAttribute(label))
+                    NoticeMagic($"{label} increased", StarterBlocks.LayerAnvilTop,
+                        $"{_character.AttributePoints} attribute point{(_character.AttributePoints == 1 ? "" : "s")} remain");
+                RefreshScreen();
+                return;
+            }
+
+            if (_hudScreen.Tab == (int)PlayerTab.Spells)
+            {
+                var loadout = label.StartsWith("loadout ", StringComparison.Ordinal)
+                    ? label : null;
+                if (!activated && loadout is null) return;
+                if (_spellCasting.IsCasting(LocalPlayerId))
+                {
+                    PlayMagicUi(MagicSounds.Invalid, 0.4f);
+                    NoticeMagic("finish the current cast", StarterBlocks.LayerAnvilTop,
+                        "prepared spells cannot change during a cast or channel");
+                    return;
+                }
+
+                if (loadout is not null)
+                {
+                    var save = !_character.HasLoadout(loadout) || !activated && by < 0;
+                    var changed = save
+                        ? _character.SaveLoadout(loadout)
+                        : _character.ApplyLoadout(loadout, casting: false);
+                    if (changed)
+                    {
+                        PlayMagicUi(save ? MagicSounds.Prepare : MagicSounds.Learn, 0.38f);
+                        NoticeMagic(save ? $"saved {loadout}" : $"applied {loadout}",
+                            StarterBlocks.LayerAnvilTop,
+                            save ? "the current eight memory slots were recorded"
+                                 : "all eight prepared slots were swapped together");
+                    }
+                    RefreshScreen();
+                    return;
+                }
+
+                if (label.StartsWith("slot ", StringComparison.Ordinal)
+                    && int.TryParse(label.AsSpan(5), out var shownSlot))
+                {
+                    var slot = shownSlot - 1;
+                    var clearing = (uint)slot < CharacterProgression.PreparedCapacity
+                                   && _character.Prepared[slot] is not null;
+                    if (_character.Prepare(slot, null) && clearing)
+                        PlayMagicUi(MagicSounds.Unprepare, 0.38f);
+                    RefreshScreen();
+                    return;
+                }
+
+                var spell = SpellCatalogue.All.FirstOrDefault(one => one.DisplayName == label);
+                if (spell is not null && _character.Learned.Contains(spell.StableName))
+                {
+                    var wasPrepared = _character.IsPrepared(spell.StableName);
+                    if (wasPrepared)
+                    {
+                        for (var slot = 0; slot < CharacterProgression.PreparedCapacity; slot++)
+                            if (_character.Prepared[slot] == spell.StableName) _character.Prepare(slot, null);
+                    }
+                    else
+                    {
+                        var free = Enumerable.Range(0, CharacterProgression.PreparedCapacity)
+                            .FirstOrDefault(slot => _character.Prepared[slot] is null, -1);
+                        if (free < 0)
+                        {
+                            PlayMagicUi(MagicSounds.Invalid, 0.4f);
+                            NoticeMagic("spell memory is full", SpellIconAtlas.LayerFor(spell.Particle),
+                                "clear one of the eight prepared slots first");
+                        }
+                        else _character.Prepare(free, spell.StableName);
+                    }
+                    if (wasPrepared || _character.IsPrepared(spell.StableName))
+                        PlayMagicUi(wasPrepared ? MagicSounds.Unprepare : MagicSounds.Prepare, 0.4f);
+                    RefreshScreen();
+                }
+                return;
+            }
+
             if (_hudScreen.Tab == (int)PlayerTab.Progress && label == "reset progress" && activated)
             {
                 if (!_progressResetArmed)
@@ -7587,6 +7919,31 @@ public sealed class ClientHost : IDisposable
         if (_hudScreen.Kind == HudScreenKind.Trade)
         {
             if (_tradingWith is not { } resident) { CloseScreen(); return; }
+            if (resident.Profession == Profession.Lorekeeper)
+            {
+                if (_hudScreen.Selected < 0 || _hudScreen.Selected >= _hudScreen.Rows.Count) return;
+                var selected = _hudScreen.Rows[_hudScreen.Selected];
+                if (selected.Label == "done") { CloseScreen(); return; }
+                var spell = SpellCatalogue.All.FirstOrDefault(one => one.DisplayName == selected.Label);
+                if (spell is null) return;
+
+                var purchase = _character.Buy(spell.StableName, $"spell:{spell.StableName}");
+                if (purchase.Accepted)
+                {
+                    PlayMagicUi(MagicSounds.Purchase, 0.52f);
+                    PlayMagicUi(MagicSounds.Learn, 0.42f, 1.06f);
+                    NoticeMagic($"learned {spell.DisplayName}", SpellIconAtlas.LayerFor(spell.Particle),
+                        $"paid {CharacterProgression.CoinsText(purchase.Paid)}");
+                }
+                else
+                {
+                    PlayMagicUi(MagicSounds.PurchaseRefused, 0.46f);
+                    NoticeMagic($"cannot learn {spell.DisplayName}", SpellIconAtlas.LayerFor(spell.Particle),
+                        purchase.Reason);
+                }
+                RefreshScreen();
+                return;
+            }
             var at = _hudScreen.Selected - 1;
             var offers = Trading.For(resident.Profession);
             if (at == offers.Count) { CloseScreen(); return; }
@@ -8392,6 +8749,13 @@ public sealed class ClientHost : IDisposable
         TopUpCreatures(dt);
         if (_herd is null) return;
 
+        foreach (var creature in _herd.All)
+        {
+            var target = new EffectTarget(EffectTargetKind.Creature, creature.RuntimeId);
+            creature.MagicMovementScale = _spellEffects.MovementMultiplier(target);
+            creature.MagicallyFeared = _spellEffects.Feared(target);
+        }
+
         // ⚠ The body's feet, not the eye. A hostile aims at where somebody is standing, and giving
         // it the camera would make it chase a point two blocks in the air in third person.
         // ⛔ The herd is told which cells actually exist. A restored animal can stand a long way
@@ -8400,12 +8764,23 @@ public sealed class ClientHost : IDisposable
         _herd.Update(
             dt, SolidForCreature, _walking ? _player.Position : null, Sunlit,
             known: (x, y, z) => _streamer.World.TryGetChunk(ChunkPos.FromWorld(x, y, z), out _),
-            water: (x, y, z) => _registry[_streamer.World.GetBlock(x, y, z)].Fluid == FluidKind.Water);
+            water: (x, y, z) => _registry[_streamer.World.GetBlock(x, y, z)].Fluid == FluidKind.Water,
+            scorch: SustainSunlightBurn);
 
         foreach (var blow in _herd.TakeAttacks())
         {
-            _vitals.Hurt(blow.HalfHearts);
-            Rumble(0.72f, 1f, 150);
+            var pet = _companions.For(LocalPlayerId);
+            var intercepted = pet is { Alive: true }
+                              && Vector3.DistanceSquared(pet.Position, blow.Position) <= 3.25f * 3.25f;
+            if (intercepted)
+            {
+                _companions.Hurt(LocalPlayerId, blow.HalfHearts, $"hostile:{blow.Kind}");
+            }
+            else
+            {
+                HurtPlayer(blow.HalfHearts);
+                Rumble(0.72f, 1f, 150);
+            }
 
             _audio?.Play(Pick(CreatureSounds.Blows), blow.Position, 0.62f, Wobble());
 
@@ -8490,6 +8865,20 @@ public sealed class ClientHost : IDisposable
         {
             _audio?.Play(Pick(CreatureSounds.Deaths), death.Position, 0.68f, Wobble());
 
+            var contributed = _playerContributions.Remove(death.RuntimeId);
+            if (contributed)
+            {
+                var reward = CharacterRewards.Creature(death.Kind, death.Grown, death.Hostile);
+                if (reward.Empty)
+                {
+                    NoticeMagic(
+                        $"{death.Kind} awards nothing", StarterBlocks.LayerAnvilTop, reward.Reason);
+                }
+                else SettleCharacterReward(
+                    $"creature:{death.RuntimeId}", reward, XpSource.Creature,
+                    $"{death.Kind} defeated", StarterBlocks.LayerAnvilTop);
+            }
+
             // ⚠ Its own voice, one last time. A kind with a real death recording uses it; the rest
             // low the ordinary voice pitched down. The impact says a blow landed; what says which
             // animal it was is the recording it has been lowing with all afternoon.
@@ -8554,7 +8943,8 @@ public sealed class ClientHost : IDisposable
 
         _inhabitants.Update(
             dt, _clock.TimeOfDay, SolidForCreature,
-            (x, y, z) => _streamer.World.TryGetChunk(ChunkPos.FromWorld(x, y, z), out _));
+            (x, y, z) => _streamer.World.TryGetChunk(ChunkPos.FromWorld(x, y, z), out _),
+            DryTreeFreeSpawnSupport);
     }
 
     /// <summary>Drives the two keyed encounter state machines after the herd has moved/died.</summary>
@@ -8571,8 +8961,14 @@ public sealed class ClientHost : IDisposable
             if (encounter.Kind == EncounterKind.Trial)
             {
                 if (sentinelCount == 0 && _exploration.Clear(site.Id))
+                {
+                    SettleCharacterReward(
+                        $"encounter:{site.Id}:{LocalPlayerId}",
+                        CharacterRewards.Encounter(EncounterKind.Trial), XpSource.Encounter,
+                        "storm vault cleared", StarterBlocks.LayerAnvilTop);
                     Notice("the storm vault falls quiet", _items.ByName(
                         ExplorationRewards.RewardFor(EncounterKind.Trial)));
+                }
                 continue;
             }
 
@@ -8580,8 +8976,14 @@ public sealed class ClientHost : IDisposable
             if (wardens.Count == 0)
             {
                 if (sentinelCount == 0 && _exploration.Clear(site.Id))
+                {
+                    SettleCharacterReward(
+                        $"encounter:{site.Id}:{LocalPlayerId}",
+                        CharacterRewards.Encounter(EncounterKind.Crown), XpSource.Encounter,
+                        "Starfall Crown cleared", StarterBlocks.LayerAnvilTop);
                     Notice("the Starfall Crown falls quiet", _items.ByName(
                         ExplorationRewards.RewardFor(EncounterKind.Crown)));
+                }
                 continue;
             }
 
@@ -8608,9 +9010,59 @@ public sealed class ClientHost : IDisposable
         }
     }
 
+    /// <summary>Settles first-site discoveries and bounded ten-minute survival milestones.</summary>
+    private void StepProgressionRewards(float dt)
+    {
+        if (!_spawned || !_walking || _atStartScreen || dt <= 0f) return;
+        _progressionRewardScan -= dt;
+        if (_progressionRewardScan > 0f) return;
+        _progressionRewardScan = 1.5f;
+
+        var px = (int)MathF.Floor(_player.Position.X);
+        var pz = (int)MathF.Floor(_player.Position.Z);
+        foreach (var kind in Enum.GetValues<StructureKind>())
+        {
+            if (_terrain.Exploration.FindNearest(kind, px, pz, rings: 2) is not { } site) continue;
+            var reach = site.Radius + 24L;
+            var dx = (long)site.X - px;
+            var dz = (long)site.Z - pz;
+            if (dx * dx + dz * dz > reach * reach) continue;
+            SettleCharacterReward(
+                $"discovery:{site.Id}:{LocalPlayerId}", CharacterRewards.Discovery(site.Kind),
+                XpSource.Discovery, $"discovered {StructureName(site.Kind)}", StarterBlocks.LayerRelicChart);
+        }
+
+        var survived = Math.Min(
+            CharacterRewards.MaximumSurvivalMilestones,
+            (int)Math.Floor(_progress.TimeSurvived / CharacterRewards.SurvivalSeconds));
+        for (var milestone = 1; milestone <= survived; milestone++)
+            SettleCharacterReward(
+                $"survival:{milestone}:{LocalPlayerId}", CharacterRewards.Survival(milestone),
+                XpSource.Survival, "survival milestone", StarterBlocks.LayerBread);
+    }
+
+    private static string StructureName(StructureKind kind) => kind switch
+    {
+        StructureKind.BuriedGallery => "a buried gallery",
+        StructureKind.Driftstead => "a Driftstead",
+        StructureKind.Tidewreck => "a tidewreck",
+        StructureKind.StormVault => "a storm vault",
+        _ => "the Starfall Crown",
+    };
+
     /// <summary>Advances the shared flight pool and turns its plain impact records into game effects.</summary>
     private void StepProjectiles(float dt)
     {
+        for (var i = 0; i < ProjectileSystem.Capacity; i++)
+        {
+            if (!_projectiles.ActiveAt(i)) continue;
+            var shot = _projectiles.SnapshotAt(i);
+            if (shot.Kind != ProjectileKind.FireBolt) continue;
+            SpellParticleEffects.Emit(
+                _particles, SpellParticleId.FireBolt, SpellParticlePhase.Travel,
+                shot.Position - shot.Velocity * MathF.Min(dt, 0.05f), shot.Position, _character.Rank);
+        }
+
         _projectiles.Update(_streamer.World, _herd, dt);
 
         foreach (ref readonly var impact in _projectiles.Impacts)
@@ -8621,11 +9073,22 @@ public sealed class ClientHost : IDisposable
                 continue;
             }
 
+            if (impact.Kind == ProjectileKind.FireBolt)
+            {
+                SpellParticleEffects.Emit(
+                    _particles, SpellParticleId.FireBolt, SpellParticlePhase.Impact,
+                    impact.Position - impact.Velocity * 0.03f, impact.Position, _character.Rank);
+                PlayMagic(MagicSounds.Impact, impact.Position, 0.52f,
+                    0.98f + _character.Rank * 0.02f);
+            }
+
             if (impact.Creature is { } creature && _herd is not null)
             {
                 var before = creature.Health;
                 _herd.Hurt(creature, impact.Damage, impact.Position - impact.Velocity);
                 if (creature.Health == before) continue;
+                if (impact.Owner == ProjectileOwner.Player)
+                    _playerContributions.Add(creature.RuntimeId);
 
                 _audio?.Play(Pick(CreatureSounds.Blows), impact.Position, 0.58f, 1.08f);
                 InteractionParticleEffects.CreatureHit(
@@ -8637,7 +9100,7 @@ public sealed class ClientHost : IDisposable
                 continue;
             }
 
-            if (impact.Face < 0) continue;
+            if (impact.Face < 0 || impact.Kind == ProjectileKind.FireBolt) continue;
             var struck = _registry[_streamer.World.GetBlock(impact.X, impact.Y, impact.Z)];
             _particles.Chip(struck, impact.X, impact.Y, impact.Z, impact.Face, 5);
             PlaySound(struck, SoundEvent.Hit, impact.Position, 0.38f, 1.16f);
@@ -8794,7 +9257,7 @@ public sealed class ClientHost : IDisposable
         var hurt = Explosion.HurtAt(centre, _player.Position + new Vector3(0f, 0.9f, 0f));
         if (hurt > 0)
         {
-            _vitals.Hurt(hurt);
+            HurtPlayer(hurt);
             Rumble(1f, 0.75f, 280);
         }
 
@@ -8956,13 +9419,16 @@ public sealed class ClientHost : IDisposable
     {
         if (_herd is null) return;
 
-        var damage = Combat.DamageOf(_inventory.HeldType);
+        var damage = Combat.DamageOf(_inventory.HeldType) + _character.Statistics.WeaponDamage;
+        if (Random.Shared.NextDouble() < _character.Statistics.CriticalChance)
+            damage = Math.Max(damage + 1, (int)MathF.Round(damage * 1.5f));
         var before = quarry.Health;
 
         _herd.Hurt(quarry, damage, _viewPosition);
 
         // Still ringing from the last blow, so nothing happened and nothing should be heard.
         if (quarry.Health == before) return;
+        _playerContributions.Add(quarry.RuntimeId);
         Rumble(0.22f, 0.72f, 75);
 
         // The gains here are levelled against the VOICES rather than picked. The user's animal
@@ -9088,6 +9554,8 @@ public sealed class ClientHost : IDisposable
     }
 
     /// <summary>How tall the screen is in layout units — what the overlay lays everything out in.</summary>
+    private float LayoutWidth => _window.Size.X / HudRenderer.ScaleFor(_window.Size.Y);
+
     private float LayoutHeight => _window.Size.Y / HudRenderer.ScaleFor(_window.Size.Y);
 
     /// <summary>
@@ -9152,6 +9620,18 @@ public sealed class ClientHost : IDisposable
         _lastInputWasController = false;
         if (_bench is not null) return;
 
+        if (HandleMagicWindowMouseDown(button)) return;
+
+        if (_spellCursorOpen)
+        {
+            if (button != MouseButton.Left) return;
+            var zone = _layout.At(_hudScreen.Pointer.X, _hudScreen.Pointer.Y);
+            if (zone is { Kind: ZoneKind.Spell }) TryCastPrepared(zone.Value.Index);
+            else if (zone is { Kind: ZoneKind.CompanionCommand })
+                CommandCompanion((CompanionCommand)zone.Value.Index);
+            return;
+        }
+
         // A screen takes the buttons. It used to swallow them, which is the whole of the fault
         // behind "the menu opens and I cannot do anything with it": the pointer was let go of, the
         // system's arrow appeared over a screen full of squares, and every click landed on nothing.
@@ -9178,7 +9658,7 @@ public sealed class ClientHost : IDisposable
 
             if (button == MouseButton.Left
                 && _hudScreen.Kind == HudScreenKind.Player
-                && _hudScreen.Tab == (int)PlayerTab.Items
+                && _hudScreen.Tab is (int)PlayerTab.Items or (int)PlayerTab.Character
                 && _layout.At(_hudScreen.Pointer.X, _hudScreen.Pointer.Y) is { Kind: ZoneKind.PlayerPreview })
             {
                 _draggingFigure = true;
@@ -9216,6 +9696,111 @@ public sealed class ClientHost : IDisposable
         }
     }
 
+    /// <summary>
+    /// Right click opens the one safe layout action; left click performs it or drags an unlocked
+    /// title.  This runs before spell commands and menu rows so moving a panel can never cast,
+    /// dismiss a pet, or change preparation underneath the pointer.
+    /// </summary>
+    private bool HandleMagicWindowMouseDown(MouseButton button)
+    {
+        if (!_spellCursorOpen && !IsOpenSpellbook()) return false;
+        var point = _hudScreen.Pointer;
+        var zone = _layout.At(point.X, point.Y);
+
+        if (zone is { Kind: ZoneKind.MagicWindowOption })
+        {
+            if (button == MouseButton.Left)
+                ToggleMagicWindowLock((MagicWindowKind)zone.Value.Index);
+            return true;
+        }
+
+        MagicWindowKind? panel = null;
+        if (_spellCursorOpen && Contains(_hudScreen.CompanionPanelBounds, point))
+            panel = MagicWindowKind.Companion;
+        else if (IsOpenSpellbook() && Contains(_hudScreen.SpellbookPanelBounds, point))
+            panel = MagicWindowKind.Spellbook;
+
+        if (button == MouseButton.Right && panel is { } context)
+        {
+            _hudScreen.MagicWindowContext = (int)context;
+            _hudScreen.MagicWindowContextAt = point + new Vector2(4f, 3f);
+            PlayMagicUi(MagicSounds.Prepare, 0.24f, 0.92f);
+            return true;
+        }
+
+        if (button == MouseButton.Left
+            && zone is { Kind: ZoneKind.MagicWindowTitle }
+            && Enum.IsDefined<MagicWindowKind>((MagicWindowKind)zone.Value.Index))
+        {
+            var kind = (MagicWindowKind)zone.Value.Index;
+            _hudScreen.MagicWindowContext = -1;
+            if (!MagicWindowLocked(kind))
+            {
+                _draggingMagicWindow = kind;
+                _magicWindowDragAt = point;
+            }
+            return true;
+        }
+
+        if (button == MouseButton.Left && _hudScreen.MagicWindowContext >= 0)
+            _hudScreen.MagicWindowContext = -1;
+        return false;
+    }
+
+    private bool IsOpenSpellbook() =>
+        _hudScreen.Kind == HudScreenKind.Player && _hudScreen.Tab == (int)PlayerTab.Spells;
+
+    private bool MagicWindowLocked(MagicWindowKind kind) => kind switch
+    {
+        MagicWindowKind.Companion => _settings.CompanionWindowLocked,
+        _ => _settings.SpellbookWindowLocked,
+    };
+
+    private void ToggleMagicWindowLock(MagicWindowKind kind)
+    {
+        bool locked;
+        if (kind == MagicWindowKind.Companion)
+            locked = _settings.CompanionWindowLocked = !_settings.CompanionWindowLocked;
+        else locked = _settings.SpellbookWindowLocked = !_settings.SpellbookWindowLocked;
+        _hudScreen.MagicWindowContext = -1;
+        if (locked && _draggingMagicWindow == kind) _draggingMagicWindow = null;
+        SaveMagicWindowSettings();
+        NoticeMagic($"{(kind == MagicWindowKind.Companion ? "companion window" : "spellbook")} "
+                    + (locked ? "locked" : "unlocked"),
+            StarterBlocks.LayerAnvilTop,
+            locked ? "protected from accidental movement" : "drag its decorated title border to move it");
+    }
+
+    private void SaveMagicWindowSettings()
+    {
+        _settings.CompanionWindowX = (int)MathF.Round(_companionWindowOffset.X);
+        _settings.CompanionWindowY = (int)MathF.Round(_companionWindowOffset.Y);
+        _settings.SpellbookWindowX = (int)MathF.Round(_spellbookWindowOffset.X);
+        _settings.SpellbookWindowY = (int)MathF.Round(_spellbookWindowOffset.Y);
+        if (_options.UiCheck) return;
+        if (!_settings.Save())
+            Console.Error.WriteLine("driftwood: could not remember the magic window layout");
+    }
+
+    private static bool Contains(Vector4 bounds, Vector2 point) =>
+        bounds.Z > 0f && bounds.W > 0f
+        && point.X >= bounds.X && point.X < bounds.X + bounds.Z
+        && point.Y >= bounds.Y && point.Y < bounds.Y + bounds.W;
+
+    private Vector2 ConstrainMagicWindowMove(MagicWindowKind kind, Vector2 moved)
+    {
+        var bounds = kind == MagicWindowKind.Companion
+            ? _hudScreen.CompanionPanelBounds : _hudScreen.SpellbookPanelBounds;
+        if (bounds.Z <= 0f || bounds.W <= 0f) return Vector2.Zero;
+        var margin = kind == MagicWindowKind.Companion ? 4f : 8f;
+        var bottom = kind == MagicWindowKind.Companion ? 44f : 25f;
+        return new Vector2(
+            Math.Clamp(moved.X, margin - bounds.X,
+                LayoutWidth - margin - bounds.X - bounds.Z),
+            Math.Clamp(moved.Y, margin - bounds.Y,
+                LayoutHeight - bottom - bounds.Y - bounds.W));
+    }
+
     private void OnMouseUp(MouseButton button)
     {
         _lastInputWasController = false;
@@ -9228,6 +9813,8 @@ public sealed class ClientHost : IDisposable
                 _draggingMap = false;
                 _draggingSkinPreview = false;
                 _draggingFigure = false;
+                if (_draggingMagicWindow is not null) SaveMagicWindowSettings();
+                _draggingMagicWindow = null;
                 break;
             case MouseButton.Right:
                 _mousePlaceHeld = false;
@@ -9266,7 +9853,7 @@ public sealed class ClientHost : IDisposable
     private void ApplyCursorMode()
     {
         _input.SetCursor(
-            _hudScreen.IsOpen ? CursorMode.Hidden
+            _hudScreen.IsOpen || _spellCursorOpen ? CursorMode.Hidden
             : _mouseCaptured ? CursorMode.Raw
             : CursorMode.Normal);
 
@@ -9277,7 +9864,7 @@ public sealed class ClientHost : IDisposable
     {
         // A GLFW cursor warp can report on this call or a later one. Keep controller prompts when
         // that report lands exactly where snap navigation put the shared pointer.
-        var controllerWarp = _hudScreen.IsOpen
+        var controllerWarp = (_hudScreen.IsOpen || _spellCursorOpen)
             && _lastInputWasController
             && Vector2.DistanceSquared(
                 position,
@@ -9286,7 +9873,7 @@ public sealed class ClientHost : IDisposable
         // Under a screen the position is real window coordinates, so the pointer is simply where
         // the mouse is, divided down into layout units. No accumulation, nothing to drift, and
         // nothing to re-anchor when the window is resized under it.
-        if (_hudScreen.IsOpen)
+        if (_hudScreen.IsOpen || _spellCursorOpen)
         {
             var scale = HudRenderer.ScaleFor(_window.Size.Y);
             _hudScreen.Pointer = new Vector2(
@@ -9325,6 +9912,16 @@ public sealed class ClientHost : IDisposable
                 _hudScreen.FigureYaw = NormalAngle(_hudScreen.FigureYaw + moved.X * 1.4f);
                 _figureDragAt = _hudScreen.Pointer;
                 RefreshScreen();
+            }
+
+            if (_draggingMagicWindow is { } magicWindow)
+            {
+                var moved = ConstrainMagicWindowMove(
+                    magicWindow, _hudScreen.Pointer - _magicWindowDragAt);
+                if (magicWindow == MagicWindowKind.Companion) _companionWindowOffset += moved;
+                else _spellbookWindowOffset += moved;
+                _magicWindowDragAt = _hudScreen.Pointer;
+                if (IsOpenSpellbook()) RefreshScreen();
             }
 
             _haveMouseAnchor = false;
@@ -9449,23 +10046,46 @@ public sealed class ClientHost : IDisposable
     {
         var pad = _settings.Pad;
 
-        if (_controller.Pressed(ControllerAction.OpenInventory, pad))
+        var bankLeft = _controller.Held(ControllerAction.SpellBankLeft, pad);
+        var bankRight = _controller.Held(ControllerAction.SpellBankRight, pad);
+        if (_controller.Pressed(ControllerAction.SpellBankLeft, pad)) _spellLastControllerBank = 1;
+        if (_controller.Pressed(ControllerAction.SpellBankRight, pad)) _spellLastControllerBank = 2;
+        _spellControllerBank = bankLeft && bankRight ? _spellLastControllerBank
+            : bankRight ? 2 : bankLeft ? 1 : 0;
+
+        if (_spellControllerBank == 0 && _controller.Pressed(ControllerAction.OpenInventory, pad))
             RunAction(GameAction.OpenInventory);
-        if (_controller.Pressed(ControllerAction.OpenOptions, pad))
+        if (_spellControllerBank == 0 && _controller.Pressed(ControllerAction.OpenOptions, pad))
             RunAction(GameAction.OpenOptions);
-        if (_controller.Pressed(ControllerAction.ToggleView, pad))
+        if (_spellControllerBank == 0 && _controller.Pressed(ControllerAction.ToggleView, pad))
             RunAction(GameAction.ToggleView);
-        if (_controller.Pressed(ControllerAction.SwapHands, pad))
+        if (_spellControllerBank == 0 && _controller.Pressed(ControllerAction.SwapHands, pad))
             RunAction(GameAction.SwapHands);
 
-        if (_hudScreen.IsOpen) return;
+        if (_hudScreen.IsOpen) { _spellControllerBank = 0; return; }
+
+        if (_spellControllerBank > 0)
+        {
+            _controllerLookSuppressed = true;
+            var first = (_spellControllerBank - 1) * 4;
+            if (_controller.Pressed(ControllerControl.South)) TryCastPrepared(first);
+            else if (_controller.Pressed(ControllerControl.East)) TryCastPrepared(first + 1);
+            else if (_controller.Pressed(ControllerControl.West)) TryCastPrepared(first + 2);
+            else if (_controller.Pressed(ControllerControl.North)) TryCastPrepared(first + 3);
+
+            if (_controller.Pressed(ControllerControl.DPadUp)) CommandCompanion(CompanionCommand.Attack);
+            else if (_controller.Pressed(ControllerControl.DPadRight)) CommandCompanion(CompanionCommand.Guard);
+            else if (_controller.Pressed(ControllerControl.DPadDown)) CommandCompanion(CompanionCommand.Follow);
+            else if (_controller.Pressed(ControllerControl.DPadLeft)) CommandCompanion(CompanionCommand.Stop);
+            else if (_controller.Pressed(ControllerControl.Back)) CommandCompanion(CompanionCommand.GoAway);
+        }
 
         if (_controller.Pressed(ControllerAction.PreviousSlot, pad))
             _inventory.Select(_inventory.Selected - 1);
         if (_controller.Pressed(ControllerAction.NextSlot, pad))
             _inventory.Select(_inventory.Selected + 1);
 
-        var radial = _controller.Held(ControllerAction.RadialHotbar, pad);
+        var radial = _spellControllerBank == 0 && _controller.Held(ControllerAction.RadialHotbar, pad);
         if (radial)
         {
             _controllerLookSuppressed = true;
@@ -9481,17 +10101,19 @@ public sealed class ClientHost : IDisposable
             _hudScreen.RadialSlot = -1;
         }
 
-        if (!radial && _controllerLookSuppressed && _controllerLook == Vector2.Zero)
+        if (!radial && _spellControllerBank == 0 && _controllerLookSuppressed && _controllerLook == Vector2.Zero)
             _controllerLookSuppressed = false;
 
-        if (!radial && !_controllerLookSuppressed)
+        if (!radial && _spellControllerBank == 0 && !_controllerLookSuppressed)
         {
             _camera.ApplyControllerLook(
                 _controllerLook, dt, _settings.ControllerLookSpeed, _settings.ControllerInvertY);
         }
 
-        var breaking = !radial && _controller.Held(ControllerAction.BreakOrAttack, pad);
-        var placing = !radial && _controller.Held(ControllerAction.UseOrPlace, pad);
+        var breaking = !radial && _spellControllerBank == 0
+            && _controller.Held(ControllerAction.BreakOrAttack, pad);
+        var placing = !radial && _spellControllerBank == 0
+            && _controller.Held(ControllerAction.UseOrPlace, pad);
         if (breaking && !_controllerBreakHeld)
         {
             _lastStrikeWasBreak = true;
@@ -9702,6 +10324,7 @@ public sealed class ClientHost : IDisposable
         _uploadsThisFrame = 0;
 
         StepController((float)dt);
+        StepSpellCursorInput();
 
         if (_benchPath is not null)
         {
@@ -9734,9 +10357,9 @@ public sealed class ClientHost : IDisposable
             {
                 _camera.UpdateController(
                     (float)dt, _controllerMove,
-                    _controller.Held(ControllerAction.Jump, _settings.Pad),
-                    _controller.Held(ControllerAction.Sneak, _settings.Pad),
-                    _controller.Held(ControllerAction.Sprint, _settings.Pad));
+                    _spellControllerBank == 0 && _controller.Held(ControllerAction.Jump, _settings.Pad),
+                    _spellControllerBank == 0 && _controller.Held(ControllerAction.Sneak, _settings.Pad),
+                    _spellControllerBank == 0 && _controller.Held(ControllerAction.Sprint, _settings.Pad));
             }
         }
 
@@ -9792,8 +10415,10 @@ public sealed class ClientHost : IDisposable
         StepFurnaces((float)dt);
         StepProjectiles((float)dt);
         StepCreatures((float)dt);
+        StepMagic((float)dt);
         StepInhabitants((float)dt);
         StepExploration();
+        StepProgressionRewards((float)dt);
         StepCarts((float)dt);
         StepToasts((float)dt);
         StepAmbience((float)dt);
@@ -9821,7 +10446,7 @@ public sealed class ClientHost : IDisposable
         // What the pointer is over, from the layout the overlay built last frame. A frame behind on
         // purpose — the alternative is laying the whole screen out twice — and at sixty a second
         // nothing about a highlight is visible one frame late.
-        _hudScreen.Hovered = _hudScreen.IsOpen
+        _hudScreen.Hovered = _hudScreen.IsOpen || _spellCursorOpen
             ? _layout.At(_hudScreen.Pointer.X, _hudScreen.Pointer.Y)
             : null;
 
@@ -9880,6 +10505,613 @@ public sealed class ClientHost : IDisposable
                   + (_frustumCulling ? "" : " | CULLING OFF");
         }
     }
+
+    private void StepSpellCursorInput()
+    {
+        var wanted = !_hudScreen.IsOpen && !_atStartScreen && _bench is null
+            && _keys.Held(_input, GameAction.SpellCursor);
+        if (wanted == _spellCursorOpen) return;
+
+        _spellCursorOpen = wanted;
+        if (wanted)
+        {
+            StopHands();
+            TakeThePointer();
+        }
+        else
+        {
+            _hudScreen.Hovered = null;
+            SetMouseCaptured(true);
+        }
+    }
+
+    private void TryCastPrepared(int slot)
+    {
+        if ((uint)slot >= CharacterProgression.PreparedCapacity) return;
+        var stable = _character.Prepared[slot];
+        if (stable is null || !SpellCatalogue.TryByStableName(stable, out var spell))
+        {
+            NoticeMagic($"spell slot {slot + 1} is empty", StarterBlocks.LayerAnvilTop,
+                "prepare a learned spell on the Spells tab");
+            return;
+        }
+
+        var origin = _player.Position + new Vector3(0f, _player.CurrentEyeHeight * 0.72f, 0f);
+        var target = CastTargetFor(spell, origin, out var lineOfSight);
+        _spellCasting.Begin(_character, stable, origin, target, lineOfSight);
+    }
+
+    private CastTarget CastTargetFor(SpellDefinition spell, Vector3 origin, out bool lineOfSight)
+    {
+        lineOfSight = true;
+        if (spell.Target is SpellTarget.Self or SpellTarget.SelfOrAlly or SpellTarget.DeadAlly)
+        {
+            return new CastTarget(
+                EffectTargetKind.Player, LocalPlayerId, _player.Position,
+                Alive: spell.Target != SpellTarget.DeadAlly, Allied: true, Hostile: false);
+        }
+
+        var rank = spell.AtRank(_character.Rank);
+        if (spell.Target == SpellTarget.Hostile)
+        {
+            var limit = rank.Range;
+            var blockAt = BlockRay.TryCast(
+                _streamer.World, _targetable, _camera.Position, _camera.Forward, limit, out var wall)
+                ? wall.Distance : float.PositiveInfinity;
+            var reach = MathF.Min(limit, blockAt);
+            var creature = _herd?.Pick(_camera.Position, _camera.Forward, reach, out _);
+            if (creature is not null)
+                return new CastTarget(
+                    EffectTargetKind.Creature, creature.RuntimeId, creature.Middle,
+                    creature.Alive, Allied: false, creature.Hostile);
+
+            lineOfSight = float.IsInfinity(blockAt);
+            return new CastTarget(
+                EffectTargetKind.Creature, "no-target", origin + _camera.Forward * MathF.Min(limit, 4f),
+                Alive: false, Allied: false, Hostile: false);
+        }
+
+        var flat = new Vector3(_camera.Forward.X, 0f, _camera.Forward.Z);
+        if (flat.LengthSquared() < 1e-6f) flat = Vector3.UnitX;
+        else flat = Vector3.Normalize(flat);
+        var ground = _player.Position + flat * MathF.Min(3f, rank.Range);
+        if (BlockRay.TryCast(
+                _streamer.World, _targetable, _camera.Position, _camera.Forward, rank.Range, out var hit))
+        {
+            var n = Faces.Normals[hit.Face];
+            ground = _camera.Position + _camera.Forward * hit.Distance
+                + new Vector3(n.X, n.Y, n.Z) * 0.08f;
+            if (MathF.Abs(n.Y) < 0.5f) ground.Y = _player.Position.Y;
+        }
+        return new CastTarget(
+            EffectTargetKind.Player, "ground", ground, Alive: true, Allied: true, Hostile: false);
+    }
+
+    private void StepMagic(float dt)
+    {
+        if (_atStartScreen || _bench is not null) return;
+
+        _vitals.SetMaximumHealth(_character.Statistics.MaximumHealth);
+        _character.Tick(dt);
+        _spellCasting.Tick(dt);
+        foreach (var cast in _spellCasting.TakeEvents())
+        {
+            var spell = SpellCatalogue.ById(cast.Spell);
+            switch (cast.Kind)
+            {
+                case CastEventKind.Started:
+                    SpellParticleEffects.Emit(
+                        _particles, spell.Particle, SpellParticlePhase.Cast,
+                        cast.Origin, cast.Target.Position, cast.Rank);
+                    PlayMagic(spell.AudioKey, cast.Origin, 0.48f, 0.96f + cast.Rank * 0.025f);
+                    PlayMagic(MagicSounds.CastStart, cast.Origin, 0.28f);
+                    break;
+                case CastEventKind.Released:
+                    if (spell.AtRank(cast.Rank).CastTime > 0f)
+                        PlayMagic(MagicSounds.CastRelease, cast.Origin, 0.38f);
+                    if (spell.Delivery == SpellDelivery.Channel)
+                        _audio?.StartLoop(
+                            $"cast:{cast.PlayerId}", MagicSounds.ChannelLoop,
+                            cast.Target.Position, 0.32f, 0.92f + cast.Rank * 0.025f);
+                    ResolveSpell(cast, spell);
+                    break;
+                case CastEventKind.ChannelTick:
+                    ResolveChannelTick(cast, spell);
+                    break;
+                case CastEventKind.Completed:
+                    _audio?.StopLoop($"cast:{cast.PlayerId}");
+                    SpellParticleEffects.Emit(
+                        _particles, spell.Particle, SpellParticlePhase.End,
+                        cast.Origin, cast.Target.Position, cast.Rank);
+                    break;
+                case CastEventKind.Interrupted:
+                    _audio?.StopLoop($"cast:{cast.PlayerId}");
+                    SpellParticleEffects.Emit(
+                        _particles, spell.Particle, SpellParticlePhase.End,
+                        cast.Origin, cast.Target.Position, cast.Rank);
+                    PlayMagic(MagicSounds.Interrupted, cast.Origin, 0.5f);
+                    break;
+                case CastEventKind.Refused:
+                    NoticeMagic($"{spell.DisplayName} refused",
+                        SpellIconAtlas.LayerFor(spell.Particle), cast.Reason);
+                    PlayMagicUi(
+                        spell.Id == SpellId.Revive ? MagicSounds.ReviveRefused : MagicSounds.Invalid,
+                        0.42f);
+                    break;
+            }
+        }
+
+        _spellEffects.Tick(dt);
+        SettleSpellEffects();
+        StepCompanion(dt);
+        StepGatewayRifts(dt);
+    }
+
+    private void ResolveSpell(SpellCastEvent cast, SpellDefinition spell)
+    {
+        var value = spell.AtRank(cast.Rank);
+        var power = SpellPower(value.Primary);
+        var creature = CreatureById(cast.Target.Id);
+        var playerTarget = new EffectTarget(EffectTargetKind.Player, LocalPlayerId);
+        var creatureTarget = new EffectTarget(EffectTargetKind.Creature, cast.Target.Id);
+
+        switch (spell.Id)
+        {
+            case SpellId.HolyMight:
+            case SpellId.LightningStreak:
+            case SpellId.IceShock:
+                if (creature is not null)
+                    HurtWithSpell(creature, power, spell, cast.Rank, cast.Origin, emitImpact: false);
+                break;
+
+            case SpellId.QuickHeal:
+                _vitals.Heal(power);
+                break;
+
+            case SpellId.Revive:
+                // Accepted only when a future multiplayer authority supplies a dead allied target.
+                break;
+
+            case SpellId.HolyShield:
+                _spellEffects.Apply(
+                    SpellEffectKind.HolyShield, playerTarget, LocalPlayerId, cast.Rank,
+                    power, value.Duration, dispel: EffectDispelFamily.Beacon);
+                break;
+
+            case SpellId.Root:
+                if (creature is not null)
+                    _spellEffects.Apply(
+                        SpellEffectKind.Rooted, creatureTarget, LocalPlayerId, cast.Rank,
+                        value.Secondary, value.Duration, 0f, EffectDispelFamily.Nature);
+                break;
+
+            case SpellId.Fear:
+                if (creature is not null)
+                    _spellEffects.Apply(
+                        SpellEffectKind.Feared, creatureTarget, LocalPlayerId, cast.Rank,
+                        0, value.Duration, 0f, EffectDispelFamily.Control);
+                break;
+
+            case SpellId.DrawLifeforce:
+                SpellParticleEffects.Emit(_particles, spell.Particle, SpellParticlePhase.Travel,
+                    cast.Origin, cast.Target.Position, cast.Rank);
+                break;
+
+            case SpellId.Leech:
+                if (creature is not null)
+                    _spellEffects.Apply(
+                        SpellEffectKind.LifeforceLeech, creatureTarget, LocalPlayerId, cast.Rank,
+                        power, value.Duration, 1f, EffectDispelFamily.Grave);
+                break;
+
+            case SpellId.Ignite:
+                if (creature is not null)
+                {
+                    HurtWithSpell(creature, power, spell, cast.Rank, cast.Origin, emitImpact: false);
+                    _spellEffects.Apply(
+                        SpellEffectKind.Burning, creatureTarget, LocalPlayerId, cast.Rank,
+                        SpellPower(value.Secondary), value.Duration, 1f, EffectDispelFamily.Flame);
+                }
+                break;
+
+            case SpellId.TreeOfLife:
+                _spellEffects.Apply(
+                    SpellEffectKind.HealingOverTime, playerTarget, LocalPlayerId, cast.Rank,
+                    power, value.Duration, 1f, EffectDispelFamily.Nature);
+                break;
+
+            case SpellId.FireBolt:
+                if (!_projectiles.ShootFireBolt(
+                        cast.Origin + _camera.Forward * 0.35f,
+                        cast.Target.Position - cast.Origin, power))
+                    NoticeMagic("Fire Bolt fizzled", SpellIconAtlas.LayerFor(spell.Particle),
+                        "too many projectiles are already in flight");
+                else
+                    SpellParticleEffects.Emit(_particles, spell.Particle, SpellParticlePhase.Travel,
+                        cast.Origin, cast.Target.Position, cast.Rank);
+                break;
+
+            case SpellId.SummonBones:
+            case SpellId.AnimateZombie:
+            case SpellId.SpiritWolf:
+            case SpellId.EarthElemental:
+                var summoned = _companions.Summon(
+                    NextMagicEvent("summon"), LocalPlayerId, spell.Id, cast.Rank, cast.Target.Position);
+                if (summoned is not null)
+                {
+                    _character.LinkCompanion(summoned.InstanceId);
+                    SpellParticleEffects.Emit(_particles, spell.Particle, SpellParticlePhase.Impact,
+                        cast.Origin, summoned.Position, cast.Rank);
+                    NoticeMagic($"summoned {CompanionService.Definition(summoned.Kind).Name}",
+                        SpellIconAtlas.LayerFor(spell.Particle), "follow · guard · attack · stop · go away");
+                }
+                break;
+
+            case SpellId.GatewayRift:
+                _gatewayRifts.Open(
+                    LocalPlayerId, cast.Rank, cast.Target.Position, _camera.Yaw, value.Duration);
+                SpellParticleEffects.Emit(_particles, spell.Particle, SpellParticlePhase.Impact,
+                    cast.Origin, cast.Target.Position, cast.Rank);
+                break;
+
+            case SpellId.Snare:
+                if (creature is not null)
+                    _spellEffects.Apply(
+                        SpellEffectKind.Snared, creatureTarget, LocalPlayerId, cast.Rank,
+                        value.Secondary, value.Duration, 0f, EffectDispelFamily.Control);
+                break;
+        }
+
+        if (spell.Delivery is not (SpellDelivery.Projectile or SpellDelivery.Channel
+            or SpellDelivery.Summon or SpellDelivery.Portal))
+        {
+            SpellParticleEffects.Emit(_particles, spell.Particle, SpellParticlePhase.Impact,
+                cast.Origin, cast.Target.Position, cast.Rank);
+            PlayMagic(MagicSounds.Impact, cast.Target.Position, 0.46f,
+                0.96f + cast.Rank * 0.025f);
+        }
+    }
+
+    private void ResolveChannelTick(SpellCastEvent cast, SpellDefinition spell)
+    {
+        if (spell.Id != SpellId.DrawLifeforce || CreatureById(cast.Target.Id) is not { } creature) return;
+        var value = spell.AtRank(cast.Rank);
+        var settled = HurtWithSpell(
+            creature, SpellPower(value.Primary), spell, cast.Rank, cast.Origin, emitImpact: false);
+        if (settled > 0) _vitals.Heal(Math.Min(settled, SpellPower(value.Secondary)));
+        _audio?.UpdateLoop($"cast:{cast.PlayerId}", creature.Middle, 0.34f,
+            0.94f + cast.Rank * 0.025f);
+        SpellParticleEffects.Emit(_particles, spell.Particle, SpellParticlePhase.Sustain,
+            cast.Origin, creature.Middle, cast.Rank);
+    }
+
+    private void SettleSpellEffects()
+    {
+        foreach (var effect in _spellEffects.TakeEvents())
+        {
+            var spell = SpellForEffect(effect.Effect);
+            var targetPosition = EffectPosition(effect.Target);
+            if (effect.Kind is EffectEventKind.Applied or EffectEventKind.Refreshed)
+            {
+                SpellParticleEffects.Emit(_particles, spell.Particle, SpellParticlePhase.Sustain,
+                    _player.Position, targetPosition, _character.Rank);
+                continue;
+            }
+            if (effect.Kind == EffectEventKind.Ended)
+            {
+                SpellParticleEffects.Emit(_particles, spell.Particle, SpellParticlePhase.End,
+                    _player.Position, targetPosition, _character.Rank);
+                PlayMagic(MagicSounds.EffectEnd, targetPosition, 0.24f);
+                continue;
+            }
+            if (effect.Kind == EffectEventKind.TickHealing
+                && effect.Target.Kind == EffectTargetKind.Player)
+            {
+                _vitals.Heal(effect.Amount);
+                SpellParticleEffects.Emit(_particles, spell.Particle, SpellParticlePhase.Sustain,
+                    _player.Position, _player.Position, _character.Rank);
+                continue;
+            }
+            if (effect.Kind == EffectEventKind.TickDamage
+                && effect.Target.Kind == EffectTargetKind.Creature
+                && CreatureById(effect.Target.Id) is { } creature)
+            {
+                var localSource = effect.SourcePlayerId == LocalPlayerId;
+                var settled = HurtWithSpell(
+                    creature, effect.Amount, spell, _character.Rank, _player.Position,
+                    emitImpact: false, creditPlayer: localSource);
+                if (effect.Effect == SpellEffectKind.LifeforceLeech && localSource && settled > 0)
+                {
+                    var healing = SpellCatalogue.ById(SpellId.Leech).AtRank(_character.Rank).Secondary;
+                    _vitals.Heal(Math.Min(settled, SpellPower(healing)));
+                }
+                SpellParticleEffects.Emit(_particles, spell.Particle, SpellParticlePhase.Sustain,
+                    _player.Position, creature.Middle, _character.Rank);
+            }
+        }
+    }
+
+    private int SpellPower(int amount) =>
+        Math.Max(0, (int)MathF.Round(amount * _character.Statistics.SpellPotency));
+
+    private void SustainSunlightBurn(Creature creature)
+    {
+        _spellEffects.Sustain(
+            SpellEffectKind.Burning,
+            new(EffectTargetKind.Creature, creature.RuntimeId),
+            SunlightEffectSource,
+            rank: 1,
+            magnitude: 1,
+            duration: 0.2f,
+            tickEvery: 1f / CreatureHerd.ScorchRate,
+            dispel: EffectDispelFamily.Flame);
+    }
+
+    private int HurtWithSpell(
+        Creature creature, int amount, SpellDefinition spell, int rank, Vector3 from,
+        bool emitImpact = true, bool creditPlayer = true)
+    {
+        if (_herd is null || amount <= 0 || !creature.Alive) return 0;
+        var before = creature.Health;
+        _herd.Hurt(creature, amount, from);
+        var settled = before - creature.Health;
+        if (settled <= 0) return 0;
+        if (creditPlayer) _playerContributions.Add(creature.RuntimeId);
+        _spellEffects.BreakRoot(new EffectTarget(EffectTargetKind.Creature, creature.RuntimeId), settled);
+        if (emitImpact)
+            SpellParticleEffects.Emit(_particles, spell.Particle, SpellParticlePhase.Impact,
+                from, creature.Middle, rank);
+        return settled;
+    }
+
+    private Creature? CreatureById(string id) =>
+        _herd?.All.FirstOrDefault(one => one.RuntimeId == id && one.Alive);
+
+    private Vector3 EffectPosition(EffectTarget target) => target.Kind switch
+    {
+        EffectTargetKind.Player => _player.Position,
+        EffectTargetKind.Creature => CreatureById(target.Id)?.Middle ?? _player.Position,
+        EffectTargetKind.Companion => _companions.For(LocalPlayerId)?.Position ?? _player.Position,
+        _ => _player.Position,
+    };
+
+    private static SpellDefinition SpellForEffect(SpellEffectKind effect) => SpellCatalogue.ById(effect switch
+    {
+        SpellEffectKind.Burning => SpellId.Ignite,
+        SpellEffectKind.HealingOverTime => SpellId.TreeOfLife,
+        SpellEffectKind.Rooted => SpellId.Root,
+        SpellEffectKind.Feared => SpellId.Fear,
+        SpellEffectKind.LifeforceLeech => SpellId.Leech,
+        SpellEffectKind.Snared => SpellId.Snare,
+        _ => SpellId.HolyShield,
+    });
+
+    private void StepCompanion(float dt)
+    {
+        var beforePet = _companions.For(LocalPlayerId);
+        var beforePosition = beforePet?.Position;
+        _companions.RefreshRank(LocalPlayerId, _character.Rank);
+        _companions.Update(
+            dt,
+            owner => owner == LocalPlayerId ? _player.Position : null,
+            id => CreatureById(id)?.Position);
+
+        foreach (var change in _companions.TakeEvents())
+        {
+            var at = _companions.For(change.OwnerPlayerId)?.Position ?? _player.Position;
+            PlayMagic(MagicSounds.PetIdentity(change.Kind), at, 0.42f, 0.96f);
+            switch (change.Event)
+            {
+                case "summoned": PlayMagic(MagicSounds.Summon, at, 0.52f); break;
+                case "replaced": PlayMagic(MagicSounds.SummonReplace, at, 0.45f); break;
+                case "dismissed": PlayMagic(MagicSounds.SummonDepart, at, 0.45f); break;
+                case "died": PlayMagic(MagicSounds.PetDeathFor(change.Kind), at, 0.58f); break;
+                case "hurt": PlayMagic(MagicSounds.PetHurtFor(change.Kind), at, 0.42f); break;
+                case "command": PlayMagic(MagicSounds.Command(change.Command), at, 0.4f); break;
+            }
+        }
+
+        var pet = _companions.For(LocalPlayerId);
+        if (pet is null)
+        {
+            if (_character.ActiveCompanionId.Length > 0) _character.LinkCompanion("");
+            _petLowHealthWarned = false;
+            _petMovementSoundClock = _petIdleSoundClock = 0f;
+            return;
+        }
+
+        _character.LinkCompanion(pet.InstanceId);
+        StepCompanionVoice(
+            pet,
+            beforePosition is { } old && beforePet?.InstanceId == pet.InstanceId
+                && Vector3.DistanceSquared(old, pet.Position) > 0.0004f,
+            dt);
+        SelectDefensiveCompanionTarget(pet);
+        pet = _companions.For(LocalPlayerId)!;
+        _petAttackClock = MathF.Max(0f, _petAttackClock - dt);
+        var low = pet.Health * 4 <= pet.MaxHealth;
+        if (low && !_petLowHealthWarned)
+        {
+            _petLowHealthWarned = true;
+            PlayMagic(MagicSounds.PetLowHealthFor(pet.Kind), pet.Position, 0.55f);
+            NoticeMagic($"{CompanionService.Definition(pet.Kind).Name} is badly hurt",
+                StarterBlocks.LayerAnvilTop, $"{pet.Health}/{pet.MaxHealth} health");
+        }
+        else if (!low) _petLowHealthWarned = false;
+
+        if (pet.TargetId.Length == 0) return;
+        if (CreatureById(pet.TargetId) is not { } target)
+        {
+            if (pet.Command == CompanionCommand.Attack)
+                _companions.Command(LocalPlayerId, CompanionCommand.Follow);
+            else _companions.DefendAgainst(LocalPlayerId, "");
+            return;
+        }
+
+        var definition = CompanionService.Definition(pet.Kind);
+        if (_petAttackClock > 0f
+            || Vector3.DistanceSquared(pet.Position, target.Position) > definition.Reach * definition.Reach) return;
+
+        _petAttackClock = 1.1f;
+        if (_herd is null) return;
+        var before = target.Health;
+        _herd.Hurt(target, definition.Damage[pet.Rank - 1], pet.Position);
+        if (target.Health == before) return;
+        _playerContributions.Add(target.RuntimeId);
+        PlayMagic(MagicSounds.PetAttackFor(pet.Kind), target.Middle, 0.42f,
+            0.94f + pet.Rank * 0.02f);
+        var summonSpell = SpellCatalogue.ById(definition.Spell);
+        SpellParticleEffects.Emit(_particles, summonSpell.Particle, SpellParticlePhase.Impact,
+            pet.Position, target.Middle, pet.Rank);
+    }
+
+    private void StepCompanionVoice(Companion pet, bool moved, float dt)
+    {
+        if (moved)
+        {
+            _petIdleSoundClock = 0f;
+            _petMovementSoundClock -= dt;
+            if (_petMovementSoundClock > 0f) return;
+            _petMovementSoundClock = 0.48f + (int)pet.Kind * 0.055f;
+            PlayMagic(MagicSounds.PetMovement(pet.Kind), pet.Position, 0.18f,
+                0.97f + pet.Rank * 0.01f);
+            return;
+        }
+
+        _petMovementSoundClock = 0f;
+        _petIdleSoundClock += dt;
+        var interval = 7.5f + (int)pet.Kind * 0.8f;
+        if (_petIdleSoundClock < interval) return;
+        _petIdleSoundClock = 0f;
+        PlayMagic(MagicSounds.PetIdle(pet.Kind), pet.Position, 0.22f,
+            0.97f + pet.Rank * 0.01f);
+    }
+
+    private void SelectDefensiveCompanionTarget(Companion pet)
+    {
+        if (_herd is null || pet.Command is not (CompanionCommand.Guard or CompanionCommand.Follow)) return;
+        var centre = pet.Command == CompanionCommand.Guard ? pet.GuardPosition : _player.Position;
+        var leash = pet.Command == CompanionCommand.Guard ? 10f : 7f;
+        var maximum = leash * leash;
+        var current = CreatureById(pet.TargetId);
+        if (current is { Hostile: true }
+            && Vector3.DistanceSquared(current.Position, centre) <= maximum) return;
+
+        var nearest = _herd.All
+            .Where(one => one.Alive && one.Hostile)
+            .Select(one => (Creature: one, Distance: Vector3.DistanceSquared(one.Position, centre)))
+            .Where(one => one.Distance <= maximum)
+            .OrderBy(one => one.Distance)
+            .FirstOrDefault();
+        _companions.DefendAgainst(LocalPlayerId, nearest.Creature?.RuntimeId ?? "");
+    }
+
+    private void CommandCompanion(CompanionCommand command)
+    {
+        var target = command == CompanionCommand.Attack
+            ? PickSpellCreature(25f) : null;
+        if (command == CompanionCommand.Attack && target is null)
+        {
+            NoticeMagic("no hostile selected", StarterBlocks.LayerAnvilTop,
+                "aim at an enemy, then choose attack");
+            PlayMagicUi(MagicSounds.Invalid, 0.4f);
+            return;
+        }
+        if (!_companions.Command(LocalPlayerId, command, target?.RuntimeId ?? "")) return;
+        if (command == CompanionCommand.GoAway) _character.LinkCompanion("");
+        NoticeMagic(command == CompanionCommand.GoAway ? "companion dismissed" : $"companion: {command.ToString().ToLowerInvariant()}",
+            StarterBlocks.LayerAnvilTop,
+            command == CompanionCommand.Attack ? target!.Kind : "command accepted");
+    }
+
+    private Creature? PickSpellCreature(float range)
+    {
+        if (_herd is null) return null;
+        var blockAt = BlockRay.TryCast(
+            _streamer.World, _targetable, _camera.Position, _camera.Forward, range, out var wall)
+            ? wall.Distance : range;
+        var creature = _herd.Pick(_camera.Position, _camera.Forward, MathF.Min(range, blockAt), out _);
+        return creature is { Hostile: true } ? creature : null;
+    }
+
+    private void StepGatewayRifts(float dt)
+    {
+        _gatewayRifts.Tick(dt);
+        _riftParticleClock -= dt;
+        _riftEntryCooldown = MathF.Max(0f, _riftEntryCooldown - dt);
+        foreach (var rift in _gatewayRifts.All)
+        {
+            _audio?.UpdateLoop($"rift:{rift.Id}", rift.Position, 0.34f,
+                0.96f + rift.Rank * 0.02f);
+            if (_riftParticleClock <= 0f)
+                SpellParticleEffects.Emit(
+                    _particles, SpellParticleId.GatewayRift, SpellParticlePhase.Sustain,
+                    _player.Position, rift.Position, rift.Rank);
+
+            if (_riftEntryCooldown > 0f || !GatewayRiftService.Inside(rift, _player.Position)) continue;
+            _riftEntryCooldown = 1f;
+            _gatewayRifts.TryEnter(
+                rift, LocalPlayerId, _player.Position,
+                player => player == LocalPlayerId ? _character.Bind : null,
+                GatewayDestinationSafe,
+                destination => _player.Teleport(destination),
+                out _);
+        }
+        if (_riftParticleClock <= 0f) _riftParticleClock = 0.12f;
+
+        foreach (var change in _gatewayRifts.TakeEvents())
+        {
+            if (change.Kind == "opened")
+            {
+                PlayMagic(MagicSounds.PortalOpen, change.Position, 0.66f);
+                _audio?.StartLoop($"rift:{change.RiftId}", MagicSounds.PortalLoop,
+                    change.Position, 0.34f, 1f);
+            }
+            else if (change.Kind == "entered")
+            {
+                PlayMagic(MagicSounds.PortalEnter, change.Position, 0.68f);
+                SpellParticleEffects.Emit(_particles, SpellParticleId.GatewayRift,
+                    SpellParticlePhase.Impact, change.Position, change.Position, _character.Rank);
+                NoticeMagic("the rift returned you", SpellIconAtlas.LayerFor(SpellParticleId.GatewayRift),
+                    "your bound bed or place");
+            }
+            else if (change.Kind == "refused")
+            {
+                PlayMagicUi(MagicSounds.Invalid, 0.42f);
+                NoticeMagic("Gateway Rift refused", SpellIconAtlas.LayerFor(SpellParticleId.GatewayRift),
+                    change.Reason);
+            }
+            else if (change.Kind == "closed")
+            {
+                _audio?.StopLoop($"rift:{change.RiftId}");
+                PlayMagic(MagicSounds.PortalClose, change.Position, 0.54f);
+                SpellParticleEffects.Emit(_particles, SpellParticleId.GatewayRift,
+                    SpellParticlePhase.End, change.Position, change.Position, _character.Rank);
+            }
+        }
+    }
+
+    private bool GatewayDestinationSafe(Vector3 destination)
+    {
+        var feet = ChunkPos.FromWorld(
+            (int)MathF.Floor(destination.X), (int)MathF.Floor(destination.Y), (int)MathF.Floor(destination.Z));
+        var head = ChunkPos.FromWorld(
+            (int)MathF.Floor(destination.X),
+            (int)MathF.Floor(destination.Y + _player.CurrentHeight),
+            (int)MathF.Floor(destination.Z));
+        return _streamer.World.TryGetChunk(feet, out _)
+            && _streamer.World.TryGetChunk(head, out _)
+            && !_player.Collides(_streamer.World, destination);
+    }
+
+    private string NextMagicEvent(string kind) =>
+        $"{kind}:{_worldName}:{_playedBefore + _elapsed:R}:{++_magicEventSequence}";
+
+    private void PlayMagic(string sound, Vector3 at, float volume = 0.5f, float pitch = 1f) =>
+        _audio?.Play(sound, at, volume, pitch);
+
+    private void PlayMagicUi(string sound, float volume = 0.5f, float pitch = 1f) =>
+        _audio?.PlayUi(sound, volume, pitch);
 
     /// <summary>
     /// Advances the pose, works the target loose, and places on each swing that came round.
@@ -11365,6 +12597,7 @@ public sealed class ClientHost : IDisposable
 
         _clock.SetTime(Beds.Morning);
         _bedSpawn = new Vector3(x + 0.5f, y + 0.6f, z + 0.5f);
+        _character.SetBind(_bedSpawn);
 
         PlaySound(SoundMaterial.Cloth, SoundEvent.Place, new Vector3(x + 0.5f, y + 0.5f, z + 0.5f), 0.7f);
         Notice("slept till morning — you will wake here", null);
@@ -11400,6 +12633,68 @@ public sealed class ClientHost : IDisposable
             what, about?.Label ?? "", about?.IconLayer ?? StarterBlocks.LayerAnvilTop, ToastSeconds));
 
         while (_toasts.Count > MaxToasts) _toasts.RemoveAt(0);
+    }
+
+    private void NoticeMagic(string what, int icon, string line)
+    {
+        _toasts.Add(new Toast(what, line, icon, ToastSeconds));
+        while (_toasts.Count > MaxToasts) _toasts.RemoveAt(0);
+    }
+
+    private void SettleCharacterReward(
+        string eventId,
+        CharacterReward reward,
+        XpSource source,
+        string title,
+        int icon)
+    {
+        if (reward.Empty || string.IsNullOrWhiteSpace(eventId)) return;
+        var level = reward.Experience > 0
+            ? _character.AwardExperience(eventId, reward.Experience, source)
+            : default;
+        var paid = reward.Coins > 0 && _character.TryCredit(eventId, reward.Coins);
+        if (!level.Accepted && !paid) return;
+
+        if (level.ExperienceGranted > 0) PlayMagicUi(MagicSounds.XpGain, 0.34f);
+        if (paid) PlayMagicUi(MagicSounds.CoinPickup, 0.34f, 1.08f);
+        if (level.RankBoundary) PlayMagicUi(MagicSounds.RankUp, 0.72f);
+        else if (level.LevelsGained > 0) PlayMagicUi(MagicSounds.LevelUp, 0.65f);
+
+        var levelWords = level.RankBoundary
+            ? $" · level {_character.Level}, {CharacterProgression.RankName(_character.Rank)}!"
+            : level.LevelsGained > 0 ? $" · level {_character.Level}!" : "";
+        var gains = new List<string>(2);
+        if (level.ExperienceGranted > 0) gains.Add($"+{level.ExperienceGranted} XP");
+        if (paid) gains.Add($"+{CharacterProgression.CoinsText(reward.Coins)}");
+        NoticeMagic(title + levelWords, icon,
+            gains.Count > 0 ? string.Join(" · ", gains) : reward.Reason);
+    }
+
+    private void SettleLeveledGear(string eventId, LeveledGearReward reward)
+    {
+        if (reward.Empty || !_items.TryByName(reward.ItemName, out var item)) return;
+        var stack = new ItemStack(item.Id, 1);
+        if (!_inventory.CanAdd(stack))
+        {
+            NoticeMagic("personal gear cache waiting", item.IconLayer,
+                "make one inventory slot and reopen this chest");
+            return;
+        }
+        if (!_character.TryClaimReward("gear:" + eventId)) return;
+        var left = _inventory.Add(stack);
+        if (!left.IsEmpty)
+            throw new InvalidOperationException("a preflighted personal gear reward did not fit");
+        _audio?.Play(Pick(ActionSounds.Pickup), _player.Position, 0.52f, 1.08f);
+        NoticeMagic($"found {item.Label}", item.IconLayer, reward.Reason);
+    }
+
+    private void HurtPlayer(
+        int halfHearts, bool armoured = true, VitalsCause cause = VitalsCause.Struck)
+    {
+        var target = new EffectTarget(EffectTargetKind.Player, LocalPlayerId);
+        halfHearts = _spellEffects.Absorb(target, halfHearts);
+        if (armoured) halfHearts = Math.Max(0, halfHearts - _character.Statistics.Armour);
+        if (halfHearts > 0) _vitals.Hurt(halfHearts, armoured, cause);
     }
 
     /// <summary>Steps an anvil one stage nearer gone, and removes it at the end.</summary>
@@ -11754,6 +13049,16 @@ public sealed class ClientHost : IDisposable
                 return;
             }
 
+            // TerrainGenerator.SurfaceHeight deliberately describes terrain, not decoration. A
+            // tree can therefore occupy the original column after that estimate is made. Resolve
+            // a fresh player against the loaded, decorated world once, using the same legal-
+            // support distinction as animals and hostiles. Loaded saves keep their exact position.
+            if (_newWorldSpawnPending && !TryResolveNewWorldSpawn())
+            {
+                _camera.Position = _player.EyePosition;
+                return;
+            }
+
             _spawned = true;
         }
 
@@ -11782,6 +13087,7 @@ public sealed class ClientHost : IDisposable
         {
             if (_keys.Held(_input, GameAction.Sneak)
                 || (_settings.ControllerEnabled
+                    && _spellControllerBank == 0
                     && _controller.Held(ControllerAction.Sneak, _settings.Pad)))
             {
                 var offAt = _player.Position + new Vector3(0.8f, 0.2f, 0f);
@@ -11832,12 +13138,15 @@ public sealed class ClientHost : IDisposable
 
         var jump = _keys.Held(_input, GameAction.Jump)
             || (_settings.ControllerEnabled
+                && _spellControllerBank == 0
                 && _controller.Held(ControllerAction.Jump, _settings.Pad));
         var sneak = _keys.Held(_input, GameAction.Sneak)
             || (_settings.ControllerEnabled
+                && _spellControllerBank == 0
                 && _controller.Held(ControllerAction.Sneak, _settings.Pad));
         var sprint = (_keys.Held(_input, GameAction.Sprint)
             || (_settings.ControllerEnabled
+                && _spellControllerBank == 0
                 && _controller.Held(ControllerAction.Sprint, _settings.Pad))) && !sneak;
 
         var before = _player.Position;
@@ -11857,6 +13166,53 @@ public sealed class ClientHost : IDisposable
         }
 
         _camera.Position = _player.EyePosition;
+    }
+
+    /// <summary>
+    /// Finds the nearest dry, loaded, tree-free support column for a newly created player.
+    /// </summary>
+    private bool TryResolveNewWorldSpawn()
+    {
+        var world = _streamer.World;
+        var centreX = (int)MathF.Floor(_spawnPoint.X);
+        var centreZ = (int)MathF.Floor(_spawnPoint.Z);
+
+        // Square rings give a stable nearest-first result without allocating a candidate list.
+        // Sixty-four blocks is inside even the minimum play view and escapes a dense origin grove.
+        for (var radius = 0; radius <= 64; radius++)
+        for (var dz = -radius; dz <= radius; dz++)
+        for (var dx = -radius; dx <= radius; dx++)
+        {
+            if (radius > 0 && Math.Max(Math.Abs(dx), Math.Abs(dz)) != radius) continue;
+            var x = centreX + dx;
+            var z = centreZ + dz;
+            if (!CreatureHerd.TryGround(
+                    SolidForCreature, TreeFreeSpawnSupport,
+                    x, z, TerrainGenerator.WorldTop - 1, out var feetY)) continue;
+
+            var feet = (int)feetY;
+            if (feet <= TerrainGenerator.SeaLevel) continue;
+            if (!SpawnCellsLoaded(x, feet, z)) continue;
+            if (_registry[world.GetBlock(x, feet, z)].Fluid != FluidKind.None
+                || _registry[world.GetBlock(x, feet + 1, z)].Fluid != FluidKind.None) continue;
+
+            _spawnPoint = new Vector3(x + 0.5f, feetY, z + 0.5f);
+            _player.Teleport(_spawnPoint);
+            _camera.Position = _player.EyePosition;
+            _newWorldSpawnPending = false;
+            Console.WriteLine(
+                $"spawn       tree-free ground at {_spawnPoint.X:F1} {_spawnPoint.Y:F1} {_spawnPoint.Z:F1}");
+            return true;
+        }
+
+        return false;
+    }
+
+    private bool SpawnCellsLoaded(int x, int feetY, int z)
+    {
+        for (var y = feetY - 1; y <= feetY + CreatureHerd.HeadRoom; y++)
+            if (!_streamer.World.TryGetChunk(ChunkPos.FromWorld(x, y, z), out _)) return false;
+        return true;
     }
 
     /// <summary>Wears the held tool and records the exact use that finally broke it.</summary>
@@ -12097,6 +13453,7 @@ public sealed class ClientHost : IDisposable
         _particleRenderer.Draw(
             _particles, viewProj, _viewPosition, _viewForward,
             at => ParticleLight(at), _skyState.Horizon, _fogStart, _fogEnd);
+        _gatewayRenderer.Draw(_gatewayRifts.All, viewProj, FlickerClock);
 
         // Blended, and after the world has written its depth so terrain occludes them. Before the
         // player, not after: drawing the held arm clears the depth buffer so it can sit in front of
@@ -12131,6 +13488,7 @@ public sealed class ClientHost : IDisposable
         {
             _furnaces.TryGet(_station.X, _station.Y, _station.Z, out var open);
             _hudScreen.Burning = _hudScreen.Kind == HudScreenKind.Furnace ? open : null;
+            SyncMagicHud();
 
             _hud.Draw(
                 _blockTextures, _items, _inventory, _equipment, _vitals,
@@ -12738,12 +14096,30 @@ public sealed class ClientHost : IDisposable
 
         _furnaces.TryGet(_station.X, _station.Y, _station.Z, out var open);
         _hudScreen.Burning = _hudScreen.Kind == HudScreenKind.Furnace ? open : null;
+        SyncMagicHud();
 
         _hud.Draw(
             _blockTextures, _items, _inventory, _equipment, _vitals,
             _hudScreen, _layout, _toasts, size.X, size.Y);
 
         return ReadFrame(size);
+    }
+
+    private void SyncMagicHud()
+    {
+        _hudScreen.Character = _character;
+        _hudScreen.Companion = _companions.For(LocalPlayerId);
+        _hudScreen.SpellCursor = _spellCursorOpen;
+        _hudScreen.SpellBank = _spellControllerBank;
+        _spellFaceLabels[0] = _controller.Label(ControllerControl.South);
+        _spellFaceLabels[1] = _controller.Label(ControllerControl.East);
+        _spellFaceLabels[2] = _controller.Label(ControllerControl.West);
+        _spellFaceLabels[3] = _controller.Label(ControllerControl.North);
+        _hudScreen.SpellFaceLabels = _spellFaceLabels;
+        _hudScreen.CompanionWindowOffset = _companionWindowOffset;
+        _hudScreen.CompanionWindowLocked = _settings.CompanionWindowLocked;
+        _hudScreen.SpellbookWindowOffset = _spellbookWindowOffset;
+        _hudScreen.SpellbookWindowLocked = _settings.SpellbookWindowLocked;
     }
 
     /// <summary>
@@ -13267,11 +14643,36 @@ public sealed class ClientHost : IDisposable
                 StopTyping(accept: false);
                 break;
 
-            // P7's three non-container tabs, through the same doors a player uses. Each is sampled
-            // off the framebuffer and then asked for the one interaction that makes it more than a
-            // title: a durable record, a searchable item entry, and a draggable/zoomable map.
+            // P10.5's classless character sheet and spellbook go through the same player-screen
+            // doors as ordinary play. The fixture owns every spell, prepares exactly eight, reaches
+            // Rank II and has a wounded companion, so this proves the dense states rather than the
+            // nearly empty new-character version of them.
             case 331:
                 CloseScreen();
+                PrepareMagicUiCheck();
+                OpenPlayer(PlayerTab.Character, atBench: false, default);
+                break;
+
+            case 334:
+                SampleUi(size, "character");
+                ProbeCharacterTab();
+                CloseScreen();
+                OpenPlayer(PlayerTab.Spells, atBench: false, default);
+                break;
+
+            case 335: OpenSpellbookWindowMenuForCheck(); break;
+            case 336: UnlockSpellbookWindowForCheck(); break;
+            case 337: DragSpellbookWindowForCheck(size); break;
+
+            case 338:
+                SampleUi(size, "spells");
+                ProbeSpellTab();
+                CloseScreen();
+                ProbeMagicHud(size);
+
+                // P7's three non-container tabs, through the same doors a player uses. Each is
+                // sampled off the framebuffer and then asked for the one interaction that makes it
+                // more than a title: a durable record, searchable item facts, and a moving map.
                 _progress.Broke(7);
                 _progress.Placed(5);
                 _unlocks.Reload(_book.Recipes.Take(3).Select(recipe => recipe.Name));
@@ -14321,6 +15722,31 @@ public sealed class ClientHost : IDisposable
     private bool _uiMapZoomed;
     private int _uiMapTiles = -1;
 
+    private bool _uiCharacterTab;
+    private bool _uiCharacterFigure;
+    private int _uiCharacterRows = -1;
+    private bool _uiSpellTab;
+    private int _uiSpellCatalogue = -1;
+    private int _uiPreparedRows = -1;
+    private int _uiSpellIcons = -1;
+    private int _uiMagicScale = -1;
+    private int _uiMagicHeight = -1;
+    private int _uiSpellSlots = -1;
+    private int _uiSpellZones = -1;
+    private int _uiSpellBankSlots = -1;
+    private int _uiPetCommands = -1;
+    private int _uiPetCommandZones = -1;
+    private bool _uiPetHealth;
+    private bool _uiMagicBounds;
+    private bool _uiSpellbookFrame;
+    private bool _uiSpellbookContext;
+    private bool _uiSpellbookDragged;
+    private bool _uiPetFrame;
+    private bool _uiPetContext;
+    private bool _uiPetDragged;
+    private int _uiSpellBarInk = -1;
+    private int _uiPetPanelInk = -1;
+
     private bool _uiAudioRows;
     private bool _uiAudioLicense;
     private bool _uiAudioToggle;
@@ -14655,6 +16081,243 @@ public sealed class ClientHost : IDisposable
         }
 
         return painted with { Pixels = pixels, Summary = "UI-check slim live-selection control" };
+    }
+
+    /// <summary>Builds the most demanding honest P10.5 UI state without reading a player's save.</summary>
+    private void PrepareMagicUiCheck()
+    {
+        _settings.CompanionWindowLocked = true;
+        _settings.SpellbookWindowLocked = true;
+        _companionWindowOffset = Vector2.Zero;
+        _spellbookWindowOffset = Vector2.Zero;
+        _hudScreen.MagicWindowContext = -1;
+        var price = SpellCatalogue.All.Sum(spell => spell.Price);
+        _character.TryCredit("ui-check-magic-wallet-v1", price + 12_345);
+        foreach (var spell in SpellCatalogue.All)
+            _character.Buy(spell.StableName, "ui-check-learn-" + spell.StableName);
+
+        for (var slot = 0; slot < CharacterProgression.PreparedCapacity; slot++)
+            _character.Prepare(slot, SpellCatalogue.All[slot].StableName);
+
+        var levelReceipt = 0;
+        while (_character.Level < 6)
+            _character.AwardExperience(
+                $"ui-check-rank-two-v2-{levelReceipt++}",
+                Math.Max(1, _character.ExperienceNeeded - _character.Experience),
+                XpSource.Encounter);
+
+        var pet = _companions.Summon(
+            "ui-check-earth-elemental-v1", LocalPlayerId, SpellId.EarthElemental,
+            _character.Rank, _player.Position + new Vector3(1.5f, 0f, 0f));
+        if (pet is not null)
+        {
+            _character.LinkCompanion(pet.InstanceId);
+            _companions.Hurt(LocalPlayerId, 6);
+        }
+        _companions.TakeEvents();
+    }
+
+    private void ProbeCharacterTab()
+    {
+        var labels = _hudScreen.Rows.Select(row => row.Label).ToHashSet(StringComparer.Ordinal);
+        ReadOnlySpan<string> statistics =
+        [
+            "experience", "gold", "focus", "might", "finesse", "insight", "resolve",
+            "maximum health", "armour", "weapon damage", "spell potency", "critical chance", "haste",
+        ];
+        _uiCharacterRows = _hudScreen.Rows.Count;
+        _uiCharacterFigure = _hudScreen.FigureSkinFaces > 0
+            && _hudScreen.FigureOuterFaces > 0
+            && _hudScreen.FigureBox.Z > 0f
+            && _layout.Zones.Any(zone => zone.Kind == ZoneKind.PlayerPreview);
+        _uiCharacterTab = _hudScreen.TabNames.Length == Enum.GetValues<PlayerTab>().Length
+            && statistics.ToArray().All(labels.Contains)
+            && _hudScreen.Rows.Any(row => row.Heading && row.Label.StartsWith("level 6 · Rank II", StringComparison.Ordinal))
+            && _hudScreen.Rows.Any(row => row.Heading && row.Label.StartsWith("attributes · 5 points free", StringComparison.Ordinal))
+            && _hudScreen.Rows.Any(row => row.Heading && row.Label == "combat statistics")
+            && labels.Contains("next spell rank")
+            && labels.Contains("equipment armour")
+            && labels.Contains("prepared spells")
+            && _character.Rank == 2
+            && _character.Coins > 0
+            && _uiCharacterFigure;
+
+        Console.WriteLine(
+            $"ui-check    character   {_uiCharacterRows} rows at level {_character.Level}, "
+            + $"{CharacterProgression.RankName(_character.Rank)}, wallet {CharacterProgression.CoinsText(_character.Coins)}, "
+            + (_uiCharacterTab ? "live paper doll, attributes and derived statistics present" : "rows/figure are incomplete"));
+        Console.Out.Flush();
+    }
+
+    private void OpenSpellbookWindowMenuForCheck()
+    {
+        var box = _hudScreen.SpellbookPanelBounds;
+        if (box.Z <= 0f || box.W <= 0f) return;
+        _hudScreen.Pointer = new Vector2(box.X + box.Z - 12f, box.Y + 10f);
+        OnMouseDown(MouseButton.Right);
+    }
+
+    private void UnlockSpellbookWindowForCheck()
+    {
+        var option = _layout.Zones.FirstOrDefault(zone => zone.Kind == ZoneKind.MagicWindowOption
+            && zone.Index == (int)MagicWindowKind.Spellbook);
+        _uiSpellbookContext = option.W > 0f && option.H > 0f
+                              && _hudScreen.MagicWindowContextBounds.Z > 0f;
+        if (option.W <= 0f || option.H <= 0f) return;
+        _hudScreen.Pointer = new Vector2(option.CentreX, option.CentreY);
+        OnMouseDown(MouseButton.Left);
+        OnMouseUp(MouseButton.Left);
+    }
+
+    private void DragSpellbookWindowForCheck(Vector2D<int> size)
+    {
+        var title = _layout.Zones.FirstOrDefault(zone => zone.Kind == ZoneKind.MagicWindowTitle
+            && zone.Index == (int)MagicWindowKind.Spellbook);
+        if (title.W <= 0f || title.H <= 0f) return;
+        var scale = HudRenderer.ScaleFor(size.Y);
+        var before = _spellbookWindowOffset;
+        _hudScreen.Pointer = new Vector2(title.CentreX, title.CentreY);
+        OnMouseDown(MouseButton.Left);
+        var grabbed = _draggingMagicWindow == MagicWindowKind.Spellbook;
+        OnMouseMove((_hudScreen.Pointer + new Vector2(18f, 9f)) * scale);
+        OnMouseUp(MouseButton.Left);
+        _uiSpellbookDragged = grabbed
+                              && Vector2.DistanceSquared(before, _spellbookWindowOffset) > 4f
+                              && !_settings.SpellbookWindowLocked;
+    }
+
+    private void ProbeSpellTab()
+    {
+        var rows = _hudScreen.Rows.ToArray();
+        var names = SpellCatalogue.All.Select(spell => spell.DisplayName).ToHashSet(StringComparer.Ordinal);
+        _uiSpellCatalogue = rows.Count(row => names.Contains(row.Label));
+        _uiPreparedRows = rows.Count(row => row.Label.StartsWith("slot ", StringComparison.Ordinal)
+                                             && row.Value != "empty");
+        _uiSpellIcons = rows.Count(row => row.Icon >= 0);
+        var described = SpellCatalogue.All.All(spell => rows.Any(row => row.Label == spell.DisplayName
+            && row.Note.Contains(spell.Description, StringComparison.Ordinal)));
+        var groups = Enum.GetValues<SpellGroup>().All(group => rows.Any(row => row.Heading
+            && row.Label == SpellGroupName(group)));
+        _uiSpellTab = _hudScreen.TabNames.Length == Enum.GetValues<PlayerTab>().Length
+            && _uiSpellCatalogue == SpellCatalogue.All.Count
+            && _uiPreparedRows == CharacterProgression.PreparedCapacity
+            && _character.Learned.Count == SpellCatalogue.All.Count
+            && described && groups;
+        var logicalWidth = LayoutWidth;
+        var logicalHeight = LayoutHeight;
+        var box = _hudScreen.SpellbookPanelBounds;
+        _uiSpellbookFrame = box.Z > 0f && box.W > 0f
+                            && box.X >= 0f && box.Y >= 0f
+                            && box.X + box.Z <= logicalWidth && box.Y + box.W <= logicalHeight
+                            && _hudScreen.MagicWindowAccentsDrawn >= 12
+                            && _layout.Zones.Any(zone => zone.Kind == ZoneKind.MagicWindowTitle
+                                && zone.Index == (int)MagicWindowKind.Spellbook);
+
+        Console.WriteLine(
+            $"ui-check    spells       {_uiSpellCatalogue} catalogue spells, {_uiPreparedRows} prepared, "
+            + $"{_uiSpellIcons} icon rows, descriptions {described}, groups {groups}, "
+            + $"frame {_uiSpellbookFrame}, menu {_uiSpellbookContext}, drag {_uiSpellbookDragged}");
+        Console.Out.Flush();
+    }
+
+    /// <summary>Reads the live over-world magic controls from the card at the requested pixel scale.</summary>
+    private void ProbeMagicHud(Vector2D<int> size)
+    {
+        var oldCursor = _spellCursorOpen;
+        var oldBank = _spellControllerBank;
+        _spellCursorOpen = true;
+        _spellControllerBank = 1;
+        var frame = HudOnlyFrame(size);
+
+        var firstPanel = _hudScreen.CompanionPanelBounds;
+        _uiPetFrame = firstPanel.Z > 0f && firstPanel.W > 0f
+                      && _hudScreen.MagicWindowAccentsDrawn >= 8
+                      && _layout.Zones.Any(zone => zone.Kind == ZoneKind.MagicWindowTitle
+                          && zone.Index == (int)MagicWindowKind.Companion);
+        if (firstPanel.Z > 0f && firstPanel.W > 0f)
+        {
+            _hudScreen.Pointer = new Vector2(firstPanel.X + firstPanel.Z - 10f, firstPanel.Y + 10f);
+            OnMouseDown(MouseButton.Right);
+            frame = HudOnlyFrame(size);
+            var option = _layout.Zones.FirstOrDefault(zone => zone.Kind == ZoneKind.MagicWindowOption
+                && zone.Index == (int)MagicWindowKind.Companion);
+            _uiPetContext = option.W > 0f && option.H > 0f
+                            && _hudScreen.MagicWindowContextBounds.Z > 0f;
+            if (option.W > 0f && option.H > 0f)
+            {
+                _hudScreen.Pointer = new Vector2(option.CentreX, option.CentreY);
+                OnMouseDown(MouseButton.Left);
+                OnMouseUp(MouseButton.Left);
+                frame = HudOnlyFrame(size);
+                var title = _layout.Zones.FirstOrDefault(zone => zone.Kind == ZoneKind.MagicWindowTitle
+                    && zone.Index == (int)MagicWindowKind.Companion);
+                if (title.W > 0f && title.H > 0f)
+                {
+                    var before = _companionWindowOffset;
+                    var scale = HudRenderer.ScaleFor(size.Y);
+                    _hudScreen.Pointer = new Vector2(title.CentreX, title.CentreY);
+                    OnMouseDown(MouseButton.Left);
+                    var grabbed = _draggingMagicWindow == MagicWindowKind.Companion;
+                    OnMouseMove((_hudScreen.Pointer + new Vector2(22f, 11f)) * scale);
+                    OnMouseUp(MouseButton.Left);
+                    frame = HudOnlyFrame(size);
+                    _uiPetDragged = grabbed
+                                    && Vector2.DistanceSquared(before, _companionWindowOffset) > 4f
+                                    && !_settings.CompanionWindowLocked;
+                }
+            }
+        }
+
+        _uiMagicScale = (int)HudRenderer.ScaleFor(size.Y);
+        _uiMagicHeight = size.Y;
+        _uiSpellSlots = _hudScreen.SpellSlotsDrawn;
+        _uiSpellBankSlots = _hudScreen.SpellBankSlotsDrawn;
+        _uiPetCommands = _hudScreen.CompanionCommandsDrawn;
+        _uiPetCommandZones = _layout.Zones.Count(zone => zone.Kind == ZoneKind.CompanionCommand);
+        _uiSpellZones = _layout.Zones.Count(zone => zone.Kind == ZoneKind.Spell);
+        var logicalWidth = MathF.Floor(size.X / (float)_uiMagicScale);
+        var logicalHeight = MathF.Floor(size.Y / (float)_uiMagicScale);
+        static bool Inside(Vector4 box, float width, float height) => box.Z > 0f && box.W > 0f
+            && box.X >= 0f && box.Y >= 0f && box.X + box.Z <= width && box.Y + box.W <= height;
+        _uiMagicBounds = Inside(_hudScreen.SpellBarBounds, logicalWidth, logicalHeight)
+                         && Inside(_hudScreen.CompanionPanelBounds, logicalWidth, logicalHeight);
+        var companion = _companions.For(LocalPlayerId);
+        _uiPetHealth = companion is { Alive: true } && companion.Health > 0
+            && companion.Health < companion.MaxHealth;
+        _uiSpellBarInk = CountHudInk(frame, size, _hudScreen.SpellBarBounds, _uiMagicScale);
+        _uiPetPanelInk = CountHudInk(frame, size, _hudScreen.CompanionPanelBounds, _uiMagicScale);
+
+        Console.WriteLine(
+            $"ui-check    magic HUD    {_uiMagicScale}x: {_uiSpellSlots} memory slots/{_uiSpellZones} mouse zones, "
+            + $"{_uiSpellBankSlots} controller choices, {_uiPetCommands} pet commands/{_uiPetCommandZones} zones, "
+            + $"ink {_uiSpellBarInk}+{_uiPetPanelInk}, health {_uiPetHealth}, bounded {_uiMagicBounds}, "
+            + $"frame {_uiPetFrame}, menu {_uiPetContext}, drag {_uiPetDragged}");
+        Console.Out.Flush();
+
+        _spellCursorOpen = oldCursor;
+        _spellControllerBank = oldBank;
+        SyncMagicHud();
+    }
+
+    private static int CountHudInk(byte[] frame, Vector2D<int> size, Vector4 bounds, int scale)
+    {
+        if (frame.Length != size.X * size.Y * 4 || scale <= 0 || bounds.Z <= 0f || bounds.W <= 0f)
+            return 0;
+        var left = Math.Clamp((int)MathF.Floor(bounds.X * scale), 0, size.X);
+        var right = Math.Clamp((int)MathF.Ceiling((bounds.X + bounds.Z) * scale), 0, size.X);
+        var top = Math.Clamp((int)MathF.Floor(bounds.Y * scale), 0, size.Y);
+        var bottom = Math.Clamp((int)MathF.Ceiling((bounds.Y + bounds.W) * scale), 0, size.Y);
+        var ink = 0;
+        for (var y = top; y < bottom; y++)
+        {
+            var glY = size.Y - 1 - y;
+            for (var x = left; x < right; x++)
+            {
+                var at = (glY * size.X + x) * 4;
+                if (frame[at] + frame[at + 1] + frame[at + 2] > 18) ink++;
+            }
+        }
+        return ink;
     }
 
     private void ProbeProgressTab()
@@ -15396,6 +17059,8 @@ public sealed class ClientHost : IDisposable
         var game = Read("game");
         var controllerPanel = Read("controller");
         var radialPanel = Read("radial");
+        var characterPanel = Read("character");
+        var spellsPanel = Read("spells");
         var progressPanel = Read("progress");
         var handbookPanel = Read("handbook");
         var mapPanel = Read("map");
@@ -15421,6 +17086,8 @@ public sealed class ClientHost : IDisposable
         if (game == bare) faults.Add("opening the game screen changed nothing on screen");
         if (controllerPanel == bare) faults.Add("opening the controller tab changed nothing on screen");
         if (radialPanel == bare) faults.Add("holding the radial hotbar changed nothing on screen");
+        if (characterPanel == bare) faults.Add("opening the character sheet changed nothing on screen");
+        if (spellsPanel == bare) faults.Add("opening the spellbook changed nothing on screen");
         if (progressPanel == bare) faults.Add("opening progress changed nothing on screen");
         if (handbookPanel == bare) faults.Add("opening the handbook changed nothing on screen");
         if (mapPanel == bare) faults.Add("opening the map changed nothing on screen");
@@ -15441,6 +17108,36 @@ public sealed class ClientHost : IDisposable
             faults.Add("the controller tab is missing discovery, feel, rumble, or rebinding controls");
         if (_uiRadialSlots != Inventory.HotbarSlots || !_uiRadialBounds)
             faults.Add($"the radial hotbar drew {_uiRadialSlots} slots or published no bounds, not all nine");
+
+        if (!_uiCharacterTab)
+            faults.Add($"the character sheet's {_uiCharacterRows} rows do not contain the complete level, wallet, attribute and combat snapshot");
+        if (!_uiSpellTab || _uiSpellCatalogue != SpellCatalogue.All.Count)
+            faults.Add($"the spellbook exposed {_uiSpellCatalogue} of {SpellCatalogue.All.Count} spells or omitted a description/group");
+        if (_uiPreparedRows != CharacterProgression.PreparedCapacity)
+            faults.Add($"the spellbook showed {_uiPreparedRows} prepared rows instead of all {CharacterProgression.PreparedCapacity}");
+        if (_uiSpellIcons != SpellCatalogue.All.Count + CharacterProgression.PreparedCapacity)
+            faults.Add($"the dense spellbook drew {_uiSpellIcons} icon rows instead of "
+                       + $"{SpellCatalogue.All.Count + CharacterProgression.PreparedCapacity}");
+        if (!_uiSpellbookFrame || !_uiSpellbookContext || !_uiSpellbookDragged)
+            faults.Add("the spellbook is missing its accented frame, right-click lock option, or unlocked drag path");
+        if (_uiSpellSlots != CharacterProgression.PreparedCapacity
+            || _uiSpellZones != CharacterProgression.PreparedCapacity)
+            faults.Add($"the held-mouse spell bar drew {_uiSpellSlots} slots and {_uiSpellZones} clickable zones, not eight of each");
+        if (_uiSpellBankSlots != 4)
+            faults.Add($"a held controller trigger offered {_uiSpellBankSlots} face-button spells instead of four");
+        if (_uiPetCommands != Enum.GetValues<CompanionCommand>().Length
+            || _uiPetCommandZones != Enum.GetValues<CompanionCommand>().Length)
+            faults.Add($"the pet panel drew {_uiPetCommands} commands and {_uiPetCommandZones} clickable zones instead of all five");
+        if (!_uiPetFrame || !_uiPetContext || !_uiPetDragged)
+            faults.Add("the companion panel is missing its accented frame, right-click lock option, or unlocked drag path");
+        if (!_uiPetHealth)
+            faults.Add("the pet panel was not backed by a living, partially wounded companion health value");
+        if (!_uiMagicBounds)
+            faults.Add("the spell bar or pet panel escaped the framebuffer's logical bounds");
+        if (_uiSpellBarInk <= 0 || _uiPetPanelInk <= 0)
+            faults.Add($"the spell bar/pet panel built geometry but read {_uiSpellBarInk}/{_uiPetPanelInk} lit pixels from the card");
+        if (_uiMagicScale < 1 || _uiMagicHeight < 1)
+            faults.Add("the magic HUD did not publish a valid whole-number pixel scale");
 
         if (!_uiProgressTab)
             faults.Add("the progress tab did not show all eight counters, unlocks and its reset row");
@@ -15938,7 +17635,8 @@ public sealed class ClientHost : IDisposable
         // claim and never was.
         foreach (var (screen, middle) in (ReadOnlySpan<(string, (byte R, byte G, byte B))>)
                  [("items", items), ("book", book), ("bench", bench), ("chest", chestPanel),
-                  ("cutter", cutter), ("game", game), ("progress", progressPanel),
+                  ("cutter", cutter), ("game", game), ("character", characterPanel),
+                  ("spells", spellsPanel), ("progress", progressPanel),
                   ("handbook", handbookPanel), ("map", mapPanel), ("skins", skinsPanel)])
         {
             var outside = Read($"{screen} corner");
@@ -16055,7 +17753,7 @@ public sealed class ClientHost : IDisposable
                 ? "pack-skinned panels"
                 : "original graphite panels in neutral grey";
             Console.WriteLine(
-                "OK  the overlay reaches the screen: crosshair, controller radial, nineteen screen states, "
+                "OK  the overlay reaches the screen: crosshair, controller radial, twenty-one screen states, "
                 + panelReceipt + ", "
                 + $"{_uiProbes.Sum(p => p.Value.Hits)} squares answering for their own middles");
         }
@@ -16290,6 +17988,15 @@ public sealed class ClientHost : IDisposable
             }
         }
 
+        if (_creatureRenderer is not null && _companions.For(LocalPlayerId) is { Alive: true } companion)
+        {
+            var definition = CompanionService.Definition(companion.Kind);
+            _creatureRenderer.Draw(
+                viewProj, _viewPosition, sky,
+                SampleLight(companion.Position + new Vector3(0f, definition.Height * 0.5f, 0f)),
+                definition.Model, companion.Position, companion.Yaw);
+        }
+
         // The carts, through the same shader — each lit where it stands, yawed the way its own
         // stretch of track runs.
         if (_creatureRenderer is not null)
@@ -16480,6 +18187,7 @@ public sealed class ClientHost : IDisposable
         _meshes.Clear();
         _chunkShader?.Dispose();
         _outline?.Dispose();
+        _gatewayRenderer?.Dispose();
         _sky?.Dispose();
         _clouds?.Dispose();
         _weather?.Dispose();

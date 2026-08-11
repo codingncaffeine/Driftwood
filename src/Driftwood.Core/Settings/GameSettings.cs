@@ -122,6 +122,19 @@ public sealed class GameSettings
     /// </remarks>
     public bool RecipeNotices { get; set; } = true;
 
+    /// <summary>Movable magic panels start protected from accidental drags.</summary>
+    public bool CompanionWindowLocked { get; set; } = true;
+
+    public int CompanionWindowX { get; set; }
+
+    public int CompanionWindowY { get; set; }
+
+    public bool SpellbookWindowLocked { get; set; } = true;
+
+    public int SpellbookWindowX { get; set; }
+
+    public int SpellbookWindowY { get; set; }
+
     /// <summary>
     /// A folder of creature skeletons to read at startup, or empty for no animals.
     /// </summary>
@@ -246,6 +259,18 @@ public sealed class GameSettings
                 case "controller.targetassist": settings.ControllerTargetAssist = Int(value, 0, 100, settings.ControllerTargetAssist); break;
                 case "controller.rumble": settings.ControllerRumble = Int(value, 0, 100, settings.ControllerRumble); break;
                 case "ui.recipenotices": settings.RecipeNotices = Bool(value, settings.RecipeNotices); break;
+                case "ui.companionwindow.locked":
+                    settings.CompanionWindowLocked = Bool(value, settings.CompanionWindowLocked); break;
+                case "ui.companionwindow.x":
+                    settings.CompanionWindowX = Int(value, -4096, 4096, settings.CompanionWindowX); break;
+                case "ui.companionwindow.y":
+                    settings.CompanionWindowY = Int(value, -4096, 4096, settings.CompanionWindowY); break;
+                case "ui.spellbookwindow.locked":
+                    settings.SpellbookWindowLocked = Bool(value, settings.SpellbookWindowLocked); break;
+                case "ui.spellbookwindow.x":
+                    settings.SpellbookWindowX = Int(value, -4096, 4096, settings.SpellbookWindowX); break;
+                case "ui.spellbookwindow.y":
+                    settings.SpellbookWindowY = Int(value, -4096, 4096, settings.SpellbookWindowY); break;
 
                 // ⚠ Taken verbatim, not trimmed of anything but its edges. A Windows path is full of
                 // characters every other value here would reject, and one of them is a backslash.
@@ -266,7 +291,13 @@ public sealed class GameSettings
         // inventory. A key already taken by something else is left alone rather than duplicated.
         if (boundAnything) settings.Keys.FillGapsFrom(Bindings.Defaults());
         if (boundPadAnything)
-            settings.Pad.FillGapsFrom(ControllerBindings.Defaults(), namedPadActions);
+        {
+            // The one automatic migration is deliberately exact: only the untouched old shipped
+            // preset moves its trigger actions to shoulders and gains two spell banks. Any custom
+            // layout remains byte-for-intent intact and merely receives genuinely free defaults.
+            if (settings.Pad.IsLegacyDefault(namedPadActions)) settings.Pad = ControllerBindings.Defaults();
+            else settings.Pad.FillGapsFrom(ControllerBindings.Defaults(), namedPadActions);
+        }
 
         return settings;
     }
@@ -334,6 +365,12 @@ public sealed class GameSettings
         text.AppendLine($"controller.rumble={ControllerRumble}");
         text.AppendLine();
         text.AppendLine($"ui.recipenotices={Text(RecipeNotices)}");
+        text.AppendLine($"ui.companionwindow.locked={Text(CompanionWindowLocked)}");
+        text.AppendLine($"ui.companionwindow.x={CompanionWindowX}");
+        text.AppendLine($"ui.companionwindow.y={CompanionWindowY}");
+        text.AppendLine($"ui.spellbookwindow.locked={Text(SpellbookWindowLocked)}");
+        text.AppendLine($"ui.spellbookwindow.x={SpellbookWindowX}");
+        text.AppendLine($"ui.spellbookwindow.y={SpellbookWindowY}");
         text.AppendLine();
 
         // Only written when there is one, so a file from a machine with no creature geometry does

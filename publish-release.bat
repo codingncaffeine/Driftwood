@@ -40,13 +40,15 @@ if errorlevel 1 goto :failed_publish
 
 REM Gate on the published binary, not the build output: this is the thing that ships, and it
 REM catches a publish that dropped a native dependency the build had sitting beside it.
-echo [3/7] checking release identity and embedded offline audio...
+echo [3/7] checking release identity, embedded offline audio and P10.5 magic...
 set "DRIFTWOOD_EXPECT=Driftwood v%VERSION%"
 call :run_windowed --version
 set "DRIFTWOOD_EXPECT="
 if errorlevel 1 goto :failed_version
 call :run_windowed --audio-check
 if errorlevel 1 goto :failed_audio
+call :run_windowed --magic-check
+if errorlevel 1 goto :failed_magic
 
 REM SDL is a bundled native dependency and controllers are optional hardware. This requires the
 REM former to load from the single EXE while explicitly allowing zero of the latter.
@@ -148,6 +150,12 @@ exit /b 1
 :failed_audio
 echo.
 echo AUDIO CHECK FAILED - the executable cannot decode its offline fallback. See the faults above.
+popd
+exit /b 1
+
+:failed_magic
+echo.
+echo MAGIC CHECK FAILED - P10.5 progression, spells, companions or persistence drifted.
 popd
 exit /b 1
 

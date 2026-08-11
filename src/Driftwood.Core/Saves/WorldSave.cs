@@ -3,6 +3,7 @@ using Driftwood.Core.Blocks;
 using Driftwood.Core.Entities;
 using Driftwood.Core.Exploration;
 using Driftwood.Core.Items;
+using Driftwood.Core.Magic;
 using Driftwood.Core.Players;
 using Driftwood.Core.World;
 
@@ -60,6 +61,12 @@ public sealed record WorldState(
     public ExplorationProgress Exploration { get; set; } = new();
 
     public InhabitantSystem Inhabitants { get; set; } = new();
+
+    /// <summary>The classless level, wallet and spellbook record (#75–#80).</summary>
+    public CharacterProgression Character { get; set; } = new();
+
+    /// <summary>Owned summons live beside, rather than inside, the wild creature herd.</summary>
+    public CompanionService Companions { get; set; } = new();
 
     /// <summary>Where a slept-in bed stands, or null when none ever was (#99).</summary>
     public Vector3? BedSpawn { get; set; }
@@ -346,6 +353,15 @@ public static class WorldSave
                     stats.Write(state.Progress.Deaths);
                 }));
 
+                // Stable spell names and owned companion identities get a length-delimited section
+                // of their own. Old builds skip it; old saves simply create a level-one character.
+                SaveSection.Write(into, "MAGC", Bytes(magic =>
+                {
+                    magic.Write(1); // container version
+                    state.Character.Write(magic);
+                    state.Companions.Write(magic);
+                }));
+
                 SaveSection.Write(into, "MAPS", Bytes(map =>
                 {
                     map.Write(state.Map.Tiles.Count);
@@ -446,6 +462,8 @@ public static class WorldSave
             state.Map.Settled();
             state.Exploration.Settled();
             state.Inhabitants.Settled();
+            state.Character.Settled();
+            state.Companions.Settled();
             return null;
         }
         catch (Exception fault)
@@ -570,6 +588,7 @@ public static class WorldSave
             byte[]? map = null;
             byte[]? exploration = null;
             byte[]? inhabitants = null;
+            byte[]? magic = null;
 
             while (SaveSection.TryRead(from, out var tag, out var payload))
             {
@@ -599,6 +618,7 @@ public static class WorldSave
                     case "MAPS": map = payload; break;
                     case "EXPL": exploration = payload; break;
                     case "INHB": inhabitants = payload; break;
+                    case "MAGC": magic = payload; break;
                     case "CRTR": into.Creatures.AddRange(ReadCreatures(Reader(payload))); break;
 
                     case "CART":
@@ -630,6 +650,18 @@ public static class WorldSave
             if (furnaces is not null) ReadFurnaces(Reader(furnaces), into.Furnaces, toItem);
             if (chests is not null) ReadChests(Reader(chests), into.Chests, toItem);
             if (cargo is not null) ReadCargo(Reader(cargo), into, toItem);
+
+            // Read the character ceiling before health, so a progressed save can restore more than
+            // the legacy ten-heart default without being clamped on the way through PLYR.
+            if (magic is not null)
+            {
+                using var saved = Reader(magic);
+                var version = saved.ReadInt32();
+                if (version != 1) return $"this world's magic record uses unknown version {version}";
+                if (into.Character.Read(saved) is { } characterFault) return characterFault;
+                if (into.Companions.Read(saved) is { } companionFault) return companionFault;
+                into.Vitals.SetMaximumHealth(into.Character.Statistics.MaximumHealth);
+            }
             if (player is not null) ReadPlayer(Reader(player), into, toItem);
 
             if (unlocks is not null)

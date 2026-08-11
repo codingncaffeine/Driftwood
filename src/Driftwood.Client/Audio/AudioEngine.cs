@@ -30,12 +30,18 @@ public sealed unsafe class AudioEngine : IDisposable
     /// </remarks>
     public const int Voices = 30;
 
+    /// <summary>Voices reserved from one-shot stealing for channels and temporary world actors.</summary>
+    public const int LoopVoices = 4;
+
+    private const int OneShotVoices = Voices - LoopVoices;
+
     /// <summary>How far away a sound falls to nothing.</summary>
     private const float MaxDistance = 48f;
 
     private readonly SoundLibrary _library;
     private readonly Dictionary<string, uint> _buffers = new(StringComparer.OrdinalIgnoreCase);
     private readonly uint[] _sources = new uint[Voices];
+    private readonly Dictionary<string, int> _loops = new(StringComparer.Ordinal);
 
     private AL? _al;
     private ALContext? _alc;
@@ -134,11 +140,13 @@ public sealed unsafe class AudioEngine : IDisposable
         var buffer = BufferFor(name);
         if (buffer == 0) return;
 
-        // Round-robin, stopping whatever was there. A burst of debris is several sounds at once and
-        // the oldest of them is the one nobody will miss.
+        // Round-robin inside the one-shot bank. Sustained channels and portals own the four voices
+        // above it, so a burst of footsteps or debris cannot silently cut their lifecycle short.
         var source = _sources[_next];
-        _next = (_next + 1) % Voices;
+        _next = (_next + 1) % OneShotVoices;
 
+        _al.SetSourceProperty(source, SourceBoolean.Looping, false);
+        _al.SetSourceProperty(source, SourceBoolean.SourceRelative, false);
         _al.SetSourceProperty(source, SourceInteger.Buffer, 0);
         _al.SetSourceProperty(source, SourceInteger.Buffer, (int)buffer);
         _al.SetSourceProperty(source, SourceVector3.Position, at.X, at.Y, at.Z);
@@ -147,6 +155,85 @@ public sealed unsafe class AudioEngine : IDisposable
         _al.SourcePlay(source);
 
         Played++;
+    }
+
+    /// <summary>Starts a non-positional interface cue that stays centred on every camera.</summary>
+    public void PlayUi(string name, float volume = 1f, float pitch = 1f)
+    {
+        if (!Available || _al is null || MasterVolume <= 0f) return;
+        var buffer = BufferFor(name);
+        if (buffer == 0) return;
+
+        var source = _sources[_next];
+        _next = (_next + 1) % OneShotVoices;
+        _al.SetSourceProperty(source, SourceBoolean.Looping, false);
+        _al.SetSourceProperty(source, SourceBoolean.SourceRelative, true);
+        _al.SetSourceProperty(source, SourceInteger.Buffer, 0);
+        _al.SetSourceProperty(source, SourceInteger.Buffer, (int)buffer);
+        _al.SetSourceProperty(source, SourceVector3.Position, 0f, 0f, 0f);
+        _al.SetSourceProperty(source, SourceFloat.Gain, Math.Clamp(volume * MasterVolume, 0f, 4f));
+        _al.SetSourceProperty(source, SourceFloat.Pitch, Math.Clamp(pitch, 0.25f, 4f));
+        _al.SourcePlay(source);
+        Played++;
+    }
+
+    /// <summary>
+    /// Starts or replaces one authoritative loop. The owner is a cast/effect/actor identity, not a
+    /// filename, so stopping an expired portal cannot accidentally stop another player's portal.
+    /// </summary>
+    public void StartLoop(
+        string owner,
+        string name,
+        Vector3 at,
+        float volume = 1f,
+        float pitch = 1f)
+    {
+        if (!Available || _al is null || MasterVolume <= 0f || string.IsNullOrWhiteSpace(owner)) return;
+        var buffer = BufferFor(name);
+        if (buffer == 0) return;
+
+        if (!_loops.TryGetValue(owner, out var index))
+        {
+            index = Enumerable.Range(OneShotVoices, LoopVoices)
+                .FirstOrDefault(candidate => !_loops.Values.Contains(candidate), -1);
+            if (index < 0)
+            {
+                var displaced = _loops.First();
+                StopLoop(displaced.Key);
+                index = displaced.Value;
+            }
+            _loops[owner] = index;
+        }
+
+        var source = _sources[index];
+        _al.SourceStop(source);
+        _al.SetSourceProperty(source, SourceBoolean.SourceRelative, false);
+        _al.SetSourceProperty(source, SourceBoolean.Looping, true);
+        _al.SetSourceProperty(source, SourceInteger.Buffer, 0);
+        _al.SetSourceProperty(source, SourceInteger.Buffer, (int)buffer);
+        _al.SetSourceProperty(source, SourceVector3.Position, at.X, at.Y, at.Z);
+        _al.SetSourceProperty(source, SourceFloat.Gain, Math.Clamp(volume * MasterVolume, 0f, 4f));
+        _al.SetSourceProperty(source, SourceFloat.Pitch, Math.Clamp(pitch, 0.25f, 4f));
+        _al.SourcePlay(source);
+        Played++;
+    }
+
+    public void UpdateLoop(string owner, Vector3 at, float volume = 1f, float pitch = 1f)
+    {
+        if (!Available || _al is null || !_loops.TryGetValue(owner, out var index)) return;
+        var source = _sources[index];
+        _al.SetSourceProperty(source, SourceVector3.Position, at.X, at.Y, at.Z);
+        _al.SetSourceProperty(source, SourceFloat.Gain, Math.Clamp(volume * MasterVolume, 0f, 4f));
+        _al.SetSourceProperty(source, SourceFloat.Pitch, Math.Clamp(pitch, 0.25f, 4f));
+    }
+
+    public void StopLoop(string owner)
+    {
+        if (!_loops.Remove(owner, out var index) || _al is null) return;
+        var source = _sources[index];
+        _al.SourceStop(source);
+        _al.SetSourceProperty(source, SourceBoolean.Looping, false);
+        _al.SetSourceProperty(source, SourceInteger.Buffer, 0);
     }
 
     /// <summary>Uploads a clip the first time it is asked for, and remembers the handle.</summary>
@@ -174,6 +261,7 @@ public sealed unsafe class AudioEngine : IDisposable
 
     public void Dispose()
     {
+        _loops.Clear();
         if (_al is not null)
         {
             foreach (var source in _sources) if (source != 0) _al.SourceStop(source);

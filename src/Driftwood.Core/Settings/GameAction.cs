@@ -67,6 +67,9 @@ public enum GameAction
     HoldClock,
     WindClock,
 
+    /// <summary>Held: releases mouse-look and makes the eight prepared spell icons clickable.</summary>
+    SpellCursor,
+
     Slot1,
     Slot2,
     Slot3,
@@ -93,6 +96,7 @@ public static class GameActions
         GameAction.RaiseShield or GameAction.SwapHands => "fighting",
         <= GameAction.OpenOptions => "screens",
         <= GameAction.WindClock => "looking at things",
+        GameAction.SpellCursor => "magic",
         _ => "the bar",
     };
 
@@ -116,6 +120,7 @@ public static class GameActions
         GameAction.ToggleCulling => "frustum culling",
         GameAction.HoldClock => "hold the clock",
         GameAction.WindClock => "wind the day on",
+        GameAction.SpellCursor => "spell cursor",
         _ => $"slot {(int)action - (int)GameAction.Slot1 + 1}",
     };
 }

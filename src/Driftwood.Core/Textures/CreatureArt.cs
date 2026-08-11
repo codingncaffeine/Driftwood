@@ -147,6 +147,14 @@ public static class CreatureArt
         ["shorewright"] = new((76, 104, 112), (184, 142, 82), (170, 132, 104), (64, 82, 86), 0.26f, 0.06f),
         ["forager"] = new((92, 122, 74), (176, 142, 86), (176, 136, 108), (74, 88, 56), 0.24f, 0.06f),
         ["waykeeper"] = new((94, 84, 112), (190, 172, 116), (168, 132, 104), (70, 64, 82), 0.22f, 0.06f),
+        ["lorekeeper"] = new((74, 62, 100), (194, 166, 88), (174, 136, 108), (88, 68, 112), 0.25f, 0.07f),
+
+        // Owned summon treatments are purposefully distinct from their wild relatives. The wolf's
+        // Eyes face spends its bright cyan hard-parts colour on the readable pair the user asked for.
+        ["summoned_skeleton"] = new((178, 190, 194), (112, 128, 138), (34, 42, 48), (88, 174, 188), 0.28f, 0.12f),
+        ["summoned_zombie"] = new((72, 94, 92), (56, 50, 86), (42, 60, 58), (106, 174, 184), 0.38f, 0.14f),
+        ["spirit_wolf"] = new((42, 46, 54), (104, 112, 124), (24, 28, 34), (72, 196, 238), 0.34f, 0.10f, FaceKind.Eyes),
+        ["earth_elemental"] = new((92, 96, 92), (126, 118, 94), (52, 58, 56), (116, 226, 224), 0.42f, 0.16f, FaceKind.Eyes),
 
         // Vault metal and the Crown's cold night-stone. The warden's cyan mark is shared with the
         // star key/heart, making reward and encounter one visual family without borrowed artwork.
@@ -358,7 +366,9 @@ public static class CreatureArt
             // wet. The one face drawn LIGHTER than its coat.
             if (hide.Face == FaceKind.Eyes)
             {
-                var band = t is > 0.30f and < 0.48f && (s is > 0.06f and < 0.44f || s is > 0.56f and < 0.94f);
+                // Two real texel rows even on the elemental's six-high face. The earlier narrow
+                // band collapsed to one row at this scale and averaged away against rough stone.
+                var band = t is > 0.20f and < 0.60f && (s is > 0.04f and < 0.46f || s is > 0.54f and < 0.96f);
                 return band ? ((float)hide.Horn.R, hide.Horn.G, hide.Horn.B) : (r, g, b);
             }
 

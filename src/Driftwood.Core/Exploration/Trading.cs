@@ -28,6 +28,9 @@ public static class Trading
             new("survey paper", "trade_token", 1, "paper", 8),
             new("charted route", "trade_token", 3, "relic_chart", 1),
         ],
+        // Spell purchases use the per-player wallet and permanent learned-name receipt. Keeping
+        // this row present but empty prevents inventory-token trades from masquerading as magic.
+        [Profession.Lorekeeper] = [],
     };
 
     public static IReadOnlyList<TradeOffer> For(Profession profession) => Offers[profession];

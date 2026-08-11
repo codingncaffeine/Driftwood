@@ -63,6 +63,7 @@ public sealed class Bindings
         bindings.Set(GameAction.ToggleCulling, "F2");
         bindings.Set(GameAction.HoldClock, "F6");
         bindings.Set(GameAction.WindClock, "F7");
+        bindings.Set(GameAction.SpellCursor, "R");
 
         for (var i = 0; i < 9; i++)
             bindings.Set(GameAction.Slot1 + i, $"Number{i + 1}");

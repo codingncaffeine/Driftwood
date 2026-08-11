@@ -4,6 +4,7 @@ using Driftwood.Core.Entities;
 using Driftwood.Core.Exploration;
 using Driftwood.Core.Gen;
 using Driftwood.Core.Items;
+using Driftwood.Core.Magic;
 using Driftwood.Core.Physics;
 using Driftwood.Core.Textures;
 using Driftwood.Core.Ui;
@@ -87,6 +88,12 @@ public enum PlayerTab
 {
     /// <summary>What is carried, what is worn, the two-by-two, and the book beside them.</summary>
     Items,
+
+    /// <summary>Level, experience, gold, attributes and the combat snapshot they produce.</summary>
+    Character,
+
+    /// <summary>The learned catalogue and the eight spells currently held in memory.</summary>
+    Spells,
 
     /// <summary>What this player has done in this world, and what the recipe tree has revealed.</summary>
     Progress,
@@ -240,6 +247,50 @@ public sealed class HudScreen
     public bool AttackCooling;
 
     public float AttackReady = 1f;
+
+    /// <summary>The live classless character and owned summon shown over the world.</summary>
+    public CharacterProgression? Character;
+
+    public Companion? Companion;
+
+    /// <summary>Held keyboard cursor mode and held controller bank (0, 1 or 2).</summary>
+    public bool SpellCursor;
+
+    public int SpellBank;
+
+    public string[] SpellFaceLabels = ["A", "B", "X", "Y"];
+
+    /// <summary>Published spell-bar geometry for input and the framebuffer audit.</summary>
+    public int SpellSlotsDrawn;
+
+    public Vector4 SpellBarBounds;
+
+    public int SpellBankSlotsDrawn;
+
+    public int CompanionCommandsDrawn;
+
+    public Vector4 CompanionPanelBounds;
+
+    /// <summary>Resolution-independent player offsets and lock states for the two magic windows.</summary>
+    public Vector2 CompanionWindowOffset;
+
+    public bool CompanionWindowLocked = true;
+
+    public Vector2 SpellbookWindowOffset;
+
+    public bool SpellbookWindowLocked = true;
+
+    public Vector4 SpellbookPanelBounds;
+
+    /// <summary>-1 when closed; otherwise a <see cref="MagicWindowKind"/> shown at this point.</summary>
+    public int MagicWindowContext = -1;
+
+    public Vector2 MagicWindowContextAt;
+
+    /// <summary>Published polish geometry for the deterministic framebuffer audit.</summary>
+    public int MagicWindowAccentsDrawn;
+
+    public Vector4 MagicWindowContextBounds;
 
     /// <summary>Whether the controller's hold-to-pick nine-way hotbar is over the world.</summary>
     public bool RadialHotbar;
@@ -692,6 +743,14 @@ public sealed class HudRenderer : IDisposable
         screen.CursorBox = Vector4.Zero;
         screen.RadialDrawnSlots = 0;
         screen.RadialBounds = Vector4.Zero;
+        screen.SpellSlotsDrawn = 0;
+        screen.SpellBarBounds = Vector4.Zero;
+        screen.SpellBankSlotsDrawn = 0;
+        screen.CompanionCommandsDrawn = 0;
+        screen.CompanionPanelBounds = Vector4.Zero;
+        screen.SpellbookPanelBounds = Vector4.Zero;
+        screen.MagicWindowAccentsDrawn = 0;
+        screen.MagicWindowContextBounds = Vector4.Zero;
 
         // A whole number of screen pixels per layout unit, never a half. Everything here is pixel
         // art — a font drawn at twice its authored size, two-pixel bevels, hard edges — and all of
@@ -761,9 +820,16 @@ public sealed class HudRenderer : IDisposable
             Food(vitals, screen.Drift, w, h);
             ArmourBar(vitals, w, h);
             Bubbles(vitals, screen.Drift, w, h);
+            SpellBar(screen, layout, w, h);
+            CharacterMeters(screen, w, h);
+            CompanionPanel(screen, layout, w, h);
         }
 
         Toasts(toasts, w);
+
+        // A right-click menu belongs over the panel it controls and over every row inside it.
+        // Drawing and zoning it here also gives it the final hit-test priority.
+        MagicWindowMenu(screen, layout, w, h);
 
         // Last, over everything, because a pointer that goes behind a panel is a pointer somebody
         // is about to lose. What is on the cursor rides under it, offset so the hotspot still reads.
@@ -773,6 +839,8 @@ public sealed class HudRenderer : IDisposable
             Tip(catalogue, inventory, equipment, screen, layout, w, h);
             Pointer(catalogue, screen, layout);
         }
+        else if (screen.SpellCursor)
+            SpellPointer(screen);
 
         // Said once per screen, on the frame it opens. "It is not appearing" and "it is appearing
         // somewhere I am not looking" are different faults with the same symptom, and the only
@@ -991,6 +1059,245 @@ public sealed class HudRenderer : IDisposable
         }
     }
 
+    /// <summary>The eight swappable spells held in memory, above the ordinary item hotbar.</summary>
+    private void SpellBar(HudScreen screen, ScreenLayout layout, float w, float h)
+    {
+        if (screen.Character is not { } character) return;
+
+        const float slot = 20f;
+        const float gap = 2f;
+        var width = CharacterProgression.PreparedCapacity * slot
+            + (CharacterProgression.PreparedCapacity - 1) * gap;
+        var left = MathF.Round((w - width) * 0.5f);
+        var top = MathF.Round(h - 70f);
+        screen.SpellBarBounds = new Vector4(left, top, width, slot);
+
+        for (var i = 0; i < CharacterProgression.PreparedCapacity; i++)
+        {
+            var x = left + i * (slot + gap);
+            Bevel(x, top, slot, slot, raised: false, SlotFill with { W = 0.92f });
+            if (screen.SpellCursor) layout.Add(ZoneKind.Spell, i, x, top, slot, slot);
+            screen.SpellSlotsDrawn++;
+
+            var stable = character.Prepared[i];
+            if (stable is null || !SpellCatalogue.TryByStableName(stable, out var spell))
+            {
+                Text((i + 1).ToString(), x + 7f, top + 6f, 6f, InkFaint with { W = 0.5f });
+                continue;
+            }
+
+            Rect(_blocks, x + 2f, top + 2f, slot - 4f, slot - 4f,
+                Vector4.One, SpellIconAtlas.LayerFor(spell.Particle));
+            var cooldown = character.Cooldown(stable);
+            var maximum = MathF.Max(0.001f, spell.AtRank(character.Rank).Cooldown);
+            if (cooldown > 0f)
+            {
+                var fraction = Math.Clamp(cooldown / maximum, 0f, 1f);
+                Rect(_plain, x + 2f, top + 2f, slot - 4f, (slot - 4f) * fraction,
+                    new Vector4(0.015f, 0.02f, 0.035f, 0.72f));
+                Text(MathF.Ceiling(cooldown).ToString("0"), x + 7f, top + 6f, 6f, Vector4.One);
+            }
+
+            Text((i + 1).ToString(), x + 1f, top + 1f, 5f, Vector4.One);
+            Text(character.Rank.ToString(), x + slot - 6f, top + slot - 7f, 5f, Vector4.One);
+        }
+
+        if (screen.SpellCursor && screen.Hovered is { Kind: ZoneKind.Spell } hovered
+            && (uint)hovered.Index < CharacterProgression.PreparedCapacity
+            && character.Prepared[hovered.Index] is { } hoveredName
+            && SpellCatalogue.TryByStableName(hoveredName, out var hoveredSpell))
+        {
+            var rank = hoveredSpell.AtRank(character.Rank);
+            var cooldown = character.Cooldown(hoveredName);
+            var reason = cooldown > 0f ? $"{cooldown:0.0}s cooldown"
+                : character.Focus < rank.Focus ? $"needs {rank.Focus} Focus"
+                : $"{rank.Focus} Focus · ready";
+            const float tipWidth = 174f;
+            var tipLeft = MathF.Round((w - tipWidth) * 0.5f);
+            var tipTop = top - 30f;
+            Bevel(tipLeft, tipTop, tipWidth, 25f, raised: true,
+                new Vector4(0.045f, 0.05f, 0.06f, 0.96f));
+            Text(FitText($"{hoveredSpell.DisplayName} · R{character.Rank}", tipWidth - 8f, 7f),
+                tipLeft + 4f, tipTop + 4f, 7f, Highlight);
+            Text(FitText(reason, tipWidth - 8f, 6f), tipLeft + 4f, tipTop + 14f, 6f, InkDim);
+        }
+
+        if (screen.SpellBank > 0) ControllerSpellBank(screen, w, h);
+    }
+
+    private void ControllerSpellBank(HudScreen screen, float w, float h)
+    {
+        if (screen.Character is not { } character) return;
+        var offset = screen.SpellBank == 1 ? 0 : 4;
+        var centre = new Vector2(MathF.Round(w * 0.5f), MathF.Round(h * 0.48f));
+        ReadOnlySpan<Vector2> positions =
+        [new(0f, 37f), new(37f, 0f), new(-37f, 0f), new(0f, -37f)];
+        ReadOnlySpan<string> fallback = ["A", "B", "X", "Y"];
+
+        Bevel(centre.X - 34f, centre.Y - 12f, 68f, 24f, raised: true,
+            new Vector4(0.035f, 0.04f, 0.05f, 0.88f));
+        TextCentred($"spell bank {screen.SpellBank}", centre.X, centre.Y - 3f, 7f, Highlight);
+
+        for (var face = 0; face < 4; face++)
+        {
+            var slot = offset + face;
+            var at = centre + positions[face];
+            const float size = 25f;
+            var x = MathF.Round(at.X - size * 0.5f);
+            var y = MathF.Round(at.Y - size * 0.5f);
+            Bevel(x, y, size, size, raised: false, SlotFill with { W = 0.97f });
+            var stable = character.Prepared[slot];
+            if (stable is not null && SpellCatalogue.TryByStableName(stable, out var spell))
+            {
+                var rank = spell.AtRank(character.Rank);
+                var ready = character.Cooldown(stable) <= 0f && character.Focus >= rank.Focus;
+                Rect(_blocks, x + 3f, y + 3f, size - 6f, size - 6f,
+                    ready ? Vector4.One : new Vector4(0.38f, 0.40f, 0.44f, 1f),
+                    SpellIconAtlas.LayerFor(spell.Particle));
+                if (!ready)
+                    Text(character.Cooldown(stable) > 0f
+                            ? MathF.Ceiling(character.Cooldown(stable)).ToString("0") : "focus",
+                        x + 5f, y + size - 8f, 5f, Vector4.One);
+            }
+            var label = screen.SpellFaceLabels.Length > face
+                && !string.IsNullOrWhiteSpace(screen.SpellFaceLabels[face])
+                    ? screen.SpellFaceLabels[face] : fallback[face];
+            Text(FitText(label, size - 2f, 6f), x + 1f, y + 1f, 6f, Vector4.One);
+            screen.SpellBankSlotsDrawn++;
+        }
+    }
+
+    private void CharacterMeters(HudScreen screen, float w, float h)
+    {
+        if (screen.Character is not { } character) return;
+        const float width = 174f;
+        var left = MathF.Round((w - width) * 0.5f);
+        var top = MathF.Round(h - 83f);
+        var stats = character.Statistics;
+        var xp = character.Level >= CharacterProgression.MaximumLevel
+            ? 1f : character.Experience / (float)Math.Max(1, character.ExperienceNeeded);
+        var focus = character.Focus / (float)Math.Max(1, stats.MaximumFocus);
+        Rect(_plain, left, top, width, 3f, new Vector4(0.02f, 0.025f, 0.03f, 0.88f));
+        Rect(_plain, left, top, width * Math.Clamp(xp, 0f, 1f), 3f,
+            new Vector4(0.72f, 0.86f, 0.38f, 0.96f));
+        Rect(_plain, left, top + 5f, width, 3f, new Vector4(0.02f, 0.025f, 0.03f, 0.88f));
+        Rect(_plain, left, top + 5f, width * Math.Clamp(focus, 0f, 1f), 3f,
+            new Vector4(0.30f, 0.58f, 0.95f, 0.96f));
+        Text($"L{character.Level}  {CharacterProgression.CoinsText(character.Coins)}",
+            left, top - 8f, 6f, Vector4.One);
+        Text($"{character.Focus}/{stats.MaximumFocus}", left + width - 36f, top + 3f, 5f, Vector4.One);
+    }
+
+    private void CompanionPanel(HudScreen screen, ScreenLayout layout, float w, float h)
+    {
+        if (screen.Companion is not { Alive: true } pet) return;
+        var definition = CompanionService.Definition(pet.Kind);
+        var portrait = SpellCatalogue.ById(definition.Spell);
+        const float width = 132f;
+        const float line = 13f;
+        var height = 40f + line * 5f;
+        var left = Math.Clamp(8f + screen.CompanionWindowOffset.X,
+            4f, MathF.Max(4f, w - width - 4f));
+        var top = Math.Clamp(9f + screen.CompanionWindowOffset.Y,
+            4f, MathF.Max(4f, h - height - 44f));
+        screen.CompanionPanelBounds = new Vector4(left, top, width, height);
+
+        MagicFrame(left, top, width, height,
+            new Vector4(0.37f, 0.72f, 0.68f, 0.90f), screen);
+        Rect(_plain, left + 4f, top + 4f, width - 8f, 20f,
+            new Vector4(0.055f, 0.07f, 0.073f, 0.96f));
+        Rect(_plain, left + 4f, top + 23f, width - 8f, 1f,
+            new Vector4(0.37f, 0.72f, 0.68f, 0.55f));
+        Bevel(left + 4f, top + 4f, 19f, 19f, raised: false, SlotFill);
+        Rect(_blocks, left + 6f, top + 6f, 15f, 15f,
+            Vector4.One, SpellIconAtlas.LayerFor(portrait.Particle));
+        Text($"{definition.Name} · R{pet.Rank}", left + 27f, top + 5f, 7f, Highlight);
+        Text($"{definition.Role.ToString().ToLowerInvariant()} · {pet.Command.ToString().ToLowerInvariant()}",
+            left + 27f, top + 14f, 5f, InkDim);
+        Text(screen.CompanionWindowLocked ? "locked" : "move",
+            left + width - (screen.CompanionWindowLocked ? 31f : 23f), top + 26f, 5f,
+            screen.CompanionWindowLocked ? InkFaint : Picked);
+        var health = pet.Health / (float)Math.Max(1, pet.MaxHealth);
+        Rect(_plain, left + 5f, top + 27f, width - 42f, 4f, new Vector4(0.08f, 0.02f, 0.02f, 0.9f));
+        Rect(_plain, left + 5f, top + 27f, (width - 42f) * health, 4f,
+            new Vector4(0.76f, 0.16f, 0.18f, 1f));
+        Text($"{pet.Health}/{pet.MaxHealth}", left + 5f, top + 33f, 5f, Vector4.One);
+
+        layout.Add(ZoneKind.MagicWindowTitle, (int)MagicWindowKind.Companion,
+            left + 4f, top + 4f, width - 8f, 20f);
+
+        ReadOnlySpan<string> controller = ["up", "right", "down", "left", "view"];
+
+        foreach (var command in Enum.GetValues<CompanionCommand>())
+        {
+            var row = (int)command;
+            var y = top + 39f + row * line;
+            var active = pet.Command == command && command != CompanionCommand.GoAway;
+            if (active) Rect(_plain, left + 3f, y - 1f, width - 6f, line - 1f,
+                new Vector4(0.26f, 0.30f, 0.32f, 0.92f));
+            Text(command == CompanionCommand.GoAway ? "go away" : command.ToString().ToLowerInvariant(),
+                left + 6f, y + 1f, 6f, active ? Vector4.One : InkDim);
+            if (screen.SpellBank > 0)
+                Text(controller[row], left + width - 29f, y + 1f, 5f, InkFaint);
+            if (screen.SpellCursor)
+                layout.Add(ZoneKind.CompanionCommand, row, left + 3f, y - 1f, width - 6f, line - 1f);
+            screen.CompanionCommandsDrawn++;
+        }
+    }
+
+    /// <summary>A double pixel frame with clipped-looking corner clasps for magic-only windows.</summary>
+    private void MagicFrame(float x, float y, float w, float h, Vector4 accent, HudScreen screen)
+    {
+        Rect(_plain, x + 3f, y + 4f, w, h, new Vector4(0f, 0f, 0f, 0.34f));
+        Bevel(x, y, w, h, raised: true, new Vector4(0.12f, 0.125f, 0.13f, 0.97f));
+        Rect(_plain, x + 3f, y + 3f, w - 6f, 1f, accent with { W = accent.W * 0.65f });
+        Rect(_plain, x + 3f, y + h - 4f, w - 6f, 1f, accent with { W = accent.W * 0.32f });
+        Rect(_plain, x + 3f, y + 3f, 1f, h - 6f, accent with { W = accent.W * 0.48f });
+
+        // Eight tiny clasps are enough ornament at this resolution; curved vector corners would
+        // soften the pixel language and a full texture would prevent packs from recolouring it.
+        Rect(_plain, x + 2f, y + 2f, 8f, 2f, accent);
+        Rect(_plain, x + 2f, y + 2f, 2f, 8f, accent);
+        Rect(_plain, x + w - 10f, y + 2f, 8f, 2f, accent);
+        Rect(_plain, x + w - 4f, y + 2f, 2f, 8f, accent);
+        Rect(_plain, x + 2f, y + h - 4f, 8f, 2f, accent);
+        Rect(_plain, x + 2f, y + h - 10f, 2f, 8f, accent);
+        Rect(_plain, x + w - 10f, y + h - 4f, 8f, 2f, accent);
+        Rect(_plain, x + w - 4f, y + h - 10f, 2f, 8f, accent);
+        screen.MagicWindowAccentsDrawn += 8;
+    }
+
+    /// <summary>The single lock action offered after a right click on either movable panel.</summary>
+    private void MagicWindowMenu(HudScreen screen, ScreenLayout layout, float w, float h)
+    {
+        if (screen.MagicWindowContext < (int)MagicWindowKind.Companion
+            || screen.MagicWindowContext > (int)MagicWindowKind.Spellbook) return;
+        var kind = (MagicWindowKind)screen.MagicWindowContext;
+        var locked = kind == MagicWindowKind.Companion
+            ? screen.CompanionWindowLocked : screen.SpellbookWindowLocked;
+        const float width = 126f;
+        const float height = 25f;
+        var left = Math.Clamp(screen.MagicWindowContextAt.X, 4f, MathF.Max(4f, w - width - 4f));
+        var top = Math.Clamp(screen.MagicWindowContextAt.Y, 4f, MathF.Max(4f, h - height - 4f));
+        screen.MagicWindowContextBounds = new Vector4(left, top, width, height);
+
+        Bevel(left, top, width, height, raised: true,
+            new Vector4(0.055f, 0.06f, 0.065f, 0.99f));
+        Rect(_plain, left + 3f, top + 3f, 2f, height - 6f,
+            new Vector4(0.55f, 0.98f, 0.78f, 0.9f));
+        Text(locked ? "unlock window" : "lock window", left + 10f, top + 5f, 8f, Highlight);
+        Text(kind == MagicWindowKind.Companion ? "companion" : "spellbook",
+            left + 10f, top + 15f, 5f, InkFaint);
+        layout.Add(ZoneKind.MagicWindowOption, (int)kind, left, top, width, height);
+    }
+
+    private void SpellPointer(HudScreen screen)
+    {
+        const float size = TileGen.Size;
+        screen.CursorBox = new Vector4(screen.Pointer.X, screen.Pointer.Y, size, size);
+        Rect(_cursorQuads, screen.Pointer.X, screen.Pointer.Y, size, size, Vector4.One, IconCursor);
+    }
+
     private void SkinnedHotbar(ItemRegistry catalogue, Inventory inventory, float w, float h)
     {
         const float width = 182f;
@@ -1107,6 +1414,20 @@ public sealed class HudRenderer : IDisposable
             return;
         }
 
+        if (screen.Kind == HudScreenKind.Player && screen.Tab == (int)PlayerTab.Character)
+        {
+            CharacterScreen(catalogue, inventory, equipment, screen, layout, w, h);
+            Footer(screen, w, h);
+            return;
+        }
+
+        if (screen.Kind == HudScreenKind.Player && screen.Tab == (int)PlayerTab.Spells)
+        {
+            SpellbookScreen(screen, layout, w, h);
+            Footer(screen, w, h);
+            return;
+        }
+
         if (screen.Kind == HudScreenKind.Game && screen.Tab == (int)GameTab.Skins)
         {
             SkinScreen(screen, layout, w, h);
@@ -1172,6 +1493,100 @@ public sealed class HudRenderer : IDisposable
         DrawSkinPreview(screen, px, py, previewWide, ph);
 
         TextCentred(PreviewFacing(screen.SkinPreviewYaw), px + previewWide * 0.5f, py + ph - 10f, 8f, InkDim);
+    }
+
+    /// <summary>
+    /// A spellbook should read as an object the player opened, not another grey settings list.  It
+    /// keeps the shared row and tab machinery underneath, but carries its own spine, corner clasps,
+    /// school marks and draggable title strip around them.
+    /// </summary>
+    private void SpellbookScreen(HudScreen screen, ScreenLayout layout, float w, float h)
+    {
+        const float panel = MenuPanel;
+        var shown = Math.Min(screen.Rows.Count, ScreenLayout.MenuLines(h));
+        var rowsHeight = shown * ScreenLayout.MenuLine + 12f;
+        var width = panel + 16f;
+        var height = 50f + rowsHeight;
+        var defaultLeft = MathF.Round((w - panel) * 0.5f);
+        var defaultTop = MathF.Round((h - (22f + rowsHeight)) * 0.42f);
+        var left = Math.Clamp(defaultLeft + screen.SpellbookWindowOffset.X,
+            12f, MathF.Max(12f, w - panel - 12f));
+        var top = Math.Clamp(defaultTop + screen.SpellbookWindowOffset.Y,
+            32f, MathF.Max(32f, h - rowsHeight - 28f));
+        var outerLeft = left - 8f;
+        var outerTop = top - 27f;
+        screen.SpellbookPanelBounds = new Vector4(outerLeft, outerTop, width, height);
+
+        MagicFrame(outerLeft, outerTop, width, height,
+            new Vector4(0.42f, 0.72f, 0.88f, 0.92f), screen);
+
+        // A darker leather-like header and a narrow spine make the frame read as a bound volume.
+        Rect(_plain, outerLeft + 4f, outerTop + 4f, width - 8f, 19f,
+            new Vector4(0.075f, 0.07f, 0.09f, 0.98f));
+        Rect(_plain, outerLeft + 5f, outerTop + 5f, 3f, height - 10f,
+            new Vector4(0.24f, 0.28f, 0.31f, 0.95f));
+        Rect(_plain, outerLeft + 9f, outerTop + 6f, 1f, height - 12f,
+            new Vector4(0.54f, 0.76f, 0.84f, 0.42f));
+        Text("spellbook", outerLeft + 15f, outerTop + 8f, 8f, Highlight);
+        var state = screen.SpellbookWindowLocked ? "locked" : "unlocked · drag here";
+        var stateWidth = TextWidth(state, 5f);
+        Text(state, outerLeft + width - stateWidth - 8f, outerTop + 10f, 5f,
+            screen.SpellbookWindowLocked ? InkFaint : Picked);
+
+        // One gem for each open spell line. Their restrained colours are accents, never selection
+        // states, and keep the body of the interface in the established neutral palette.
+        ReadOnlySpan<Vector4> schools =
+        [
+            new(0.96f, 0.86f, 0.50f, 0.94f),
+            new(0.56f, 0.38f, 0.72f, 0.94f),
+            new(0.36f, 0.68f, 0.62f, 0.94f),
+            new(0.40f, 0.62f, 0.92f, 0.94f),
+        ];
+        for (var i = 0; i < schools.Length; i++)
+        {
+            var x = outerLeft + 15f + i * 8f;
+            Rect(_plain, x, outerTop + height - 6f, 5f, 2f, schools[i]);
+            screen.MagicWindowAccentsDrawn++;
+        }
+
+        layout.Add(ZoneKind.MagicWindowTitle, (int)MagicWindowKind.Spellbook,
+            outerLeft + 4f, outerTop + 4f, width - 8f, 19f);
+        Tabs(screen, layout, left, top, panel);
+        Rows(screen, layout, left, top + 22f, panel, h);
+    }
+
+    /// <summary>The live progression rows beside the same worn paper doll as inventory.</summary>
+    private void CharacterScreen(
+        ItemRegistry catalogue,
+        Inventory inventory,
+        Equipment equipment,
+        HudScreen screen,
+        ScreenLayout layout,
+        float w,
+        float h)
+    {
+        const float rowsWide = MenuPanel;
+        const float gap = 14f;
+        const float previewWide = 132f;
+        const float totalWide = GameMenuPanel;
+        var shown = Math.Min(screen.Rows.Count, ScreenLayout.MenuLines(h));
+        var tall = 22f + shown * ScreenLayout.MenuLine + 12f;
+        var left = MathF.Round((w - totalWide) * 0.5f);
+        var top = MathF.Round((h - tall) * 0.42f);
+
+        var cell = TitleCell(w);
+        var titleTop = MathF.Max(6f, top - TitleArt.LetterHeight * cell - 26f);
+        Title(screen, left + totalWide * 0.5f, titleTop, cell, screen.Drift);
+        Tabs(screen, layout, left, top, totalWide);
+        Rows(screen, layout, left, top + 22f, rowsWide, h);
+
+        var px = left + rowsWide + gap;
+        var py = top + 20f;
+        var ph = MathF.Max(126f, shown * ScreenLayout.MenuLine + 10f);
+        FigureAt(
+            screen, catalogue, equipment, inventory.Held, layout,
+            px, py, previewWide, ph, iconScale: 1f, frame: true);
+        TextCentred(PreviewFacing(screen.FigureYaw), px + previewWide * 0.5f, py + ph - 10f, 8f, InkDim);
     }
 
     /// <summary>
@@ -1762,9 +2177,13 @@ public sealed class HudRenderer : IDisposable
                 }
             }
 
+            var iconWidth = row.Icon >= 0 ? 16f : 0f;
+            if (row.Icon >= 0)
+                Rect(_blocks, left + 3f, y - 1f, 14f, 14f, Vector4.One, row.Icon);
+
             var reserved = boxWidth > 0f ? boxWidth + 8f : valueWidth > 0f ? valueWidth + 12f : 6f;
             var labelWidth = MathF.Max(8f, panel - reserved - 8f);
-            Text(FitText(row.Label, labelWidth, 8f), left + 6f, y, 8f,
+            Text(FitText(row.Label, MathF.Max(8f, labelWidth - iconWidth), 8f), left + 6f + iconWidth, y, 8f,
                 lit ? Vector4.One : InkDim);
 
             // A heading has no zone at all, so the pointer cannot land on something the keyboard
@@ -2626,6 +3045,26 @@ public sealed class HudRenderer : IDisposable
         var y = layout.Y(box.Y);
         var w = layout.Size(box.W);
         var h = layout.Size(box.H);
+        FigureAt(
+            screen, catalogue, equipment, held, layout,
+            x, y, w, h, layout.Zoom, frame: false);
+    }
+
+    private void FigureAt(
+        HudScreen screen,
+        ItemRegistry catalogue,
+        Equipment equipment,
+        ItemStack held,
+        ScreenLayout layout,
+        float x,
+        float y,
+        float w,
+        float h,
+        float iconScale,
+        bool frame)
+    {
+        if (frame)
+            Bevel(x, y, w, h, raised: false, new Vector4(0.13f, 0.14f, 0.16f, 0.98f));
         screen.FigureBox = new Vector4(x, y, w, h);
         layout.Add(ZoneKind.PlayerPreview, 0, x, y, w, h);
 
@@ -2653,7 +3092,7 @@ public sealed class HudRenderer : IDisposable
         screen.FigureArmWidth = measure.ArmWidth;
         screen.FigureBounds = measure.Bounds;
         screen.FigureHeldItems = InHand(
-            layout, catalogue, held, equipment[EquipSlot.Offhand], measure);
+            catalogue, held, equipment[EquipSlot.Offhand], measure, 13f * iconScale);
     }
 
     /// <summary>What each hand is holding, centred on the shared projection's two fists.</summary>
@@ -2663,10 +3102,9 @@ public sealed class HudRenderer : IDisposable
     /// a small outward separation keeps both visible in a side view.
     /// </remarks>
     private int InHand(
-        ScreenLayout layout, ItemRegistry catalogue, ItemStack held, ItemStack other,
-        in ProjectedPlayerMeasure measure)
+        ItemRegistry catalogue, ItemStack held, ItemStack other,
+        in ProjectedPlayerMeasure measure, float size)
     {
-        var size = layout.Size(13f);
         var centre = measure.Bounds.X + measure.Bounds.Z * 0.5f;
         var count = 0;
 
@@ -3391,7 +3829,7 @@ public sealed class HudRenderer : IDisposable
         }
 
         const float Icon = BarIcon;
-        const int Count = PlayerVitals.MaxHealth / 2;
+        var count = Math.Max(1, (vitals.MaximumHealth + 1) / 2);
 
         var start = BarsLeft(w);
         var top = h - 44f;
@@ -3403,10 +3841,10 @@ public sealed class HudRenderer : IDisposable
         // thing left rather than as none — which is the moment the shiver matters most.
         var filled = (vitals.Health + 1) / 2;
 
-        for (var i = 0; i < Count; i++)
+        for (var i = 0; i < count; i++)
         {
-            var x = start + i * Icon;
-            var y = top + Tremble(drift, i, filled);
+            var x = start + i % 10 * Icon;
+            var y = top - i / 10 * (Icon + 1f) + Tremble(drift, i, filled);
             var size = Icon - 1f;
 
             // ⚠ The socket shivers with its heart rather than staying put. A fill that moves out of
@@ -3431,15 +3869,15 @@ public sealed class HudRenderer : IDisposable
     private void SkinnedHearts(PlayerVitals vitals, float drift, float w, float h)
     {
         const float icon = BarIcon;
-        const int count = PlayerVitals.MaxHealth / 2;
+        var count = Math.Max(1, (vitals.MaximumHealth + 1) / 2);
         var start = BarsLeft(w);
         var top = h - 44f;
         var filled = (vitals.Health + 1) / 2;
 
         for (var i = 0; i < count; i++)
         {
-            var x = start + i * icon;
-            var y = top + Tremble(drift, i, filled);
+            var x = start + i % 10 * icon;
+            var y = top - i / 10 * (icon + 1f) + Tremble(drift, i, filled);
             var size = icon - 1f;
             Rect(_guiOver, x, y, size, size, Vector4.One, (int)GuiTextureSet.Layer.HeartContainer);
 

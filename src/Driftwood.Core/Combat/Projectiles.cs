@@ -11,6 +11,7 @@ public enum ProjectileKind : byte
 {
     Arrow,
     Farpearl,
+    FireBolt,
 }
 
 /// <summary>Who launched a projectile. Spells and creature shots can extend this without a new pool.</summary>
@@ -58,6 +59,7 @@ public sealed class ProjectileSystem
     public const int ArrowDamage = 5;
     public const float FarpearlSpeed = 22f;
     public const float FarpearlGravity = 10f;
+    public const float FireBoltSpeed = 20f;
     public const float Lifetime = 20f;
 
     private struct Slot
@@ -97,6 +99,10 @@ public sealed class ProjectileSystem
 
     public bool ThrowFarpearl(Vector3 origin, Vector3 direction, ProjectileOwner owner = ProjectileOwner.Player) =>
         Spawn(ProjectileKind.Farpearl, owner, origin, direction, FarpearlSpeed, FarpearlGravity, 0);
+
+    public bool ShootFireBolt(Vector3 origin, Vector3 direction, int damage) =>
+        Spawn(ProjectileKind.FireBolt, ProjectileOwner.Player, origin, direction,
+            FireBoltSpeed, 0f, damage);
 
     /// <summary>Adds one flight with explicit numbers, which later spell data can call unchanged.</summary>
     public bool Spawn(

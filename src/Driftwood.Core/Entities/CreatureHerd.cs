@@ -19,6 +19,13 @@ public readonly record struct CreatureAttack(string Kind, Vector3 Position, int 
 /// <summary>One animal in the world: what it is, where it is, and which way it is pointing.</summary>
 public sealed class Creature
 {
+    /// <summary>
+    /// Session-stable identity used to attribute combat, effects, pet targets and rewards. It is
+    /// deliberately regenerated when a world is loaded: no persistent rule refers to a wild
+    /// creature after that creature has left the herd.
+    /// </summary>
+    public string RuntimeId { get; } = Guid.NewGuid().ToString("N");
+
     public required string Kind { get; init; }
 
     /// <summary>How big it stands, in blocks. What a blow has to land inside.</summary>
@@ -41,7 +48,10 @@ public sealed class Creature
     /// <summary>Seconds until it may swing again.</summary>
     public float Swings { get; set; }
 
-    /// <summary>Seconds of standing in the sun it has taken. Only for the kinds that burn.</summary>
+    /// <summary>
+    /// Seconds of daylight exposure, up to the scorch threshold. Damage itself belongs to the
+    /// shared effect service; this is only the grace-period sensor and the renderer's warning.
+    /// </summary>
     public float Burning { get; set; }
 
     public Vector3 Position { get; set; }
@@ -75,6 +85,11 @@ public sealed class Creature
 
     /// <summary>Seconds left of running away. It moves faster and re-thinks less while this runs.</summary>
     public float FleeFor { get; set; }
+
+    /// <summary>Transient spell control, refreshed by the owner of the effect service each frame.</summary>
+    public float MagicMovementScale { get; set; } = 1f;
+
+    public bool MagicallyFeared { get; set; }
 
     /// <summary>True once a blow has turned a retaliating kind on the player. Never unset: a wolf
     /// crossed stays crossed, which is what gives striking one a price worth thinking about.</summary>
@@ -173,7 +188,8 @@ public sealed class Creature
 
 /// <summary>One animal that has just died, for whoever turns that into drops and a noise.</summary>
 /// <param name="Grown">False for a young one, which leaves nothing — killing calves must not pay.</param>
-public readonly record struct CreatureDeath(string Kind, Vector3 Position, bool Shorn, bool Grown);
+public readonly record struct CreatureDeath(
+    string RuntimeId, string Kind, Vector3 Position, bool Shorn, bool Grown, bool Hostile);
 
 /// <summary>One animal that has just been born, for whoever plays the moment.</summary>
 public readonly record struct CreatureBirth(string Kind, Vector3 Position);
@@ -543,9 +559,16 @@ public sealed class CreatureHerd
     /// </param>
     public int Spawn(
         Func<int, int, int, bool> solid, IReadOnlyList<SpawnKind> kinds, Vector3 near, int count,
-        Func<int, int, int, bool>? where = null, float minRadius = 4f)
+        Func<int, int, int, bool>? where = null, float minRadius = 4f,
+        Func<int, int, int, bool>? spawnSupport = null)
     {
         if (kinds.Count == 0) return 0;
+
+        // Collision and legal ground are deliberately different questions. Leaves and trunks stop
+        // a body, but their top faces are never a place a new creature should enter the world.
+        // Keeping the second predicate optional preserves the small pure-simulation callers while
+        // the live world can reject tree material without pretending it is non-solid headroom.
+        spawnSupport ??= solid;
 
         var placed = 0;
 
@@ -558,7 +581,7 @@ public sealed class CreatureHerd
             var x = (int)MathF.Floor(near.X + MathF.Cos(angle) * radius);
             var z = (int)MathF.Floor(near.Z + MathF.Sin(angle) * radius);
 
-            if (!TryGround(solid, x, z, (int)near.Y + 24, out var y)) continue;
+            if (!TryGround(solid, spawnSupport, x, z, (int)near.Y + 24, out var y)) continue;
             if (where is not null && !where(x, (int)y, z)) continue;
 
             var kind = kinds[placed % kinds.Count];
@@ -593,10 +616,28 @@ public sealed class CreatureHerd
     /// The first surface at or below <paramref name="from"/> with room to stand on it.
     /// </summary>
     public static bool TryGround(Func<int, int, int, bool> solid, int x, int z, int from, out float y)
+        => TryGround(solid, solid, x, z, from, out y);
+
+    /// <summary>
+    /// The first allowed support surface with real collision-free headroom. A support predicate is
+    /// separate from collision so tree blocks can remain solid without becoming spawn platforms.
+    /// </summary>
+    public static bool TryGround(
+        Func<int, int, int, bool> solid,
+        Func<int, int, int, bool> spawnSupport,
+        int x,
+        int z,
+        int from,
+        out float y)
     {
         for (var at = from; at > 1; at--)
         {
             if (!solid(x, at, z)) continue;
+
+            // Keep looking below a forbidden surface. Its real solidity still participates in the
+            // headroom check when a lower candidate is considered, so this cannot place a body
+            // inside the trunk or under a canopy that is too low for it.
+            if (!spawnSupport(x, at, z)) continue;
 
             // Room above it, or this is a ledge under an overhang and standing there buries the
             // animal's head in rock.
@@ -645,7 +686,9 @@ public sealed class CreatureHerd
         if (!creature.Alive)
         {
             creature.DyingFor = DyingSeconds;
-            _dead.Add(new CreatureDeath(creature.Kind, creature.Middle, creature.Shorn, creature.Adult));
+            _dead.Add(new CreatureDeath(
+                creature.RuntimeId, creature.Kind, creature.Middle, creature.Shorn,
+                creature.Adult, creature.Hostile));
             return true;
         }
 
@@ -992,10 +1035,15 @@ public sealed class CreatureHerd
     /// Whether a cell is water, or null when nothing is — which beaches every swimmer, honestly.
     /// The herd never learns what a fluid is, the same posture the dark and the daylight take.
     /// </param>
+    /// <param name="scorch">
+    /// Called while a daylight-sensitive creature is past its grace period. The owner routes this
+    /// into the same burning effect used by Ignite; the herd never keeps a second damage clock.
+    /// </param>
     public void Update(
         float dt, Func<int, int, int, bool> solid,
         Vector3? player = null, Func<int, int, int, bool>? sunlit = null,
-        Func<int, int, int, bool>? known = null, Func<int, int, int, bool>? water = null)
+        Func<int, int, int, bool>? known = null, Func<int, int, int, bool>? water = null,
+        Action<Creature>? scorch = null)
     {
         // ⛔ The dead are swept HERE and never inside Hurt, because a fall calls Hurt from inside the
         // walk below — and taking a creature out of the list being walked is how a herd that loses
@@ -1025,6 +1073,19 @@ public sealed class CreatureHerd
 
             creature.HurtFor = MathF.Max(0f, creature.HurtFor - dt);
             creature.FleeFor = MathF.Max(0f, creature.FleeFor - dt);
+            var magicMovement = Math.Clamp(creature.MagicMovementScale, 0f, 1f);
+
+            if (creature.MagicallyFeared && player is { } fearedFrom)
+            {
+                var away = creature.Position - fearedFrom;
+                away.Y = 0f;
+                if (away.LengthSquared() > 1e-6f)
+                {
+                    creature.WantsYaw = float.RadiansToDegrees(MathF.Atan2(away.Z, away.X));
+                    creature.Moving = true;
+                }
+                creature.FleeFor = MathF.Max(creature.FleeFor, dt + 0.1f);
+            }
 
             if (creature.Shorn)
             {
@@ -1115,8 +1176,8 @@ public sealed class CreatureHerd
                 creature.Thinks = 0.6f;
             }
 
-            Scorch(creature, dt, sunlit);
-            var hunting = Hunt(creature, dt, player);
+            Scorch(creature, dt, sunlit, scorch);
+            var hunting = !creature.MagicallyFeared && Hunt(creature, dt, player);
             var courting = !hunting && Court(creature, dt);
 
             creature.Thinks -= dt;
@@ -1153,15 +1214,17 @@ public sealed class CreatureHerd
 
             if (!creature.Moving) continue;
 
+            if (magicMovement <= 0f) continue;
+
             if (creature.Move == CreatureMove.Fly)
             {
-                Glide(creature, dt, solid, null);
+                Glide(creature, dt * magicMovement, solid, null);
                 continue;
             }
 
             if (swimming)
             {
-                Glide(creature, dt, solid, water);
+                Glide(creature, dt * magicMovement, solid, water);
                 continue;
             }
 
@@ -1182,7 +1245,7 @@ public sealed class CreatureHerd
             var yaw = float.DegreesToRadians(creature.Yaw);
             var ahead = new Vector3(MathF.Cos(yaw), 0f, MathF.Sin(yaw));
             var speed = hunting ? HuntSpeed : creature.FleeFor > 0f ? PanicSpeed : WalkSpeed;
-            var wanted = creature.Position + ahead * (speed * dt);
+            var wanted = creature.Position + ahead * (speed * magicMovement * dt);
 
             var x = (int)MathF.Floor(wanted.X);
             var z = (int)MathF.Floor(wanted.Z);
@@ -1376,7 +1439,7 @@ public sealed class CreatureHerd
         return true;
     }
 
-    /// <summary>Sets fire to the kinds the sun does not agree with.</summary>
+    /// <summary>Measures daylight exposure for the kinds the sun does not agree with.</summary>
     /// <remarks>
     /// ⛳ <b>Why this is worth having at all:</b> it is what makes daylight a resource rather than a
     /// backdrop. Without it a night's worth of hostiles simply accumulates and the morning changes
@@ -1384,7 +1447,11 @@ public sealed class CreatureHerd
     /// going out at dusk. ⚠ There is a grace period, so one step through a doorway is survivable and
     /// a creature caught in the open is not.
     /// </remarks>
-    private void Scorch(Creature creature, float dt, Func<int, int, int, bool>? sunlit)
+    private static void Scorch(
+        Creature creature,
+        float dt,
+        Func<int, int, int, bool>? sunlit,
+        Action<Creature>? scorch)
     {
         if (sunlit is null || !CreatureVitals.BurnsInDaylight(creature.Kind)) return;
 
@@ -1398,17 +1465,9 @@ public sealed class CreatureHerd
             return;
         }
 
-        creature.Burning += dt;
+        creature.Burning = MathF.Min(creature.Burning + dt, ScorchSeconds);
         if (creature.Burning < ScorchSeconds) return;
-
-        // ⚠ Accumulated rather than rounded per step: at sixty frames a second every step's worth of
-        // damage rounds to zero and a creature stands in the sun for ever. The remainder is kept in
-        // the same clock the grace period used, which is why it is wound back rather than cleared.
-        var due = (int)((creature.Burning - ScorchSeconds) * ScorchRate);
-        if (due <= 0) return;
-
-        creature.Burning -= due / ScorchRate;
-        Hurt(creature, due, creature.Middle + new Vector3(0f, 4f, 0f));
+        scorch?.Invoke(creature);
     }
 
     /// <summary>Every blow landed on the player since this was last asked, and forgets them.</summary>
@@ -1594,6 +1653,17 @@ public sealed class CreatureHerd
         // ⚠ Ten seconds at a 60% chance of walking per decision. All six standing still is a herd
         // that is not being stepped at all, which every other claim here is happy with.
         if (moved == 0) faults.Add("not one of six creatures moved in ten seconds of walking");
+
+        // A solid canopy at y 70 used to win the top-down search and put every new animal at y 71.
+        // It remains solid collision, but the support predicate admits only the soil underneath.
+        static bool UnderTrees(int x, int y, int z) => y < 64 || y == 70;
+        static bool NaturalGround(int x, int y, int z) => y < 64;
+        var shaded = new CreatureHerd(17);
+        shaded.Spawn(
+            UnderTrees, [kinds[0]], new Vector3(0f, 64f, 0f), 3,
+            spawnSupport: NaturalGround);
+        if (shaded.Count != 3 || shaded.All.Any(one => MathF.Abs(one.Position.Y - 64f) > 0.01f))
+            faults.Add("a solid tree canopy became legal creature spawn support");
 
         // ⛔ The control arm: a floor with a wall down the middle. Nothing may cross it — and the
         // flat arm above cannot catch that, because there is nothing there to cross.
@@ -2215,7 +2285,20 @@ public sealed class CreatureHerd
         // because cows do not burn. Control-tested: with the kind filter deliberately deleted the
         // check went GREEN, because the case it claims to catch could not happen in the world it
         // built. Lighting everything is what makes the cow's survival a claim about the table.
-        for (var i = 0; i < 300; i++) noon.Update(1f / 60f, Flat, null, (_, _, _) => true);
+        var scorchClock = 0f;
+        for (var i = 0; i < 300; i++)
+        {
+            noon.Update(
+                1f / 60f, Flat, null, (_, _, _) => true,
+                scorch: creature =>
+                {
+                    scorchClock += 1f / 60f;
+                    var due = (int)(scorchClock * ScorchRate);
+                    if (due <= 0) return;
+                    scorchClock -= due / ScorchRate;
+                    noon.Hurt(creature, due, creature.Middle + new Vector3(0f, 4f, 0f));
+                });
+        }
 
         if (scorched.Health >= before.Item1)
             faults.Add("a zombie stood in five seconds of daylight and took no damage");

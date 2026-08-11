@@ -278,6 +278,7 @@ public static class StarterCreatures
     public static CreatureModel Shorewright() => Humanoid("shorewright", 0f);
     public static CreatureModel Forager() => Humanoid("forager", 0f);
     public static CreatureModel Waykeeper() => Humanoid("waykeeper", 0f);
+    public static CreatureModel Lorekeeper() => Humanoid("lorekeeper", 0f);
     public static CreatureModel StormSentinel() => Humanoid("storm_sentinel", 58f);
     public static CreatureModel Starwarden() => Humanoid("starwarden", 36f);
 
@@ -307,6 +308,34 @@ public static class StarterCreatures
 
             Bone("leg1", "body", new Vector3(2f, 12f, 0f),
                 Box(1f, 0f, -1f, 2f, 12f, 2f, 16, 48, mirror: true)),
+        ]);
+
+    /// <summary>Owned summons retain familiar movement rigs but never a wild identity.</summary>
+    public static CreatureModel SummonedSkeleton() => Skeleton() with { Name = "summoned_skeleton" };
+    public static CreatureModel SummonedZombie() => Zombie() with { Name = "summoned_zombie" };
+    public static CreatureModel SpiritWolf() => Wolf() with { Name = "spirit_wolf" };
+
+    /// <summary>
+    /// A compact irregular stone biped, authored at sixteen model units: about half a player's
+    /// height. It borrows no hostile model and its broad head leaves room for readable bright eyes.
+    /// </summary>
+    public static CreatureModel EarthElemental() => new(
+        "earth_elemental", 64, 64,
+        [
+            Bone("body", "", new Vector3(0f, 9f, 0f),
+                Box(-4f, 4f, -2.5f, 8f, 7f, 5f, 16, 16),
+                Box(-3f, 9f, -3f, 6f, 3f, 1f, 40, 16)),
+            Bone("head", "body", new Vector3(0f, 11f, 0f),
+                Box(-3.5f, 10f, -3.5f, 7f, 6f, 7f, 0, 0),
+                Box(-4.5f, 12f, -1f, 2f, 2f, 2f, 32, 0)),
+            Posed("arm0", "body", new Vector3(-4f, 10f, 0f), Vector3.Zero,
+                Box(-7f, 3f, -2f, 3f, 8f, 4f, 0, 24)),
+            Posed("arm1", "body", new Vector3(4f, 10f, 0f), Vector3.Zero,
+                Box(4f, 4f, -2f, 4f, 7f, 4f, 16, 40, mirror: true)),
+            Bone("leg0", "body", new Vector3(-2f, 4f, 0f),
+                Box(-4f, 0f, -2.5f, 4f, 5f, 5f, 32, 32)),
+            Bone("leg1", "body", new Vector3(2f, 4f, 0f),
+                Box(0f, 0f, -2f, 3f, 5f, 4f, 44, 40, mirror: true)),
         ]);
 
     /// <summary>
@@ -663,7 +692,8 @@ public static class StarterCreatures
     public static IReadOnlyList<CreatureModel> All { get; } =
         [Cow(), Pig(), Sheep(), Chicken(), Wolf(), Zombie(), Drowned(), Husk(), Skeleton(), Spider(),
          Slime(), Crawler(), Farwalker(), Rabbit(), Fox(), Cat(), Bat(), Squid(),
-         Shorewright(), Forager(), Waykeeper(), StormSentinel(), Starwarden()];
+         Shorewright(), Forager(), Waykeeper(), Lorekeeper(), StormSentinel(), Starwarden(),
+         SummonedSkeleton(), SummonedZombie(), SpiritWolf(), EarthElemental()];
 
     /// <summary>Ours for this creature, or null when we have not drawn one yet.</summary>
     public static CreatureModel? ByName(string name)

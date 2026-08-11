@@ -7,6 +7,7 @@ using Driftwood.Core.Diagnostics;
 using Driftwood.Core.Entities;
 using Driftwood.Core.Gen;
 using Driftwood.Core.Items;
+using Driftwood.Core.Magic;
 using Driftwood.Core.Textures;
 
 namespace Driftwood.Client;
@@ -58,6 +59,40 @@ public static class Program
 
             if (args.Contains("--controller-check"))
                 return ControllerCheck();
+
+            if (args.Contains("--magic-check"))
+            {
+                var faults = MagicAudit.Run(out var detail);
+                faults.AddRange(StarterCreatures.Validate());
+                faults.AddRange(CreatureArt.Validate());
+                var reference = Path.Combine(Path.GetTempPath(),
+                    "driftwood-magic-reference-check-" + Guid.NewGuid().ToString("N"));
+                try
+                {
+                    MagicReference.Write(reference, ProductVersion);
+                    HandbookReference.Write(reference, ProductVersion);
+                    faults.AddRange(MagicReference.Faults(reference, ProductVersion));
+                    faults.AddRange(HandbookReference.Faults(reference, ProductVersion));
+                }
+                finally
+                {
+                    try { if (Directory.Exists(reference)) Directory.Delete(reference, recursive: true); }
+                    catch (IOException) { faults.Add("the generated-reference check could not clean its temporary directory"); }
+                }
+                Console.WriteLine(faults.Count == 0 ? $"magic      PASS — {detail}" : $"magic      FAIL — {string.Join("; ", faults)}");
+                return faults.Count == 0 ? 0 : 1;
+            }
+
+            if (args.Contains("--magic-reference"))
+            {
+                var at = Array.IndexOf(args, "--magic-reference");
+                var folder = at + 1 < args.Length && !args[at + 1].StartsWith('-')
+                    ? args[at + 1] : "magic-reference";
+                var written = MagicReference.Write(folder, ProductVersion).Count
+                    + HandbookReference.Write(folder, ProductVersion).Count;
+                Console.WriteLine($"magic      wrote {written} reference files to {Path.GetFullPath(folder)}");
+                return 0;
+            }
 
             if (args.Contains("--pack-matrix"))
             {
@@ -697,9 +732,13 @@ public static class Program
                 case "--pack-matrix":
                     i++;
                     break;
+                case "--magic-reference":
+                    if (i + 1 < args.Length && !args[i + 1].StartsWith('-')) i++;
+                    break;
                 case "--audit":
                 case "--version":
                 case "--controller-check":
+                case "--magic-check":
                 case "--pack-coverage":
                 case "--pack-report":
                 case "--packs":
@@ -792,6 +831,11 @@ public static class Program
               --audio-check [sound-pack.zip]
                                 decode Driftwood's owned fallback; with a pack, require and report
                                 every sound slot the game names
+              --magic-check     audit the exact 19-spell registry, Rank I-IV progression, wallet,
+                                effects, summons, controls, rewards and stable save identities
+              --magic-reference <dir>
+                                write generated-value handbook, spell and companion wiki pages plus
+                                stable game-reference.json and magic-reference.json exports
               --controller-check
                                 load bundled SDL3, verify the XInput fallback ABI, enumerate any
                                 connected pads by name, and pass when no controller is attached

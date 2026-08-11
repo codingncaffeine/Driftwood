@@ -48,6 +48,8 @@ public enum ControllerAction
     PreviousSlot,
     NextSlot,
     RadialHotbar,
+    SpellBankLeft,
+    SpellBankRight,
     OpenInventory,
     OpenOptions,
     ToggleView,
@@ -62,6 +64,7 @@ public static class ControllerActions
         <= ControllerAction.Sprint => "moving",
         <= ControllerAction.SwapHands => "using things",
         <= ControllerAction.RadialHotbar => "the bar",
+        <= ControllerAction.SpellBankRight => "magic",
         _ => "screens",
     };
 
@@ -77,6 +80,8 @@ public static class ControllerActions
         ControllerAction.PreviousSlot => "previous slot",
         ControllerAction.NextSlot => "next slot",
         ControllerAction.RadialHotbar => "radial hotbar",
+        ControllerAction.SpellBankLeft => "spell bank 1-4",
+        ControllerAction.SpellBankRight => "spell bank 5-8",
         ControllerAction.OpenInventory => "inventory",
         ControllerAction.OpenOptions => "options",
         _ => "change view",
@@ -94,17 +99,45 @@ public sealed class ControllerBindings
         bindings.Set(ControllerAction.Jump, ControllerControl.South);
         bindings.Set(ControllerAction.Sneak, ControllerControl.East);
         bindings.Set(ControllerAction.Sprint, ControllerControl.LeftStick);
-        bindings.Set(ControllerAction.BreakOrAttack, ControllerControl.RightTrigger);
-        bindings.Set(ControllerAction.UseOrPlace, ControllerControl.LeftTrigger);
-        bindings.Set(ControllerAction.RaiseShield, ControllerControl.LeftShoulder);
+        bindings.Set(ControllerAction.BreakOrAttack, ControllerControl.RightShoulder);
+        bindings.Set(ControllerAction.UseOrPlace, ControllerControl.LeftShoulder);
+        bindings.Set(ControllerAction.RaiseShield, ControllerControl.RightStick);
         bindings.Set(ControllerAction.SwapHands, ControllerControl.West);
         bindings.Set(ControllerAction.PreviousSlot, ControllerControl.DPadLeft);
         bindings.Set(ControllerAction.NextSlot, ControllerControl.DPadRight);
         bindings.Set(ControllerAction.RadialHotbar, ControllerControl.DPadUp);
+        bindings.Set(ControllerAction.SpellBankLeft, ControllerControl.LeftTrigger);
+        bindings.Set(ControllerAction.SpellBankRight, ControllerControl.RightTrigger);
         bindings.Set(ControllerAction.OpenInventory, ControllerControl.North);
         bindings.Set(ControllerAction.OpenOptions, ControllerControl.Start);
-        bindings.Set(ControllerAction.ToggleView, ControllerControl.RightStick);
+        bindings.Set(ControllerAction.ToggleView, ControllerControl.Back);
         return bindings;
+    }
+
+    /// <summary>
+    /// True only for the complete pre-magic shipped preset. A customized row makes this false, so
+    /// adding spell banks never silently rearranges somebody's controls.
+    /// </summary>
+    public bool IsLegacyDefault(IReadOnlySet<ControllerAction> named)
+    {
+        var legacy = new Dictionary<ControllerAction, ControllerControl>
+        {
+            [ControllerAction.Jump] = ControllerControl.South,
+            [ControllerAction.Sneak] = ControllerControl.East,
+            [ControllerAction.Sprint] = ControllerControl.LeftStick,
+            [ControllerAction.BreakOrAttack] = ControllerControl.RightTrigger,
+            [ControllerAction.UseOrPlace] = ControllerControl.LeftTrigger,
+            [ControllerAction.RaiseShield] = ControllerControl.LeftShoulder,
+            [ControllerAction.SwapHands] = ControllerControl.West,
+            [ControllerAction.PreviousSlot] = ControllerControl.DPadLeft,
+            [ControllerAction.NextSlot] = ControllerControl.DPadRight,
+            [ControllerAction.RadialHotbar] = ControllerControl.DPadUp,
+            [ControllerAction.OpenInventory] = ControllerControl.North,
+            [ControllerAction.OpenOptions] = ControllerControl.Start,
+            [ControllerAction.ToggleView] = ControllerControl.RightStick,
+        };
+        return named.Count == legacy.Count
+            && legacy.All(pair => named.Contains(pair.Key) && Control(pair.Key) == pair.Value);
     }
 
     public ControllerControl Control(ControllerAction action) => _controls[(int)action];
