@@ -164,12 +164,13 @@ public sealed class FluidTable
 /// strength downward instead of a beam, and one rule of its own: <b>a cell that can fall does not
 /// feed sideways</b>.</para>
 /// <para>⛳⛳ <b>There is no tear-down pass, and the reason is worth writing down.</b> Light needs one
-/// because a cell can be lit by a neighbour that is lit by it — light has no direction. A fluid's
-/// support graph cannot contain a cycle: a flowing cell's level is <em>strictly</em> below the
-/// neighbour that feeds it, or it is fed from directly above, and y strictly decreases that way. So
-/// the graph is a DAG ordered by (height, level), stale support is impossible, and re-resolving a
-/// cell from its neighbours until nothing changes reaches the true answer on its own. Removing a
-/// source drains the river by arithmetic rather than by a second algorithm.</para>
+/// because a cell can be lit by a neighbour that is lit by it — light has no direction. Ordinary
+/// fluid support cannot contain a cycle: a flowing cell's level is <em>strictly</em> below the
+/// neighbour that feeds it, or it is fed from directly above, and y strictly decreases that way.
+/// Reservoir-connected water adds full cells, but gives each one a depth that strictly increases
+/// away from the generated body. The combined graph is still a DAG ordered by (height, reservoir
+/// depth, level), so re-resolving cells reaches the true answer without a separate tear-down pass.
+/// Removing a feed drains the river by arithmetic rather than by a second algorithm.</para>
 /// <para><b>What that buys.</b> Termination is a theorem: levels are bounded, the graph is acyclic,
 /// and a cell can only be re-visited as many times as it has levels to lose. Order independence is
 /// a theorem too, and it is what makes a save that stores no fluid <em>correct</em> rather than
@@ -183,6 +184,12 @@ public sealed class FluidTable
 public sealed class FluidEngine
 {
     public const int MaxLevel = FluidTable.MaxLevel;
+
+    /// <summary>
+    /// Four generated sources at one level are enough to call the body a reservoir. A 2×2 pond is
+    /// the smallest useful positive control; one bucket or a short placed row remains ordinary flow.
+    /// </summary>
+    private const int ReservoirMinimumSources = 4;
 
     private readonly FluidTable _table;
 
@@ -211,6 +218,28 @@ public sealed class FluidEngine
     /// correctly can stop being correct later in the same pass, when the thing feeding it drains.
     /// </remarks>
     private readonly HashSet<(int X, int Y, int Z)> _queued = [];
+
+    /// <summary>
+    /// Water cells carrying an unbroken feed from a generated lake or ocean. The value strictly
+    /// increases away from that body, giving reservoir support the same acyclic shape as fluid
+    /// levels even though a full connected excavation may be much longer than seven cells.
+    /// </summary>
+    private readonly Dictionary<(int X, int Y, int Z), int> _reservoirDepth = [];
+
+    /// <summary>
+    /// The exact upstream cell behind each reservoir depth. Depth alone orders a live feed, but a
+    /// stale child could otherwise re-parent its former parent after the lake mouth was blocked.
+    /// Following these strictly decreasing links proves that every feed still ends at generated
+    /// water rather than at a disconnected loop of yesterday's sources.
+    /// </summary>
+    private readonly Dictionary<
+        (int X, int Y, int Z), (int X, int Y, int Z)> _reservoirParent = [];
+
+    /// <summary>
+    /// Source blocks made by the flow rather than supplied by generation or a player's bucket.
+    /// Kept separate so a derived four-cell pool cannot misidentify itself as generated water.
+    /// </summary>
+    private readonly HashSet<(int X, int Y, int Z)> _derivedSources = [];
 
     private static readonly (int X, int Z)[] Sides =
         [(1, 0), (-1, 0), (0, 1), (0, -1)];
@@ -283,7 +312,10 @@ public sealed class FluidEngine
             // move and does not need asking.
             if (!CanSpread(world, ox + x, oy + y, oz + z, here)) continue;
 
-            Seed(ox + x, oy + y, oz + z);
+            // The neighbour is what can change. Asking only the permanent source itself resolves
+            // to the same source and wakes nobody, which meant a saved hole beside a lake stayed
+            // dry after reload even though a fresh player edit filled it. Touch the ring as well.
+            Touch(ox + x, oy + y, oz + z);
         }
 
         const int last = Chunk.Size - 1;
@@ -317,6 +349,48 @@ public sealed class FluidEngine
             // asked is the cell on the other side of the seam, in the chunk that has just arrived.
             Touch(wx, wy, wz);
         }
+    }
+
+    /// <summary>Forgets derived reservoir bookkeeping when streaming drops a chunk.</summary>
+    /// <remarks>
+    /// Flow is not saved and a returning chunk is regenerated from sources and edits. Retaining a
+    /// derived marker at the same coordinate would mistake that regenerated cell for old flow and
+    /// could sever a real lake from its newly loaded shore.
+    /// </remarks>
+    public void ForgetChunk(ChunkPos pos)
+    {
+        var derived = _derivedSources
+            .Where(cell => ChunkPos.FromWorld(cell.X, cell.Y, cell.Z) == pos)
+            .ToArray();
+        var reservoir = _reservoirDepth.Keys
+            .Where(cell => ChunkPos.FromWorld(cell.X, cell.Y, cell.Z) == pos)
+            .ToArray();
+        var dependents = _reservoirParent
+            .Where(link => ChunkPos.FromWorld(link.Value.X, link.Value.Y, link.Value.Z) == pos
+                           && ChunkPos.FromWorld(link.Key.X, link.Key.Y, link.Key.Z) != pos)
+            .Select(link => link.Key)
+            .ToArray();
+
+        foreach (var cell in derived) _derivedSources.Remove(cell);
+        foreach (var cell in reservoir) ClearReservoir(cell);
+
+        // Only shell cells can have supported something outside the chunk. Wake that outside ring
+        // so a feed cut by streaming does not remain visually frozen until the next player edit.
+        var (ox, oy, oz) = pos.Origin;
+        foreach (var cell in reservoir)
+        {
+            var lx = cell.X - ox;
+            var ly = cell.Y - oy;
+            var lz = cell.Z - oz;
+            if (lx is not (0 or Chunk.SizeMask)
+                && ly is not (0 or Chunk.SizeMask)
+                && lz is not (0 or Chunk.SizeMask)) continue;
+            Ring(cell.X, cell.Y, cell.Z);
+        }
+
+        // A generated source itself has no depth entry, so an outside child may be the only record
+        // that its root just streamed away. Wake those direct children as well.
+        foreach (var cell in dependents) Touch(cell.X, cell.Y, cell.Z);
     }
 
     /// <summary>
@@ -447,16 +521,59 @@ public sealed class FluidEngine
     private (FluidKind Kind, int Level, bool Falling) Resolve(
         VoxelWorld world, int x, int y, int z, ushort have)
     {
-        // A source is permanent until a bucket or a block takes it away. Flow derives one in
-        // exactly one place: F8, just below.
-        if (_table.IsSource(have)) return (_table.KindOf(have), MaxLevel, false);
+        var cell = (X: x, Y: y, Z: z);
 
-        // ⛳⛳ F8 — a cell held between two settled water sources becomes a source itself. The
-        // design decided this the day the flow was designed ("it is what makes an ocean an
-        // ocean") and the build forgot it, which the user then watched from the shore: without
-        // it a scooped pool refills WEAKER, a channel off the sea is a seven-cell tongue that
-        // dies, and empty space sits beside standing water for ever — water that "forgets" to
-        // flow.
+        // A supplied source is permanent until a bucket or a block takes it away. A source made by
+        // reservoir propagation is permanent only while a lower-depth feed still reaches it; that
+        // strict depth ordering prevents a disconnected loop from claiming to support itself.
+        if (_table.IsSource(have))
+        {
+            if (!_derivedSources.Contains(cell))
+            {
+                ClearReservoir(cell);
+                return (_table.KindOf(have), MaxLevel, false);
+            }
+
+            // F8's ordinary two-spring source retains the existing genre rule. Only sources that
+            // carry reservoir depth participate in the new long-body contract.
+            if (!_reservoirDepth.TryGetValue(cell, out var currentDepth))
+                return (_table.KindOf(have), MaxLevel, false);
+
+            if (!Draining(world, x, y, z, FluidKind.Water)
+                && BestSideReservoirDepth(
+                    world, x, y, z, currentDepth, out var supportDepth, out var support))
+            {
+                SetReservoir(cell, supportDepth + 1, support);
+                return (FluidKind.Water, MaxLevel, false);
+            }
+
+            // The feed was cut. Keep the derived-source marker until the replacement is known so
+            // this stale cell cannot briefly masquerade as generated water to one of its children.
+            ClearReservoir(cell);
+        }
+        else
+        {
+            _derivedSources.Remove(cell);
+            ClearReservoir(cell);
+        }
+
+        // A generated lake/ocean is a reservoir, not one eight-level emitter. Once a stable cell
+        // touches an unbroken reservoir feed it becomes a full derived source and carries a depth
+        // one greater than its parent. That is what lets an enclosed trench fill to the lake's
+        // level however long it is, while a bucket source below never enters this path.
+        if (!Draining(world, x, y, z, FluidKind.Water)
+            && BestSideReservoirDepth(
+                world, x, y, z, int.MaxValue, out var reservoirDepth, out var reservoirParent))
+        {
+            SetReservoir(cell, reservoirDepth + 1, reservoirParent);
+            _derivedSources.Add(cell);
+            return (FluidKind.Water, MaxLevel, false);
+        }
+
+        // ⛳⛳ F8 — a cell held between two settled water sources becomes a source itself. This is
+        // the small-pool rule: it makes a scooped middle refill at full strength. Long excavation
+        // connected to generated lakes/oceans is the reservoir-depth path above; keeping the two
+        // contracts separate is what lets a bucket puddle remain finite.
         //
         // Never for lava (a second infinite feed into coal would flatten the early economy), and
         // only AT REST — a cell with somewhere below to go falls rather than settling, which is
@@ -464,10 +581,8 @@ public sealed class FluidEngine
         // springs. A waterlogged block counts as the source it holds, so two wet fence posts
         // flank a gap the way two open sources do.
         //
-        // ⛳ Still one monotone fixpoint: sourceness only ever gets ADDED while filling, so the
-        // settle stays order-independent and a save that stores no fluid stays correct — a dug
-        // pool re-promotes the same cells every time it is re-derived from the seed and the
-        // edits.
+        // ⛳ Still one monotone fill: sourceness only gets added here, so a dug pool re-promotes the
+        // same cells every time it is re-derived from the seed and edits.
         if (!Draining(world, x, y, z, FluidKind.Water))
         {
             var springs = 0;
@@ -480,7 +595,12 @@ public sealed class FluidEngine
                 if (_table.KindOf(n) == FluidKind.Water && _table.IsSource(n)) springs++;
             }
 
-            if (springs >= 2) return (FluidKind.Water, MaxLevel, false);
+            if (springs >= 2)
+            {
+                ClearReservoir(cell);
+                _derivedSources.Add(cell);
+                return (FluidKind.Water, MaxLevel, false);
+            }
         }
 
         // Fed from directly above: full strength, and falling. This is the rule that makes a
@@ -491,12 +611,24 @@ public sealed class FluidEngine
         {
             var above = world.GetBlock(x, y + 1, z).Value;
             var kind = _table.KindOf(above);
-            if (kind != FluidKind.None) return (kind, MaxLevel, true);
+            if (kind != FluidKind.None)
+            {
+                if (kind == FluidKind.Water
+                    && TryReservoirDepth(world, x, y + 1, z, out var aboveDepth))
+                    SetReservoir(cell, aboveDepth + 1, (x, y + 1, z));
+                else
+                    ClearReservoir(cell);
+
+                _derivedSources.Remove(cell);
+                return (kind, MaxLevel, true);
+            }
         }
 
         // Otherwise the best a side neighbour can offer, ignoring any that has somewhere to fall.
         var bestKind = FluidKind.None;
         var best = 0;
+        int? bestReservoirDepth = null;
+        (int X, int Y, int Z)? bestReservoirParent = null;
 
         foreach (var (dx, dz) in Sides)
         {
@@ -514,13 +646,162 @@ public sealed class FluidEngine
             if (Draining(world, nx, y, nz, kind)) continue;
 
             var level = _table.LevelOf(n) - FluidTable.Decay(kind, y);
-            if (level <= best) continue;
+            var sideDepth = 0;
+            var reservoirFed = kind == FluidKind.Water
+                               && TryReservoirDepth(world, nx, y, nz, out sideDepth);
+
+            if (level < best) continue;
+            if (level == best
+                && (kind != bestKind || bestReservoirDepth.HasValue || !reservoirFed)) continue;
 
             best = level;
             bestKind = kind;
+            bestReservoirDepth = reservoirFed ? sideDepth : null;
+            bestReservoirParent = reservoirFed ? (nx, y, nz) : null;
         }
 
+        _derivedSources.Remove(cell);
+        if (best > 0 && bestKind == FluidKind.Water
+                     && bestReservoirDepth is { } depth
+                     && bestReservoirParent is { } parent)
+            SetReservoir(cell, depth + 1, parent);
+        else
+            ClearReservoir(cell);
+
         return best > 0 ? (bestKind, best, false) : (FluidKind.None, 0, false);
+    }
+
+    /// <summary>Finds the shallowest reservoir-fed side that can actually feed this cell.</summary>
+    private bool BestSideReservoirDepth(
+        VoxelWorld world, int x, int y, int z, int beforeDepth, out int bestDepth,
+        out (int X, int Y, int Z) bestParent)
+    {
+        bestDepth = int.MaxValue;
+        bestParent = default;
+
+        foreach (var (dx, dz) in Sides)
+        {
+            int nx = x + dx, nz = z + dz;
+            if (!Loaded(world, nx, y, nz)) continue;
+
+            var neighbour = world.GetBlock(nx, y, nz).Value;
+            if (_table.KindOf(neighbour) != FluidKind.Water) continue;
+            if (Draining(world, nx, y, nz, FluidKind.Water)) continue;
+            if (!TryReservoirDepth(world, nx, y, nz, out var depth)) continue;
+            if (depth >= beforeDepth || depth >= bestDepth) continue;
+
+            bestDepth = depth;
+            bestParent = (nx, y, nz);
+        }
+
+        return bestDepth != int.MaxValue;
+    }
+
+    /// <summary>
+    /// Answers how far a water cell's feed is from a generated multi-source body. Derived cells
+    /// carry an exact, strictly decreasing parent chain; supplied sources prove the root with a
+    /// four-cell bounded walk. Checking the whole chain is what makes stale disconnected water
+    /// unable to support itself after its mouth or an intermediate chunk disappears.
+    /// </summary>
+    private bool TryReservoirDepth(VoxelWorld world, int x, int y, int z, out int depth)
+    {
+        depth = 0;
+        if (!Loaded(world, x, y, z)) return false;
+
+        var cell = (X: x, Y: y, Z: z);
+        var block = world.GetBlock(x, y, z).Value;
+        if (_table.KindOf(block) != FluidKind.Water)
+        {
+            ClearReservoir(cell);
+            if (!_table.IsSource(block)) _derivedSources.Remove(cell);
+            return false;
+        }
+
+        if (NaturalReservoirSource(world, x, y, z)) return true;
+        if (!_reservoirDepth.TryGetValue(cell, out depth) || depth <= 0) return false;
+
+        var expected = depth;
+        var here = cell;
+
+        while (expected > 0)
+        {
+            if (!_reservoirDepth.TryGetValue(here, out var recorded) || recorded != expected)
+                return false;
+            if (!_reservoirParent.TryGetValue(here, out var parent)) return false;
+            if (!ReservoirParentOf(here, parent)) return false;
+            if (!Loaded(world, parent.X, parent.Y, parent.Z)) return false;
+
+            var parentBlock = world.GetBlock(parent.X, parent.Y, parent.Z).Value;
+            if (_table.KindOf(parentBlock) != FluidKind.Water) return false;
+
+            expected--;
+            if (NaturalReservoirSource(world, parent.X, parent.Y, parent.Z))
+                return expected == 0;
+
+            here = parent;
+        }
+
+        return false;
+    }
+
+    private static bool ReservoirParentOf(
+        (int X, int Y, int Z) cell, (int X, int Y, int Z) parent) =>
+        (parent.Y == cell.Y
+         && Math.Abs(parent.X - cell.X) + Math.Abs(parent.Z - cell.Z) == 1)
+        || (parent.X == cell.X && parent.Y == cell.Y + 1 && parent.Z == cell.Z);
+
+    private void SetReservoir(
+        (int X, int Y, int Z) cell, int depth, (int X, int Y, int Z) parent)
+    {
+        _reservoirDepth[cell] = depth;
+        _reservoirParent[cell] = parent;
+    }
+
+    private void ClearReservoir((int X, int Y, int Z) cell)
+    {
+        _reservoirDepth.Remove(cell);
+        _reservoirParent.Remove(cell);
+    }
+
+    /// <summary>
+    /// True when this is generated (not bucketed or flow-derived) water belonging to at least a
+    /// 2×2 body's worth of horizontally connected sources at this level.
+    /// </summary>
+    private bool NaturalReservoirSource(VoxelWorld world, int x, int y, int z)
+    {
+        if (!BaseNaturalSource(world, x, y, z)) return false;
+
+        var pending = new Queue<(int X, int Z)>();
+        var seen = new HashSet<(int X, int Z)> { (x, z) };
+        pending.Enqueue((x, z));
+
+        while (pending.TryDequeue(out var here))
+        {
+            if (seen.Count >= ReservoirMinimumSources) return true;
+
+            foreach (var (dx, dz) in Sides)
+            {
+                var next = (X: here.X + dx, Z: here.Z + dz);
+                if (seen.Contains(next)) continue;
+                if (!BaseNaturalSource(world, next.X, y, next.Z)) continue;
+
+                seen.Add(next);
+                pending.Enqueue(next);
+            }
+        }
+
+        return false;
+    }
+
+    private bool BaseNaturalSource(VoxelWorld world, int x, int y, int z)
+    {
+        if (!Loaded(world, x, y, z)) return false;
+
+        var cell = (X: x, Y: y, Z: z);
+        if (_derivedSources.Contains(cell) || world.Edits.ContainsKey(cell)) return false;
+
+        var block = world.GetBlock(x, y, z).Value;
+        return _table.KindOf(block) == FluidKind.Water && _table.IsSource(block);
     }
 
     /// <summary>True when this fluid cell has somewhere below it to go.</summary>

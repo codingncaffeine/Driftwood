@@ -338,8 +338,12 @@ public sealed class ModrinthResourcePackProvider
         var verified = System.IO.Path.Combine(stagingFolder, $"driftwood-resource-pack-{token}.zip");
         try
         {
-            var bridge = progress is null ? null : new Progress<SoundPackDownloadProgress>(value =>
-                progress.Report(new ResourcePackDownloadProgress(value.BytesReceived, value.TotalBytes)));
+            // Progress<T> posts to the captured synchronization context (or the thread pool), so a
+            // tiny or cached download can finish before its final report is delivered. Forwarding
+            // inline preserves the transport's ordering: once DownloadAsync returns, callers have
+            // observed the determinate completion that the returned file represents.
+            IProgress<SoundPackDownloadProgress>? bridge = progress is null
+                ? null : new DownloadProgressBridge(progress);
             SoundPackFileHttpResult response;
             try
             {
@@ -398,6 +402,13 @@ public sealed class ModrinthResourcePackProvider
             TryDelete(verified);
             throw;
         }
+    }
+
+    private sealed class DownloadProgressBridge(
+        IProgress<ResourcePackDownloadProgress> destination) : IProgress<SoundPackDownloadProgress>
+    {
+        public void Report(SoundPackDownloadProgress value) => destination.Report(
+            new ResourcePackDownloadProgress(value.BytesReceived, value.TotalBytes));
     }
 
     public async Task<bool> UpdateAvailableAsync(

@@ -82,7 +82,11 @@ for a streamer that loads whole columns.
 ## Fluids
 
 Water and lava flow. Break a block beside a river and it fills the space; lava falls down a shaft;
-take the source away and everything it was feeding drains.
+take the source away and everything it was feeding drains. A naturally generated lake or ocean
+with at least four connected source cells is a reservoir: a directly connected, stable excavation
+fills to that body's level however far it runs, and a falling feed can fill an enclosed hole below.
+A player-built puddle remains ordinary eight-level flow, so four buckets cannot flood an arbitrary
+flat world.
 
 **A fluid is light.** The lighting engine already computes the least fixpoint of a monotone level
 function — every cell keeps the best thing offered it and only passes it on when it improves — which
@@ -91,11 +95,13 @@ same answer. Flow is that fixpoint with sources instead of emitters, full streng
 sideways, and one rule of its own: **a cell that can fall does not feed sideways**. That is what
 makes a river run along a channel instead of spreading into a disc.
 
-It needs no tear-down pass, and that is worth writing down. Light needs one because a cell can be lit
-by a neighbour that is lit by it. A flowing cell's level is *strictly* below whatever feeds it, or it
-is fed from directly above and height strictly decreases — so the support graph is acyclic, stale
-support is impossible, and re-resolving a cell from its neighbours until nothing changes reaches the
-true answer on its own. Termination is a theorem rather than a hope, and so is order independence.
+It needs no separate tear-down pass, and that is worth writing down. Light needs one because a cell
+can be lit by a neighbour that is lit by it. An ordinary flowing cell's level is *strictly* below
+whatever feeds it, or it is fed from directly above and height strictly decreases. Reservoir-filled
+water instead records one exact upstream parent and a depth that strictly increases away from the
+generated body. Both support graphs are acyclic, so cutting the lake mouth drains derived water and
+re-resolving cells until nothing changes reaches the true answer. Termination is a theorem rather
+than a hope, and so is order independence.
 
 **Flowing fluid is never written to disk.** At rest it is a function of where the sources are and
 where the solids are, and both of those are already the seed plus the diff. The obvious objection —

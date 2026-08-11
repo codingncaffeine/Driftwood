@@ -903,7 +903,7 @@ public static class StarterBlocks
         });
 
         // Water is non-solid and non-opaque: you fall through it and it does not hide the
-        // sea floor. P0 still draws it in the opaque pass; sorted translucency is a later phase.
+        // sea floor. Its layer is drawn in the sorted translucent pass.
         // The attenuation is what makes depth read as depth — light falls off twice as fast under
         // water, so a shallow sandbar stays bright while a trench goes black.
         // Unbreakable because a fluid is not something you mine — a ray passes through it to the

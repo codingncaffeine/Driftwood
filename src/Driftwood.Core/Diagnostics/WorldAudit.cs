@@ -11517,10 +11517,10 @@ public static class WorldAudit
         }
 
         // ── F8: water held between two springs becomes one; nothing else ever does ───────────────
-        // The rule the design decided and the build forgot, found by the user from the shore:
-        // without it a scooped pool refills WEAKER and dies, and empty space sits beside standing
-        // water for ever. Each arm in its own box — the scratch repro that found this had its lava
-        // arm poisoned by an earlier arm's spread, which is why these are fixtures, not one world.
+        // This is the small-pool rule: a scooped middle comes back full. P9-W1 below owns the
+        // separate large-body rule, where generated lake/ocean water keeps feeding an excavation
+        // beyond the ordinary seven-cell tail. Each arm stays in its own box so an earlier spread
+        // cannot poison the next control.
         {
             // The middle of a three-source row comes back a SOURCE.
             var world = FluidBox(registry, ids, 0, 0, 1);
@@ -11586,22 +11586,166 @@ public static class WorldAudit
                 faults.Add("the hole under a fed gap never took the fall");
         }
 
+        var reservoirReach = 0;
+        var reopenedReach = 0;
+        var dammedReach = 0;
+        var puddleReach = 0;
+        var deepReach = 0;
         {
-            // ⚠ The genre's own LIMIT, pinned so nobody 'fixes' it into wrongness: a one-wide
-            // channel off a pool has one source neighbour at its mouth and dies seven cells out.
+            // P9-W1 — the user's lake-edge contract. Generated multi-source water is a reservoir:
+            // opening a directly connected trench must fill the whole enclosed excavation, not
+            // spend one level per step and die seven cells from the bank. The cells begin as stone
+            // and become saved AIR edits, so this is the same shape as digging them in play.
+            VoxelWorld ReservoirTrench()
+            {
+                var world = FluidBox(registry, ids, 0, 0, 1);
+
+                // A generated 3×3 pond, enclosed except for its east mouth.
+                for (var x = -3; x <= -1; x++)
+                for (var z = -1; z <= 1; z++)
+                    Put(world, x, 1, z, ids.Water);
+                for (var z = -2; z <= 2; z++) Put(world, -4, 1, z, ids.Stone);
+                for (var x = -4; x <= 0; x++)
+                {
+                    Put(world, x, 1, -2, ids.Stone);
+                    Put(world, x, 1, 2, ids.Stone);
+                }
+                for (var z = -2; z <= 2; z++)
+                    if (z != 0) Put(world, 0, 1, z, ids.Stone);
+
+                // An eighteen-cell one-wide excavation, with real edit records and a closed end.
+                for (var x = 0; x <= 17; x++)
+                {
+                    Put(world, x, 1, -1, ids.Stone);
+                    Put(world, x, 1, 0, ids.Stone);
+                    Put(world, x, 1, 1, ids.Stone);
+                }
+                Put(world, 18, 1, 0, ids.Stone);
+                for (var x = 0; x <= 17; x++) world.SetBlock(x, 1, 0, BlockId.Air);
+
+                return world;
+            }
+
+            var world = ReservoirTrench();
+            if (!At(world, 17, 1, 0).IsAir)
+                faults.Add("the reservoir trench was not empty before water ran");
+
+            var editsBeforeFlow = world.Edits.Count;
+            var engine = new FluidEngine(table);
+            engine.Touch(0, 1, 0, urgent: true);
+            engine.Settle(world, changed);
+
+            for (var x = 0; x <= 17; x++)
+                if (table.KindOf(At(world, x, 1, 0).Value) == FluidKind.Water) reservoirReach++;
+
+            if (reservoirReach != 18 || !table.IsSource(At(world, 17, 1, 0).Value))
+                faults.Add($"a generated pond filled {reservoirReach}/18 connected trench cells; "
+                         + $"the far cell was '{registry[At(world, 17, 1, 0)].Name}'");
+            if (world.Edits.Count != editsBeforeFlow)
+                faults.Add($"reservoir flow added {world.Edits.Count - editsBeforeFlow} save edits");
+
+            // The depth labels are a rooted feed, not permission for a disconnected loop of full
+            // cells to keep vouching for itself. Dam the one-cell mouth and the derived branch must
+            // drain; this is also the streaming case with a solid boundary in place of an unload.
+            world.SetBlock(0, 1, 0, ids.Stone);
+            engine.Touch(0, 1, 0, urgent: true);
+            engine.Settle(world, changed);
+            for (var x = 1; x <= 17; x++)
+                if (table.KindOf(At(world, x, 1, 0).Value) == FluidKind.Water) dammedReach++;
+
+            if (dammedReach != 0)
+                faults.Add($"a dammed reservoir branch retained {dammedReach}/17 stale water cells");
+
+            // Reopening derives the same fill without another player touch. TouchChunk is the load
+            // path; seeding only the permanent source used to wake nobody and leave this trench dry.
+            var reopened = ReservoirTrench();
+            var reopenedEdits = reopened.Edits.Count;
+            var afterLoad = new FluidEngine(table);
+            afterLoad.TouchChunk(reopened, new ChunkPos(-1, 0, 0));
+            afterLoad.Settle(reopened, changed);
+
+            for (var x = 0; x <= 17; x++)
+                if (table.IsSource(At(reopened, x, 1, 0).Value)) reopenedReach++;
+
+            if (reopenedReach != 18)
+                faults.Add($"reopening derived only {reopenedReach}/18 reservoir cells from saved air edits");
+            if (reopened.Edits.Count != reopenedEdits)
+                faults.Add("deriving a reservoir after load changed the save edit set");
+        }
+
+        {
+            // Negative control: even a player-built 2×2 pool is not generated reservoir water.
+            // Its one-wide outlet keeps the ordinary eight-level falloff and stops after six cells
+            // beyond the mouth; otherwise four buckets could flood an arbitrary flat world.
             var world = FluidBox(registry, ids, 0, 0, 1);
-            for (var x = -3; x <= -1; x++)
-            for (var z = -1; z <= 1; z++)
-                Put(world, x, 1, z, ids.Water);
+            for (var x = -2; x <= -1; x++)
+            for (var z = 0; z <= 1; z++)
+                world.SetBlock(x, 1, z, ids.Water);
+            for (var x = 0; x <= 10; x++)
+            {
+                Put(world, x, 1, -1, ids.Stone);
+                Put(world, x, 1, 1, ids.Stone);
+            }
 
             var engine = new FluidEngine(table);
             engine.Touch(0, 1, 0, urgent: true);
             engine.Settle(world, changed);
 
-            if (table.KindOf(At(world, 0, 1, 0).Value) != FluidKind.Water)
-                faults.Add("the mouth of a channel off a pool took no water at all");
-            if (table.KindOf(At(world, 7, 1, 0).Value) != FluidKind.None)
-                faults.Add("a one-wide channel ran past seven cells, which is not the genre's flow");
+            for (var x = 0; x <= 10; x++)
+                if (table.KindOf(At(world, x, 1, 0).Value) == FluidKind.Water) puddleReach++;
+
+            if (puddleReach != 7 || table.KindOf(At(world, 7, 1, 0).Value) != FluidKind.None)
+                faults.Add($"a player-placed puddle reached {puddleReach} outlet cells instead of 7");
+            if (table.IsSource(At(world, 0, 1, 0).Value))
+                faults.Add("a player-placed puddle promoted its outlet into reservoir water");
+        }
+
+        {
+            // A reservoir feed survives a drop as well as distance. The lip drains downward, the
+            // falling column carries its reservoir ancestry, and the enclosed lower hole fills to
+            // its far end instead of becoming one seven-cell splash at the bottom.
+            var world = FluidBox(registry, ids, 0, 0, 1);
+            for (var x = -3; x <= -1; x++)
+            for (var z = -1; z <= 1; z++)
+            {
+                Put(world, x, 9, z, ids.Stone);
+                Put(world, x, 10, z, ids.Water);
+            }
+            for (var z = -2; z <= 2; z++) Put(world, -4, 10, z, ids.Stone);
+            for (var x = -4; x <= 0; x++)
+            {
+                Put(world, x, 10, -2, ids.Stone);
+                Put(world, x, 10, 2, ids.Stone);
+            }
+            for (var z = -2; z <= 2; z++)
+                if (z != 0) Put(world, 0, 10, z, ids.Stone);
+
+            for (var y = 2; y <= 9; y++)
+            {
+                Put(world, -1, y, 0, ids.Stone);
+                Put(world, 0, y, -1, ids.Stone);
+                Put(world, 0, y, 1, ids.Stone);
+                Put(world, 1, y, 0, ids.Stone);
+            }
+            for (var x = 0; x <= 12; x++)
+            {
+                Put(world, x, 1, -1, ids.Stone);
+                Put(world, x, 1, 1, ids.Stone);
+            }
+            Put(world, -1, 1, 0, ids.Stone);
+            Put(world, 13, 1, 0, ids.Stone);
+
+            var engine = new FluidEngine(table);
+            engine.Touch(0, 10, 0, urgent: true);
+            engine.Settle(world, changed);
+
+            for (var x = 0; x <= 12; x++)
+                if (table.KindOf(At(world, x, 1, 0).Value) == FluidKind.Water) deepReach++;
+
+            if (deepReach != 13 || !table.IsSource(At(world, 12, 1, 0).Value))
+                faults.Add($"a pond spilling nine cells down filled {deepReach}/13 cells of the lower hole, "
+                         + $"but its far cell was '{registry[At(world, 12, 1, 0)].Name}' "
+                         + $"with {engine.Pending:N0} cells still queued");
         }
 
         // ── The urgent lane cannot be starved by a cell already queued patiently ─────────────────
@@ -11853,10 +11997,14 @@ public static class WorldAudit
             if (mixed != 0) faults.Add($"{mixed} cells hold one fluid directly under the other");
         }
 
-        detail = $"a fall crossed {fell} cells and spread {reach}; breaking a wall let it {filled} further "
-               + $"and taking the source drained {drained}; a fall stalled at the seam and resumed to "
-               + $"y {resumedTo}; a quenched source became coal and a quenched flow left {chilled} rubble "
-               + $"with its source intact; only the {quenched} reaction reached the save";
+        detail = $"a generated reservoir filled {reservoirReach}/18 trench cells and re-derived "
+               + $"{reopenedReach}/18 after load, its dammed branch retained {dammedReach}/17, "
+               + $"while a placed puddle stopped after {puddleReach} and "
+               + $"a nine-cell fall fed {deepReach}/13 lower cells; an ordinary fall crossed {fell} cells "
+               + $"and spread {reach}; breaking a wall let it {filled} further and taking the source "
+               + $"drained {drained}; a fall stalled at the seam and resumed to y {resumedTo}; a quenched "
+               + $"source became coal and a quenched flow left {chilled} rubble with its source intact; "
+               + $"only the {quenched} reaction reached the save";
 
         return faults;
     }

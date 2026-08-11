@@ -523,6 +523,7 @@ public sealed class WorldStreamer : IDisposable
                 _requested.Remove(pos);
                 _meshRequested.Remove(pos);
                 _generated.TryRemove(pos, out _);
+                Fluids?.ForgetChunk(pos);
                 _world.RemoveChunk(pos);
                 _dropped.Enqueue(pos);
 
