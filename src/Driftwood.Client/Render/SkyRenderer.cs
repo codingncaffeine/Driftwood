@@ -1,5 +1,6 @@
 using System.Numerics;
 using Driftwood.Core.Sky;
+using Driftwood.Core.Textures;
 using Silk.NET.OpenGL;
 
 namespace Driftwood.Client.Render;
@@ -49,6 +50,8 @@ public sealed class SkyRenderer : IDisposable
         uniform vec3 uMoonDir;
         uniform vec3 uSunColor;
         uniform float uStarFade;
+        uniform sampler2D uSunSprite;
+        uniform sampler2D uMoonSprite;
 
         out vec4 FragColor;
 
@@ -59,6 +62,19 @@ public sealed class SkyRenderer : IDisposable
             p = fract(p * 0.3183099 + vec3(0.71, 0.113, 0.419));
             p += dot(p, p.yzx + 19.19);
             return fract((p.x + p.y) * p.z);
+        }
+
+        vec4 celestial(sampler2D sprite, vec3 direction, vec3 ray, float radius)
+        {
+            // A planar sprite also projects to the same coordinates at the antipode. Reject the
+            // back hemisphere explicitly or every pack-authored sun and moon appears twice.
+            if (dot(ray, direction) <= 0.0) return vec4(0.0);
+            vec3 reference = abs(direction.y) > 0.96 ? vec3(0.0, 0.0, 1.0) : vec3(0.0, 1.0, 0.0);
+            vec3 right = normalize(cross(reference, direction));
+            vec3 up = cross(direction, right);
+            vec2 uv = vec2(dot(ray, right), dot(ray, up)) / radius * 0.5 + 0.5;
+            if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) return vec4(0.0);
+            return texture(sprite, vec2(uv.x, 1.0 - uv.y));
         }
 
         void main()
@@ -91,14 +107,15 @@ public sealed class SkyRenderer : IDisposable
             }
 
             // The moon first, so the sun paints over it on the rare mornings they share the sky.
-            float toMoon = dot(ray, uMoonDir);
-            color = mix(color, vec3(0.86, 0.88, 0.94), uStarFade * smoothstep(0.9993, 0.9996, toMoon));
+            vec4 moon = celestial(uMoonSprite, uMoonDir, ray, 0.052);
+            color = mix(color, moon.rgb, moon.a * uStarFade);
 
             // The sun: a broad glow that lights the whole quarter of the sky it is in, then the disc.
             float toSun = dot(ray, uSunDir);
             color += uSunColor * pow(max(toSun, 0.0), 220.0) * 1.4;
             color += uSunColor * pow(max(toSun, 0.0), 8.0) * 0.10;
-            color = mix(color, vec3(1.0, 0.97, 0.90), smoothstep(0.99965, 0.99980, toSun));
+            vec4 sun = celestial(uSunSprite, uSunDir, ray, 0.043);
+            color = mix(color, sun.rgb, sun.a);
 
             FragColor = vec4(color, 1.0);
         }
@@ -111,11 +128,16 @@ public sealed class SkyRenderer : IDisposable
     private readonly Shader _shader;
     private readonly uint _vao;
     private readonly uint _vbo;
+    private readonly Texture2D _sun;
+    private readonly Texture2D _moon;
 
-    public unsafe SkyRenderer(GL gl)
+    public unsafe SkyRenderer(GL gl, EnvironmentTextureSet.Result? art = null)
     {
         _gl = gl;
         _shader = new Shader(gl, VertexSource, FragmentSource);
+        art ??= EnvironmentTextureSet.Build(null);
+        _sun = new Texture2D(gl, art.Sun);
+        _moon = new Texture2D(gl, art.Moon);
 
         _vao = _gl.GenVertexArray();
         _gl.BindVertexArray(_vao);
@@ -153,6 +175,10 @@ public sealed class SkyRenderer : IDisposable
         // goes out several minutes before it reaches the horizon.
         _shader.SetVec3("uSunColor", Vector3.Max(sky.SunColor, new Vector3(0.45f, 0.30f, 0.18f)));
         _shader.SetFloat("uStarFade", sky.StarFade);
+        _shader.SetInt("uSunSprite", 0);
+        _shader.SetInt("uMoonSprite", 1);
+        _sun.Bind(TextureUnit.Texture0);
+        _moon.Bind(TextureUnit.Texture1);
 
         _gl.Disable(EnableCap.DepthTest);
         _gl.DepthMask(false);
@@ -170,6 +196,8 @@ public sealed class SkyRenderer : IDisposable
     {
         _gl.DeleteBuffer(_vbo);
         _gl.DeleteVertexArray(_vao);
+        _sun.Dispose();
+        _moon.Dispose();
         _shader.Dispose();
     }
 }

@@ -36,6 +36,8 @@ public static class ChunkShaders
         out float vFog;
         out vec3 vWorld;
         out vec3 vShade;   // AO and climate tint alone, for light added per fragment
+        out vec3 vNormal;
+        out vec3 vSun;     // direct-sun color and sky visibility; angle is evaluated per fragment
 
         // Index 6 is the model format's "do not shade": a plant's two crossed planes face opposite
         // ways and must not come out one bright and one dark, so both are lit as if facing up.
@@ -74,6 +76,7 @@ public static class ChunkShaders
             bool explicitUv = ((aPacked1 >> 30) & 1u) != 0u;
 
             vec3 n = kNormals[face];
+            vNormal = n;
             vec3 world = uChunkOrigin + local;
             gl_Position = uViewProj * vec4(world + n * (float(pass) * kCoplanarLift), 1.0);
 
@@ -91,8 +94,7 @@ public static class ChunkShaders
             // the hillside above it stays lit.
             float upness = 0.5 + 0.5 * n.y;
             vec3 skyAmbient = mix(uGroundAmbient, uSkyAmbient, upness);
-            vec3 sun = uSunColor * max(dot(n, uSunDir), 0.0);
-            vec3 daylight = (skyAmbient + sun) * sky;
+            vec3 daylight = skyAmbient * sky;
 
             // ⛳ FIRELIGHT SWAYS AND DAYLIGHT DOES NOT. Two slow waves out of phase, sampled at
             // the corner's own position, dim the block-light term by up to a tenth — so the glow
@@ -115,6 +117,7 @@ public static class ChunkShaders
             // end up multiplying the texel, and doing it here costs one lookup a vertex instead of
             // one a fragment.
             vLight = max(light, uNightFloor) * kAo[ao] * uTint[tint];
+            vSun = uSunColor * sky * kAo[ao] * uTint[tint];
 
             // And the same two factors alone, for the carried light the fragment shader adds —
             // it has to sit under the same shade and tint as the baked light or a hand-lit
@@ -157,16 +160,139 @@ public static class ChunkShaders
         in float vFog;
         in vec3 vWorld;
         in vec3 vShade;
+        in vec3 vNormal;
+        in vec3 vSun;
 
         uniform sampler2DArray uBlocks;
+        uniform sampler2DArray uNormals;
+        uniform sampler2DArray uMaterials;
+        uniform sampler2DArrayShadow uShadowMap;
+        uniform sampler2D uOpaqueColor;
+        uniform sampler2D uOpaqueDepth;
         uniform vec3 uFogColor;
+        uniform vec3 uCameraPos;
         uniform float uAlpha;
         uniform vec3 uHeldPos;     // where the carried light is, in world space
         uniform vec3 uHeldLight;   // its colour and strength, zero when the hands are dark
         uniform float uHeldRange;  // blocks to nothing — one number, owned by the host
         uniform float uTime;       // shared with the vertex stage: same clock, same sway
+        uniform vec3 uSunDir;
+        uniform mat4 uShadow0;
+        uniform mat4 uShadow1;
+        uniform mat4 uShadow2;
+        uniform vec3 uShadowSplits;
+        uniform int uShadowEnabled;
+        uniform int uMaterialsEnabled;
+        uniform int uWaterPass;
+        uniform int uWaterEffects;
+        uniform vec2 uViewport;
+        uniform mat4 uViewProj;
+        uniform float uNear;
+        uniform float uFar;
 
         out vec4 FragColor;
+
+        float linearDepth(float depth)
+        {
+            float z = depth * 2.0 - 1.0;
+            return (2.0 * uNear * uFar) / max(uFar + uNear - z * (uFar - uNear), 0.0001);
+        }
+
+        vec3 materialNormal(vec3 baseNormal)
+        {
+            if (uMaterialsEnabled == 0) return normalize(baseNormal);
+            vec3 tangentNormal = texture(uNormals, vUvw).xyz * 2.0 - 1.0;
+            vec3 q1 = dFdx(vWorld);
+            vec3 q2 = dFdy(vWorld);
+            vec2 s1 = dFdx(vUvw.xy);
+            vec2 s2 = dFdy(vUvw.xy);
+            vec3 tangent = q1 * s2.y - q2 * s1.y;
+            vec3 bitangent = -q1 * s2.x + q2 * s1.x;
+            if (dot(tangent, tangent) < 0.000001 || dot(bitangent, bitangent) < 0.000001)
+                return normalize(baseNormal);
+            mat3 frame = mat3(normalize(tangent), normalize(bitangent), normalize(baseNormal));
+            return normalize(frame * tangentNormal);
+        }
+
+        float sunShadow(vec3 normal)
+        {
+            if (uShadowEnabled == 0) return 1.0;
+            float distanceToEye = distance(vWorld, uCameraPos);
+            int cascade = distanceToEye <= uShadowSplits.x ? 0
+                        : distanceToEye <= uShadowSplits.y ? 1 : 2;
+            vec4 lightClip = cascade == 0 ? uShadow0 * vec4(vWorld, 1.0)
+                           : cascade == 1 ? uShadow1 * vec4(vWorld, 1.0)
+                                          : uShadow2 * vec4(vWorld, 1.0);
+            vec3 projected = lightClip.xyz / max(abs(lightClip.w), 0.00001) * 0.5 + 0.5;
+            if (projected.z <= 0.0 || projected.z >= 1.0
+                || any(lessThan(projected.xy, vec2(0.002)))
+                || any(greaterThan(projected.xy, vec2(0.998)))) return 1.0;
+
+            float bias = max(0.00020 * (1.0 - dot(normal, uSunDir)), 0.000035);
+            float texel = 1.0 / float(textureSize(uShadowMap, 0).x);
+            float visibility = 0.0;
+            for (int y = -1; y <= 1; ++y)
+            for (int x = -1; x <= 1; ++x)
+                visibility += texture(uShadowMap,
+                    vec4(projected.xy + vec2(x, y) * texel, float(cascade), projected.z - bias));
+            return visibility / 9.0;
+        }
+
+        vec3 screenReflection(vec3 origin, vec3 direction, out float hit)
+        {
+            hit = 0.0;
+            vec3 reflected = uFogColor;
+            for (int step = 1; step <= 12; ++step)
+            {
+                vec3 point = origin + direction * (float(step) * 1.65);
+                vec4 clip = uViewProj * vec4(point, 1.0);
+                if (clip.w <= 0.0) break;
+                vec3 ndc = clip.xyz / clip.w;
+                vec2 uv = ndc.xy * 0.5 + 0.5;
+                if (any(lessThan(uv, vec2(0.002))) || any(greaterThan(uv, vec2(0.998)))) break;
+                float rayDepth = ndc.z * 0.5 + 0.5;
+                float sceneDepth = texture(uOpaqueDepth, uv).r;
+                float crossing = rayDepth - sceneDepth;
+                if (crossing > 0.0002 && crossing < 0.018)
+                {
+                    reflected = texture(uOpaqueColor, uv).rgb;
+                    hit = 1.0;
+                    break;
+                }
+            }
+            return reflected;
+        }
+
+        vec3 enhancedWater(vec3 tint)
+        {
+            vec2 screenUv = gl_FragCoord.xy / max(uViewport, vec2(1.0));
+            float surface = linearDepth(gl_FragCoord.z);
+            float behind = linearDepth(texture(uOpaqueDepth, screenUv).r);
+            float thickness = clamp(behind - surface, 0.0, 48.0);
+
+            float waveX = sin(vWorld.x * 0.31 + uTime * 1.23)
+                        + sin(vWorld.z * 0.57 - uTime * 0.71);
+            float waveZ = cos(vWorld.z * 0.27 + uTime * 0.93)
+                        + cos(vWorld.x * 0.49 + uTime * 0.54);
+            vec3 waveNormal = normalize(vec3(waveX * 0.075, 1.0, waveZ * 0.075));
+            vec2 refractUv = clamp(screenUv + waveNormal.xz * min(0.014, thickness * 0.0012),
+                                   vec2(0.001), vec2(0.999));
+            vec3 behindColor = texture(uOpaqueColor, refractUv).rgb;
+
+            vec3 absorption = exp(-vec3(0.11, 0.045, 0.022) * thickness);
+            vec3 waterColor = mix(tint * vec3(0.36, 0.72, 0.90), tint, 0.28);
+            vec3 refracted = behindColor * absorption + waterColor * (vec3(1.0) - absorption);
+
+            vec3 eyeDirection = normalize(vWorld - uCameraPos);
+            vec3 reflectedDirection = normalize(reflect(eyeDirection, waveNormal));
+            float reflectionHit;
+            vec3 reflection = screenReflection(vWorld + waveNormal * 0.04,
+                                                reflectedDirection, reflectionHit);
+            reflection = mix(uFogColor * 1.08, reflection, reflectionHit);
+            float fresnel = 0.035 + 0.48 * pow(1.0 - max(dot(-eyeDirection, waveNormal), 0.0), 5.0);
+            float shore = smoothstep(0.0, 1.35, thickness);
+            return mix(behindColor, mix(refracted, reflection, fresnel), 0.25 + shore * 0.75);
+        }
 
         void main()
         {
@@ -175,6 +301,13 @@ public static class ChunkShaders
             // Cutout, not blending. Leaves and vines are mostly holes; discarding them outright
             // keeps them in the opaque pass, where they need no sorting and still write depth.
             if (texel.a < 0.5) discard;
+
+            if (uWaterPass != 0 && uWaterEffects != 0)
+            {
+                vec3 color = enhancedWater(texel.rgb * vShade);
+                FragColor = vec4(mix(color, uFogColor, vFog), 1.0);
+                return;
+            }
 
             // ⛳ THE LIGHT CARRIED IN A HAND: a point of the held block's own colours, falling
             // linearly to nothing, breathing with the same firelight sway as everything else,
@@ -188,13 +321,30 @@ public static class ChunkShaders
                        + sin(uTime * 7.1 + vWorld.y * 2.9 - vWorld.x * 1.1);
             held *= 0.95 + 0.025 * sway;
 
-            vec3 light = max(vLight, held * vShade);
+            vec3 normal = materialNormal(vNormal);
+            float shadow = sunShadow(normal);
+            float diffuse = max(dot(normal, uSunDir), 0.0);
+            vec3 light = max(vLight, held * vShade) + vSun * diffuse * shadow;
+
+            vec4 material = uMaterialsEnabled != 0
+                ? texture(uMaterials, vUvw) : vec4(0.0, 0.74, 0.0, 1.0);
+            float metalness = material.r;
+            float roughness = clamp(material.g, 0.04, 1.0);
+            float emissive = material.b;
+            vec3 viewDirection = normalize(uCameraPos - vWorld);
+            vec3 halfway = normalize(uSunDir + viewDirection);
+            float exponent = mix(112.0, 3.0, roughness * roughness);
+            float highlight = pow(max(dot(normal, halfway), 0.0), exponent)
+                              * (1.0 - roughness * 0.72) * diffuse * shadow;
+            vec3 f0 = mix(vec3(0.035), texel.rgb, metalness);
+            vec3 color = texel.rgb * light + f0 * vSun * highlight
+                         + texel.rgb * emissive * 1.65;
 
             // ⛳ Alpha belongs to the PASS, not to the tile. Water's own texture is fully opaque and
             // has to stay that way — the cutout discard above and the whole mip chain are built on
             // every block texture being one or the other — so what makes a lake see-through is which
             // pass drew it. The opaque pass sets this to one and pays nothing.
-            FragColor = vec4(mix(texel.rgb * light, uFogColor, vFog), uAlpha);
+            FragColor = vec4(mix(color, uFogColor, vFog), uAlpha);
         }
         """;
 }

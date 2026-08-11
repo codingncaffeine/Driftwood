@@ -26,10 +26,10 @@ reachable from bare hands, in seven rounds, with no starting kit.
 | Workstations — bench, furnace, blast furnace, stonecutter, chests | working |
 | Interface — pixel font, tabbed screens, recipe book, key rebinding | working |
 | Save and load, autosave, backups, a start screen | working |
-| Sky, day and night, clouds, weather particles | working |
+| Sky, day and night, pack-aware weather, cascaded shadows, SSAO, HDR/bloom and TAA | working |
 | Creatures — four beasts, three hostiles, a cave animal, all modelled and painted here | working |
 | Creature drops, sixteen colours of wool and dye, food that heals | working |
-| **Flowing water and lava, buckets, swimming, burning** | working |
+| **Flowing water and lava, natural reservoirs, depth/refraction/SSR, buckets, swimming, burning** | working |
 | **Fire and smoke — anything alight shows it, anything that dies leaves a puff** | working |
 | **A searchable texture-pack library, verified Modrinth browser and updater** | working |
 | **An audio shelf, local importer and verified Modrinth browser** | working |
@@ -113,6 +113,27 @@ terrain and goes in the diff like anything else that cannot be undone.
 Lava is a light source, so bulk lava is placed **at rest** by the generator exactly as the ocean is —
 a lake, a river along a cavern floor, and the shore where it rises are all a pure function of seed and
 position and cost no flow at all. Only flowing lava costs relights.
+
+## Visuals
+
+The OpenGL 3.3 renderer now resolves the world through a checked HDR framebuffer. Three stabilized
+sun-shadow cascades and filtered edges give nearby blocks definition without spending the same
+resolution at the horizon; depth-derived ambient occlusion adds the small contacts between them.
+Water reads the stable opaque colour and depth from immediately before its pass, so shallow shores
+refract gently, depth absorbs colour, and a bounded screen-space reflection either finds visible
+terrain or falls back to the horizon without ever sampling water back into itself.
+
+Texture packs can supply aligned normal, roughness/specular, metalness/MER and emissive companions.
+The sun, moon, rain and snow also use standard pack paths, each with a complete Driftwood fallback.
+Seeded clear, rain and snow intervals transition rather than switching in one frame. The final image
+adds depth-occluded sun shafts, photographic exposure, a restrained half-resolution bloom and
+neighbourhood-clamped temporal antialiasing.
+
+Each P9 effect has its own checkbox under **OPTIONS → VIDEO**: shadows, ambient occlusion, material
+maps, water optics, rain/snow, sun shafts, exposure/bloom and TAA. Failed optional framebuffer or
+shadow allocation is named at startup and falls back to the original direct renderer; it cannot keep
+the game from opening. Startup also prints the live attachment limits and memory estimate so a visual
+setting is paired with an honest machine-specific receipt.
 
 ## Building
 
@@ -397,6 +418,13 @@ clip falls through per event to the next pack layer and finally Driftwood's owne
 Animated textures play, at whatever frame rate the pack asks for, with the whole mip chain uploaded
 per layer so a lake does not freeze at distance.
 
+Mapped block layers also look for Java `_n`/normal/height, roughness or specular, metalness and
+emissive companions, plus Bedrock `.texture_set.json` normal/height/MER declarations. Missing layers
+receive a flat normal and material-aware fallback rather than a broken black map. Standard
+`textures/environment` sun/moon and `textures/weather` rain/snow images dress the live sky and
+precipitation renderers; a multi-phase moon sheet is cropped to one phase instead of squeezed into a
+disc.
+
 Driftwood's block names are deliberately its own, so the correspondence between them and a pack's
 file names lives in one explicit table in `BlockTextureSet`. That is the only place the two
 vocabularies meet.
@@ -441,7 +469,7 @@ and that moment is when the power goes off.
 ## Auditing a world
 
 `--audit` generates and meshes a world without opening a window, then reports a block census,
-terrain relief, timings and **122 checks**. It exits non-zero if any fails, so a seed plus its report
+terrain relief, timings and **181 checks**. It exits non-zero if any fails, so a seed plus its report
 is a receipt that survives into later phases.
 
 ```

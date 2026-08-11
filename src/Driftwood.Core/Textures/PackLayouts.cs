@@ -155,10 +155,29 @@ public static class PackLayouts
             yield break;
         }
 
+        // Companion maps inherit the COLOR texture's rename. Asking for oak_log_normal in a
+        // Bedrock pack means log_oak_normal, not merely moving oak_log_normal into blocks/. Texture
+        // set definitions follow the same rule with a compound extension.
+        foreach (var suffix in CompanionPathSuffixes)
+        {
+            if (!stem.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)) continue;
+            var colorStem = stem[..^suffix.Length];
+            if (!Renames.TryGetValue(colorStem, out others)) break;
+            foreach (var other in others) yield return $"{folder}/{other}{suffix}{extension}";
+            yield break;
+        }
+
         // Same name, different folder. Most of the set is here — stone, sand, gravel, clay, snow,
         // glass, bedrock and every ore are called the same thing in every layout there has been.
         yield return $"{folder}/{stem}{extension}";
     }
+
+    private static readonly string[] CompanionPathSuffixes =
+    [
+        ".texture_set", "_heightmap", "_roughness", "_metalness", "_specular",
+        "_emissive", "_normal", "_metallic", "_height", "_rough", "_metal",
+        "_spec", "_emit", "_norm", "_bump", "_mers", "_mer", "_n", "_s", "_r", "_m", "_e",
+    ];
 
     /// <summary>Every name a texture might be filed under, for matching a pack's own file list.</summary>
     /// <remarks>
@@ -212,5 +231,9 @@ public static class PackLayouts
     // Whole words only. "_s" and "_n" are used by some shader packs for the same thing and are not
     // in this list on purpose: they would swallow every real name ending in those letters.
     private static readonly string[] Companions =
-        ["_mer", "_mers", "_normal", "_norm", "_height", "_heightmap", "_bump", "_spec"];
+        [
+            "_mer", "_mers", "_normal", "_norm", "_height", "_heightmap", "_bump",
+            "_spec", "_specular", "_rough", "_roughness", "_metal", "_metallic",
+            "_metalness", "_emit", "_emissive",
+        ];
 }

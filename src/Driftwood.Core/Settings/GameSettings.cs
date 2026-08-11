@@ -28,6 +28,30 @@ public sealed class GameSettings
 
     public bool VSync { get; set; }
 
+    /// <summary>Three-cascade sun shadows over the voxel world.</summary>
+    public bool Shadows { get; set; } = true;
+
+    /// <summary>Screen-space contact shading reconstructed from the scene depth buffer.</summary>
+    public bool AmbientOcclusion { get; set; } = true;
+
+    /// <summary>Normal, roughness, metalness and emissive companion maps supplied by a pack.</summary>
+    public bool Materials { get; set; } = true;
+
+    /// <summary>Depth-aware refraction and bounded screen-space reflections on water.</summary>
+    public bool WaterEffects { get; set; } = true;
+
+    /// <summary>Pack-aware rain and snow around the player.</summary>
+    public bool Weather { get; set; } = true;
+
+    /// <summary>Sun shafts reconstructed from the scene depth buffer.</summary>
+    public bool GodRays { get; set; } = true;
+
+    /// <summary>HDR exposure and a soft bloom pass for bright light sources.</summary>
+    public bool Bloom { get; set; } = true;
+
+    /// <summary>Temporal anti-aliasing with a reprojected, clamped history buffer.</summary>
+    public bool TemporalAntialiasing { get; set; } = true;
+
     /// <summary>
     /// The most frames a second the game will draw, or 0 for as many as it can.
     /// </summary>
@@ -189,6 +213,14 @@ public sealed class GameSettings
                 case "video.fov": settings.FieldOfView = Int(value, 50, 110, settings.FieldOfView); break;
                 case "video.fullscreen": settings.Fullscreen = Bool(value, settings.Fullscreen); break;
                 case "video.vsync": settings.VSync = Bool(value, settings.VSync); break;
+                case "video.shadows": settings.Shadows = Bool(value, settings.Shadows); break;
+                case "video.ambientocclusion": settings.AmbientOcclusion = Bool(value, settings.AmbientOcclusion); break;
+                case "video.materials": settings.Materials = Bool(value, settings.Materials); break;
+                case "video.watereffects": settings.WaterEffects = Bool(value, settings.WaterEffects); break;
+                case "video.weather": settings.Weather = Bool(value, settings.Weather); break;
+                case "video.godrays": settings.GodRays = Bool(value, settings.GodRays); break;
+                case "video.bloom": settings.Bloom = Bool(value, settings.Bloom); break;
+                case "video.taa": settings.TemporalAntialiasing = Bool(value, settings.TemporalAntialiasing); break;
 
                 // ⚠ Zero means uncapped and is inside the range on purpose, so a player who wants
                 // every frame the machine can make can still say so.
@@ -268,6 +300,14 @@ public sealed class GameSettings
         text.AppendLine($"video.fov={FieldOfView}");
         text.AppendLine($"video.fullscreen={Text(Fullscreen)}");
         text.AppendLine($"video.vsync={Text(VSync)}");
+        text.AppendLine($"video.shadows={Text(Shadows)}");
+        text.AppendLine($"video.ambientocclusion={Text(AmbientOcclusion)}");
+        text.AppendLine($"video.materials={Text(Materials)}");
+        text.AppendLine($"video.watereffects={Text(WaterEffects)}");
+        text.AppendLine($"video.weather={Text(Weather)}");
+        text.AppendLine($"video.godrays={Text(GodRays)}");
+        text.AppendLine($"video.bloom={Text(Bloom)}");
+        text.AppendLine($"video.taa={Text(TemporalAntialiasing)}");
         text.AppendLine();
         text.AppendLine($"audio.volume={Volume}");
         text.AppendLine($"audio.mute={Text(Mute)}");

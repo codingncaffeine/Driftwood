@@ -857,6 +857,19 @@ public static class WorldAudit
         Check("settings survive a round trip", settingsFaults.Count == 0,
             settingsFaults.Count == 0 ? settingsDetail : $"{settingsFaults.Count} faults: {settingsFaults[0]}");
 
+        var materialFaults = BlockMaterialSet.SelfTest(out var materialDetail);
+        Check("every color layer has a safe material companion", materialFaults.Count == 0,
+            materialFaults.Count == 0 ? materialDetail : $"{materialFaults.Count} faults: {materialFaults[0]}");
+
+        var environmentFaults = EnvironmentTextureSet.SelfTest(out var environmentDetail);
+        Check("sky and weather art always has a fallback", environmentFaults.Count == 0,
+            environmentFaults.Count == 0
+                ? environmentDetail : $"{environmentFaults.Count} faults: {environmentFaults[0]}");
+
+        var weatherFaults = WeatherCycle.SelfTest(out var weatherDetail);
+        Check("weather changes gently and repeats from the seed", weatherFaults.Count == 0,
+            weatherFaults.Count == 0 ? weatherDetail : $"{weatherFaults.Count} faults: {weatherFaults[0]}");
+
         var fontFaults = FontSelfTest(out var fontDetail);
         Check("every letter is drawn and distinct", fontFaults.Count == 0,
             fontFaults.Count == 0 ? fontDetail : $"{fontFaults.Count} faults: {fontFaults[0]}");
@@ -6560,6 +6573,14 @@ public static class WorldAudit
             FieldOfView = 96,
             Fullscreen = true,
             VSync = true,
+            Shadows = false,
+            AmbientOcclusion = false,
+            Materials = false,
+            WaterEffects = false,
+            Weather = false,
+            GodRays = false,
+            Bloom = false,
+            TemporalAntialiasing = false,
             Volume = 43,
             Mute = true,
             SoundPack = "mr-Ab12Cd34",
@@ -6599,6 +6620,14 @@ public static class WorldAudit
         if (read.FieldOfView != 96) faults.Add($"field of view came back {read.FieldOfView}, not 96");
         if (!read.Fullscreen) faults.Add("fullscreen came back off");
         if (!read.VSync) faults.Add("vsync came back off");
+        if (read.Shadows) faults.Add("shadows came back on");
+        if (read.AmbientOcclusion) faults.Add("ambient occlusion came back on");
+        if (read.Materials) faults.Add("material maps came back on");
+        if (read.WaterEffects) faults.Add("water optics came back on");
+        if (read.Weather) faults.Add("weather came back on");
+        if (read.GodRays) faults.Add("sun shafts came back on");
+        if (read.Bloom) faults.Add("bloom came back on");
+        if (read.TemporalAntialiasing) faults.Add("TAA came back on");
         if (read.Volume != 43) faults.Add($"volume came back {read.Volume}, not 43");
         if (!read.Mute) faults.Add("mute came back off");
         if (read.SoundPack != "mr-Ab12Cd34") faults.Add($"sound pack came back '{read.SoundPack}'");
@@ -6693,7 +6722,7 @@ public static class WorldAudit
             faults.Add("releasing and reversing a menu stick did not reset its repeat");
 
         detail = $"{GameActions.All.Length} keyboard and {ControllerActions.All.Length} controller actions, "
-               + "16 settings out and back unchanged; radial deadzone, nine-way selection and UI repeat pinned";
+               + "24 settings out and back unchanged; radial deadzone, nine-way selection and UI repeat pinned";
 
         return faults;
     }

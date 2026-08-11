@@ -229,6 +229,9 @@ public sealed class ClientHost : IDisposable
     private Shader _chunkShader = null!;
     private SkyRenderer _sky = null!;
     private CloudRenderer _clouds = null!;
+    private WeatherRenderer _weather = null!;
+    private VisualPipeline _visuals = null!;
+    private CascadedShadowMap _shadows = null!;
 
     /// <summary>The day/night cycle, and the one place the sky's colours come from.</summary>
     private SkyClock _clock = null!;
@@ -387,7 +390,11 @@ public sealed class ClientHost : IDisposable
     private PlayerBody _player = null!;
     private BlockOutline _outline = null!;
     private BlockTextureArray _blockTextures = null!;
+    private BlockTextureArray _normalTextures = null!;
+    private BlockTextureArray _materialTextures = null!;
     private BlockTextureSet.Result _textures = null!;
+    private BlockMaterialSet.Result _materials = null!;
+    private EnvironmentTextureSet.Result _environment = null!;
 
     /// <summary>The layers that move. Ticked once a frame; uploads only when a frame changes.</summary>
     private TextureAnimator _animatedTextures = null!;
@@ -719,6 +726,7 @@ public sealed class ClientHost : IDisposable
     private bool _frustumCulling = true;
     private int _drawnChunks;
     private int _drawnTriangles;
+    private bool _visualBudgetReported;
 
     private double _titleTimer;
     private int _framesSinceTitle;
@@ -976,6 +984,19 @@ public sealed class ClientHost : IDisposable
         // Whatever the player changed last time, before anything reads a key or a field of view.
         // A bad file costs the setting it names and nothing else — see GameSettings.Load.
         _settings = GameSettings.Load();
+        if (_options.UiCheck || _options.ShotPath is not null)
+        {
+            // Framebuffer instruments must exercise the shipped visual path, not inherit a local
+            // troubleshooting toggle from the machine running the release gate.
+            _settings.Shadows = true;
+            _settings.AmbientOcclusion = true;
+            _settings.Materials = true;
+            _settings.WaterEffects = true;
+            _settings.Weather = true;
+            _settings.GodRays = true;
+            _settings.Bloom = true;
+            _settings.TemporalAntialiasing = true;
+        }
         _keys = new InputMap(_settings.Keys);
         _startup.Mark("settings");
 
@@ -1027,6 +1048,8 @@ public sealed class ClientHost : IDisposable
         _gl.ClearColor(SkyColor.X, SkyColor.Y, SkyColor.Z, 1f);
 
         _chunkShader = new Shader(_gl, ChunkShaders.Vertex, ChunkShaders.Fragment);
+        _visuals = new VisualPipeline(_gl);
+        _shadows = new CascadedShadowMap(_gl);
         _outline = new BlockOutline(_gl);
 
         _particleRenderer = new ParticleRenderer(_gl);
@@ -1050,7 +1073,11 @@ public sealed class ClientHost : IDisposable
         // A loaded world opens where it was put down, and --time only says where a new one starts.
         _clock = new SkyClock(_loadedWorld ? _savedDayTime : _options.StartTime, _options.DayLength);
         _skyState = _clock.Now;
-        _sky = new SkyRenderer(_gl);
+        _environment = EnvironmentTextureSet.Build(_packPath);
+        _sky = new SkyRenderer(_gl, _environment);
+        _weather = new WeatherRenderer(_gl, _environment);
+        Console.WriteLine($"environment {_environment.Summary}; weather renderer "
+                          + (_weather.Available ? "ready" : _weather.Failure));
 
         var cloudField = new CloudField(_seed, _packPath);
         _clouds = new CloudRenderer(_gl, cloudField.Build());
@@ -1069,6 +1096,18 @@ public sealed class ClientHost : IDisposable
             + (_blockTextures.Reweighted > 0
                 ? $", {_blockTextures.Reweighted} cut-outs re-mipped"
                 : ""));
+
+        // Companion maps are sampled as surface detail rather than as color silhouettes. Capping
+        // them independently keeps two extra 325-layer arrays under 96 MiB including mipmaps even
+        // when a 512px pack spends most of the card's texture budget on its color array.
+        var materialSize = Math.Min(_textures.Size, 128);
+        _materials = BlockMaterialSet.Build(_packPath, materialSize);
+        _normalTextures = new BlockTextureArray(_gl, _materials.Normals, _materials.Size);
+        _materialTextures = new BlockTextureArray(_gl, _materials.Materials, _materials.Size);
+        Console.WriteLine($"materials   {_materials.Summary}");
+        Console.WriteLine($"visuals     framebuffer and effect shaders "
+                          + (_visuals.Available ? "ready" : _visuals.Failure)
+                          + $"; shadows {_shadows.Summary}");
 
         _animatedTextures = new TextureAnimator(_blockTextures, _textures.Animations);
         if (_animatedTextures.Count > 0)
@@ -4342,6 +4381,34 @@ public sealed class ClientHost : IDisposable
                     Control: MenuControl.Slider,
                     ControlAmount: _settings.FrameCap <= 0 ? 0f : Math.Clamp(_settings.FrameCap / 360f, 0f, 1f)));
 
+                _hudScreen.Rows.Add(new MenuRow("world effects", Heading: true));
+                _hudScreen.Rows.Add(new MenuRow("cascaded shadows", OnOff(_settings.Shadows),
+                    Note: _shadows.Available ? "three sun cascades with filtered edges" : _shadows.Failure,
+                    Control: MenuControl.Checkbox, ControlAmount: _settings.Shadows ? 1f : 0f));
+                _hudScreen.Rows.Add(new MenuRow("ambient occlusion", OnOff(_settings.AmbientOcclusion),
+                    Note: "small depth contacts where blocks and terrain meet",
+                    Control: MenuControl.Checkbox, ControlAmount: _settings.AmbientOcclusion ? 1f : 0f));
+                _hudScreen.Rows.Add(new MenuRow("material maps", OnOff(_settings.Materials),
+                    Note: "pack normals, roughness, metalness and emissive light",
+                    Control: MenuControl.Checkbox, ControlAmount: _settings.Materials ? 1f : 0f));
+                _hudScreen.Rows.Add(new MenuRow("water optics", OnOff(_settings.WaterEffects),
+                    Note: "depth absorption, shore refraction and bounded screen reflections",
+                    Control: MenuControl.Checkbox, ControlAmount: _settings.WaterEffects ? 1f : 0f));
+                _hudScreen.Rows.Add(new MenuRow("rain and snow", OnOff(_settings.Weather),
+                    Note: _environment.Summary,
+                    Control: MenuControl.Checkbox, ControlAmount: _settings.Weather ? 1f : 0f));
+
+                _hudScreen.Rows.Add(new MenuRow("camera effects", Heading: true));
+                _hudScreen.Rows.Add(new MenuRow("sun shafts", OnOff(_settings.GodRays),
+                    Note: "depth-tested rays at terrain and canopy edges",
+                    Control: MenuControl.Checkbox, ControlAmount: _settings.GodRays ? 1f : 0f));
+                _hudScreen.Rows.Add(new MenuRow("exposure and bloom", OnOff(_settings.Bloom),
+                    Note: _visuals.Available ? "HDR exposure with a half-resolution soft bloom" : _visuals.Failure,
+                    Control: MenuControl.Checkbox, ControlAmount: _settings.Bloom ? 1f : 0f));
+                _hudScreen.Rows.Add(new MenuRow("temporal antialiasing", OnOff(_settings.TemporalAntialiasing),
+                    Note: "eight-sample jitter with reprojected, neighborhood-clamped history",
+                    Control: MenuControl.Checkbox, ControlAmount: _settings.TemporalAntialiasing ? 1f : 0f));
+
                 _hudScreen.Rows.Add(new MenuRow("notices", Heading: true));
                 _hudScreen.Rows.Add(new MenuRow(
                     "new recipe notices", OnOff(_settings.RecipeNotices),
@@ -4625,6 +4692,38 @@ public sealed class ClientHost : IDisposable
                     // ⚠ Steps of five past sixty, and off the bottom rather than at it: a limiter
                     // nudged one frame at a time from 175 to uncapped is twenty-three presses.
                     case "frame limit": _settings.FrameCap = NudgeCap(_settings.FrameCap, by); break;
+                    case "cascaded shadows":
+                        _settings.Shadows = !_settings.Shadows;
+                        _visuals.ResetHistory();
+                        break;
+                    case "ambient occlusion":
+                        _settings.AmbientOcclusion = !_settings.AmbientOcclusion;
+                        _visuals.ResetHistory();
+                        break;
+                    case "material maps":
+                        _settings.Materials = !_settings.Materials;
+                        _visuals.ResetHistory();
+                        break;
+                    case "water optics":
+                        _settings.WaterEffects = !_settings.WaterEffects;
+                        _visuals.ResetHistory();
+                        break;
+                    case "rain and snow":
+                        _settings.Weather = !_settings.Weather;
+                        _visuals.ResetHistory();
+                        break;
+                    case "sun shafts":
+                        _settings.GodRays = !_settings.GodRays;
+                        _visuals.ResetHistory();
+                        break;
+                    case "exposure and bloom":
+                        _settings.Bloom = !_settings.Bloom;
+                        _visuals.ResetHistory();
+                        break;
+                    case "temporal antialiasing":
+                        _settings.TemporalAntialiasing = !_settings.TemporalAntialiasing;
+                        _visuals.ResetHistory();
+                        break;
 
                     case "new recipe notices": _settings.RecipeNotices = !_settings.RecipeNotices; break;
                     // Enter only. A direction is how a player browses, not how they throw
@@ -11290,8 +11389,6 @@ public sealed class ClientHost : IDisposable
     private void OnRender(double _)
     {
         var renderStart = Stopwatch.GetTimestamp();
-        _gl.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
-
         var size = _window.FramebufferSize;
         var aspect = size.Y > 0 ? size.X / (float)size.Y : 1f;
 
@@ -11300,8 +11397,39 @@ public sealed class ClientHost : IDisposable
         // camera has backed into.
         var view = FlyCamera.View(_viewPosition, _viewForward);
         var projection = _camera.Projection(aspect);
+        projection = _visuals.Jitter(
+            projection, size.X, size.Y, _settings.TemporalAntialiasing);
         var viewProj = view * projection;
         var frustum = Frustum.FromViewProjection(viewProj);
+
+        // Shadow maps are independent render targets and run before the scene target is bound.
+        // Their draw restores framebuffer zero; BeginFrame immediately selects either HDR or that
+        // same direct fallback and restores the real viewport in both cases.
+        if (_settings.Shadows)
+            _shadows.Render(
+                _meshes.Values, _viewPosition, _viewForward,
+                _skyState.SunDirection, _fogEnd);
+
+        if (!_visuals.BeginFrame(size.X, size.Y))
+        {
+            _gl.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
+            _gl.Viewport(size);
+        }
+        if (!_visualBudgetReported)
+        {
+            _visualBudgetReported = true;
+            var attachments = _gl.GetInteger(GLEnum.MaxColorAttachments);
+            var drawBuffers = _gl.GetInteger(GLEnum.MaxDrawBuffers);
+            var textureUnits = _gl.GetInteger(GLEnum.MaxCombinedTextureImageUnits);
+            var materialMiB = 2.0 * _materials.Normals.Length * _materials.Size * _materials.Size
+                              * 4.0 * 4.0 / 3.0 / (1024.0 * 1024.0);
+            Console.WriteLine(
+                $"render P9   GL 3.3 baseline; {attachments} color attachments, {drawBuffers} draw buffers, "
+                + $"{textureUnits} texture units; {_visuals.EstimatedMiB:F1} MiB frame targets, "
+                + $"{CascadedShadowMap.EstimatedMiB} MiB shadows, {materialMiB:F1} MiB companion arrays; "
+                + (_visuals.Available && _shadows.Available ? "full path" : "fallback active"));
+        }
+        _gl.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
 
         // Before anything else, with no depth. Everything in the frame is nearer than the sky.
         _sky.Draw(_skyState, _viewForward, _camera.FovDegrees, aspect);
@@ -11324,6 +11452,27 @@ public sealed class ClientHost : IDisposable
         _chunkShader.SetVec3("uNightFloor", NightFloor);
         _chunkShader.SetInt("uBlocks", 0);
         _blockTextures.Bind();
+        _chunkShader.SetInt("uNormals", 1);
+        _normalTextures.Bind(TextureUnit.Texture1);
+        _chunkShader.SetInt("uMaterials", 2);
+        _materialTextures.Bind(TextureUnit.Texture2);
+        _chunkShader.SetInt("uShadowMap", 3);
+        _shadows.Bind(TextureUnit.Texture3);
+        _chunkShader.SetMatrix4("uShadow0", _shadows.Matrices[0]);
+        _chunkShader.SetMatrix4("uShadow1", _shadows.Matrices[1]);
+        _chunkShader.SetMatrix4("uShadow2", _shadows.Matrices[2]);
+        _chunkShader.SetVec3("uShadowSplits", new Vector3(
+            _shadows.Splits[0], _shadows.Splits[1], _shadows.Splits[2]));
+        _chunkShader.SetInt("uShadowEnabled",
+            _settings.Shadows && _shadows.Available && _skyState.SunDirection.Y > -0.08f ? 1 : 0);
+        _chunkShader.SetInt("uMaterialsEnabled", _settings.Materials ? 1 : 0);
+        _chunkShader.SetInt("uWaterPass", 0);
+        _chunkShader.SetInt("uWaterEffects", 0);
+        _chunkShader.SetInt("uOpaqueColor", 4);
+        _chunkShader.SetInt("uOpaqueDepth", 5);
+        _chunkShader.SetVec2("uViewport", new Vector2(size.X, size.Y));
+        _chunkShader.SetFloat("uNear", _camera.NearPlane);
+        _chunkShader.SetFloat("uFar", _camera.FarPlane);
         _chunkShader.SetFloat("uFogStart", _fogStart);
         _chunkShader.SetFloat("uFogEnd", _fogEnd);
         _chunkShader.SetFloat("uTime", FlickerClock);
@@ -11350,8 +11499,6 @@ public sealed class ClientHost : IDisposable
 
             if (mesh.HasTranslucent) _wetChunks.Add(mesh);
         }
-
-        DrawWater();
 
         _drawnChunks = drawn;
         _drawnTriangles = triangles;
@@ -11391,7 +11538,24 @@ public sealed class ClientHost : IDisposable
             CloudTint * MathF.Max(_skyState.SunColor.X + _skyState.SkyAmbient.X, 0.18f),
             _skyState.Horizon, _fogStart, _fogEnd, (float)_elapsed);
 
+        // Water is the last world surface: the stable copy now includes terrain, entities,
+        // particles and clouds, so refraction never feeds back and does not make those layers pop
+        // in front of a lake. Its own depth remains unwritten for overlapping water surfaces.
+        _visuals.CaptureOpaque();
+        DrawWater();
+
+        if (_settings.Weather)
+        {
+            var weather = WeatherCycle.Sample(_seed.Value, _elapsed, _viewPosition.Y);
+            _weather.Draw(weather, viewProj, _viewPosition, (float)_elapsed,
+                _seed.Value, size.Y);
+        }
+
         DrawPlayer(viewProj, projection, view);
+
+        _visuals.EndFrame(
+            viewProj, ProjectedSun(viewProj), _skyState.SunColor,
+            _camera.NearPlane, _camera.FarPlane, _settings);
 
         // Over everything, in screen space. The benchmark flies itself and wants a clean picture.
         if (_bench is null)
@@ -11414,6 +11578,15 @@ public sealed class ClientHost : IDisposable
         // Reports once and then costs a bool.
         _startup.Report("first frame drawn");
         _firstFrameDrawn = true;
+    }
+
+    /// <summary>The sun in framebuffer UV coordinates, or well outside them when it is behind us.</summary>
+    private Vector2 ProjectedSun(Matrix4x4 viewProj)
+    {
+        var point = _viewPosition + _skyState.SunDirection * 256f;
+        var clip = Vector4.Transform(new Vector4(point, 1f), viewProj);
+        if (clip.W <= 0.0001f) return new Vector2(-10f);
+        return new Vector2(clip.X / clip.W, clip.Y / clip.W) * 0.5f + new Vector2(0.5f);
     }
 
     /// <summary>How many frames the shot run has drawn.</summary>
@@ -14605,6 +14778,37 @@ public sealed class ClientHost : IDisposable
         faults.AddRange(NativeFilePicker.SelfTest(out var chooser));
         Console.WriteLine($"ui-check    file chooser  {chooser}");
 
+        var resolved = _visuals.ReadResolvedPixel(_visuals.Width / 2, _visuals.Height / 2);
+        if (!_visuals.Available || !_visuals.HistoryReady)
+            faults.Add($"the P9 framebuffer pipeline did not produce a history image: {_visuals.Failure}");
+        if (_visuals.Width != _window.FramebufferSize.X || _visuals.Height != _window.FramebufferSize.Y)
+            faults.Add($"the P9 framebuffer is {_visuals.Width}x{_visuals.Height}, not the window's "
+                       + $"{_window.FramebufferSize.X}x{_window.FramebufferSize.Y}");
+        if (_visuals.CompletedFrames < 2 || _visuals.OpaqueCaptures < 2)
+            faults.Add($"the P9 pipeline completed {_visuals.CompletedFrames} frames and "
+                       + $"{_visuals.OpaqueCaptures} opaque captures");
+        if (resolved.A == 0 || resolved.R + resolved.G + resolved.B == 0)
+            faults.Add("the resolved HDR/TAA history is transparent or black at the framebuffer centre");
+        if (!_shadows.Available || _shadows.RenderedCascades < CascadedShadowMap.CascadeCount)
+            faults.Add($"cascaded shadows rendered {_shadows.RenderedCascades} layers: {_shadows.Failure}");
+        if (!_weather.Available)
+            faults.Add($"the weather renderer did not compile: {_weather.Failure}");
+
+        var normalLayer = _normalTextures.ReadLayer(StarterBlocks.LayerStone);
+        var materialLayer = _materialTextures.ReadLayer(StarterBlocks.LayerStone);
+        if (normalLayer.Length == 0 || normalLayer[0] != 128 || normalLayer[1] != 128
+            || normalLayer[2] != 255)
+            faults.Add("the flat normal fallback did not reach the GPU array");
+        if (materialLayer.Length == 0 || materialLayer[1] == 0 || materialLayer[3] != 255)
+            faults.Add("the roughness/material fallback did not reach the GPU array");
+
+        var glError = _gl.GetError();
+        if (glError != GLEnum.NoError) faults.Add($"OpenGL reported {glError} after the P9 passes");
+        Console.WriteLine(
+            $"ui-check    P9 visuals  {_visuals.CompletedFrames} HDR/TAA frames, "
+            + $"{_visuals.OpaqueCaptures} opaque captures, {_shadows.RenderedCascades} shadow layers, "
+            + $"resolved {resolved.R} {resolved.G} {resolved.B} {resolved.A}, material arrays on-card");
+
         (byte R, byte G, byte B) Read(string key) =>
             _uiSamples.TryGetValue(key, out var v) ? v : default;
 
@@ -15363,24 +15567,42 @@ public sealed class ClientHost : IDisposable
     /// one and the whole point is lost. Culling comes off too: from under the water you are looking
     /// at the back of every quad above you.</para>
     /// <para>⚠ <b>And every bit of state is put back.</b> Every pass in this renderer restores what
-    /// it changed, and this one runs in the middle of the frame with the outline, the cracks, the
-    /// particles and the clouds still to come.</para>
+    /// it changed. This now runs after the opaque world, particles and clouds have been copied into
+    /// the stable refraction source, and immediately before weather and the player.</para>
     /// </remarks>
     private void DrawWater()
     {
         if (_wetChunks.Count == 0) return;
+
+        // Several renderers have owned the program and texture units since the opaque chunks.
+        // Uniform values persist; program and bindings do not.
+        _chunkShader.Use();
+        _blockTextures.Bind(TextureUnit.Texture0);
+        _normalTextures.Bind(TextureUnit.Texture1);
+        _materialTextures.Bind(TextureUnit.Texture2);
+        _shadows.Bind(TextureUnit.Texture3);
 
         var eye = _viewPosition;
         _wetChunks.Sort((a, b) =>
             Vector3.DistanceSquared(b.BoundsMin + HalfChunk, eye)
                 .CompareTo(Vector3.DistanceSquared(a.BoundsMin + HalfChunk, eye)));
 
-        _gl.Enable(EnableCap.Blend);
-        _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+        var enhanced = _settings.WaterEffects && _visuals.Active;
+        if (enhanced)
+        {
+            _visuals.BindOpaque(TextureUnit.Texture4, TextureUnit.Texture5);
+        }
+        else
+        {
+            _gl.Enable(EnableCap.Blend);
+            _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+        }
         _gl.DepthMask(false);
         _gl.Disable(EnableCap.CullFace);
 
-        _chunkShader.SetFloat("uAlpha", WaterAlpha);
+        _chunkShader.SetInt("uWaterPass", 1);
+        _chunkShader.SetInt("uWaterEffects", enhanced ? 1 : 0);
+        _chunkShader.SetFloat("uAlpha", enhanced ? 1f : WaterAlpha);
 
         foreach (var mesh in _wetChunks)
         {
@@ -15390,10 +15612,12 @@ public sealed class ClientHost : IDisposable
         }
 
         _chunkShader.SetFloat("uAlpha", 1f);
+        _chunkShader.SetInt("uWaterPass", 0);
+        _chunkShader.SetInt("uWaterEffects", 0);
 
         _gl.Enable(EnableCap.CullFace);
         _gl.DepthMask(true);
-        _gl.Disable(EnableCap.Blend);
+        if (!enhanced) _gl.Disable(EnableCap.Blend);
     }
 
     private static readonly Vector3 HalfChunk = new(Chunk.Size * 0.5f);
@@ -15630,7 +15854,11 @@ public sealed class ClientHost : IDisposable
         HeldGrip.HandLight(
             light.Block, light.Sky * _skyState.SunColor.X + _skyState.SkyAmbient.X);
 
-    private void OnResize(Vector2D<int> size) => _gl.Viewport(size);
+    private void OnResize(Vector2D<int> size)
+    {
+        _gl.Viewport(size);
+        _visuals?.ResetHistory();
+    }
 
     private void Shutdown()
     {
@@ -15659,6 +15887,9 @@ public sealed class ClientHost : IDisposable
         _outline?.Dispose();
         _sky?.Dispose();
         _clouds?.Dispose();
+        _weather?.Dispose();
+        _visuals?.Dispose();
+        _shadows?.Dispose();
         _particleRenderer?.Dispose();
         _itemRenderer?.Dispose();
         _hud?.Dispose();
@@ -15669,6 +15900,8 @@ public sealed class ClientHost : IDisposable
         _controller.Dispose();
         _audio?.Dispose();
         _blockTextures?.Dispose();
+        _normalTextures?.Dispose();
+        _materialTextures?.Dispose();
         _playerRenderer?.Dispose();
         _creatureRenderer?.Dispose();
         _cracks?.Dispose();

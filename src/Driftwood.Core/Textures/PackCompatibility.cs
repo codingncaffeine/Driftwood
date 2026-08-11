@@ -72,7 +72,7 @@ public static class PackCompatibility
         public IReadOnlyList<PackLibrary.PackDependency> PackDependencies => Dependencies ?? [];
     }
 
-    private const int CacheSchema = 8;
+    private const int CacheSchema = 9;
     private const int MaximumCacheBytes = 1024 * 1024;
     private sealed record CacheRecord(int Schema, string Hash, string DependencySignature, Summary Summary);
 
@@ -262,25 +262,35 @@ public static class PackCompatibility
                 "Java model data is supported for owned blocks and items.", []));
         }
 
-        var companions = entries.Where(PackLayouts.IsCompanionMap).ToArray();
-        families.Add(new Family("material companion maps", FamilyDisposition.NotApplicable,
-            companions.Length, 0, "Normal/specular/emissive and MER maps wait for P9's material pipeline.",
+        var companions = entries.Where(entry => PackLayouts.IsCompanionMap(entry)
+                                                || RecognizedMaterialCompanion(entry)
+                                                || entry.EndsWith(".texture_set.json",
+                                                    StringComparison.OrdinalIgnoreCase)).ToArray();
+        var companionsUsed = companions.Count(RecognizedMaterialCompanion);
+        families.Add(new Family("material companion maps",
+            companions.Length == 0 || companionsUsed == 0
+                ? FamilyDisposition.SupportedButNotUsed : FamilyDisposition.Consumed,
+            companions.Length, companionsUsed,
+            "Mapped layers consume Java normal/specular/roughness/emissive suffixes and Bedrock normal/height/MER texture sets.",
             Samples(companions)));
 
         var environment = entries.Where(entry => IsPngUnder(entry, "environment")
                                                  || IsPngUnder(entry, "weather")).ToArray();
-        families.Add(new Family("environment and weather art", FamilyDisposition.NotApplicable,
-            environment.Length, 0, "Sun, moon and weather sprites wait for their P9 renderers.",
+        var environmentUsed = environment.Count(RecognizedEnvironment);
+        families.Add(new Family("environment and weather art",
+            environment.Length == 0 || environmentUsed == 0
+                ? FamilyDisposition.SupportedButNotUsed : FamilyDisposition.Consumed,
+            environment.Length, environmentUsed,
+            "Sun, moon, clouds, rain and snow use their standard pack paths; unfamiliar dimensions keep safe fallbacks.",
             Samples(environment)));
 
         var bedrockSpecific = entries.Where(entry =>
             entry.EndsWith(".tga", StringComparison.OrdinalIgnoreCase)
-            || entry.EndsWith(".texture_set.json", StringComparison.OrdinalIgnoreCase)
             || entry.Contains("/fogs/", StringComparison.OrdinalIgnoreCase)
             || entry.Contains("/particles/", StringComparison.OrdinalIgnoreCase)
                && entry.EndsWith(".json", StringComparison.OrdinalIgnoreCase)).ToArray();
         families.Add(new Family("Bedrock-specific resources", FamilyDisposition.NotApplicable,
-            bedrockSpecific.Length, 0, "TGA, texture sets, fog and Bedrock particle definitions remain #54.",
+            bedrockSpecific.Length, 0, "TGA, fog and Bedrock particle definitions remain #54; texture sets are consumed by P9.",
             Samples(bedrockSpecific)));
 
         var externalEntries = entries.Where(IsExternal).ToArray();
@@ -495,6 +505,61 @@ public static class PackCompatibility
         path.EndsWith(".json", StringComparison.OrdinalIgnoreCase)
         && (path.Contains($"/{folder}/", StringComparison.OrdinalIgnoreCase)
             || path.StartsWith($"{folder}/", StringComparison.OrdinalIgnoreCase));
+
+    private static readonly string[] MaterialSuffixes =
+    [
+        "_heightmap", "_roughness", "_metalness", "_specular", "_emissive",
+        "_normal", "_metallic", "_mers", "_height", "_rough", "_metal",
+        "_spec", "_emit", "_norm", "_bump", "_mer", "_n", "_s", "_r", "_m", "_e",
+    ];
+
+    private static bool RecognizedMaterialCompanion(string entry)
+    {
+        entry = entry.Replace('\\', '/');
+        string color;
+        const string textureSet = ".texture_set.json";
+        if (entry.EndsWith(textureSet, StringComparison.OrdinalIgnoreCase))
+        {
+            color = entry[..^textureSet.Length] + ".png";
+        }
+        else
+        {
+            var dot = entry.LastIndexOf('.');
+            if (dot < 0 || !entry[dot..].Equals(".png", StringComparison.OrdinalIgnoreCase)) return false;
+            var stem = entry[..dot];
+            var suffix = MaterialSuffixes.FirstOrDefault(candidate =>
+                stem.EndsWith(candidate, StringComparison.OrdinalIgnoreCase));
+            if (suffix is null) return false;
+            color = stem[..^suffix.Length] + ".png";
+        }
+
+        foreach (var row in BlockTextureSet.Layers)
+        {
+            if (row.PackPath.Length > 0 && color.EndsWith(row.PackPath, StringComparison.OrdinalIgnoreCase))
+                return true;
+            if (row.PackPathAlt.Length > 0 && color.EndsWith(row.PackPathAlt, StringComparison.OrdinalIgnoreCase))
+                return true;
+            if (row.PackPath.Length > 0 && PackLayouts.Legacy(row.PackPath).Any(candidate =>
+                    color.EndsWith(candidate, StringComparison.OrdinalIgnoreCase))) return true;
+        }
+        return false;
+    }
+
+    private static bool RecognizedEnvironment(string entry)
+    {
+        entry = entry.Replace('\\', '/');
+        return entry.EndsWith("/textures/environment/sun.png", StringComparison.OrdinalIgnoreCase)
+               || entry.EndsWith("/textures/environment/moon.png", StringComparison.OrdinalIgnoreCase)
+               || entry.EndsWith("/textures/environment/moon_phases.png", StringComparison.OrdinalIgnoreCase)
+               || entry.EndsWith("/textures/environment/clouds.png", StringComparison.OrdinalIgnoreCase)
+               || entry.EndsWith("/textures/environment/rain.png", StringComparison.OrdinalIgnoreCase)
+               || entry.EndsWith("/textures/environment/snow.png", StringComparison.OrdinalIgnoreCase)
+               || entry.EndsWith("/textures/weather/rain.png", StringComparison.OrdinalIgnoreCase)
+               || entry.EndsWith("/textures/weather/snow.png", StringComparison.OrdinalIgnoreCase)
+               || entry.StartsWith("textures/environment/", StringComparison.OrdinalIgnoreCase)
+                  && entry[(entry.LastIndexOf('/') + 1)..] is "sun.png" or "moon.png" or "moon_phases.png"
+                      or "clouds.png" or "rain.png" or "snow.png";
+    }
 
     private static bool IsExternal(string path) =>
         path.Contains("/optifine/", StringComparison.OrdinalIgnoreCase)

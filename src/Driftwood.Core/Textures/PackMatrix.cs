@@ -96,7 +96,7 @@ public static class PackMatrix
         report.AppendLine("routing");
         report.AppendLine("  P7.6/#110  GUI, sounds.json, emitted particles and verified-cache runtime paths");
         report.AppendLine("  #56        standard Java blockstates/models/items (closed by this runtime gate)");
-        report.AppendLine($"  P9         {material + environment:N0} material/environment files await those renderers");
+        report.AppendLine($"  P9         {material + environment:N0} material/environment files routed through the live renderers");
         report.AppendLine($"  #54        {bedrock:N0} Bedrock-specific files await Bedrock resource semantics");
         report.AppendLine($"  #42        {content:N0} owned-content analogue opportunities across the corpus");
         report.AppendLine($"  external   {extensions:N0} loader-extension/dependency markers stay explicitly optional or required");
