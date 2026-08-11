@@ -8,6 +8,7 @@ using Driftwood.Client.Platform;
 using Driftwood.Core.Audio;
 using Driftwood.Core.Blocks;
 using Driftwood.Core.Entities;
+using Driftwood.Core.Exploration;
 using Driftwood.Core.Gen;
 using Driftwood.Core.Items;
 using Driftwood.Core.Lighting;
@@ -452,6 +453,13 @@ public sealed class ClientHost : IDisposable
     /// independent tests, because two tests is how a player ends up digging through a sheep.
     /// </remarks>
     private Creature? _creatureTarget;
+
+    private readonly ExplorationProgress _exploration = new();
+    private readonly InhabitantSystem _inhabitants = new();
+    private Inhabitant? _inhabitantTarget;
+    private Inhabitant? _tradingWith;
+    private float _settlementScan;
+    private const string LocalPlayerId = "local";
 
     /// <summary>How far a player can reach to break or place. Genre-standard.</summary>
     private const float Reach = 5f;
@@ -1556,8 +1564,12 @@ public sealed class ClientHost : IDisposable
     /// all the same (see <see cref="TopUpHostiles"/>), or the dark would fill with them past any
     /// bound.
     /// </remarks>
-    private static bool Fierce(string kind) =>
-        FamilyOf(kind) == CreatureFamily.Hostile && !CreatureVitals.Retaliates(kind);
+    private static bool Fierce(string kind)
+    {
+        var family = FamilyOf(kind);
+        return family == CreatureFamily.Encounter
+            || family == CreatureFamily.Hostile && !CreatureVitals.Retaliates(kind);
+    }
 
     /// <summary>One saved kind stood back up, or null for one this build has no mesh for.</summary>
     private SpawnKind? KindFor(string kind)
@@ -1967,6 +1979,8 @@ public sealed class ClientHost : IDisposable
             BedSpawn = _bedSpawn,
             Progress = _progress,
             Map = _map,
+            Exploration = _exploration,
+            Inhabitants = _inhabitants,
         };
 
         if (_herd is not null) state.Creatures.AddRange(_herd.Capture());
@@ -2165,6 +2179,10 @@ public sealed class ClientHost : IDisposable
         if (_herd is { } herd)
             foreach (var creature in herd.All)
                 NoteFoot(creature.Position);
+        foreach (var resident in _inhabitants.All)
+            if (_streamer.World.TryGetChunk(ChunkPos.FromWorld(
+                    (int)resident.Position.X, (int)resident.Position.Y, (int)resident.Position.Z), out _))
+                NoteFoot(resident.Position);
 
         foreach (var cell in _platesNow)
         {
@@ -2265,7 +2283,8 @@ public sealed class ClientHost : IDisposable
 
         _sinceSave += dt;
         if (_sinceSave < AutosaveSeconds) return;
-        if (!_streamer.World.Changed && !_unlocks.Dirty && !_progress.Dirty && !_map.Dirty) return;
+        if (!_streamer.World.Changed && !_unlocks.Dirty && !_progress.Dirty && !_map.Dirty
+            && !_exploration.Dirty && !_inhabitants.Dirty) return;
 
         _autosaves++;
         SaveWorld("automatically");
@@ -2743,7 +2762,8 @@ public sealed class ClientHost : IDisposable
         var many = _input.IsKeyPressed(Key.ShiftLeft) || _input.IsKeyPressed(Key.ShiftRight);
         // The menu is a list of rows exactly as a settings tab is, so it wants the same keys —
         // up and down to pick, enter to act. It simply has no tabs to walk.
-        var tabbed = _hudScreen.Kind is HudScreenKind.Player or HudScreenKind.Game or HudScreenKind.Start;
+        var tabbed = _hudScreen.Kind is HudScreenKind.Player or HudScreenKind.Game
+            or HudScreenKind.Start or HudScreenKind.Trade;
 
         // On a panel of squares the arrows drive the pointer itself rather than a separate
         // selection, so there is one cursor and not two things arguing about what is picked out.
@@ -3807,9 +3827,34 @@ public sealed class ClientHost : IDisposable
             new Vector3(cart.X + 0.5f, cart.Y + 0.5f, cart.Z + 0.5f), 0.6f, Wobble());
     }
 
+    private void OpenTrade(Inhabitant resident)
+    {
+        _tradingWith = resident;
+        _hudScreen.Kind = HudScreenKind.Trade;
+        _hudScreen.TabNames = [];
+        _hudScreen.Tab = 0;
+        _hudScreen.Selected = 1;
+        _hudScreen.Scroll = 0;
+        _hudScreen.Grid = null;
+        _laidOut = null;
+        StopHands();
+        TakeThePointer();
+        RefreshScreen();
+    }
+
     /// <summary>A chest: twenty seven slots, and the player's own pockets under them.</summary>
     private void OpenChest(int x, int y, int z)
     {
+        // A generated chest becomes state the first time it is opened. ChestBank keeps even an
+        // emptied chest, so revisiting or save/load can never roll it a second time.
+        var authored = WorldLoot.TryFindChest(
+            _terrain.Exploration, x, y, z, out var site, out _);
+        if (authored)
+        {
+            if (HandleEncounterChest(site)) return;
+            WorldLoot.TryInitialize(_seed, _terrain.Exploration, _chests, _items, x, y, z, out _);
+        }
+
         _hudScreen.Kind = HudScreenKind.Chest;
         _hudScreen.TabNames = [];
         _hudScreen.Tab = 0;
@@ -3824,6 +3869,87 @@ public sealed class ClientHost : IDisposable
         _audio?.Play(
             Pick(LidOf(x, y, z, opening: true)),
             new Vector3(x + 0.5f, y + 0.5f, z + 0.5f), 0.6f, Wobble());
+    }
+
+    /// <summary>Keys start shared fights; cleared vaults pay each player exactly once.</summary>
+    private bool HandleEncounterChest(StructureSite site)
+    {
+        if (site.Kind is not (StructureKind.StormVault or StructureKind.StarfallCrown)) return false;
+
+        var kind = site.Kind == StructureKind.StormVault ? EncounterKind.Trial : EncounterKind.Crown;
+        var reward = ExplorationRewards.RewardFor(kind);
+        var existing = _exploration.At(site.Id);
+
+        if (existing?.Cleared == true)
+        {
+            if (_exploration.CanClaim(site.Id, reward, LocalPlayerId))
+            {
+                var item = _items.ByName(reward);
+                var prize = new ItemStack(item.Id, 1);
+                if (!_inventory.CanAdd(prize))
+                {
+                    Notice("make room for your reward", item);
+                    return true;
+                }
+                if (!_exploration.Claim(site.Id, reward, LocalPlayerId)) return true;
+                _inventory.Add(prize);
+                Notice(kind == EncounterKind.Trial ? "vault answered you" : "the Crown remembers you", item);
+            }
+            return false;
+        }
+
+        if (existing?.Active == true)
+        {
+            Notice(kind == EncounterKind.Trial ? "the vault is still awake" : "the Crown is still awake", null);
+            return true;
+        }
+
+        var keyName = ExplorationRewards.KeyFor(kind);
+        var key = _items.ByName(keyName);
+        if (_inventory.CountOf(key.Id) == 0)
+        {
+            Notice(kind == EncounterKind.Trial ? "the vault wants a storm-vault key" : "the Crown wants a star key", key);
+            return true;
+        }
+
+        TopUpCreatures(0f);
+        if (_herd is null || _creatureRenderer is null || KindFor(
+                kind == EncounterKind.Trial ? "storm_sentinel" : "starwarden") is null)
+        {
+            Notice("the encounter cannot take shape", key);
+            return true;
+        }
+
+        if (_inventory.Take(key.Id, 1) != 1) return true;
+        _exploration.Begin(site.Id, kind);
+
+        if (kind == EncounterKind.Trial)
+        {
+            SpawnEncounter(site, "storm_sentinel", 4, 6f);
+            Notice("the storm vault wakes", key);
+        }
+        else
+        {
+            SpawnEncounter(site, "starwarden", 1, 4f);
+            Notice("the Starfall Crown wakes", key);
+        }
+        return true;
+    }
+
+    private void SpawnEncounter(StructureSite site, string kind, int count, float radius)
+    {
+        if (_herd is null || _creatureRenderer is null
+            || !_creatureRenderer.TryMeasure(kind, out var size)) return;
+        var spawn = new SpawnKind(kind, size, Hostile: true, CreatureSet.MoveFor(kind));
+        for (var i = 0; i < count; i++)
+        {
+            var angle = MathF.Tau * i / Math.Max(count, 1);
+            var at = new Vector3(
+                site.X + 0.5f + MathF.Cos(angle) * radius,
+                site.Y,
+                site.Z + 0.5f + MathF.Sin(angle) * radius);
+            _herd.SpawnAt(spawn, at, float.RadiansToDegrees(angle + MathF.PI));
+        }
     }
 
     /// <summary>A chest's lid or a barrel's, told apart by the block actually standing there.</summary>
@@ -3911,6 +4037,7 @@ public sealed class ClientHost : IDisposable
         // The chest keeps what is in it — that is the whole point of one — but the screen lets go
         // of it, so a shift-click on a pocket goes back to trading with the bar.
         _hudScreen.Stored = null;
+        _tradingWith = null;
         _hudScreen.Hovered = null;
         _draggingMap = false;
         _draggingSkinPreview = false;
@@ -4278,6 +4405,32 @@ public sealed class ClientHost : IDisposable
             return;
         }
 
+        if (_hudScreen.Kind == HudScreenKind.Trade)
+        {
+            if (_tradingWith is not { } resident)
+            {
+                _hudScreen.Rows.Add(new MenuRow("the trader has gone", Heading: true));
+                return;
+            }
+
+            _hudScreen.Rows.Add(new MenuRow(
+                $"{resident.Name} · {resident.Profession.ToString().ToLowerInvariant()}", Heading: true));
+            foreach (var offer in Trading.For(resident.Profession))
+            {
+                var cost = _items.ByName(offer.Cost);
+                var result = _items.ByName(offer.Result);
+                var have = _inventory.CountOf(cost.Id);
+                var payable = Trading.CanPay(offer, _inventory, _items);
+                _hudScreen.Rows.Add(new MenuRow(
+                    offer.Label,
+                    $"{offer.CostCount} {cost.Label} → {offer.ResultCount} {result.Label}",
+                    Note: payable ? $"you have {have}; enter trades" : $"you have {have}; cannot trade yet",
+                    Icon: result.IconLayer));
+            }
+            _hudScreen.Rows.Add(new MenuRow("done", "close trading"));
+            return;
+        }
+
         // ⛔ A visible way out, because escape is not one. It works, and the user's verdict on that
         // was "if hitting the esc key is the only way to get out of the settings area that's not
         // intuitive enough for most users" — which is right: a settings screen reached from a menu
@@ -4632,6 +4785,8 @@ public sealed class ClientHost : IDisposable
         if (_hudScreen.Selected < 0 || _hudScreen.Selected >= _hudScreen.Rows.Count) return;
 
         var label = _hudScreen.Rows[_hudScreen.Selected].Label;
+
+        if (_hudScreen.Kind == HudScreenKind.Trade) return;
 
         if (_hudScreen.Kind == HudScreenKind.Player)
         {
@@ -7429,6 +7584,26 @@ public sealed class ClientHost : IDisposable
             return;
         }
 
+        if (_hudScreen.Kind == HudScreenKind.Trade)
+        {
+            if (_tradingWith is not { } resident) { CloseScreen(); return; }
+            var at = _hudScreen.Selected - 1;
+            var offers = Trading.For(resident.Profession);
+            if (at == offers.Count) { CloseScreen(); return; }
+            if ((uint)at >= (uint)offers.Count) return;
+            var offer = offers[at];
+            if (!Trading.TryMake(offer, _inventory, _items))
+            {
+                Notice("that trade cannot be paid", _items.ByName(offer.Cost));
+            }
+            else
+            {
+                Notice($"traded with {resident.Name}", _items.ByName(offer.Result));
+            }
+            RefreshScreen();
+            return;
+        }
+
         // Before the tab dispatch, because it is on every tab and none of them owns it.
         if (_atStartScreen
             && _hudScreen.Selected >= 0
@@ -8358,6 +8533,81 @@ public sealed class ClientHost : IDisposable
         }
     }
 
+    private void StepInhabitants(float dt)
+    {
+        if (!_spawned || !_walking) return;
+
+        _settlementScan -= dt;
+        if (_settlementScan <= 0f)
+        {
+            _settlementScan = 2f;
+            var px = (int)MathF.Floor(_player.Position.X);
+            var pz = (int)MathF.Floor(_player.Position.Z);
+            if (_terrain.Exploration.FindNearest(StructureKind.Driftstead, px, pz, 2) is { } settlement)
+            {
+                var dx = settlement.X - px;
+                var dz = settlement.Z - pz;
+                if (dx * dx + dz * dz <= 220 * 220)
+                    _inhabitants.EnsureSettlement(_terrain.Exploration, settlement);
+            }
+        }
+
+        _inhabitants.Update(
+            dt, _clock.TimeOfDay, SolidForCreature,
+            (x, y, z) => _streamer.World.TryGetChunk(ChunkPos.FromWorld(x, y, z), out _));
+    }
+
+    /// <summary>Drives the two keyed encounter state machines after the herd has moved/died.</summary>
+    private void StepExploration()
+    {
+        if (_herd is null) return;
+
+        foreach (var encounter in _exploration.Encounters.ToArray())
+        {
+            if (!encounter.Active || encounter.Cleared
+                || !_terrain.Exploration.TrySiteById(encounter.SiteId, out var site)) continue;
+
+            var sentinelCount = AliveNear("storm_sentinel", site, 34f).Count;
+            if (encounter.Kind == EncounterKind.Trial)
+            {
+                if (sentinelCount == 0 && _exploration.Clear(site.Id))
+                    Notice("the storm vault falls quiet", _items.ByName(
+                        ExplorationRewards.RewardFor(EncounterKind.Trial)));
+                continue;
+            }
+
+            var wardens = AliveNear("starwarden", site, 40f);
+            if (wardens.Count == 0)
+            {
+                if (sentinelCount == 0 && _exploration.Clear(site.Id))
+                    Notice("the Starfall Crown falls quiet", _items.ByName(
+                        ExplorationRewards.RewardFor(EncounterKind.Crown)));
+                continue;
+            }
+
+            var warden = wardens[0];
+            var fraction = warden.Health / (float)Math.Max(1, warden.MaxHealth);
+            if (fraction <= 2f / 3f && encounter.Phase < 2 && _exploration.SetPhase(site.Id, 2))
+            {
+                SpawnEncounter(site, "storm_sentinel", 2, 8f);
+                Notice("the Crown breaks its first ring", null);
+            }
+            if (fraction <= 1f / 3f && encounter.Phase < 3 && _exploration.SetPhase(site.Id, 3))
+            {
+                SpawnEncounter(site, "storm_sentinel", 3, 9f);
+                Notice("the Crown breaks its final ring", null);
+            }
+        }
+
+        List<Creature> AliveNear(string kind, StructureSite site, float radius)
+        {
+            var radiusSq = radius * radius;
+            return [.. _herd.All.Where(one => one.Alive && one.Kind == kind
+                && Vector2.DistanceSquared(
+                    new Vector2(one.Position.X, one.Position.Z), new Vector2(site.X, site.Z)) <= radiusSq)];
+        }
+    }
+
     /// <summary>Advances the shared flight pool and turns its plain impact records into game effects.</summary>
     private void StepProjectiles(float dt)
     {
@@ -8521,7 +8771,7 @@ public sealed class ClientHost : IDisposable
 
             // A station in the crater spills what it held, exactly as mining it does.
             foreach (var spilled in _furnaces.Remove(x, y, z)) _drops.Drop(spilled, at);
-            foreach (var spilled in _chests.Remove(x, y, z)) _drops.Drop(spilled, at);
+            foreach (var spilled in EmptyChestAt(x, y, z)) _drops.Drop(spilled, at);
 
             // The cell keeps the water a wet block stood in — a blast under the sea leaves sea.
             _streamer.EditBlock(x, y, z, _waterlogging.Remains(was));
@@ -8781,7 +9031,7 @@ public sealed class ClientHost : IDisposable
 
         // Over a list, the wheel is the list's. Three lines a notch, which is what a wheel means
         // everywhere else on the machine.
-        if (_hudScreen.Kind == HudScreenKind.Game
+        if (_hudScreen.Kind is HudScreenKind.Game or HudScreenKind.Trade
             || (_hudScreen.Kind == HudScreenKind.Player && !_hudScreen.IsContainer))
         {
             if (OnTab(GameTab.Packs))
@@ -8846,7 +9096,7 @@ public sealed class ClientHost : IDisposable
     /// </remarks>
     private void ShowSelectedRow()
     {
-        if (_hudScreen.Kind != HudScreenKind.Game
+        if (_hudScreen.Kind is not (HudScreenKind.Game or HudScreenKind.Trade)
             && !(_hudScreen.Kind == HudScreenKind.Player && !_hudScreen.IsContainer)) return;
 
         if (OnTab(GameTab.Packs) && _hudScreen.Selected >= 0
@@ -9315,7 +9565,8 @@ public sealed class ClientHost : IDisposable
             return;
         }
 
-        var tabbed = _hudScreen.Kind is HudScreenKind.Player or HudScreenKind.Game or HudScreenKind.Start;
+        var tabbed = _hudScreen.Kind is HudScreenKind.Player or HudScreenKind.Game
+            or HudScreenKind.Start or HudScreenKind.Trade;
         if (tabbed && _hudScreen.TabNames.Length > 1)
         {
             if (_controller.Pressed(ControllerControl.LeftShoulder)) { ChangeScreenTab(-1); return; }
@@ -9537,6 +9788,8 @@ public sealed class ClientHost : IDisposable
         StepFurnaces((float)dt);
         StepProjectiles((float)dt);
         StepCreatures((float)dt);
+        StepInhabitants((float)dt);
+        StepExploration();
         StepCarts((float)dt);
         StepToasts((float)dt);
         StepAmbience((float)dt);
@@ -9671,6 +9924,12 @@ public sealed class ClientHost : IDisposable
         // ⛳ A blow at an animal, and it spends the swing. The arm is the clock for this exactly as
         // it is for mining — a strike is one blow whatever the frame rate, and the creature's own
         // cooldown is the second half of that so a fast arm cannot whittle a cow down in a frame.
+        if (strikes > 0 && !placing && _inhabitantTarget is { } resident)
+        {
+            Notice($"{resident.Name} steps back", null);
+            strikes--;
+        }
+
         if (strikes > 0 && !placing && _creatureTarget is { } quarry)
         {
             StrikeCreature(quarry);
@@ -10230,6 +10489,7 @@ public sealed class ClientHost : IDisposable
     {
         _target = null;
         _creatureTarget = null;
+        _inhabitantTarget = null;
 
         if (_bench is not null) return;
 
@@ -10241,9 +10501,18 @@ public sealed class ClientHost : IDisposable
         // ⚠ Only as far as the block, and never further than a swing goes. Passing the block's own
         // distance in as the ceiling is what makes "the nearer wins" one comparison rather than two
         // answers to be reconciled afterwards.
-        var creature = _herd?.Pick(
-            _camera.Position, _camera.Forward, MathF.Min(blockAt, Combat.Reach), out _);
+        var ceiling = MathF.Min(blockAt, Combat.Reach);
+        var creatureAt = ceiling;
+        var creature = _herd is null ? null : _herd.Pick(
+            _camera.Position, _camera.Forward, ceiling, out creatureAt);
+        var inhabitant = _inhabitants.Pick(
+            _camera.Position, _camera.Forward, ceiling, out var inhabitantAt);
 
+        if (inhabitant is not null && (creature is null || inhabitantAt < creatureAt))
+        {
+            _inhabitantTarget = inhabitant;
+            return;
+        }
         if (creature is not null) { _creatureTarget = creature; return; }
         if (!float.IsInfinity(blockAt)) _target = hit;
     }
@@ -10288,7 +10557,7 @@ public sealed class ClientHost : IDisposable
         // clean it up — and a player who mines one mid-smelt has lost both the ore and the coal.
         var centre = new Vector3(hit.X + 0.5f, hit.Y + 0.5f, hit.Z + 0.5f);
         foreach (var spilled in _furnaces.Remove(hit.X, hit.Y, hit.Z)) _drops.Drop(spilled, centre);
-        foreach (var spilled in _chests.Remove(hit.X, hit.Y, hit.Z)) _drops.Drop(spilled, centre);
+        foreach (var spilled in EmptyChestAt(hit.X, hit.Y, hit.Z)) _drops.Drop(spilled, centre);
 
         // The cell keeps the water a wet block stood in — breaking a wet fence is a hole in the
         // water, not a hole in the sea.
@@ -10345,6 +10614,15 @@ public sealed class ClientHost : IDisposable
     }
 
     /// <summary>
+    /// Ordinary chest state leaves with the block. An authored chest keeps an empty receipt after
+    /// spilling, which is what makes breaking and replacing it unable to reroll generated loot.
+    /// </summary>
+    private IEnumerable<ItemStack> EmptyChestAt(int x, int y, int z) =>
+        WorldLoot.TryFindChest(_terrain.Exploration, x, y, z, out _, out _)
+            ? _chests.Drain(x, y, z)
+            : _chests.Remove(x, y, z);
+
+    /// <summary>
     /// Puts a block against the face being looked at, unless the player is standing there.
     /// </summary>
     /// <remarks>
@@ -10365,6 +10643,11 @@ public sealed class ClientHost : IDisposable
     /// </remarks>
     private void UseOrPlace()
     {
+        if (_inhabitantTarget is { } resident)
+        {
+            OpenTrade(resident);
+            return;
+        }
         if (_creatureTarget is { } quarry && (FeedCreature(quarry) || HarvestCreature(quarry))) return;
 
         // ⛔ EATING IS LAST IN FACT NOW, not only in the comment above. It used to run second,
@@ -10430,9 +10713,93 @@ public sealed class ClientHost : IDisposable
                 Rumble(0.08f, 0.14f, 38);
                 return true;
 
+            case ItemUse.Brush:
+                return BrushTarget(held);
+
+            case ItemUse.TreasureChart:
+                return ReadRelicChart(held);
+
+            case ItemUse.Keepsake:
+                Notice("the starheart holds a quiet pulse", held);
+                return true;
+
             default:
                 return false;
         }
+    }
+
+    private bool BrushTarget(ItemType brush)
+    {
+        if (_target is not { } hit)
+        {
+            Notice("brush old rubble in a gallery or wreck", brush);
+            return true;
+        }
+
+        foreach (var site in _terrain.Exploration.SitesAffecting(
+                     hit.X, hit.X, hit.Z, hit.Z, ExplorationGenerator.MaxRadius))
+        {
+            if (_terrain.Exploration.ArchaeologyCell(site) != (hit.X, hit.Y, hit.Z)) continue;
+            if (_streamer.World.GetBlock(hit.X, hit.Y, hit.Z) != _ids.MossyRubble)
+            {
+                Notice("this pocket has already been disturbed", brush);
+                return true;
+            }
+            if (!_exploration.Brush(site.Id))
+            {
+                Notice("this pocket has already been brushed", brush);
+                return true;
+            }
+
+            // The old green crust comes away, leaving ordinary rubble as the visible receipt.
+            _streamer.EditBlock(hit.X, hit.Y, hit.Z, _ids.Rubble);
+            var shard = _items.ByName(ExplorationRewards.ArchaeologyFind);
+            Spill(new ItemStack(shard.Id, 1));
+            Notice("a relic shard comes free", shard);
+            if (WearHeld())
+                _audio?.Play(Pick(ActionSounds.ToolBreaks), _viewPosition, 0.7f, Wobble());
+            return true;
+        }
+
+        Notice("nothing old is loose here", brush);
+        return true;
+    }
+
+    private bool ReadRelicChart(ItemType chart)
+    {
+        var px = (int)MathF.Floor(_player.Position.X);
+        var pz = (int)MathF.Floor(_player.Position.Z);
+        StructureSite? best = null;
+        long bestDistance = long.MaxValue;
+        foreach (var kind in new[]
+                 { StructureKind.Tidewreck, StructureKind.StormVault, StructureKind.StarfallCrown })
+        {
+            if (_terrain.Exploration.FindNearest(kind, px, pz) is not { } site) continue;
+            if (_map.Markers.Any(marker => marker.Id == site.Id)) continue;
+            var dx = (long)site.X - px;
+            var dz = (long)site.Z - pz;
+            var distance = dx * dx + dz * dz;
+            if (distance >= bestDistance) continue;
+            bestDistance = distance;
+            best = site;
+        }
+
+        if (best is not { } found)
+        {
+            Notice("this chart has no new route nearby", chart);
+            return true;
+        }
+
+        var label = found.Kind switch
+        {
+            StructureKind.Tidewreck => "tidewreck",
+            StructureKind.StormVault => "storm vault",
+            _ => "Starfall Crown",
+        };
+        _map.Reveal(new WorldMap.Marker(found.Id, label, found.X, found.Z, (byte)found.Kind));
+        _inventory.SpendHeld();
+        Notice($"charted {label} at {found.X}, {found.Z}", chart);
+        return true;
     }
 
     /// <summary>
@@ -15863,6 +16230,21 @@ public sealed class ClientHost : IDisposable
                     creature.Kind, creature.Position, creature.Yaw,
                     creature.HurtFor / CreatureHerd.HurtSeconds, creature.TippedOver,
                     creature.Scale * (1f + 0.25f * creature.FuseFraction));
+            }
+        }
+
+        if (_creatureRenderer is not null)
+        {
+            foreach (var resident in _inhabitants.All)
+            {
+                if (Vector3.DistanceSquared(resident.Position, _viewPosition) > _fogEnd * _fogEnd
+                    || !_streamer.World.TryGetChunk(ChunkPos.FromWorld(
+                        (int)resident.Position.X, (int)resident.Position.Y, (int)resident.Position.Z), out _))
+                    continue;
+                _creatureRenderer.Draw(
+                    viewProj, _viewPosition, sky,
+                    SampleLight(resident.Position + new Vector3(0f, 0.9f, 0f)),
+                    resident.Kind, resident.Position, resident.Yaw);
             }
         }
 

@@ -60,6 +60,11 @@ public enum ItemUse
     Bow,
     BowAmmunition,
     ThrownFarstep,
+    Brush,
+    TreasureChart,
+    TrialKey,
+    CrownKey,
+    Keepsake,
 }
 
 /// <summary>

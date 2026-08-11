@@ -1,6 +1,7 @@
 using System.Numerics;
 using Driftwood.Core.Blocks;
 using Driftwood.Core.Entities;
+using Driftwood.Core.Exploration;
 using Driftwood.Core.Items;
 using Driftwood.Core.Players;
 using Driftwood.Core.World;
@@ -55,6 +56,10 @@ public sealed record WorldState(
     public PlayerProgress Progress { get; set; } = new();
 
     public WorldMap Map { get; set; } = new();
+
+    public ExplorationProgress Exploration { get; set; } = new();
+
+    public InhabitantSystem Inhabitants { get; set; } = new();
 
     /// <summary>Where a slept-in bed stands, or null when none ever was (#99).</summary>
     public Vector3? BedSpawn { get; set; }
@@ -352,6 +357,56 @@ public static class WorldSave
                         map.Write((byte)tile.Top);
                         map.Write(tile.Height);
                     }
+
+                    // Appended inside the length-delimited section. Old readers stop after tiles;
+                    // new readers treat an old payload's end as zero markers.
+                    map.Write(state.Map.Markers.Count);
+                    foreach (var marker in state.Map.Markers.OrderBy(marker => marker.Id, StringComparer.Ordinal))
+                    {
+                        map.Write(marker.Id);
+                        map.Write(marker.Label);
+                        map.Write(marker.X);
+                        map.Write(marker.Z);
+                        map.Write(marker.Kind);
+                    }
+                }));
+
+                SaveSection.Write(into, "EXPL", Bytes(exploration =>
+                {
+                    exploration.Write(1); // payload version
+                    exploration.Write(state.Exploration.Brushed.Count);
+                    foreach (var id in state.Exploration.Brushed.Order(StringComparer.Ordinal)) exploration.Write(id);
+                    exploration.Write(state.Exploration.Claims.Count);
+                    foreach (var id in state.Exploration.Claims.Order(StringComparer.Ordinal)) exploration.Write(id);
+                    exploration.Write(state.Exploration.Encounters.Count);
+                    foreach (var encounter in state.Exploration.Encounters.OrderBy(one => one.SiteId, StringComparer.Ordinal))
+                    {
+                        exploration.Write(encounter.SiteId);
+                        exploration.Write((byte)encounter.Kind);
+                        exploration.Write(encounter.Active);
+                        exploration.Write(encounter.Cleared);
+                        exploration.Write(encounter.Phase);
+                    }
+                }));
+
+                SaveSection.Write(into, "INHB", Bytes(inhabitants =>
+                {
+                    var saved = state.Inhabitants.Capture();
+                    inhabitants.Write(saved.Count);
+                    foreach (var one in saved)
+                    {
+                        inhabitants.Write(one.Id);
+                        inhabitants.Write(one.SettlementId);
+                        inhabitants.Write(one.Name);
+                        inhabitants.Write((byte)one.Profession);
+                        inhabitants.Write(one.Position.X);
+                        inhabitants.Write(one.Position.Y);
+                        inhabitants.Write(one.Position.Z);
+                        inhabitants.Write(one.Yaw);
+                        inhabitants.Write(one.HomeX); inhabitants.Write(one.HomeY); inhabitants.Write(one.HomeZ);
+                        inhabitants.Write(one.WorkX); inhabitants.Write(one.WorkY); inhabitants.Write(one.WorkZ);
+                        inhabitants.Write(one.CommonsX); inhabitants.Write(one.CommonsY); inhabitants.Write(one.CommonsZ);
+                    }
                 }));
 
                 // ⛳ A section an older build has never heard of, and that is the compatibility
@@ -389,6 +444,8 @@ public static class WorldSave
             state.Unlocks.Settled();
             state.Progress.Settled();
             state.Map.Settled();
+            state.Exploration.Settled();
+            state.Inhabitants.Settled();
             return null;
         }
         catch (Exception fault)
@@ -511,6 +568,8 @@ public static class WorldSave
             byte[]? unlocks = null;
             byte[]? stats = null;
             byte[]? map = null;
+            byte[]? exploration = null;
+            byte[]? inhabitants = null;
 
             while (SaveSection.TryRead(from, out var tag, out var payload))
             {
@@ -538,6 +597,8 @@ public static class WorldSave
                     case "UNLK": unlocks = payload; break;
                     case "STAT": stats = payload; break;
                     case "MAPS": map = payload; break;
+                    case "EXPL": exploration = payload; break;
+                    case "INHB": inhabitants = payload; break;
                     case "CRTR": into.Creatures.AddRange(ReadCreatures(Reader(payload))); break;
 
                     case "CART":
@@ -607,6 +668,57 @@ public static class WorldSave
                     tiles.Add(new WorldMap.Tile(x, z, biome, top, height));
                 }
                 into.Map.Reload(tiles);
+
+                if (saved.BaseStream.Position < saved.BaseStream.Length)
+                {
+                    var markerCount = saved.ReadInt32();
+                    if (markerCount is < 0 or > 65_536) return $"this world's map says it has {markerCount} markers";
+                    var markers = new List<WorldMap.Marker>(markerCount);
+                    for (var i = 0; i < markerCount; i++)
+                        markers.Add(new WorldMap.Marker(
+                            saved.ReadString(), saved.ReadString(), saved.ReadInt32(), saved.ReadInt32(), saved.ReadByte()));
+                    into.Map.ReloadMarkers(markers);
+                }
+            }
+
+            if (exploration is not null)
+            {
+                using var saved = Reader(exploration);
+                var version = saved.ReadInt32();
+                if (version != 1) return $"this world's exploration record uses unknown version {version}";
+                var brushed = ReadStrings(saved, "brushed sites");
+                var claims = ReadStrings(saved, "reward claims");
+                var count = saved.ReadInt32();
+                if (count is < 0 or > 65_536) return $"this world says it has {count} encounters";
+                var encounters = new List<EncounterRecord>(count);
+                for (var i = 0; i < count; i++)
+                    encounters.Add(new EncounterRecord
+                    {
+                        SiteId = saved.ReadString(),
+                        Kind = (EncounterKind)saved.ReadByte(),
+                        Active = saved.ReadBoolean(),
+                        Cleared = saved.ReadBoolean(),
+                        Phase = saved.ReadInt32(),
+                    });
+                into.Exploration.Reload(brushed, claims, encounters);
+            }
+
+            if (inhabitants is not null)
+            {
+                using var saved = Reader(inhabitants);
+                var count = saved.ReadInt32();
+                if (count is < 0 or > 65_536) return $"this world says it has {count} inhabitants";
+                var people = new List<SavedInhabitant>(count);
+                for (var i = 0; i < count; i++)
+                    people.Add(new SavedInhabitant(
+                        saved.ReadString(), saved.ReadString(), saved.ReadString(),
+                        (Profession)saved.ReadByte(),
+                        new Vector3(saved.ReadSingle(), saved.ReadSingle(), saved.ReadSingle()),
+                        saved.ReadSingle(),
+                        saved.ReadInt32(), saved.ReadInt32(), saved.ReadInt32(),
+                        saved.ReadInt32(), saved.ReadInt32(), saved.ReadInt32(),
+                        saved.ReadInt32(), saved.ReadInt32(), saved.ReadInt32()));
+                into.Inhabitants.Reload(people);
             }
 
             into.World.Settled();
@@ -703,6 +815,15 @@ public static class WorldSave
     }
 
     private static BinaryReader Reader(byte[] payload) => new(new MemoryStream(payload));
+
+    private static List<string> ReadStrings(BinaryReader from, string what)
+    {
+        var count = from.ReadInt32();
+        if (count is < 0 or > 1_000_000) throw new InvalidDataException($"{what} count is {count}");
+        var values = new List<string>(count);
+        for (var i = 0; i < count; i++) values.Add(from.ReadString());
+        return values;
+    }
 
     private static byte[] Bytes(Action<BinaryWriter> fill)
     {

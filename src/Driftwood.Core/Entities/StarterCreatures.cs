@@ -275,6 +275,12 @@ public static class StarterCreatures
 
     public static CreatureModel Husk() => Humanoid("husk", 78f);
 
+    public static CreatureModel Shorewright() => Humanoid("shorewright", 0f);
+    public static CreatureModel Forager() => Humanoid("forager", 0f);
+    public static CreatureModel Waykeeper() => Humanoid("waykeeper", 0f);
+    public static CreatureModel StormSentinel() => Humanoid("storm_sentinel", 58f);
+    public static CreatureModel Starwarden() => Humanoid("starwarden", 36f);
+
     /// <summary>And the one that is all bone, whose arms hold something it has not got yet.</summary>
     /// <remarks>
     /// ⚠ Thinner limbs than the zombie's, which is the only difference in the geometry — everything
@@ -656,7 +662,8 @@ public static class StarterCreatures
     /// <summary>Every creature that ships with the game, by our name for it.</summary>
     public static IReadOnlyList<CreatureModel> All { get; } =
         [Cow(), Pig(), Sheep(), Chicken(), Wolf(), Zombie(), Drowned(), Husk(), Skeleton(), Spider(),
-         Slime(), Crawler(), Farwalker(), Rabbit(), Fox(), Cat(), Bat(), Squid()];
+         Slime(), Crawler(), Farwalker(), Rabbit(), Fox(), Cat(), Bat(), Squid(),
+         Shorewright(), Forager(), Waykeeper(), StormSentinel(), Starwarden()];
 
     /// <summary>Ours for this creature, or null when we have not drawn one yet.</summary>
     public static CreatureModel? ByName(string name)

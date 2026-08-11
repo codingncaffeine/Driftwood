@@ -822,6 +822,36 @@ public static class StarterItems
             IconLayer = StarterBlocks.LayerLavaBucket, MaxStack = 1, BurnSeconds = 1000f,
         });
 
+        // P14's complete exploration loop. Only the brush is an ordinary tool; keys and charts
+        // advertise their semantic use so the handbook/report never mistakes them for dead loot.
+        items.Register(new ItemType
+        {
+            Name = "brush", Label = "brush", IconLayer = StarterBlocks.LayerBrush,
+            MaxStack = 1, Durability = 96, Use = ItemUse.Brush,
+        });
+        Loose(items, "trade_token", "trade token", StarterBlocks.LayerTradeToken);
+        Loose(items, "relic_shard", "relic shard", StarterBlocks.LayerRelicShard);
+        items.Register(new ItemType
+        {
+            Name = "relic_chart", Label = "relic chart", IconLayer = StarterBlocks.LayerRelicChart,
+            MaxStack = 1, Use = ItemUse.TreasureChart,
+        });
+        items.Register(new ItemType
+        {
+            Name = "trial_key", Label = "storm-vault key", IconLayer = StarterBlocks.LayerTrialKey,
+            Use = ItemUse.TrialKey,
+        });
+        items.Register(new ItemType
+        {
+            Name = "star_key", Label = "star key", IconLayer = StarterBlocks.LayerStarKey,
+            Use = ItemUse.CrownKey,
+        });
+        items.Register(new ItemType
+        {
+            Name = "starheart", Label = "starheart", IconLayer = StarterBlocks.LayerStarheart,
+            MaxStack = 1, Use = ItemUse.Keepsake,
+        });
+
         RegisterArmour(items);
 
         return items.Seal(blocks);

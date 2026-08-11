@@ -592,6 +592,14 @@ public static class BlockTextureSet
         // dialects have a direct file to offer.
         new("bow", "textures/item/bow.png", true, "textures/items/bow_standby.png"),
         new("arrow", "textures/item/arrow.png", true, "textures/items/arrow.png"),
+
+        new("brush", "textures/item/brush.png", true),
+        new("trade_token", "", true),
+        new("relic_shard", "textures/item/prismarine_shard.png", true),
+        new("relic_chart", "textures/item/filled_map.png", true, "textures/items/map_filled.png"),
+        new("trial_key", "textures/item/trial_key.png", true),
+        new("star_key", "", true),
+        new("starheart", "", true),
     ];
 
     /// <summary>
@@ -1615,6 +1623,13 @@ public static class BlockTextureSet
 
             StarterBlocks.LayerBow => TileGen.IconBow(1394),
             StarterBlocks.LayerArrow => TileGen.IconArrow(1395),
+            StarterBlocks.LayerBrush => TileGen.IconBrush(1400),
+            StarterBlocks.LayerTradeToken => TileGen.IconToken(1401, 210, 164, 62),
+            StarterBlocks.LayerRelicShard => TileGen.IconGem(1402, 88, 198, 214),
+            StarterBlocks.LayerRelicChart => TileGen.IconScroll(1403),
+            StarterBlocks.LayerTrialKey => TileGen.IconKey(1404, 178, 184, 188),
+            StarterBlocks.LayerStarKey => TileGen.IconKey(1405, 104, 208, 220),
+            StarterBlocks.LayerStarheart => TileGen.IconHeart(1406, 100, 220, 210),
 
             _ when layer >= StarterBlocks.LayerGateFirst
                    && layer < StarterBlocks.LayerGateFirst + 10 =>

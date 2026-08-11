@@ -505,6 +505,28 @@ public sealed class CreatureHerd
 
     public int Count => _creatures.Count;
 
+    /// <summary>Places one authored actor exactly, bypassing the random ground-search spawner.</summary>
+    public Creature SpawnAt(SpawnKind kind, Vector3 position, float yaw = 0f)
+    {
+        var creature = new Creature
+        {
+            Kind = kind.Name,
+            Size = kind.Size,
+            Hostile = kind.Hostile,
+            Move = kind.Move,
+            MaxHealth = CreatureVitals.HealthFor(kind.Name),
+            Health = CreatureVitals.HealthFor(kind.Name),
+            Position = position,
+            Yaw = yaw,
+            WantsYaw = yaw,
+            Thinks = 0.5f,
+            Speaks = SpeaksEvery * 0.5f,
+            Sheds = CreatureVitals.ShedsEvery,
+        };
+        _creatures.Add(creature);
+        return creature;
+    }
+
     /// <summary>Puts creatures on the ground near a point, and says how many found room.</summary>
     /// <param name="solid">Whether the block at a cell would hold something up.</param>
     /// <param name="kinds">What to place, taken in turn.</param>

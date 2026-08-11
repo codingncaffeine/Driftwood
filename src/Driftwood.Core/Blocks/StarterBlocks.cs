@@ -639,7 +639,16 @@ public static class StarterBlocks
     public const ushort LayerBow = LayerBedSide + 1;
     public const ushort LayerArrow = LayerBedSide + 2;
 
-    public const int LayerCount = LayerArrow + 1;
+    // P14's carried exploration kit. Appended so every existing world/pack layer keeps its index.
+    public const ushort LayerBrush = LayerArrow + 1;
+    public const ushort LayerTradeToken = LayerArrow + 2;
+    public const ushort LayerRelicShard = LayerArrow + 3;
+    public const ushort LayerRelicChart = LayerArrow + 4;
+    public const ushort LayerTrialKey = LayerArrow + 5;
+    public const ushort LayerStarKey = LayerArrow + 6;
+    public const ushort LayerStarheart = LayerArrow + 7;
+
+    public const int LayerCount = LayerStarheart + 1;
 
     /// <summary>One anvil's name, by how worn it is and which way it lies.</summary>
     /// <remarks>
@@ -841,12 +850,20 @@ public static class StarterBlocks
         /// <summary>The wet shallow caves' floor covering.</summary>
         BlockId Moss,
 
+        /// <summary>Old worked stone, reused as P14's visibly suspicious rubble.</summary>
+        BlockId MossyRubble,
+
         /// <summary>The sea floor's meadow: the always-waterlogged plant that proved #96.</summary>
         BlockId Seagrass,
 
         /// <summary>The second wood species (#94): grove-banded, blossom untinted on purpose.</summary>
         BlockId CherryLog,
-        BlockId CherryLeaves)
+        BlockId CherryLeaves,
+
+        /// <summary>P14's authored-world vocabulary, resolved once by stable block name.</summary>
+        BlockId Chest,
+        BlockId Rail,
+        BlockId Lantern)
     {
         /// <summary>Every rock an ore can form in. Ore replaces rock, whichever rock it is.</summary>
         public BlockId[] Rock => [Stone, Deepstone, Coralstone, Driftstone, Saltstone];
@@ -1857,7 +1874,10 @@ public static class StarterBlocks
             emberbloom, sunwort,
             rubble, glass, bricks, bench, furnace, furnaceLit, lava, wildCrops, berryBushRipe,
             mushroomBrown, mushroomRed, pumpkin, cobweb, ice, cactus, deadBush, glowcap, marshReed,
-            moss, seagrass, cherryLog, cherryLeaves);
+            moss, registry.ByName("mossy_rubble").Id, seagrass, cherryLog, cherryLeaves,
+            registry.ByName("chest_north").Id,
+            registry.ByName("rail_x").Id,
+            registry.ByName("lantern").Id);
     }
 
     /// <summary>The five gate kinds, in the order their tiles sit from <see cref="LayerGateFirst"/>.</summary>

@@ -606,6 +606,11 @@ public static class StarterRecipes
         // standing block, not a recipe — so this is the one bench step in the pumpkin's whole run.
         LooseAt("jack o'lantern", "jack_o_lantern", 1, CraftStation.Bench, "carved_pumpkin", "torch");
 
+        // The brush is deliberately mundane and replaceable; the shard is deliberately not. A
+        // chart therefore proves archaeology feeds a real recipe instead of ending in a trophy.
+        LooseAt("brush", "brush", 1, CraftStation.Bench, "feather", "copper_ingot", "stick");
+        LooseAt("relic chart", "relic_chart", 1, CraftStation.Bench, "paper", "relic_shard");
+
         return book;
     }
 

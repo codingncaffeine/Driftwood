@@ -61,6 +61,9 @@ public static class CreatureVitals
         // ⚠ Soft on purpose: it closes slowly and in the open, so it is the hostile a new player
         // can actually beat — two swings of a bare fist. Its threat is arithmetic, not health.
         ["slime"] = 8,
+
+        ["storm_sentinel"] = 52,
+        ["starwarden"] = 240,
     };
 
     /// <summary>Kinds that leave something behind without being touched.</summary>
@@ -87,6 +90,8 @@ public static class CreatureVitals
         ["crawler"] = 6,
         ["farwalker"] = 7,
         ["slime"] = 2,
+        ["storm_sentinel"] = 5,
+        ["starwarden"] = 8,
 
         // The one beast with teeth. Only lands once provoked — see Retaliates.
         ["wolf"] = 3,
@@ -121,7 +126,7 @@ public static class CreatureVitals
     };
 
     /// <summary>Kinds that answer trouble by being somewhere else — a teleport step.</summary>
-    private static readonly HashSet<string> Blinkers = new(StringComparer.Ordinal) { "farwalker" };
+    private static readonly HashSet<string> Blinkers = new(StringComparer.Ordinal) { "farwalker", "starwarden" };
 
     /// <summary>
     /// Kinds that will not be walked up to: they bolt at approach, unstruck.

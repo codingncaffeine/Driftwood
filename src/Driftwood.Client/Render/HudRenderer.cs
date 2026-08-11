@@ -1,6 +1,7 @@
 using System.Numerics;
 using Driftwood.Core.Blocks;
 using Driftwood.Core.Entities;
+using Driftwood.Core.Exploration;
 using Driftwood.Core.Gen;
 using Driftwood.Core.Items;
 using Driftwood.Core.Physics;
@@ -47,6 +48,9 @@ public enum HudScreenKind
 
     /// <summary>A stonecutter: a rock, everything it cuts into, and one of them taken out.</summary>
     Stonecutter,
+
+    /// <summary>A settlement resident's profession-owned offers.</summary>
+    Trade,
 }
 
 /// <summary>
@@ -1499,7 +1503,23 @@ public sealed class HudRenderer : IDisposable
                 Rect(_plain, x, y, MathF.Max(2f, pitch - 1f), MathF.Max(2f, pitch - 1f), colour);
             }
 
-            Text($"{map.Tiles.Count:N0} explored", left + 4f, top + size + 10f, 8f, InkDim);
+            // Charted discoveries sit above terrain as small diamonds. They are intentionally
+            // icon-free: the mark stays readable at every zoom and every pack resolution.
+            foreach (var marker in map.Markers)
+            {
+                var x = MathF.Round(left + size * 0.5f + (marker.X - centre.X) * zoom);
+                var y = MathF.Round(top + size * 0.5f + (marker.Z - centre.Y) * zoom);
+                if (x < left + 3f || y < top + 3f || x >= left + size - 3f || y >= top + size - 3f)
+                    continue;
+                var colour = marker.Kind == (byte)StructureKind.StarfallCrown
+                    ? new Vector4(0.42f, 0.94f, 0.90f, 1f)
+                    : new Vector4(0.96f, 0.68f, 0.24f, 1f);
+                Rect(_plain, x - 3f, y - 1f, 7f, 3f, colour);
+                Rect(_plain, x - 1f, y - 3f, 3f, 7f, colour);
+            }
+
+            Text($"{map.Tiles.Count:N0} explored · {map.Markers.Count} charted",
+                left + 4f, top + size + 10f, 8f, InkDim);
         }
 
         // A bright square and a short nose: position and facing, both legible over every biome.

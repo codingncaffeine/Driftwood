@@ -92,6 +92,21 @@ public sealed class Inventory
         return stack;
     }
 
+    /// <summary>True when a stack can be added whole, without changing the inventory.</summary>
+    public bool CanAdd(ItemStack stack)
+    {
+        if (stack.IsEmpty) return true;
+        var room = 0;
+        var cap = _items[stack.Item].MaxStack;
+        foreach (var slot in _slots)
+        {
+            if (slot.IsEmpty) room += cap;
+            else if (slot.Matches(stack)) room += Math.Max(0, cap - slot.Count);
+            if (room >= stack.Count) return true;
+        }
+        return false;
+    }
+
     /// <summary>
     /// Puts a changed version of the held stack back where it was.
     /// </summary>

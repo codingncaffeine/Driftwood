@@ -1,5 +1,6 @@
 using System.Text;
 using Driftwood.Core.Blocks;
+using Driftwood.Core.Exploration;
 using Driftwood.Core.Items;
 
 namespace Driftwood.Core.Diagnostics;
@@ -207,6 +208,11 @@ public static class RecipeReport
         foreach (var name in Composting.Accepted)
             if (items.TryByName(name, out var composted)) consumed.Add(composted.Id);
 
+        // ⛳ A trade is a real sink even though it does not pass through RecipeBook. Read the
+        // profession tables themselves so the report cannot call their currency ornamental.
+        foreach (var offer in Trading.All)
+            if (items.TryByName(offer.Cost, out var cost)) consumed.Add(cost.Id);
+
         // ⛔ EVERY EXCLUSION IS NAMED, because the first run of this listed thirty-four items and
         // thirty-two of them were fine — twenty-four tools, a pair of shears, three buckets. A
         // findings list that is mostly noise is read once and then never again, which is the same
@@ -249,6 +255,14 @@ public static class RecipeReport
         // way in and it answers per item. A block that leaves nothing simply answers nothing.
         foreach (var type in items.All)
             if (drops.Sources(type.Id).Any()) produced.Add(type.Id);
+
+        // Authored-world sources live outside recipes and ordinary drops: generated chests,
+        // profession results, brushing and personal encounter rewards. These are the same tables
+        // and names the live mechanics use, not report-only exclusions.
+        foreach (var name in WorldLoot.PossibleItemNames
+                     .Concat(Trading.All.Select(offer => offer.Result))
+                     .Concat(ExplorationRewards.DirectItemNames))
+            if (items.TryByName(name, out var authored)) produced.Add(authored.Id);
 
         // ⚠ A bucket with something in it is FILLED rather than made — it comes out of a world the
         // player dipped it in, which is not a recipe, a smelt or a drop. Named here so the finding

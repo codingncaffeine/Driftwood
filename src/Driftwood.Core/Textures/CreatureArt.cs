@@ -142,6 +142,16 @@ public static class CreatureArt
 
         // Slate-blue, mottled the way wet skin is; the tentacle tips shade through the leg rule.
         ["squid"] = new((96, 108, 132), (76, 88, 112), (66, 76, 98), (66, 76, 98), 0.22f, 0.08f),
+
+        // P14's residents: one silhouette, three occupations stated in broad cloth/apron colours.
+        ["shorewright"] = new((76, 104, 112), (184, 142, 82), (170, 132, 104), (64, 82, 86), 0.26f, 0.06f),
+        ["forager"] = new((92, 122, 74), (176, 142, 86), (176, 136, 108), (74, 88, 56), 0.24f, 0.06f),
+        ["waykeeper"] = new((94, 84, 112), (190, 172, 116), (168, 132, 104), (70, 64, 82), 0.22f, 0.06f),
+
+        // Vault metal and the Crown's cold night-stone. The warden's cyan mark is shared with the
+        // star key/heart, making reward and encounter one visual family without borrowed artwork.
+        ["storm_sentinel"] = new((82, 90, 96), (154, 120, 68), (52, 58, 64), (116, 188, 194), 0.32f, 0.10f, FaceKind.Grim),
+        ["starwarden"] = new((38, 42, 58), (72, 94, 116), (24, 28, 42), (104, 220, 214), 0.38f, 0.11f, FaceKind.Eyes),
     };
 
     /// <summary>True when we have colours for this creature.</summary>

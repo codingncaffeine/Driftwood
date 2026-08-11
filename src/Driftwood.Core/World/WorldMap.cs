@@ -9,10 +9,14 @@ public sealed class WorldMap
 
     public readonly record struct Tile(int X, int Z, Biome Biome, Surface Top, short Height);
 
+    public readonly record struct Marker(string Id, string Label, int X, int Z, byte Kind);
+
     private readonly Dictionary<(int X, int Z), Tile> _tiles = [];
     private readonly HashSet<(int X, int Z)> _visited = [];
+    private readonly Dictionary<string, Marker> _markers = new(StringComparer.Ordinal);
 
     public IReadOnlyCollection<Tile> Tiles => _tiles.Values;
+    public IReadOnlyCollection<Marker> Markers => _markers.Values;
     public bool Dirty { get; private set; }
 
     /// <summary>Records the chunk under the player once, using the generator's authoritative surface.</summary>
@@ -60,6 +64,22 @@ public sealed class WorldMap
             _tiles[(tile.X, tile.Z)] = tile;
             _visited.Add((tile.X >> Chunk.SizeLog2, tile.Z >> Chunk.SizeLog2));
         }
+        Dirty = false;
+    }
+
+    /// <summary>Reveals a named destination once; charts never erase ordinary exploration.</summary>
+    public bool Reveal(Marker marker)
+    {
+        if (_markers.ContainsKey(marker.Id)) return false;
+        _markers.Add(marker.Id, marker);
+        Dirty = true;
+        return true;
+    }
+
+    public void ReloadMarkers(IEnumerable<Marker> markers)
+    {
+        _markers.Clear();
+        foreach (var marker in markers) _markers[marker.Id] = marker;
         Dirty = false;
     }
 

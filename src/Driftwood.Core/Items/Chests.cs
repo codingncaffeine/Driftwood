@@ -84,6 +84,22 @@ public sealed class ChestBank
             if (!stack.IsEmpty) yield return stack;
     }
 
+    /// <summary>
+    /// Hands back every stack but retains the empty record. Generated loot uses that record as its
+    /// one-time receipt, so breaking and replacing an authored chest cannot roll the table again.
+    /// </summary>
+    public IEnumerable<ItemStack> Drain(int x, int y, int z)
+    {
+        if (!_at.TryGetValue((x, y, z), out var chest)) yield break;
+
+        for (var slot = 0; slot < chest.Contents.Length; slot++)
+        {
+            var stack = chest.Contents[slot];
+            chest.Contents[slot] = ItemStack.Empty;
+            if (!stack.IsEmpty) yield return stack;
+        }
+    }
+
     /// <summary>Puts a stack into the first slot that will take it, and returns what would not fit.</summary>
     /// <remarks>
     /// Merges before it fills, the way the pockets do: shift-clicking forty planks into a chest that

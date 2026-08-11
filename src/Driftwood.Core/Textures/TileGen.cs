@@ -4126,6 +4126,140 @@ public static class TileGen
         return t;
     }
 
+    /// <summary>P14's excavation brush: pale bristles on a copper ferrule and timber handle.</summary>
+    public static byte[] IconBrush(int seed)
+    {
+        var tile = new byte[BytesPerTile];
+        for (var i = 0; i < 7; i++)
+        {
+            Put(tile, 3 + i, 12 - i, 94, 58, 34, 255);
+            if (i > 0) Put(tile, 4 + i, 12 - i, 142, 92, 50, 255);
+        }
+        for (var y = 4; y <= 7; y++)
+        for (var x = 10; x <= 12; x++) Put(tile, x, y, 180, 104, 62, 255);
+        for (var y = 1; y <= 4; y++)
+        for (var x = 9; x <= 13; x++)
+            if (x + y is >= 11 and <= 16) Put(tile, x, y, 224, 210, 164, 255);
+        return tile;
+    }
+
+    /// <summary>A thick minted disc, kept to three value clusters at native scale.</summary>
+    public static byte[] IconToken(int seed, byte r, byte g, byte b)
+    {
+        var tile = new byte[BytesPerTile];
+        for (var y = 3; y <= 12; y++)
+        for (var x = 3; x <= 12; x++)
+        {
+            var dx = x - 7.5f;
+            var dy = y - 7.5f;
+            var d = dx * dx + dy * dy;
+            if (d > 25f) continue;
+            var edge = d > 17f;
+            Put(tile, x, y,
+                edge ? Clamp(r - 55) : x + y < 15 ? Clamp(r + 22) : r,
+                edge ? Clamp(g - 55) : x + y < 15 ? Clamp(g + 22) : g,
+                edge ? Clamp(b - 35) : x + y < 15 ? Clamp(b + 18) : b, 255);
+        }
+        Put(tile, 7, 5, 78, 64, 42, 255);
+        Put(tile, 7, 6, 78, 64, 42, 255);
+        Put(tile, 6, 7, 78, 64, 42, 255);
+        Put(tile, 7, 7, 78, 64, 42, 255);
+        Put(tile, 8, 7, 78, 64, 42, 255);
+        Put(tile, 7, 8, 78, 64, 42, 255);
+        Put(tile, 7, 9, 78, 64, 42, 255);
+        return tile;
+    }
+
+    /// <summary>A broad-toothed key; the bow carries a single contrasting star pixel cluster.</summary>
+    public static byte[] IconKey(int seed, byte r, byte g, byte b)
+    {
+        var tile = new byte[BytesPerTile];
+
+        // Build one four-connected silhouette first. A diagonal walked one pixel at a time is a
+        // necklace of disconnected dots to the cut-out renderer, not a key; the two-pixel stair
+        // gives every step a shared edge while keeping the strong upper-right to lower-left read.
+        var ink = new bool[Size, Size];
+        for (var y = 2; y <= 7; y++)
+        for (var x = 8; x <= 13; x++)
+            if (x is 8 or 13 || y is 2 or 7) ink[x, y] = true;
+        for (var i = 0; i < 7; i++)
+        {
+            var x = 9 - i;
+            var y = 7 + i;
+            ink[x, y] = true;
+            ink[x + 1, y] = true;
+        }
+        ink[3, 11] = true;
+        ink[3, 12] = true;
+        ink[3, 13] = true;
+        ink[4, 11] = true;
+        ink[5, 10] = true;
+        ink[5, 11] = true;
+
+        // A one-pixel dark rim keeps pale keys legible over sand and inventory slots.
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            if (ink[x, y]) continue;
+            var beside = x > 0 && ink[x - 1, y]
+                || x + 1 < Size && ink[x + 1, y]
+                || y > 0 && ink[x, y - 1]
+                || y + 1 < Size && ink[x, y + 1];
+            if (beside) Put(tile, x, y, Clamp(r - 76), Clamp(g - 76), Clamp(b - 70), 255);
+        }
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            if (!ink[x, y]) continue;
+            var light = y <= 3 || x >= 11 || (x + y) % 5 == 0;
+            var shadow = !light && (y >= 11 || x <= 4);
+            var lift = light ? 34 : shadow ? -30 : 0;
+            Put(tile, x, y, Clamp(r + lift), Clamp(g + lift), Clamp(b + lift), 255);
+        }
+        return tile;
+    }
+
+    public static byte[] IconHeart(int seed, byte r, byte g, byte b)
+    {
+        var tile = new byte[BytesPerTile];
+        string[] shape = [".##.##.", "#######", "#######", ".#####.", "..###..", "...#..."];
+
+        // Dark outline first: it supplies both separation from the slot and the lowest value in a
+        // tiny four-value material ramp. The face remains a compact, deliberate pixel cluster.
+        for (var y = 0; y < shape.Length; y++)
+        for (var x = 0; x < shape[y].Length; x++)
+        {
+            if (shape[y][x] != '#') continue;
+            var px = x + 4;
+            var py = y + 4;
+            foreach (var (dx, dy) in new[] { (-1, 0), (1, 0), (0, -1), (0, 1) })
+            {
+                var nx = px + dx;
+                var ny = py + dy;
+                if (nx is < 0 or >= Size || ny is < 0 or >= Size) continue;
+                var sx = nx - 4;
+                var sy = ny - 4;
+                if (sy >= 0 && sy < shape.Length && sx >= 0 && sx < shape[sy].Length
+                    && shape[sy][sx] == '#') continue;
+                Put(tile, nx, ny, Clamp(r - 72), Clamp(g - 72), Clamp(b - 66), 255);
+            }
+        }
+
+        for (var y = 0; y < shape.Length; y++)
+        for (var x = 0; x < shape[y].Length; x++)
+        {
+            if (shape[y][x] != '#') continue;
+            var light = x + y < 5;
+            var shadow = !light && (x + y > 8 || y == shape.Length - 1);
+            var lift = light ? 34 : shadow ? -30 : 0;
+            Put(tile, x + 4, y + 4,
+                Clamp(r + lift), Clamp(g + lift), Clamp(b + lift), 255);
+        }
+        Put(tile, 6, 5, Clamp(r + 70), Clamp(g + 70), Clamp(b + 70), 255);
+        return tile;
+    }
+
     /// <summary>A rounded nugget — coal, a raw metal, a ball of clay.</summary>
     public static byte[] IconLump(int seed, byte r, byte g, byte b)
     {

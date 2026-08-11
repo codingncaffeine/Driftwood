@@ -4,6 +4,7 @@ using System.Text;
 using Driftwood.Core.Audio;
 using Driftwood.Core.Blocks;
 using Driftwood.Core.Entities;
+using Driftwood.Core.Exploration;
 using Driftwood.Core.Gen;
 using Driftwood.Core.Items;
 using Driftwood.Core.Lighting;
@@ -288,7 +289,20 @@ public static class WorldAudit
         var tundraDusted = 0L;
         var tundraOpen = 0L;
         var biomeDisagreements = 0L;
+        var authoredGroundOverrides = 0L;
         string? firstDisagreement = null;
+
+        // P14 deliberately puts hulls, paths and landmark masonry across the natural surface. The
+        // biome agreement check is about the generator's ground rule, so identify the exact cells
+        // the authored layer owns rather than weakening any material comparison by block family.
+        var authoredCells = new HashSet<(int X, int Y, int Z)>();
+        foreach (var site in generator.Exploration.SitesAffecting(
+                     minBlock, maxBlock, minBlock, maxBlock, ExplorationGenerator.MaxRadius))
+            generator.Exploration.Walk(site, (x, y, z, _) =>
+            {
+                if (x >= minBlock && x <= maxBlock && z >= minBlock && z <= maxBlock)
+                    authoredCells.Add((x, y, z));
+            });
 
         for (var wz = minBlock; wz <= maxBlock; wz++)
         for (var wx = minBlock; wx <= maxBlock; wx++)
@@ -301,7 +315,7 @@ public static class WorldAudit
             // read at sea level (their surface is the seabed); everything else at its surface.
             var groundY = biome is Biome.Sea or Biome.FrozenSea ? TerrainGenerator.SeaLevel : surface;
             var ground = world.GetBlock(wx, groundY, wz);
-            var groundOk = biome switch
+            var naturalGroundOk = biome switch
             {
                 Biome.Sea => ground == ids.Water,
                 Biome.FrozenSea => ground == ids.Ice,
@@ -309,6 +323,9 @@ public static class WorldAudit
                 Biome.Snowfield => ground == ids.Snow,
                 _ => ground == ids.Grass,
             };
+            var authoredGround = authoredCells.Contains((wx, groundY, wz));
+            var groundOk = naturalGroundOk || authoredGround;
+            if (!naturalGroundOk && authoredGround) authoredGroundOverrides++;
 
             if (!groundOk)
             {
@@ -901,6 +918,12 @@ public static class WorldAudit
         Check("a world survives being written down", saveFaults.Count == 0,
             saveFaults.Count == 0 ? saveDetail : $"{saveFaults.Count} faults: {saveFaults[0]}");
 
+        var explorationFaults = ExplorationAudit.Validate(seed, registry, ids, items, out var explorationDetail);
+        Check("exploration remains authored, persistent and fair", explorationFaults.Count == 0,
+            explorationFaults.Count == 0
+                ? explorationDetail
+                : $"{explorationFaults.Count} faults: {explorationFaults[0]}");
+
         var loadFaults = LoadIntoStreamerSelfTest(
             seed, registry, items, book, ids, oceanCoverage, out var loadDetail);
         Check("a loaded world is still the world the generator makes", loadFaults.Count == 0,
@@ -1042,7 +1065,8 @@ public static class WorldAudit
         // has been forked or the classification order no longer matches the placement order.
         Check("a biome's ground agrees with its name", biomeDisagreements == 0,
             biomeDisagreements == 0
-                ? $"{biomeColumns:N0} columns, every one on the material its name claims"
+                ? $"{biomeColumns - authoredGroundOverrides:N0} natural columns agree; "
+                  + $"{authoredGroundOverrides:N0} exact authored cells checked by P14's gate"
                 : $"{biomeDisagreements:N0} disagree; first: {firstDisagreement}");
 
         // Only the everyday biomes are demanded — frozen sea, dunes, marsh, cherry groves and
@@ -3194,6 +3218,19 @@ public static class WorldAudit
                 changed |= Gain(item);
             }
 
+            // Explore. Generated chests are a source just as surely as a vein or a creature is;
+            // they live outside the recipe/drop tables, so the walk must read their authoritative
+            // table explicitly. A brush frees the one archaeology-only ingredient, and the two
+            // keyed fights pay their unique rewards in order.
+            foreach (var name in WorldLoot.PossibleItemNames)
+                if (items.TryByName(name, out var found)) changed |= Gain(found.Id);
+
+            if (Held(items.ByName("brush").Id))
+                changed |= Gain(items.ByName(ExplorationRewards.ArchaeologyFind).Id);
+            foreach (var encounter in Enum.GetValues<EncounterKind>())
+                if (Held(items.ByName(ExplorationRewards.KeyFor(encounter)).Id))
+                    changed |= Gain(items.ByName(ExplorationRewards.RewardFor(encounter)).Id);
+
             // ⛳ Draw. The fifth source, after dig, hunt, craft and smelt, and it has the same two
             // halves every other one has: the fluid has to actually exist in this world, and the
             // thing that carries it has to be in hand. A bucket of water is not a recipe and not a
@@ -4534,6 +4571,8 @@ public static class WorldAudit
         var unlocks = new RecipeUnlocks();
         var progress = new PlayerProgress();
         var map = new WorldMap();
+        var exploration = new ExplorationProgress();
+        var inhabitants = new InhabitantSystem();
 
         var stone = registry.ByName("stone").Id;
         var bench = registry.ByName("bench").Id;
@@ -4575,6 +4614,20 @@ public static class WorldAudit
         progress.Smelted(9);
         progress.Died();
         map.Reload([new WorldMap.Tile(-2, 3, Biome.Woodland, WorldMap.Surface.Grass, 71)]);
+        map.Reveal(new WorldMap.Marker(
+            "p14/stormvault/1/2", "storm vault", 417, -203, (byte)StructureKind.StormVault));
+        exploration.Brush("p14/buriedgallery/0/1");
+        exploration.Begin("p14/stormvault/1/2", EncounterKind.Trial);
+        exploration.SetPhase("p14/stormvault/1/2", 2);
+        exploration.Clear("p14/stormvault/1/2");
+        exploration.Claim("p14/stormvault/1/2", "star_key", "local");
+        inhabitants.Reload(
+        [
+            new SavedInhabitant(
+                "p14/driftstead/2/3/resident/0", "p14/driftstead/2/3", "Mara",
+                Profession.Shorewright, new Vector3(9.5f, 66f, -4.5f), 123f,
+                8, 66, -5, 14, 66, -2, 10, 66, 0),
+        ]);
 
         var state = new WorldState(
             "driftwood", items, world, furnaces, chests, pockets, worn, vitals, unlocks)
@@ -4587,6 +4640,8 @@ public static class WorldAudit
             BedSpawn = new Vector3(3.5f, 65.6f, 1.5f),
             Progress = progress,
             Map = map,
+            Exploration = exploration,
+            Inhabitants = inhabitants,
         };
 
         // A plain cart and a laden one, so CRGO proves it hands the hold to the RIGHT cart —
@@ -4630,12 +4685,16 @@ public static class WorldAudit
             var backUnlocks = new RecipeUnlocks();
             var backProgress = new PlayerProgress();
             var backMap = new WorldMap();
+            var backExploration = new ExplorationProgress();
+            var backInhabitants = new InhabitantSystem();
 
             var into = new WorldState(
                 "", items, back, backFurnaces, backChests, backPockets, backWorn, backVitals, backUnlocks)
             {
                 Progress = backProgress,
                 Map = backMap,
+                Exploration = backExploration,
+                Inhabitants = backInhabitants,
             };
 
             var missing = new List<string>();
@@ -4743,7 +4802,32 @@ public static class WorldAudit
                 || !backMap.Tiles.Contains(
                     new WorldMap.Tile(-2, 3, Biome.Woodland, WorldMap.Surface.Grass, 71)))
                 faults.Add("the explored map tile did not come back whole");
+            if (backMap.Markers.Count != 1
+                || !backMap.Markers.Contains(new WorldMap.Marker(
+                    "p14/stormvault/1/2", "storm vault", 417, -203, (byte)StructureKind.StormVault)))
+                faults.Add("the charted exploration marker did not come back whole");
             if (backMap.Dirty) faults.Add("a loaded explored map immediately asks to be saved");
+
+            var encounter = backExploration.At("p14/stormvault/1/2");
+            if (!backExploration.Brushed.Contains("p14/buriedgallery/0/1")
+                || encounter is not { Cleared: true, Active: false, Phase: 2 }
+                || backExploration.CanClaim("p14/stormvault/1/2", "star_key", "local")
+                || !backExploration.CanClaim("p14/stormvault/1/2", "star_key", "late"))
+                faults.Add("archaeology, encounter phase or per-player claim state did not come back whole");
+            if (backExploration.Dirty)
+                faults.Add("loaded exploration progress immediately asks to be saved");
+
+            var savedPeople = backInhabitants.Capture();
+            if (savedPeople.Count != 1
+                || savedPeople[0].Id != "p14/driftstead/2/3/resident/0"
+                || savedPeople[0].SettlementId != "p14/driftstead/2/3"
+                || savedPeople[0].Profession != Profession.Shorewright
+                || Vector3.Distance(savedPeople[0].Position, new Vector3(9.5f, 66f, -4.5f)) > 0.001f
+                || savedPeople[0].HomeX != 8 || savedPeople[0].WorkZ != -2
+                || savedPeople[0].CommonsX != 10)
+                faults.Add("an inhabitant lost identity, profession, ownership, pose or schedule anchors");
+            if (backInhabitants.Dirty)
+                faults.Add("loaded inhabitants immediately ask to be saved");
             if (Math.Abs(into.Position.X - 1.5f) > 0.001f) faults.Add("the player came back somewhere else");
 
             // ⛔ THE PALETTE, and the only test that can tell it from a format keyed on ids. Every
@@ -4772,7 +4856,7 @@ public static class WorldAudit
 
             detail = $"{world.Edits.Count} edits, a furnace mid-smelt, a {Chest.Slots}-slot chest, "
                    + $"{backPockets.Used} pockets, {backUnlocks.Announced} unlocks, the progress record "
-                   + "and an explored map tile written and read back; "
+                   + "and an explored map tile, chart marker, encounter claims and inhabitant written and read back; "
                    + "names survive every id moving, and a name this build lost is reported not guessed";
         }
         finally
@@ -8565,7 +8649,12 @@ public static class WorldAudit
         // Keep it pointed at the true end, handing the bed's end to its own fixed pin.
         (StarterBlocks.LayerBedSide, "bed_side"),
         (StarterBlocks.LayerBow, "bow"),
-        ((ushort)(StarterBlocks.LayerCount - 1), "arrow"),
+        (StarterBlocks.LayerArrow, "arrow"),
+
+        // P14's exploration kit is its own appended run. Pin both ends and keep the moving pin on
+        // the actual last layer, so the next phase cannot silently slide these names off their ids.
+        (StarterBlocks.LayerBrush, "brush"),
+        ((ushort)(StarterBlocks.LayerCount - 1), "starheart"),
     ];
 
     /// <summary>

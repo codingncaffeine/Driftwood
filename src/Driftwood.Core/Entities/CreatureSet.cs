@@ -47,6 +47,12 @@ public enum CreatureFamily
     /// axis, and the water is a fourth answer.
     /// </remarks>
     Water,
+
+    /// <summary>Owned settlement actors. They use schedules/navigation, never the random herd.</summary>
+    Inhabitant,
+
+    /// <summary>Authored combat actors spawned only by a keyed encounter.</summary>
+    Encounter,
 }
 
 /// <summary>
@@ -143,6 +149,19 @@ public static class CreatureSet
             ["textures/entity/zombie/drowned.png"]),
         new("husk", "husk", CreatureFamily.Hostile, "zombie.husk",
             ["textures/entity/zombie/husk.png"]),
+
+        // P14 residents share the established humanoid net. Pack paths are observational bridges;
+        // Driftwood ships its own geometry and paint for all five rows.
+        new("shorewright", "shorewright", CreatureFamily.Inhabitant, "villager",
+            ["textures/entity/villager/profession/fisherman.png", "textures/entity/villager/villager.png"]),
+        new("forager", "forager", CreatureFamily.Inhabitant, "villager",
+            ["textures/entity/villager/profession/farmer.png", "textures/entity/villager/villager.png"]),
+        new("waykeeper", "waykeeper", CreatureFamily.Inhabitant, "villager",
+            ["textures/entity/villager/profession/cartographer.png", "textures/entity/villager/villager.png"]),
+        new("storm_sentinel", "storm sentinel", CreatureFamily.Encounter, "pillager",
+            ["textures/entity/illager/pillager.png"]),
+        new("starwarden", "starwarden", CreatureFamily.Encounter, "evoker",
+            ["textures/entity/illager/evoker.png"]),
     ];
 
     /// <summary>
@@ -184,6 +203,7 @@ public static class CreatureSet
         ["rabbit"] = 0.6f,
         ["cat"] = 0.8f,
         ["bat"] = 0.35f,
+        ["starwarden"] = 1.22f,
     };
 
     public static float DrawScaleFor(string kind) => DrawScales.GetValueOrDefault(kind, 1f);

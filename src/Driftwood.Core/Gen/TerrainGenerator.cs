@@ -1,4 +1,5 @@
 using Driftwood.Core.Blocks;
+using Driftwood.Core.Exploration;
 using Driftwood.Core.World;
 
 namespace Driftwood.Core.Gen;
@@ -179,6 +180,9 @@ public sealed class TerrainGenerator
     /// </remarks>
     private readonly ClimateField _climate;
 
+    /// <summary>P14's pure authored-world layer, exposed for maps, loot and inhabitants.</summary>
+    public ExplorationGenerator Exploration { get; }
+
     /// <summary>Default share of the surface that sits at or below sea level.</summary>
     public const float DefaultOceanCoverage = 0.25f;
 
@@ -238,6 +242,7 @@ public sealed class TerrainGenerator
         _climate = new ClimateField(seed);
 
         _heightBias = CalibrateHeightBias(OceanCoverage);
+        Exploration = new ExplorationGenerator(seed, ids, SurfaceHeight, BiomeAt);
     }
 
     /// <summary>
@@ -1162,6 +1167,10 @@ public sealed class TerrainGenerator
 
         ScatterCaveFlora(chunk, ox, oy, oz);
 
+        // Authored discoveries include underground rooms, so they must run before the surface-only
+        // early return below. The generator writes only this chunk's share and is safe in any order.
+        Exploration.PaintChunk(chunk, reach);
+
         // ⛳ Nothing ABOVE ground decorates the deep, and it is worth the two lines. SurfaceHeight is
         // clamped to at least 1 and the longest vine hangs five below a trunk's base, so no tree, tuft
         // or flower can reach a cell below y −5. Six of the world's ten chunk layers are under that
@@ -1459,7 +1468,7 @@ public sealed class TerrainGenerator
     /// two arms of up to five plus the corner — so this covers every kind with margin, and the
     /// audit's 2x-reach pass is what proves it stays big enough.
     /// </summary>
-    public const int DecorReach = 8;
+    public const int DecorReach = 24;
 
     /// <summary>Everything about one boulder: a proud cluster of rock conforming to its ground.</summary>
     public readonly record struct BoulderSpec(int X, int Z, int Size, int Seed);
