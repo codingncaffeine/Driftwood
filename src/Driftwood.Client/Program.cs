@@ -285,7 +285,7 @@ public static class Program
             $"            faces 0-{StarterBlocks.LayerFirstIcon - 1}, "
             + $"items {StarterBlocks.LayerFirstIcon}-{StarterBlocks.LayerFirstTool - 1}, "
             + $"tools {StarterBlocks.LayerFirstTool}-{StarterBlocks.LayerFirstFluid - 1}, "
-            + $"fluids and fire {StarterBlocks.LayerFirstFluid}-{StarterBlocks.LayerCount - 1}");
+            + $"fluids, gear, content and particles {StarterBlocks.LayerFirstFluid}-{StarterBlocks.LayerCount - 1}");
 
         return 0;
     }

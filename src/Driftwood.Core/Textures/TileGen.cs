@@ -1700,6 +1700,116 @@ public static class TileGen
         return t;
     }
 
+    /// <summary>A compact four-point glint, white so one tile can take every effect palette.</summary>
+    /// <remarks>
+    /// The installed Faithless pack was used only to confirm the vanilla-style grammar: a particle
+    /// is a sparse, hard-edged mark with most of its 16×16 tile transparent, not a painted icon
+    /// shrunk into the world. These pixels are Driftwood's own asymmetric diamond and highlight.
+    /// </remarks>
+    public static byte[] ParticleSpark()
+    {
+        var t = new byte[BytesPerTile];
+        const int c = 7;
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var dx = Math.Abs(x - c);
+            var dy = Math.Abs(y - c);
+            var cross = (dx == 0 && dy <= 5) || (dy == 0 && dx <= 5);
+            var core = dx + dy <= 3;
+            if (!cross && !core) continue;
+
+            var edge = dx + dy >= 3 || Math.Max(dx, dy) >= 4;
+            var v = edge ? (byte)190 : (byte)255;
+            Put(t, x, y, v, v, v, 255);
+        }
+
+        // One offset fleck breaks the perfect-symbol read when several sparks overlap.
+        Put(t, 11, 4, 220, 220, 220, 255);
+        return t;
+    }
+
+    /// <summary>A soft stepped mote for dust, growth, healing and low-key interaction feedback.</summary>
+    public static byte[] ParticleSoft()
+    {
+        var t = new byte[BytesPerTile];
+        const float c = (Size - 1) * 0.5f;
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var dx = x - c;
+            var dy = y - c;
+            var distanceSquared = dx * dx + dy * dy;
+            if (distanceSquared > 42f) continue;
+
+            // One connected, hard-pixel cloud with stepped value/opacity. The earlier checker-thin
+            // edge became seventeen unrelated flecks; a soft effect still needs a readable body.
+            var (value, alpha) = distanceSquared switch
+            {
+                <= 8f => ((byte)255, (byte)238),
+                <= 20f => ((byte)226, (byte)205),
+                <= 32f => ((byte)194, (byte)158),
+                _ => ((byte)156, (byte)105),
+            };
+            Put(t, x, y, value, value, value, alpha);
+        }
+
+        return t;
+    }
+
+    /// <summary>A broken ring used for shields, portals, binds and summon circles.</summary>
+    public static byte[] ParticleRune()
+    {
+        var t = new byte[BytesPerTile];
+        const float c = (Size - 1) * 0.5f;
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var dx = x - c;
+            var dy = y - c;
+            var r = MathF.Sqrt(dx * dx + dy * dy);
+            if (r is < 4.7f or > 6.5f) continue;
+
+            // Three intentional breaks stop it reading as a plain bubble.
+            var angle = MathF.Atan2(dy, dx);
+            if (MathF.Abs(MathF.Sin(angle * 3f + 0.55f)) < 0.18f) continue;
+            var v = ((x + y) & 1) == 0 ? (byte)255 : (byte)205;
+            Put(t, x, y, v, v, v, 255);
+        }
+
+        Put(t, 7, 1, 255, 255, 255, 255);
+        Put(t, 13, 9, 210, 210, 210, 255);
+        return t;
+    }
+
+    /// <summary>A tiny original heart silhouette for affection and healing feedback.</summary>
+    public static byte[] ParticleHeart()
+    {
+        var t = new byte[BytesPerTile];
+
+        for (var y = 3; y <= 12; y++)
+        for (var x = 2; x <= 13; x++)
+        {
+            var left = (x - 5.0f) * (x - 5.0f) + (y - 6.0f) * (y - 6.0f) <= 10.5f;
+            var right = (x - 10.0f) * (x - 10.0f) + (y - 6.0f) * (y - 6.0f) <= 10.5f;
+            var point = y >= 6 && Math.Abs(x - 7.5f) <= (13 - y) * 0.72f;
+            if (!left && !right && !point) continue;
+
+            // Four stepped values survive tinting as a tiny highlight, body and lower-right shade.
+            var edge = y <= 4 || x is 2 or 13 || y >= 11;
+            var v = edge ? (byte)174
+                : x <= 6 && y <= 7 ? (byte)255
+                : x >= 9 || y >= 9 ? (byte)202
+                : (byte)232;
+            Put(t, x, y, v, v, v, 255);
+        }
+
+        return t;
+    }
+
     /// <summary>Speckle plus scattered blobs of a second colour, for ore in rock.</summary>
     public static byte[] Ore(int seed, byte[] baseTile, byte r, byte g, byte b, int blobs)
     {

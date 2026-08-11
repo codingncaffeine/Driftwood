@@ -983,9 +983,9 @@ public static class WorldAudit
             : $"{soundFaults.Count} faults: {soundFaults[0]}");
 
         var particleFaults = ParticleSelfTest(registry, ids);
-        Check("debris falls and settles", particleFaults.Count == 0,
+        Check("material and semantic particles stay bounded", particleFaults.Count == 0,
             particleFaults.Count == 0
-                ? "a burst lands on the floor, empties the pool, uses every crop, and allocates nothing"
+                ? "material chips settle allocation-free; tinted/rotating alpha + glow shapes cover 19 spell identities"
                 : $"{particleFaults.Count} faults: {particleFaults[0]}");
 
         var projectileFaults = ProjectileSelfTest(registry, out var projectileDetail);
@@ -7765,6 +7765,96 @@ public static class WorldAudit
 
         if (allocated > 0) faults.Add($"updating allocated {allocated} bytes over 30 frames");
 
+        // ── Semantic alphabet and exact compact spell catalogue ─────────────────────────────────
+        var definitions = SpellParticleEffects.Definitions;
+        if (definitions.Length != 19)
+            faults.Add($"the spell-particle catalogue has {definitions.Length} rows, not the locked 19");
+
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        Span<int> groups = stackalloc int[4];
+        var spellPool = new ParticleSystem(registry, 0x510E11);
+
+        foreach (var definition in definitions)
+        {
+            if (!names.Add(definition.StableName))
+                faults.Add($"spell-particle name '{definition.StableName}' is duplicated");
+
+            groups[(int)definition.Group]++;
+            if (!SpellParticleEffects.TryFind(definition.StableName, out var found)
+                || found != definition.Id)
+                faults.Add($"spell-particle name '{definition.StableName}' does not round-trip");
+
+            var beforeSpell = spellPool.Count;
+            foreach (var phase in Enum.GetValues<SpellParticlePhase>())
+            {
+                SpellParticleEffects.Emit(
+                    spellPool, definition.Id, phase,
+                    new Vector3(-0.7f, 14f, 0f), new Vector3(0.7f, 14.4f, 0f), rank: 4);
+            }
+
+            if (spellPool.Count == beforeSpell)
+                faults.Add($"spell-particle row '{definition.StableName}' emitted no phase at all");
+        }
+
+        ReadOnlySpan<int> wantedGroups = [5, 5, 4, 5];
+        for (var i = 0; i < groups.Length; i++)
+            if (groups[i] != wantedGroups[i])
+                faults.Add($"spell-particle group {(SpellParticleGroup)i} has {groups[i]} rows, wanted {wantedGroups[i]}");
+
+        var sawSoft = false;
+        var sawGlow = false;
+        foreach (var p in spellPool.Live)
+        {
+            sawSoft |= p.Look == ParticleLook.Soft;
+            sawGlow |= p.Look == ParticleLook.Glow;
+            if (p.Layer >= StarterBlocks.LayerCount)
+                faults.Add($"a semantic particle uses out-of-range layer {p.Layer}");
+            if (p.Layer is >= StarterBlocks.LayerParticleSpark and <= StarterBlocks.LayerParticleBubble
+                && !p.FullTile)
+                faults.Add($"authored particle layer {p.Layer} was cropped like block debris");
+            if (p.Tint.X < 0f || p.Tint.X > 1f
+                || p.Tint.Y < 0f || p.Tint.Y > 1f
+                || p.Tint.Z < 0f || p.Tint.Z > 1f
+                || p.Tint.W <= 0f || p.Tint.W > 1f)
+                faults.Add($"a semantic particle has invalid tint {p.Tint}");
+            if (p.Size <= 0f || p.Life <= 0f || p.Drag < 0f)
+                faults.Add($"a semantic particle has size/life/drag {p.Size:F3}/{p.Life:F3}/{p.Drag:F3}");
+        }
+
+        if (!sawSoft || !sawGlow)
+            faults.Add($"semantic spells emitted soft={sawSoft}, glow={sawGlow}; both render paths are required");
+
+        // The sustained emitter owes the same count to the same elapsed second at different frame
+        // rates. It carries the fractional particle rather than rounding every frame.
+        var slowCadence = new ParticleCadence();
+        var fastCadence = new ParticleCadence();
+        var slowEmitted = 0;
+        var fastEmitted = 0;
+        for (var i = 0; i < 30; i++) slowEmitted += slowCadence.Take(23f, 1f / 30f);
+        for (var i = 0; i < 200; i++) fastEmitted += fastCadence.Take(23f, 1f / 200f);
+        if (Math.Abs(slowEmitted - fastEmitted) > 1)
+            faults.Add($"one second of a 23/s emitter made {slowEmitted} at 30fps and {fastEmitted} at 200fps");
+
+        // Ordinary interaction recipes share the same pool and remain punctuation-sized.
+        var interactions = new ParticleSystem(registry, 0x1A7E2AC7);
+        var surface = new Vector3(0.5f, 12f, 0.5f);
+        InteractionParticleEffects.BlockPlaced(interactions, stone, surface);
+        InteractionParticleEffects.Tilled(interactions, stone, surface);
+        InteractionParticleEffects.Planted(interactions, stone, surface);
+        InteractionParticleEffects.Grew(interactions, surface);
+        InteractionParticleEffects.Harvested(interactions, leaves, surface);
+        InteractionParticleEffects.Brushed(interactions, stone, 0, 11, 0, Faces.PosY);
+        InteractionParticleEffects.WaterSplash(interactions, surface);
+        InteractionParticleEffects.LavaSplash(interactions, surface);
+        InteractionParticleEffects.ItemPickup(interactions, surface, 3);
+        InteractionParticleEffects.CreatureHit(interactions, surface, surface - Vector3.UnitZ);
+        InteractionParticleEffects.CreatureHarvest(interactions, surface);
+        InteractionParticleEffects.Affection(interactions, surface, courting: true);
+        InteractionParticleEffects.MetalWorked(interactions, surface);
+        InteractionParticleEffects.Composted(interactions, surface, ready: true);
+        if (interactions.Count is < 80 or > 220)
+            faults.Add($"the complete interaction sample emitted {interactions.Count} particles, wanted 80–220");
+
         return faults;
     }
 
@@ -8651,10 +8741,18 @@ public static class WorldAudit
         (StarterBlocks.LayerBow, "bow"),
         (StarterBlocks.LayerArrow, "arrow"),
 
-        // P14's exploration kit is its own appended run. Pin both ends and keep the moving pin on
-        // the actual last layer, so the next phase cannot silently slide these names off their ids.
+        // P14's exploration kit is its own appended run. Pin its actual end rather than assuming it
+        // remains the atlas end: P10.25 deliberately appends a semantic-particle alphabet after it.
         (StarterBlocks.LayerBrush, "brush"),
-        ((ushort)(StarterBlocks.LayerCount - 1), "starheart"),
+        (StarterBlocks.LayerStarheart, "starheart"),
+
+        // P10.25's five shapes are append-only too. Pin both ends and every semantic name because
+        // spell definitions refer to these identities while a resource pack may replace the pixels.
+        (StarterBlocks.LayerParticleSpark, "particle_spark"),
+        (StarterBlocks.LayerParticleSoft, "particle_soft"),
+        (StarterBlocks.LayerParticleRune, "particle_rune"),
+        (StarterBlocks.LayerParticleHeart, "particle_heart"),
+        ((ushort)(StarterBlocks.LayerCount - 1), "particle_bubble"),
     ];
 
     /// <summary>

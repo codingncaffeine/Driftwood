@@ -8628,6 +8628,8 @@ public sealed class ClientHost : IDisposable
                 if (creature.Health == before) continue;
 
                 _audio?.Play(Pick(CreatureSounds.Blows), impact.Position, 0.58f, 1.08f);
+                InteractionParticleEffects.CreatureHit(
+                    _particles, impact.Position, impact.Position - impact.Velocity);
                 var cry = CreatureSounds.HurtFor(creature.Kind);
                 if (cry.Length > 0 && creature.Alive)
                     _audio?.Play(Pick(cry), creature.Middle, 0.82f, Wobble());
@@ -8841,11 +8843,10 @@ public sealed class ClientHost : IDisposable
         var voice = CreatureSounds.VoicesFor(quarry.Kind);
         if (voice.Length > 0) _audio?.Play(Pick(voice), quarry.Middle, 0.6f, 1.05f);
 
-        // A warm flutter over its head — the emberbloom's reds, which is as near as the particle
-        // system comes to hearts.
-        _particles.Puff(
-            _registry[_ids.Emberbloom], quarry.Middle + new Vector3(0f, 0.5f, 0f),
-            result == CreatureHerd.FeedResult.Courting ? 10 : 5);
+        // A restrained heart rise: enough to confirm affection without hiding the animal.
+        InteractionParticleEffects.Affection(
+            _particles, quarry.Middle + new Vector3(0f, 0.35f, 0f),
+            result == CreatureHerd.FeedResult.Courting);
 
         return true;
     }
@@ -8878,6 +8879,8 @@ public sealed class ClientHost : IDisposable
 
         var voice = CreatureSounds.VoicesFor(quarry.Kind);
         if (voice.Length > 0) _audio?.Play(Pick(voice), quarry.Middle, 0.6f, 1.14f);
+
+        InteractionParticleEffects.CreatureHarvest(_particles, quarry.Middle);
 
         if (held is { IsTool: true } && WearHeld())
             _audio?.Play(Pick(ActionSounds.ToolBreaks), _viewPosition, 0.7f, Wobble());
@@ -8968,6 +8971,7 @@ public sealed class ClientHost : IDisposable
         // with --audio-check, which prints every peak: a punch at 0.8 was a third louder than the
         // cow it was landing on.
         _audio?.Play(Pick(CreatureSounds.Blows), quarry.Middle, 0.62f, Wobble());
+        InteractionParticleEffects.CreatureHit(_particles, quarry.Middle, _viewPosition);
 
         // Its voice, raised. ⚠ The hurt cry where a creature has one and its ordinary voice where
         // it does not — a table with a hole in it is quieter than a wrong entry.
@@ -9829,7 +9833,10 @@ public sealed class ClientHost : IDisposable
 
         var picked = _drops.Update(_streamer.World, (float)dt, collector, collector is null ? null : _inventory);
         if (picked > 0 && collector is { } where)
+        {
             _audio?.Play(Pick(ActionSounds.Pickup), where, 0.45f, Wobble());
+            InteractionParticleEffects.ItemPickup(_particles, where, picked);
+        }
         PlaceCamera();
         PumpStreaming();
 
@@ -10752,6 +10759,9 @@ public sealed class ClientHost : IDisposable
             }
 
             // The old green crust comes away, leaving ordinary rubble as the visible receipt.
+            var crust = _registry[_ids.MossyRubble];
+            InteractionParticleEffects.Brushed(
+                _particles, crust, hit.X, hit.Y, hit.Z, hit.Face);
             _streamer.EditBlock(hit.X, hit.Y, hit.Z, _ids.Rubble);
             var shard = _items.ByName(ExplorationRewards.ArchaeologyFind);
             Spill(new ItemStack(shard.Id, 1));
@@ -10873,6 +10883,9 @@ public sealed class ClientHost : IDisposable
             _audio?.Play(
                 Pick(kind == FluidKind.Lava ? ActionSounds.BucketFillLava : ActionSounds.BucketFillWater),
                 new Vector3(from.X + 0.5f, from.Y + 0.5f, from.Z + 0.5f), 0.8f, Wobble());
+            var at = new Vector3(from.X + 0.5f, from.Y + 0.72f, from.Z + 0.5f);
+            if (kind == FluidKind.Lava) InteractionParticleEffects.LavaSplash(_particles, at);
+            else InteractionParticleEffects.WaterSplash(_particles, at);
             return true;
         }
 
@@ -10894,6 +10907,8 @@ public sealed class ClientHost : IDisposable
             _audio?.Play(
                 Pick(ActionSounds.BucketEmptyWater),
                 new Vector3(aim.X + 0.5f, aim.Y + 0.5f, aim.Z + 0.5f), 0.8f, Wobble());
+            InteractionParticleEffects.WaterSplash(
+                _particles, new Vector3(aim.X + 0.5f, aim.Y + 0.8f, aim.Z + 0.5f));
             return true;
         }
 
@@ -10909,6 +10924,9 @@ public sealed class ClientHost : IDisposable
         _audio?.Play(
             Pick(pouring == FluidKind.Lava ? ActionSounds.BucketEmptyLava : ActionSounds.BucketEmptyWater),
             new Vector3(px + 0.5f, py + 0.5f, pz + 0.5f), 0.8f, Wobble());
+        var pouredAt = new Vector3(px + 0.5f, py + 0.72f, pz + 0.5f);
+        if (pouring == FluidKind.Lava) InteractionParticleEffects.LavaSplash(_particles, pouredAt);
+        else InteractionParticleEffects.WaterSplash(_particles, pouredAt);
         return true;
     }
 
@@ -10946,7 +10964,10 @@ public sealed class ClientHost : IDisposable
         var above = _streamer.World.GetBlock(hit.X, hit.Y + 1, hit.Z);
         if (!_registry[above].Replaceable) return false;
 
+        var soil = _registry[here];
         _streamer.EditBlock(hit.X, hit.Y, hit.Z, _registry.ByName("farmland").Id);
+        InteractionParticleEffects.Tilled(
+            _particles, soil, new Vector3(hit.X + 0.5f, hit.Y + 1.02f, hit.Z + 0.5f));
 
         // ⚠ A hoe wears out tilling, exactly as a pickaxe wears out digging. Same call the mining
         // path makes, same snap when it goes — without it the one tool in the game with a single
@@ -10985,6 +11006,9 @@ public sealed class ClientHost : IDisposable
         _streamer.EditBlock(hit.X, hit.Y + 1, hit.Z, planted);
 
         _inventory.SpendHeld();
+        InteractionParticleEffects.Planted(
+            _particles, _registry[ground],
+            new Vector3(hit.X + 0.5f, hit.Y + 1.02f, hit.Z + 0.5f));
         PlaySound(
             _registry[planted], SoundEvent.Place,
             new Vector3(hit.X + 0.5f, hit.Y + 1.5f, hit.Z + 0.5f), 0.6f);
@@ -11012,6 +11036,9 @@ public sealed class ClientHost : IDisposable
         _streamer.EditBlock(hit.X, hit.Y + 1, hit.Z, planted);
 
         _inventory.SpendHeld();
+        InteractionParticleEffects.Planted(
+            _particles, _registry[ground],
+            new Vector3(hit.X + 0.5f, hit.Y + 1.02f, hit.Z + 0.5f));
         PlaySound(
             _registry[planted], SoundEvent.Place,
             new Vector3(hit.X + 0.5f, hit.Y + 1.5f, hit.Z + 0.5f), 0.6f);
@@ -11045,6 +11072,8 @@ public sealed class ClientHost : IDisposable
             }
         }
 
+        var pumpkin = _registry[_streamer.World.GetBlock(hit.X, hit.Y, hit.Z)];
+        _particles.Chip(pumpkin, hit.X, hit.Y, hit.Z, hit.Face, 9);
         _streamer.EditBlock(hit.X, hit.Y, hit.Z, carved[best]);
 
         var here = new Vector3(hit.X + 0.5f, hit.Y + 0.5f, hit.Z + 0.5f);
@@ -11067,6 +11096,7 @@ public sealed class ClientHost : IDisposable
         if (!Foraging.TryPick(_registry, block, _growthRandom.NextDouble(), out var becomes, out var count))
             return;
 
+        var ripe = _registry[block];
         _streamer.EditBlock(x, y, z, becomes);
 
         var here = new Vector3(x + 0.5f, y + 0.5f, z + 0.5f);
@@ -11074,6 +11104,7 @@ public sealed class ClientHost : IDisposable
         if (!kept.IsEmpty) _drops.Drop(kept, here);
 
         _audio?.Play(Pick(ActionSounds.BerryPick), here, 0.8f, Wobble());
+        InteractionParticleEffects.Harvested(_particles, ripe, here);
     }
 
     /// <summary>Hurries a growing crop along.</summary>
@@ -11092,7 +11123,8 @@ public sealed class ClientHost : IDisposable
         _streamer.EditBlock(hit.X, hit.Y, hit.Z, _growth.Next(crop));
         _inventory.SpendHeld();
 
-        _particles.Puff(_registry[crop], new Vector3(hit.X + 0.5f, hit.Y + 0.5f, hit.Z + 0.5f), 8);
+        InteractionParticleEffects.Grew(
+            _particles, new Vector3(hit.X + 0.5f, hit.Y + 0.12f, hit.Z + 0.5f), 10);
         PlaySound(
             _registry[crop], SoundEvent.Place,
             new Vector3(hit.X + 0.5f, hit.Y + 0.5f, hit.Z + 0.5f), 0.6f);
@@ -11176,6 +11208,7 @@ public sealed class ClientHost : IDisposable
             if (!kept.IsEmpty) _drops.Drop(kept, here + new Vector3(0f, 0.6f, 0f));
 
             _audio?.Play(Pick(ActionSounds.ComposterEmpty), here, 0.7f, Wobble());
+            InteractionParticleEffects.Composted(_particles, here, ready: true);
             return;
         }
 
@@ -11192,10 +11225,12 @@ public sealed class ClientHost : IDisposable
             _audio?.Play(
                 Pick(done ? ActionSounds.ComposterReady : ActionSounds.ComposterRaise),
                 here, 0.65f, Wobble());
+            InteractionParticleEffects.Composted(_particles, here, done);
         }
         else
         {
             _audio?.Play(Pick(ActionSounds.ComposterFill), here, 0.6f, Wobble());
+            InteractionParticleEffects.Composted(_particles, here, ready: false);
         }
     }
 
@@ -11247,6 +11282,7 @@ public sealed class ClientHost : IDisposable
         WearAnvil(x, y, z);
 
         _audio?.Play(Pick(ActionSounds.AnvilUse), here, 0.9f, Wobble());
+        InteractionParticleEffects.MetalWorked(_particles, here);
         Notice($"mended for {spent} {_items[material].Label}", type);
     }
 
@@ -11308,6 +11344,7 @@ public sealed class ClientHost : IDisposable
         _inventory.SetHeld(upgraded);
 
         _audio?.Play(Pick(ActionSounds.AnvilUse), here, 0.9f, Wobble());
+        InteractionParticleEffects.MetalWorked(_particles, here);
         Notice($"forged up for one {_items[paidWith].Label}", _items[upgraded.Item]);
     }
 
@@ -11539,6 +11576,9 @@ public sealed class ClientHost : IDisposable
             PlaySound(
                 _registry[whole], SoundEvent.Place,
                 new Vector3(hit.X + 0.5f, hit.Y + 0.5f, hit.Z + 0.5f), 0.85f);
+            InteractionParticleEffects.BlockPlaced(
+                _particles, _registry[whole],
+                new Vector3(hit.X + 0.5f, hit.Y + 1.01f, hit.Z + 0.5f));
             return true;
         }
 
@@ -11664,6 +11704,8 @@ public sealed class ClientHost : IDisposable
         else _inventory.SpendHeld();
 
         PlaySound(_registry[block], SoundEvent.Place, new Vector3(x + 0.5f, y + 0.5f, z + 0.5f), 0.85f);
+        InteractionParticleEffects.BlockPlaced(
+            _particles, _registry[block], new Vector3(x + 0.5f, y + 1.01f, z + 0.5f));
         return true;
     }
 

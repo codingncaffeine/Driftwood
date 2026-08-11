@@ -648,7 +648,22 @@ public static class StarterBlocks
     public const ushort LayerStarKey = LayerArrow + 6;
     public const ushort LayerStarheart = LayerArrow + 7;
 
-    public const int LayerCount = LayerStarheart + 1;
+    /// <summary>
+    /// The shared semantic-particle alphabet. These are white owned shapes tinted at emission time,
+    /// so interaction feedback and nineteen future spells do not need one atlas tile per colour.
+    /// </summary>
+    /// <remarks>
+    /// Appended after every gameplay layer so old pack mappings and saved layer references keep
+    /// their numbers. The paths in <c>BlockTextureSet</c> let a pack replace the shape while the
+    /// simulation continues to own colour, motion and lifetime.
+    /// </remarks>
+    public const ushort LayerParticleSpark = LayerStarheart + 1;
+    public const ushort LayerParticleSoft = LayerStarheart + 2;
+    public const ushort LayerParticleRune = LayerStarheart + 3;
+    public const ushort LayerParticleHeart = LayerStarheart + 4;
+    public const ushort LayerParticleBubble = LayerStarheart + 5;
+
+    public const int LayerCount = LayerParticleBubble + 1;
 
     /// <summary>One anvil's name, by how worn it is and which way it lies.</summary>
     /// <remarks>

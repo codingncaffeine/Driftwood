@@ -239,6 +239,25 @@ makes the ladder a choice: gold is quicker than iron and reaches less far.
 `--audit` walks the whole tree from empty hands and refuses to pass if anything has become
 unreachable, which is what stops a recipe change quietly orphaning half the game.
 
+## Particles and interaction feedback
+
+The fixed 4,096-particle pool now carries two related visual languages. Physical debris still uses
+random crops of the material's own texture, so mining stone throws tiny pieces of that exact stone;
+breaking, placing, tilling, planting, harvesting and brushing all inherit the right material without
+a colour table. Water/lava buckets, pickups, creature hits/feeding/shearing, bonemeal, composting and
+metalworking add restrained semantic punctuation only after the underlying action succeeds.
+
+Five small pack-aware owned shapes—spark, soft mote, broken rune, heart and bubble—add tint, spin,
+growth, drag and world-lit alpha or scarce self-lit additive rendering without allocating or growing
+the pool. Emitters compose those shapes as sprays, spheres, rings, trails and columns. Sustained
+effects carry fractional rate between simulation steps, so the same elapsed second emits the same
+amount at 30 or 200 fps.
+
+The future P10.5 magic runtime already has a semantic particle catalogue for its exact 19 spells:
+cast, travel, impact, sustain and end events name a spell, two positions and current Rank I–IV. The
+renderer does not know spell names. This lets heals, drains, shields, binds, summons, elemental hits
+and Gateway Rift share one bounded visual grammar when the authoritative spell/effect work lands.
+
 ## Fire and smoke
 
 Anything alight shows it. A torch has a wick, a campfire has a fire you could cook on, a furnace

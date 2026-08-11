@@ -600,6 +600,17 @@ public static class BlockTextureSet
         new("trial_key", "textures/item/trial_key.png", true),
         new("star_key", "", true),
         new("starheart", "", true),
+
+        // One small pack-aware particle alphabet. Faithless and other vanilla-shaped packs expose
+        // these exact families; Driftwood keeps original fallback pixels and only borrows the
+        // structural slot when a selected pack supplies it.
+        new("particle_spark", "textures/particle/glitter_0.png", true,
+            "textures/particle/critical_hit.png"),
+        new("particle_soft", "textures/particle/effect_0.png", true,
+            "textures/particle/generic_0.png"),
+        new("particle_rune", "textures/particle/portal_0.png", true),
+        new("particle_heart", "textures/particle/heart.png", true),
+        new("particle_bubble", "textures/particle/bubble.png", true),
     ];
 
     /// <summary>
@@ -1630,6 +1641,12 @@ public static class BlockTextureSet
             StarterBlocks.LayerTrialKey => TileGen.IconKey(1404, 178, 184, 188),
             StarterBlocks.LayerStarKey => TileGen.IconKey(1405, 104, 208, 220),
             StarterBlocks.LayerStarheart => TileGen.IconHeart(1406, 100, 220, 210),
+
+            StarterBlocks.LayerParticleSpark => TileGen.ParticleSpark(),
+            StarterBlocks.LayerParticleSoft => TileGen.ParticleSoft(),
+            StarterBlocks.LayerParticleRune => TileGen.ParticleRune(),
+            StarterBlocks.LayerParticleHeart => TileGen.ParticleHeart(),
+            StarterBlocks.LayerParticleBubble => TileGen.Bubble(),
 
             _ when layer >= StarterBlocks.LayerGateFirst
                    && layer < StarterBlocks.LayerGateFirst + 10 =>

@@ -52,6 +52,7 @@ public sealed class ParticleRenderer : IDisposable
         uniform sampler2DArray uBlocks;
         uniform vec3 uFogColor;
         uniform float uCutout;
+        uniform float uAdditive;
 
         out vec4 FragColor;
 
@@ -65,7 +66,13 @@ public sealed class ParticleRenderer : IDisposable
             if (uCutout > 0.5 && texel.a < 0.5) discard;
             if (texel.a < 0.02) discard;
 
-            FragColor = vec4(mix(texel.rgb * vLight.rgb, uFogColor, vFog), vLight.a * texel.a);
+            vec3 coloured = texel.rgb * vLight.rgb;
+            // Additive light disappears into distant fog; adding the fog colour itself once per
+            // particle would make a portal turn into a white square at the horizon.
+            vec3 fogged = uAdditive > 0.5
+                ? coloured * (1.0 - vFog)
+                : mix(coloured, uFogColor, vFog);
+            FragColor = vec4(fogged, vLight.a * texel.a);
         }
         """;
 
@@ -148,13 +155,11 @@ public sealed class ParticleRenderer : IDisposable
         var right = Vector3.Normalize(Vector3.Cross(cameraForward, Vector3.UnitY));
         var up = Vector3.Cross(right, cameraForward);
 
-        const float crop = 1f / ParticleSystem.CropsPerAxis;
         var at = 0;
 
-        // ⛳ TWO PASSES OUT OF ONE BUFFER, the debris first and everything that blends after it, so
-        // a chip still writes depth and a flame still shows through the smoke in front of it. The
-        // second group is written after the first and drawn as a range, exactly the way the chunk
-        // mesher hands water to its own pass.
+        // ⛳ THREE PASSES OUT OF ONE BUFFER: solid debris, ordinary alpha, then scarce additive
+        // glints. A chip still writes depth, smoke layers correctly, and magic can make light
+        // without turning every interaction puff into neon.
         var solid = 0;
         foreach (var p in live)
         {
@@ -166,12 +171,20 @@ public sealed class ParticleRenderer : IDisposable
         var blended = 0;
         foreach (var p in live)
         {
-            if (p.Look == ParticleLook.Debris) continue;
+            if (p.Look is ParticleLook.Debris or ParticleLook.Glow) continue;
             Quad(p);
             blended++;
         }
 
-        DrawnParticles = solid + blended;
+        var additive = 0;
+        foreach (var p in live)
+        {
+            if (p.Look != ParticleLook.Glow) continue;
+            Quad(p);
+            additive++;
+        }
+
+        DrawnParticles = solid + blended + additive;
 
         _shader.Use();
         _shader.SetMatrix4("uViewProj", viewProj);
@@ -189,6 +202,7 @@ public sealed class ParticleRenderer : IDisposable
         if (solid > 0)
         {
             _shader.SetFloat("uCutout", 1f);
+            _shader.SetFloat("uAdditive", 0f);
             _gl.DrawElements(
                 PrimitiveType.Triangles, (uint)(solid * 6), DrawElementsType.UnsignedInt, (void*)0);
         }
@@ -200,6 +214,7 @@ public sealed class ParticleRenderer : IDisposable
             // column of smoke reads as a single flat card. And the state goes back afterwards —
             // everything else in this frame is drawn expecting depth writes on.
             _shader.SetFloat("uCutout", 0f);
+            _shader.SetFloat("uAdditive", 0f);
             _gl.Enable(EnableCap.Blend);
             _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
             _gl.DepthMask(false);
@@ -212,13 +227,32 @@ public sealed class ParticleRenderer : IDisposable
             _gl.Disable(EnableCap.Blend);
         }
 
+        if (additive > 0)
+        {
+            _shader.SetFloat("uCutout", 0f);
+            _shader.SetFloat("uAdditive", 1f);
+            _gl.Enable(EnableCap.Blend);
+            _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.One);
+            _gl.DepthMask(false);
+
+            _gl.DrawElements(
+                PrimitiveType.Triangles, (uint)(additive * 6), DrawElementsType.UnsignedInt,
+                (void*)(nint)((solid + blended) * 6 * sizeof(uint)));
+
+            _gl.DepthMask(true);
+            _gl.Disable(EnableCap.Blend);
+        }
+
         _gl.BindVertexArray(0);
 
         void Quad(in Particle p)
         {
             // ⛳ Fire makes its own light and must not be dimmed by the cave it is in — it is the
             // thing lighting the cave. Smoke and debris take the light where they stand.
-            var light = p.Look == ParticleLook.Flame ? Vector3.One : lightAt(p.Position);
+            var light = p.Look is ParticleLook.Flame or ParticleLook.Glow
+                ? Vector3.One
+                : lightAt(p.Position);
+            light *= new Vector3(p.Tint.X, p.Tint.Y, p.Tint.Z);
 
             // Thinning rather than switching off, which is the whole difference between smoke
             // dissipating and smoke being deleted. Flame goes faster than linear so a tongue is
@@ -228,17 +262,25 @@ public sealed class ParticleRenderer : IDisposable
             {
                 ParticleLook.Flame => MathF.Sqrt(life),
                 ParticleLook.Smoke => life * life * 0.75f,
+                ParticleLook.Soft => MathF.Min(1f, p.Age * 8f) * life * life,
+                ParticleLook.Glow => MathF.Min(1f, p.Age * 10f) * MathF.Sqrt(life),
                 _ => 1f,
-            };
+            } * p.Tint.W;
 
-            var u = p.CropX * crop;
-            var v = p.CropY * crop;
+            var crop = p.FullTile ? 1f : 1f / ParticleSystem.CropsPerAxis;
+            var u = p.FullTile ? 0f : p.CropX * crop;
+            var v = p.FullTile ? 0f : p.CropY * crop;
+
+            var cosine = MathF.Cos(p.Rotation);
+            var sine = MathF.Sin(p.Rotation);
+            var particleRight = right * cosine + up * sine;
+            var particleUp = -right * sine + up * cosine;
 
             // Corners counter-clockwise seen from the camera, with the texture crop laid over them.
-            Write(p.Position - right * p.Size - up * p.Size, u, v + crop, p.Layer, light, alpha);
-            Write(p.Position + right * p.Size - up * p.Size, u + crop, v + crop, p.Layer, light, alpha);
-            Write(p.Position + right * p.Size + up * p.Size, u + crop, v, p.Layer, light, alpha);
-            Write(p.Position - right * p.Size + up * p.Size, u, v, p.Layer, light, alpha);
+            Write(p.Position - particleRight * p.Size - particleUp * p.Size, u, v + crop, p.Layer, light, alpha);
+            Write(p.Position + particleRight * p.Size - particleUp * p.Size, u + crop, v + crop, p.Layer, light, alpha);
+            Write(p.Position + particleRight * p.Size + particleUp * p.Size, u + crop, v, p.Layer, light, alpha);
+            Write(p.Position - particleRight * p.Size + particleUp * p.Size, u, v, p.Layer, light, alpha);
         }
 
         void Write(Vector3 position, float u, float v, ushort layer, Vector3 light, float alpha)

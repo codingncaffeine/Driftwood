@@ -23,7 +23,32 @@ public enum ParticleLook
 
     /// <summary>Smoke: blended, lit by the world, thinning and spreading as it goes.</summary>
     Smoke,
+
+    /// <summary>A tinted translucent mote: alpha blended and lit by the world.</summary>
+    Soft,
+
+    /// <summary>A tinted magical glint: additive and self-lit, used sparingly for legibility.</summary>
+    Glow,
 }
+
+/// <summary>
+/// One allocation-free particle recipe. Semantic effects compose these recipes into rings, trails,
+/// sprays and columns; the renderer never needs to know which spell or interaction asked for them.
+/// </summary>
+public readonly record struct ParticleRecipe(
+    ushort Layer,
+    ParticleLook Look,
+    Vector4 Tint,
+    float Size,
+    float Life,
+    float SizeJitter = 0f,
+    float LifeJitter = 0f,
+    float Fall = 0f,
+    float Drag = 1.4f,
+    float Grow = 0f,
+    float Sway = 0f,
+    float Spin = 0f,
+    bool FullTile = true);
 
 /// <summary>One live particle: a crop of a block's texture, thrown and falling.</summary>
 public struct Particle
@@ -59,6 +84,11 @@ public struct Particle
     public byte CropY;
 
     /// <summary>
+    /// True for authored spark/rune/heart/bubble silhouettes; false for random material crops.
+    /// </summary>
+    public bool FullTile;
+
+    /// <summary>
     /// Share of gravity this feels. One for anything thrown, a fraction for anything that drifts.
     /// </summary>
     /// <remarks>
@@ -69,6 +99,16 @@ public struct Particle
 
     /// <summary>How far it wanders sideways as it falls, in blocks a second.</summary>
     public float Sway;
+
+    /// <summary>Colour and opacity multiplied over the pack/fallback particle shape.</summary>
+    public Vector4 Tint;
+
+    /// <summary>Share of velocity shed per second. Per particle so a streak need not move like dust.</summary>
+    public float Drag;
+
+    /// <summary>Billboard rotation and angular velocity, in radians.</summary>
+    public float Rotation;
+    public float Spin;
 
     /// <summary>True on the frames it is resting on something.</summary>
     public bool Grounded;
@@ -108,7 +148,7 @@ public sealed class ParticleSystem
     private const float Gravity = 17f;
 
     /// <summary>Air resistance, as a share of speed shed per second.</summary>
-    private const float Drag = 1.4f;
+    private const float DefaultDrag = 1.4f;
 
     /// <summary>How much of its downward speed a chip keeps after hitting something.</summary>
     private const float Bounce = 0.22f;
@@ -158,9 +198,10 @@ public sealed class ParticleSystem
             }
 
             p.Velocity.Y -= Gravity * p.Fall * dt;
-            p.Velocity -= p.Velocity * MathF.Min(Drag * dt, 1f);
+            p.Velocity -= p.Velocity * MathF.Min(p.Drag * dt, 1f);
 
             if (p.Grow != 0f) p.Size = MathF.Max(0.004f, p.Size + p.Grow * dt);
+            if (p.Spin != 0f) p.Rotation += p.Spin * dt;
 
             Move(world, ref p, dt);
             i++;
@@ -179,7 +220,7 @@ public sealed class ParticleSystem
     }
 
     /// <summary>Chips off the face being struck, thrown back the way the blow came from.</summary>
-    public void Chip(BlockType type, int x, int y, int z, int face, int count = 3)
+    public void Chip(BlockType type, int x, int y, int z, int face, int count = 4)
     {
         var n = Faces.Normals[face];
         var normal = new Vector3(n.X, n.Y, n.Z);
@@ -317,6 +358,104 @@ public sealed class ParticleSystem
         }
     }
 
+    /// <summary>Emits one particle from a reusable recipe.</summary>
+    public void Emit(in ParticleRecipe recipe, Vector3 position, Vector3 velocity)
+    {
+        var size = MathF.Max(0.004f, recipe.Size + Signed() * recipe.SizeJitter);
+        var life = MathF.Max(0.03f, recipe.Life + Signed() * recipe.LifeJitter);
+        var spin = recipe.Spin == 0f ? 0f : Signed() * MathF.Abs(recipe.Spin);
+
+        Spawn(
+            recipe.Layer, position, velocity, size, life,
+            recipe.Fall, recipe.Sway, recipe.Look, recipe.Grow,
+            recipe.Tint, MathF.Max(0f, recipe.Drag), spin, recipe.FullTile);
+    }
+
+    /// <summary>A directed cone used for impacts, carving, smithing and material reactions.</summary>
+    public void Spray(
+        in ParticleRecipe recipe, Vector3 at, Vector3 normal, int count,
+        float speed, float spread = 0.65f, float radius = 0.05f)
+    {
+        normal = SafeNormal(normal, Vector3.UnitY);
+        Basis(normal, out var across, out var up);
+
+        for (var i = 0; i < count; i++)
+        {
+            var side = across * Signed() + up * Signed();
+            var direction = SafeNormal(normal + side * spread, normal);
+            Emit(
+                recipe,
+                at + across * Signed() * radius + up * Signed() * radius,
+                direction * speed * (0.55f + Unit() * 0.75f));
+        }
+    }
+
+    /// <summary>An omnidirectional burst used for hits, ends and compact spell impacts.</summary>
+    public void Sphere(
+        in ParticleRecipe recipe, Vector3 at, int count, float speed, float radius = 0f,
+        float upward = 0f)
+    {
+        for (var i = 0; i < count; i++)
+        {
+            var direction = SafeNormal(
+                new Vector3(Signed(), Signed() + upward, Signed()), Vector3.UnitY);
+            Emit(recipe, at + direction * radius * Unit(), direction * speed * (0.55f + Unit() * 0.75f));
+        }
+    }
+
+    /// <summary>
+    /// A world-space ring. Positive speed travels outward; negative speed collapses inward. Rings
+    /// make shields, roots, summons and portal ownership readable without a dedicated mesh.
+    /// </summary>
+    public void Ring(
+        in ParticleRecipe recipe, Vector3 at, Vector3 normal, int count,
+        float radius, float speed = 0f)
+    {
+        normal = SafeNormal(normal, Vector3.UnitY);
+        Basis(normal, out var across, out var up);
+        var phase = Unit() * MathF.Tau;
+
+        for (var i = 0; i < count; i++)
+        {
+            var angle = phase + MathF.Tau * i / Math.Max(count, 1);
+            var radial = across * MathF.Cos(angle) + up * MathF.Sin(angle);
+            Emit(recipe, at + radial * radius, radial * speed);
+        }
+    }
+
+    /// <summary>A sampled line for direct streaks, drains and projectile trails.</summary>
+    public void Trail(
+        in ParticleRecipe recipe, Vector3 from, Vector3 to, int count,
+        float jitter = 0.03f, float drift = 0f)
+    {
+        if (count <= 0) return;
+        var line = to - from;
+        var direction = SafeNormal(line, Vector3.UnitY);
+        Basis(direction, out var across, out var up);
+
+        for (var i = 0; i < count; i++)
+        {
+            var t = count == 1 ? 0.5f : i / (float)(count - 1);
+            var offset = across * Signed() * jitter + up * Signed() * jitter;
+            Emit(recipe, from + line * t + offset, direction * drift);
+        }
+    }
+
+    /// <summary>Rising motes distributed through a bounded cylinder.</summary>
+    public void Column(
+        in ParticleRecipe recipe, Vector3 at, int count, float radius, float height, float rise)
+    {
+        for (var i = 0; i < count; i++)
+        {
+            var angle = Unit() * MathF.Tau;
+            var distance = MathF.Sqrt(Unit()) * radius;
+            var position = at + new Vector3(
+                MathF.Cos(angle) * distance, Unit() * height, MathF.Sin(angle) * distance);
+            var velocity = new Vector3(Signed() * 0.08f, rise * (0.65f + Unit() * 0.7f), Signed() * 0.08f);
+            Emit(recipe, position, velocity);
+        }
+    }
+
     private void Spawn(
         BlockType type, Vector3 position, Vector3 velocity, float size, float life,
         float fall = 1f, float sway = 0f) =>
@@ -327,13 +466,17 @@ public sealed class ParticleSystem
     private void Spawn(
         ushort layer, Vector3 position, Vector3 velocity, float size, float life,
         float fall = 1f, float sway = 0f,
-        ParticleLook look = ParticleLook.Debris, float grow = 0f)
+        ParticleLook look = ParticleLook.Debris, float grow = 0f,
+        Vector4 tint = default, float drag = DefaultDrag, float spin = 0f,
+        bool fullTile = false)
     {
         if (Count >= Capacity)
         {
             Refused++;
             return;
         }
+
+        if (tint == default) tint = Vector4.One;
 
         _particles[Count++] = new Particle
         {
@@ -345,10 +488,15 @@ public sealed class ParticleSystem
             Layer = layer,
             CropX = (byte)(NextBits() % CropsPerAxis),
             CropY = (byte)(NextBits() % CropsPerAxis),
+            FullTile = fullTile,
             Fall = fall,
             Sway = sway,
             Look = look,
             Grow = grow,
+            Tint = tint,
+            Drag = drag,
+            Rotation = Unit() * MathF.Tau,
+            Spin = spin,
         };
     }
 
@@ -420,6 +568,16 @@ public sealed class ParticleSystem
     }
 
     private bool Blocked(VoxelWorld world, Vector3 at) => BlockShapes.Inside(_shapes, world, at);
+
+    private static Vector3 SafeNormal(Vector3 value, Vector3 fallback) =>
+        value.LengthSquared() > 1e-8f ? Vector3.Normalize(value) : fallback;
+
+    private static void Basis(Vector3 normal, out Vector3 across, out Vector3 up)
+    {
+        var helper = MathF.Abs(normal.Y) < 0.92f ? Vector3.UnitY : Vector3.UnitX;
+        across = Vector3.Normalize(Vector3.Cross(normal, helper));
+        up = Vector3.Normalize(Vector3.Cross(across, normal));
+    }
 
     /// <summary>0 to 1.</summary>
     private float Unit() => (NextBits() & 0xFFFFFF) / (float)0x1000000;
