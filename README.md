@@ -258,6 +258,14 @@ cast, travel, impact, sustain and end events name a spell, two positions and cur
 renderer does not know spell names. This lets heals, drains, shields, binds, summons, elemental hits
 and Gateway Rift share one bounded visual grammar when the authoritative spell/effect work lands.
 
+Those same 19 semantic ids now own 19 original painted icons. IconForge crops only the clean 80×80
+picture wells from the local source sheet into a compact embedded atlas, which runtime samples with
+nearest-neighbour filtering; decorative frames and printed labels never enter the texture array. The
+future spellbook can put its own font, rank and cooldown treatment around the unchanged paintings.
+Gateway Rift is reserved for a true floating world-space vortex—a breathing elliptical rim,
+counter-rotating polar swirls, inward motes and a dark depth core—rather than stretching its inventory
+icon into the world.
+
 ## Fire and smoke
 
 Anything alight shows it. A torch has a wick, a campfire has a fire you could cook on, a furnace

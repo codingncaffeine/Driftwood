@@ -4,13 +4,13 @@ using Driftwood.Core.Textures;
 namespace Driftwood.Tools.IconForge;
 
 /// <summary>
-/// Turns the supplied artwork into the two things the repository actually ships: a Windows icon
-/// for the executable and a web-sized banner for the readme.
+/// Turns supplied source artwork into the compact derivatives the repository actually ships: a
+/// Windows icon, a web-sized banner, and the borderless nineteen-spell atlas.
 /// </summary>
 /// <remarks>
-/// <para>A build tool rather than a step in the game's build. The originals are large, they change
-/// about once a year, and their derivatives are committed — so this runs when the art changes and
-/// never otherwise.</para>
+/// <para>A build tool rather than a step in the game's build. The originals are large or carry
+/// source layout, and their derivatives are committed — so this runs when art changes and never
+/// otherwise.</para>
 /// <para>Written in C# against our own PNG codec rather than as a shell script, which is a scar:
 /// a hand-rolled icon writer using PowerShell's BinaryWriter silently emitted a short final frame,
 /// the Win32 resource loader rejected the whole file, and MSBuild reported zero errors while the
@@ -42,6 +42,8 @@ public static class Program
 
     public static int Main(string[] args)
     {
+        if (args.Length > 0 && args[0] == "--spell-icons") return BuildSpellIcons(args);
+
         var root = args.Length > 0 ? args[0] : FindRepositoryRoot();
         var assets = Path.Combine(root, "assets");
 
@@ -106,6 +108,65 @@ public static class Program
     {
         if (Png.TryDecode(File.ReadAllBytes(path), out var image, out var error)) return image;
         throw new InvalidDataException($"{Path.GetFileName(path)}: {error}");
+    }
+
+    /// <summary>
+    /// Derives the compact runtime atlas from the user's local labelled spell sheet.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ The source is original Driftwood art, but it is still source-layout material: large,
+    /// framed and lettered. Only the nineteen reviewed picture wells belong in the executable. The
+    /// crop coordinates live in <see cref="SpellIconAtlas.Definitions"/>, which is also the runtime
+    /// spell ordering, so the derivation cannot quietly swap two pictures.
+    /// </remarks>
+    private static int BuildSpellIcons(string[] args)
+    {
+        if (args.Length != 3)
+        {
+            Console.Error.WriteLine("iconforge: --spell-icons needs <source.png> <output.png>");
+            return 1;
+        }
+
+        var source = Decode(args[1]);
+        if (source.Width != SpellIconAtlas.OriginalSourceWidth
+            || source.Height != SpellIconAtlas.OriginalSourceHeight)
+        {
+            Console.Error.WriteLine(
+                $"iconforge: spell source is {source.Width}×{source.Height}, wanted "
+                + $"{SpellIconAtlas.OriginalSourceWidth}×{SpellIconAtlas.OriginalSourceHeight}");
+            return 1;
+        }
+
+        var pixels = new byte[SpellIconAtlas.AtlasWidth * SpellIconAtlas.AtlasHeight * 4];
+        var definitions = SpellIconAtlas.Definitions;
+
+        for (var i = 0; i < definitions.Length; i++)
+        {
+            var crop = definitions[i];
+            if (crop.SourceX < 0 || crop.SourceY < 0
+                || crop.SourceX + SpellIconAtlas.CropSize > source.Width
+                || crop.SourceY + SpellIconAtlas.CropSize > source.Height)
+            {
+                Console.Error.WriteLine($"iconforge: '{crop.TextureName}' runs outside the source");
+                return 1;
+            }
+
+            var dx = i % SpellIconAtlas.Columns * SpellIconAtlas.CropSize;
+            var dy = i / SpellIconAtlas.Columns * SpellIconAtlas.CropSize;
+            for (var y = 0; y < SpellIconAtlas.CropSize; y++)
+            {
+                var from = ((crop.SourceY + y) * source.Width + crop.SourceX) * 4;
+                var to = ((dy + y) * SpellIconAtlas.AtlasWidth + dx) * 4;
+                Array.Copy(source.Pixels, from, pixels, to, SpellIconAtlas.CropSize * 4);
+            }
+        }
+
+        var output = new Image(SpellIconAtlas.AtlasWidth, SpellIconAtlas.AtlasHeight, pixels);
+        File.WriteAllBytes(args[2], Png.Encode(output));
+        Console.WriteLine(
+            $"wrote {args[2]} — {definitions.Length} clean {SpellIconAtlas.CropSize}px spell wells, "
+            + $"{output.Width}×{output.Height}");
+        return 0;
     }
 
     private static Image Crop(Image source, int x, int y, int width, int height)

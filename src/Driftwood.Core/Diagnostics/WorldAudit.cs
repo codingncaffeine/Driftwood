@@ -8752,7 +8752,12 @@ public static class WorldAudit
         (StarterBlocks.LayerParticleSoft, "particle_soft"),
         (StarterBlocks.LayerParticleRune, "particle_rune"),
         (StarterBlocks.LayerParticleHeart, "particle_heart"),
-        ((ushort)(StarterBlocks.LayerCount - 1), "particle_bubble"),
+        (StarterBlocks.LayerParticleBubble, "particle_bubble"),
+
+        // P10.5's approved original spell sheet follows the particle alphabet. The full crop table
+        // is checked separately; these pins make its first and true final layer visible here too.
+        (StarterBlocks.LayerFirstSpellIcon, "spell_holy_might"),
+        ((ushort)(StarterBlocks.LayerCount - 1), "spell_earth_elemental"),
     ];
 
     /// <summary>
@@ -8892,7 +8897,130 @@ public static class WorldAudit
 
         faults.AddRange(TextureCeilingSelfTest());
         faults.AddRange(PaintedArtSelfTest());
+        faults.AddRange(SpellIconSelfTest());
         faults.AddRange(BorrowedArtSelfTest());
+        return faults;
+    }
+
+    /// <summary>
+    /// Proves the nineteen approved pictures remain clean crops aligned to the semantic catalogue.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ The source is the user's original work. This check is therefore about integrity,
+    /// not provenance: the compact derived atlas must be present, the derivation recipe must retain
+    /// the reviewed source coordinates, and each semantic spell must reach the matching picture and
+    /// texture layer.</para>
+    /// <para>⛔ <b>Coordinates are pinned independently of the crop table.</b> Merely asking every
+    /// rectangle whether it fits would accept a one-pixel drift into the sheet's decorative border
+    /// or printed letters. These are the visually inspected 80×80 interiors; moving them is an art
+    /// review, not an incidental refactor.</para>
+    /// </remarks>
+    private static List<string> SpellIconSelfTest()
+    {
+        var faults = new List<string>();
+        var icons = SpellIconAtlas.Definitions;
+        var spells = SpellParticleEffects.Definitions;
+
+        if (!SpellIconAtlas.TryAtlasDimensions(out var atlasWidth, out var atlasHeight))
+        {
+            faults.Add($"the embedded clean spell atlas '{SpellIconAtlas.ResourceName}' is missing or unreadable");
+            return faults;
+        }
+
+        if (atlasWidth != SpellIconAtlas.AtlasWidth || atlasHeight != SpellIconAtlas.AtlasHeight)
+            faults.Add(
+                $"the clean spell atlas is {atlasWidth}×{atlasHeight}, wanted "
+                + $"{SpellIconAtlas.AtlasWidth}×{SpellIconAtlas.AtlasHeight}");
+
+        if (icons.Length != 19)
+            faults.Add($"the spell-icon crop table has {icons.Length} rows, not the locked 19");
+        if (icons.Length != spells.Length)
+            faults.Add($"the spell-icon table has {icons.Length} rows against {spells.Length} semantic spells");
+
+        ReadOnlySpan<(int X, int Y)> reviewed =
+        [
+            (120, 116), (391, 116), (586, 116), (781, 116), (120, 272),
+            (391, 272), (586, 272), (781, 272), (120, 428), (385, 428),
+            (586, 428), (781, 428), (781, 580), (120, 580), (385, 580),
+            (586, 580), (996, 428), (995, 580), (1206, 580),
+        ];
+
+        var hashes16 = new HashSet<string>(StringComparer.Ordinal);
+        for (var i = 0; i < icons.Length; i++)
+        {
+            var icon = icons[i];
+            if (i < spells.Length && icon.Id != spells[i].Id)
+                faults.Add($"spell-icon row {i} is {icon.Id}, while the semantic catalogue is {spells[i].Id}");
+
+            if (i < reviewed.Length && (icon.SourceX, icon.SourceY) != reviewed[i])
+                faults.Add(
+                    $"spell-icon row {i} moved to ({icon.SourceX},{icon.SourceY}); the reviewed clean crop is "
+                    + $"({reviewed[i].X},{reviewed[i].Y})");
+
+            if (icon.SourceX < 0 || icon.SourceY < 0
+                || icon.SourceX + SpellIconAtlas.CropSize > SpellIconAtlas.OriginalSourceWidth
+                || icon.SourceY + SpellIconAtlas.CropSize > SpellIconAtlas.OriginalSourceHeight)
+                faults.Add(
+                    $"spell-icon '{icon.TextureName}' runs outside the "
+                    + $"{SpellIconAtlas.OriginalSourceWidth}×{SpellIconAtlas.OriginalSourceHeight} source recipe");
+
+            var atlasX = i % SpellIconAtlas.Columns * SpellIconAtlas.CropSize;
+            var atlasY = i / SpellIconAtlas.Columns * SpellIconAtlas.CropSize;
+            if (atlasX + SpellIconAtlas.CropSize > atlasWidth
+                || atlasY + SpellIconAtlas.CropSize > atlasHeight)
+                faults.Add($"spell-icon '{icon.TextureName}' runs outside the compact atlas");
+
+            var layer = SpellIconAtlas.LayerFor(icon.Id);
+            if (layer != StarterBlocks.LayerFirstSpellIcon + i)
+                faults.Add($"spell-icon '{icon.TextureName}' maps to layer {layer}, wanted offset {i}");
+            if (!SpellIconAtlas.TryIdForLayer(layer, out var roundTrip) || roundTrip != icon.Id)
+                faults.Add($"spell-icon '{icon.TextureName}' does not round-trip through layer {layer}");
+            if (layer >= BlockTextureSet.Layers.Length
+                || BlockTextureSet.Layers[layer].Name != icon.TextureName)
+                faults.Add($"layer {layer} does not carry spell-icon name '{icon.TextureName}'");
+
+            foreach (var size in (ReadOnlySpan<int>)[16, 64])
+            {
+                var tile = SpellIconAtlas.Tile(icon.Id, size);
+                if (tile is null)
+                {
+                    faults.Add($"spell-icon '{icon.TextureName}' could not be cropped at {size}px");
+                    continue;
+                }
+
+                if (tile.Length != size * size * 4)
+                    faults.Add($"spell-icon '{icon.TextureName}' is {tile.Length} bytes at {size}px");
+                if (tile.Where((_, p) => (p & 3) == 3).Any(alpha => alpha < 255))
+                    faults.Add($"spell-icon '{icon.TextureName}' has clear pixels inside its picture well");
+
+                if (size == 16)
+                    hashes16.Add(Convert.ToHexString(
+                        System.Security.Cryptography.SHA256.HashData(tile)));
+            }
+
+            // None of the reviewed wells overlap. A duplicate rectangle could otherwise make two
+            // correct ids silently show the same picture while every bounds check above passes.
+            for (var j = 0; j < i; j++)
+            {
+                var other = icons[j];
+                var overlaps = icon.SourceX < other.SourceX + SpellIconAtlas.CropSize
+                    && icon.SourceX + SpellIconAtlas.CropSize > other.SourceX
+                    && icon.SourceY < other.SourceY + SpellIconAtlas.CropSize
+                    && icon.SourceY + SpellIconAtlas.CropSize > other.SourceY;
+                if (overlaps)
+                    faults.Add($"spell-icon '{icon.TextureName}' overlaps '{other.TextureName}' on the source sheet");
+            }
+        }
+
+        if (hashes16.Count != icons.Length)
+            faults.Add($"only {hashes16.Count} of {icons.Length} spell icons are distinct after the 16px crop");
+
+        if (StarterBlocks.LayerLastSpellIcon - StarterBlocks.LayerFirstSpellIcon + 1 != icons.Length)
+            faults.Add(
+                $"the spell layer run holds "
+                + $"{StarterBlocks.LayerLastSpellIcon - StarterBlocks.LayerFirstSpellIcon + 1}, "
+                + $"but the crop table holds {icons.Length}");
+
         return faults;
     }
 

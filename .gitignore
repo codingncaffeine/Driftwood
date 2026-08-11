@@ -42,3 +42,4 @@ Desktop.ini
 ## build or run time reads them. Keep them locally to regenerate after an art change.
 /assets/driftwood icon.png
 /assets/driftwood banner.png
+/assets/spell_icons_gitignore this.png

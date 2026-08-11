@@ -46,6 +46,13 @@
          seven cells, a white mask at 18% coverage. -->
     <EmbeddedResource Include="..\..\assets\bubbles.png" LogicalName="Driftwood.Core.bubbles.png" />
 
+    <!-- ⛳ The compact derivative of the user's original nineteen-spell sheet. IconForge copies
+         only the clean 80px picture wells into this atlas; the large source, its printed frames and
+         its labels stay local, and Driftwood draws every spell name with its own UI font. Embedding
+         the clean atlas gives the spellbook sharp pixels without shipping source-layout material. -->
+    <EmbeddedResource Include="..\..\assets\spell_icons.png"
+                      LogicalName="Driftwood.Core.spell-icons.png" />
+
     <!-- The five recordings Driftwood owns are the whole offline audio fallback. They live in the
          assembly so a single-file release never grows an assets folder; downloaded sound packs stay
          outside the executable under AppData and sparsely override these names. -->

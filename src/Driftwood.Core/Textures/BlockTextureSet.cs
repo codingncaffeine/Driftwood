@@ -611,6 +611,29 @@ public static class BlockTextureSet
         new("particle_rune", "textures/particle/portal_0.png", true),
         new("particle_heart", "textures/particle/heart.png", true),
         new("particle_bubble", "textures/particle/bubble.png", true),
+
+        // The user's original paintings. Only their clean square interiors are sampled; the sheet's
+        // labels and frames are intentionally absent because the spellbook draws type itself.
+        // Empty pack paths are honest: these are Driftwood spells, not renamed foreign items.
+        new("spell_holy_might",       "", false),
+        new("spell_quick_heal",       "", false),
+        new("spell_revive",           "", false),
+        new("spell_holy_shield",      "", false),
+        new("spell_root",             "", false),
+        new("spell_summon_bones",     "", false),
+        new("spell_animate_zombie",   "", false),
+        new("spell_fear",             "", false),
+        new("spell_draw_lifeforce",   "", false),
+        new("spell_leech",            "", false),
+        new("spell_lightning_streak", "", false),
+        new("spell_ignite",           "", false),
+        new("spell_tree_of_life",     "", false),
+        new("spell_spirit_wolf",      "", false),
+        new("spell_ice_shock",        "", false),
+        new("spell_fire_bolt",        "", false),
+        new("spell_gateway_rift",     "", false),
+        new("spell_snare",            "", false),
+        new("spell_earth_elemental",  "", false),
     ];
 
     /// <summary>
@@ -1215,6 +1238,18 @@ public static class BlockTextureSet
     /// <summary>Driftwood's own art for one layer.</summary>
     private static byte[] Own(int layer, int size)
     {
+        // The spell sheet is a crop atlas, not one image fitted into one layer. Resolve its
+        // contiguous layer run before the ordinary painted-single-image path below.
+        if (SpellIconAtlas.TryIdForLayer(layer, out var spell))
+        {
+            if (SpellIconAtlas.Tile(spell, size) is { } icon) return icon;
+
+            // A malformed assembly should still reach the title screen so its audit can explain
+            // the missing resource. This deliberately plain fallback is opaque like the real wells.
+            return TileGen.DetailUpscale(
+                TileGen.Speckle(2100 + (int)spell, 38, 30, 52, 18), size, layer);
+        }
+
         // ⛳ The painted ones go straight to the size the array is being built at, rather than
         // through a sixteen-pixel intermediate. They have real pixels to give and upscaling from 16
         // would throw all of them away — see PaintedArt. Falls through to the generator when a build

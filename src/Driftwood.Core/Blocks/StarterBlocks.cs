@@ -663,7 +663,19 @@ public static class StarterBlocks
     public const ushort LayerParticleHeart = LayerStarheart + 4;
     public const ushort LayerParticleBubble = LayerStarheart + 5;
 
-    public const int LayerCount = LayerParticleBubble + 1;
+    /// <summary>
+    /// The nineteen original spell paintings, in exactly the order of the semantic spell catalogue.
+    /// One contiguous run makes a spell id a stable layer offset without a second switch statement.
+    /// </summary>
+    /// <remarks>
+    /// Appended rather than inserted: worlds and texture packs already know every earlier layer by
+    /// number. The source sheet's frames and type are deliberately not layers; the spellbook uses
+    /// these picture wells and Driftwood's own font separately.
+    /// </remarks>
+    public const ushort LayerFirstSpellIcon = LayerParticleBubble + 1;
+    public const ushort LayerLastSpellIcon = LayerFirstSpellIcon + 18;
+
+    public const int LayerCount = LayerLastSpellIcon + 1;
 
     /// <summary>One anvil's name, by how worn it is and which way it lies.</summary>
     /// <remarks>
