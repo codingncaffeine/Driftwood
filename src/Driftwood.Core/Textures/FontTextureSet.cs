@@ -20,6 +20,8 @@ public static class FontTextureSet
     private const int MaximumDefinitions = 32;
     private const int MaximumProviders = 512;
     private const int MaximumGrid = 256;
+    private const int MaximumDefinitionBytes = 4 * 1024 * 1024;
+    private const int MaximumBitmapBytes = 64 * 1024 * 1024;
 
     public sealed record Result(
         byte[][] Tiles,
@@ -58,7 +60,14 @@ public static class FontTextureSet
         // providers have had first say. font.png is a measured legacy alias used by older packs.
         foreach (var legacy in new[] { "textures/font/ascii.png", "textures/font/font.png" })
         {
-            var raw = pack.TryReadAssetBytes(legacy, out var from);
+            byte[]? raw;
+            string from;
+            try { raw = pack.TryReadAssetBytes(legacy, MaximumBitmapBytes, out from); }
+            catch (InvalidDataException limitError)
+            {
+                faults.Add($"{legacy}: {limitError.Message}");
+                continue;
+            }
             if (raw is null) continue;
 
             if (!Png.TryDecode(raw, out var image, out var error))
@@ -116,7 +125,14 @@ public static class FontTextureSet
             var resource = key.EndsWith(".json", StringComparison.OrdinalIgnoreCase)
                 ? key
                 : key + ".json";
-            var raw = pack.TryReadResourceBytes(resource, "font", out var from);
+            byte[]? raw;
+            string from;
+            try { raw = pack.TryReadResourceBytes(resource, "font", MaximumDefinitionBytes, out from); }
+            catch (InvalidDataException error)
+            {
+                faults.Add($"{resource}: {error.Message}");
+                return;
+            }
             if (raw is null) return;
 
             JsonDocument json;
@@ -218,7 +234,14 @@ public static class FontTextureSet
                 return;
             }
 
-            var raw = pack.TryReadResourceBytes(file, "textures", out var from);
+            byte[]? raw;
+            string from;
+            try { raw = pack.TryReadResourceBytes(file, "textures", MaximumBitmapBytes, out from); }
+            catch (InvalidDataException limitError)
+            {
+                faults.Add($"{definition}: bitmap '{file}' was refused ({limitError.Message})");
+                return;
+            }
             if (raw is null)
             {
                 faults.Add($"{definition}: bitmap '{file}' is missing");

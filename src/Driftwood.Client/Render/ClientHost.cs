@@ -1539,6 +1539,25 @@ public sealed class ClientHost : IDisposable
         // it is built here rather than beside it: everything it needs is an id the blocks have
         // already handed out.
         _items = StarterItems.Register(registry);
+
+        // Standard Java model data is presentation, not world physics. The resolver swaps visual
+        // quads after both registries exist, preserves every built-in collision box, and refreshes
+        // placeable item icons from the resulting block shapes. Sparse/malformed definitions fall
+        // back per block or item rather than making the selected pack an all-or-nothing operation.
+        if (_packPath is not null)
+        {
+            using var modelPack = TexturePack.Open(_packPath);
+            if (modelPack?.Dialect is PackDialect.Java or PackDialect.JavaLegacy)
+            {
+                var models = new JavaPackModels(modelPack);
+                var applied = models.Apply(registry, _items);
+                Console.WriteLine($"models      {applied.BlocksApplied} blocks, {applied.ItemsApplied} items, "
+                                  + $"{applied.FilesRead} definitions"
+                                  + (applied.Issues.Count > 0 ? $", {applied.Issues.Count} omissions" : ""));
+                foreach (var issue in applied.Issues.Take(4)) Console.WriteLine($"  model      {issue}");
+            }
+        }
+
         _dropTable = StarterItems.Drops(registry, _items);
         _creatureDropTable = StarterItems.Creatures(_items);
         _book = StarterRecipes.Build(_items);
@@ -2823,6 +2842,7 @@ public sealed class ClientHost : IDisposable
         _padRebinding = null;
         var count = _hudScreen.TabNames.Length;
         if (OnTab(GameTab.Skins)) CancelSkinNetwork();
+        if (OnTab(GameTab.Packs)) CancelPackBrowsing();
         if (_hudScreen.Kind == HudScreenKind.Game) _tabRow[_hudScreen.Tab] = _hudScreen.Selected;
         _hudScreen.Tab = (_hudScreen.Tab + Math.Sign(by) + count) % count;
         if (_hudScreen.Kind == HudScreenKind.Game) _hudScreen.Selected = _tabRow[_hudScreen.Tab];
@@ -2886,6 +2906,8 @@ public sealed class ClientHost : IDisposable
                 _padRebinding = null;
                 var leavingSkins = OnTab(GameTab.Skins) && at.Value.Index != _hudScreen.Tab;
                 if (leavingSkins) CancelSkinNetwork();
+                var leavingPacks = OnTab(GameTab.Packs) && at.Value.Index != _hudScreen.Tab;
+                if (leavingPacks) CancelPackBrowsing();
                 if (_hudScreen.Kind == HudScreenKind.Game) _tabRow[_hudScreen.Tab] = _hudScreen.Selected;
                 _hudScreen.Tab = at.Value.Index;
                 if (_hudScreen.Kind == HudScreenKind.Game) _hudScreen.Selected = _tabRow[_hudScreen.Tab];
@@ -3501,8 +3523,39 @@ public sealed class ClientHost : IDisposable
         }
 
         _hudScreen.Selected = at;
+        if (OnTab(GameTab.Packs) && _hudScreen.Rows[at].Pane == MenuPane.Detail)
+            _hudScreen.PackDetailsOpen = true;
         ShowSelectedRow();
         if (OnTab(GameTab.Skins)) PreviewSkinAtRow();
+    }
+
+    private void FocusPackDetails()
+    {
+        var at = _hudScreen.Rows.FindIndex(row => row.Pane == MenuPane.Detail
+            && !row.Heading && !row.Action);
+        if (at < 0) at = _hudScreen.Rows.FindIndex(row => row.Pane == MenuPane.Detail && !row.Heading);
+        if (at < 0) return;
+        _hudScreen.Selected = at;
+        _hudScreen.PackDetailsOpen = true;
+        _hudScreen.PackDetailScroll = 0;
+        ShowSelectedRow();
+    }
+
+    private void FocusPackCard()
+    {
+        var at = -1;
+        if (_packBrowse && _selectedRemotePack is { } remote)
+            at = _hudScreen.Rows.FindIndex(row => row.Pane == MenuPane.List
+                && _remotePackRows.TryGetValue(row.Label, out var candidate) && candidate.Id == remote.Id);
+        else if (_selectedPackName == "")
+            at = _hudScreen.Rows.FindIndex(row => row.Label == BuiltInPackRow);
+        else if (_selectedPackPath is { Length: > 0 })
+            at = _hudScreen.Rows.FindIndex(row => row.Pane == MenuPane.List
+                && _installedPackRows.TryGetValue(row.Label, out var candidate)
+                && string.Equals(candidate.Path, _selectedPackPath, StringComparison.OrdinalIgnoreCase));
+        if (at < 0) at = _hudScreen.Rows.FindIndex(row => row.Pane == MenuPane.List && !row.Heading);
+        if (at >= 0) _hudScreen.Selected = at;
+        ShowSelectedRow();
     }
 
     /// <summary>The names across the top of each screen. Lower case, because the font has both.</summary>
@@ -3761,6 +3814,7 @@ public sealed class ClientHost : IDisposable
         if (_hudScreen.Kind is HudScreenKind.Start or HudScreenKind.Death) return;
 
         if (OnTab(GameTab.Skins)) CancelSkinNetwork();
+        if (OnTab(GameTab.Packs)) CancelPackBrowsing();
 
         if (_atStartScreen && _hudScreen.Kind == HudScreenKind.Game)
         {
@@ -4210,7 +4264,8 @@ public sealed class ClientHost : IDisposable
                 _hudScreen.Rows.Add(new MenuRow("controller", Heading: true));
                 _hudScreen.Rows.Add(new MenuRow(
                     "controller input", OnOff(_settings.ControllerEnabled),
-                    Note: "discovery begins after the first frame, never while the window is starting"));
+                    Note: "discovery begins after the first frame, never while the window is starting",
+                    Control: MenuControl.Checkbox, ControlAmount: _settings.ControllerEnabled ? 1f : 0f));
                 _hudScreen.Rows.Add(new MenuRow(
                     "device", _controller.ActiveName,
                     Note: _controller.Started
@@ -4223,14 +4278,20 @@ public sealed class ClientHost : IDisposable
                 _hudScreen.Rows.Add(new MenuRow("feel", Heading: true));
                 _hudScreen.Rows.Add(new MenuRow(
                     "stick deadzone", $"{_settings.ControllerDeadzone}%",
-                    Note: "radial, then the surviving range is restored to full travel"));
-                _hudScreen.Rows.Add(new MenuRow("look speed", $"{_settings.ControllerLookSpeed}%"));
-                _hudScreen.Rows.Add(new MenuRow("invert vertical look", OnOff(_settings.ControllerInvertY)));
+                    Note: "radial, then the surviving range is restored to full travel",
+                    Control: MenuControl.Slider, ControlAmount: _settings.ControllerDeadzone / 50f));
+                _hudScreen.Rows.Add(new MenuRow("look speed", $"{_settings.ControllerLookSpeed}%",
+                    Control: MenuControl.Slider,
+                    ControlAmount: (_settings.ControllerLookSpeed - 25f) / 275f));
+                _hudScreen.Rows.Add(new MenuRow("invert vertical look", OnOff(_settings.ControllerInvertY),
+                    Control: MenuControl.Checkbox, ControlAmount: _settings.ControllerInvertY ? 1f : 0f));
                 _hudScreen.Rows.Add(new MenuRow(
                     "target assist", _settings.ControllerTargetAssist == 0 ? "off" : $"{_settings.ControllerTargetAssist}%",
-                    Note: "a small attack-only nudge inside eight degrees; walls still win"));
+                    Note: "a small attack-only nudge inside eight degrees; walls still win",
+                    Control: MenuControl.Slider, ControlAmount: _settings.ControllerTargetAssist / 100f));
                 _hudScreen.Rows.Add(new MenuRow(
-                    "rumble", _settings.ControllerRumble == 0 ? "off" : $"{_settings.ControllerRumble}%"));
+                    "rumble", _settings.ControllerRumble == 0 ? "off" : $"{_settings.ControllerRumble}%",
+                    Control: MenuControl.Slider, ControlAmount: _settings.ControllerRumble / 100f));
 
                 var padGroup = "";
                 foreach (var action in ControllerActions.All)
@@ -4259,12 +4320,16 @@ public sealed class ClientHost : IDisposable
 
                 _hudScreen.Rows.Add(new MenuRow("picture", Heading: true));
                 _hudScreen.Rows.Add(new MenuRow(
-                    "view distance", $"{_settings.ViewDistance} chunks", Note: pending));
-                _hudScreen.Rows.Add(new MenuRow("field of view", $"{_settings.FieldOfView}"));
-                _hudScreen.Rows.Add(new MenuRow("fullscreen", OnOff(_settings.Fullscreen)));
+                    "view distance", $"{_settings.ViewDistance} chunks", Note: pending,
+                    Control: MenuControl.Slider, ControlAmount: (_settings.ViewDistance - 2f) / 30f));
+                _hudScreen.Rows.Add(new MenuRow("field of view", $"{_settings.FieldOfView}",
+                    Control: MenuControl.Slider, ControlAmount: (_settings.FieldOfView - 50f) / 60f));
+                _hudScreen.Rows.Add(new MenuRow("fullscreen", OnOff(_settings.Fullscreen),
+                    Control: MenuControl.Checkbox, ControlAmount: _settings.Fullscreen ? 1f : 0f));
                 _hudScreen.Rows.Add(new MenuRow(
                     "wait for the display", OnOff(_settings.VSync),
-                    Note: "smoother, and the frame counter stops meaning anything"));
+                    Note: "smoother, and the frame counter stops meaning anything",
+                    Control: MenuControl.Checkbox, ControlAmount: _settings.VSync ? 1f : 0f));
 
                 // ⛳ Uncapped, this draws about 5,000 frames a second — twenty-eight thrown away for
                 // every one a 175 Hz display can show, in fans and heat and battery.
@@ -4273,21 +4338,26 @@ public sealed class ClientHost : IDisposable
                     _settings.FrameCap <= 0 ? "as fast as it can" : $"{_settings.FrameCap} a second",
                     Note: _settings.VSync
                         ? "ignored while the display is being waited for, which is already a limit"
-                        : "match your display; drawing more than it can show is heat and nothing else"));
+                        : "match your display; drawing more than it can show is heat and nothing else",
+                    Control: MenuControl.Slider,
+                    ControlAmount: _settings.FrameCap <= 0 ? 0f : Math.Clamp(_settings.FrameCap / 360f, 0f, 1f)));
 
                 _hudScreen.Rows.Add(new MenuRow("notices", Heading: true));
                 _hudScreen.Rows.Add(new MenuRow(
                     "new recipe notices", OnOff(_settings.RecipeNotices),
-                    Note: "said once ever, not once a session"));
+                    Note: "said once ever, not once a session",
+                    Control: MenuControl.Checkbox, ControlAmount: _settings.RecipeNotices ? 1f : 0f));
                 _hudScreen.Rows.Add(new MenuRow(
                     "forget what has been said", $"{_unlocks.Announced} remembered",
                     Note: "enter forgets them, and the whole tree announces itself again"));
 
                 _hudScreen.Rows.Add(new MenuRow("looking at things", Heading: true));
-                _hudScreen.Rows.Add(new MenuRow("wireframe", OnOff(_wireframe)));
+                _hudScreen.Rows.Add(new MenuRow("wireframe", OnOff(_wireframe),
+                    Control: MenuControl.Checkbox, ControlAmount: _wireframe ? 1f : 0f));
                 _hudScreen.Rows.Add(new MenuRow(
                     "frustum culling", OnOff(_frustumCulling),
-                    Note: "turning it off must change the chunk count and nothing on screen"));
+                    Note: "turning it off must change the chunk count and nothing on screen",
+                    Control: MenuControl.Checkbox, ControlAmount: _frustumCulling ? 1f : 0f));
                 break;
 
             case GameTab.Audio:
@@ -4811,12 +4881,68 @@ public sealed class ClientHost : IDisposable
     private const string BuiltInPackRow = "Driftwood's own art";
     private const string UseSelectedPackRow = "use this texture pack";
     private const string RemoveSelectedPackRow = "remove selected pack";
+    private const string MyPacksRow = "MY PACKS";
+    private const string BrowsePacksRow = "BROWSE";
+    private const string PackSearchRow = "search packs";
+    private const string PackSortRow = "sort";
+    private const string PackBackRow = "back to pack list";
+    private const string PackOpenShelfRow = "open shelf";
+    private const string PackUpdateRow = "update";
+    private const string PackDownloadRow = "download";
+    private const string PackSourceRow = "source page";
+    private const string PackVersionRow = "release";
+    private const string PackPreviousRow = "previous page";
+    private const string PackNextRow = "next page";
+    private const string PackRefreshRow = "refresh";
 
     /// <summary>What the shelf held when it was last read, and what the last import said.</summary>
     private IReadOnlyList<PackLibrary.Entry> _packs = [];
     private string _packNote = "";
     private string? _selectedPackName;
+    private string? _selectedPackPath;
     private bool _packRemoveArmed;
+    private bool _packBrowse;
+    private PackLibrary.SortOrder _packSort;
+    private ResourcePackSort _packBrowseSort;
+    private readonly TextField _packSearchBox = new(100) { Placeholder = "name, author or source" };
+    private readonly TextField _packCategoryBox = new(40) { Placeholder = "category" };
+    private readonly TextField _packVersionBox = new(20) { Placeholder = "Minecraft version" };
+    private readonly Dictionary<string, PackLibrary.Entry> _installedPackRows =
+        new(StringComparer.Ordinal);
+    private readonly Dictionary<string, RemoteResourcePack> _remotePackRows =
+        new(StringComparer.Ordinal);
+    private readonly ModrinthResourcePackProvider _modrinthPacks = new();
+    private ResourcePackPage? _packPage;
+    private Task<ResourcePackPage>? _packSearchTask;
+    private CancellationTokenSource? _packSearchCancel;
+    private readonly Dictionary<string, byte[]> _remotePackIcons = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, int> _remotePackIconLayers = new(StringComparer.Ordinal);
+    private Task<Dictionary<string, byte[]>>? _packIconsTask;
+    private CancellationTokenSource? _packIconsCancel;
+    private int _packPageOffset;
+    private RemoteResourcePack? _selectedRemotePack;
+    private IReadOnlyList<RemoteResourcePackVersion> _selectedPackVersions = [];
+    private byte[]? _selectedPackPreview;
+    private bool _selectedPackPreviewIsGallery;
+    private int _selectedPackPreviewLayer = -1;
+    private sealed record RemotePackDetails(
+        RemoteResourcePack Project,
+        IReadOnlyList<RemoteResourcePackVersion> Versions,
+        byte[] Preview,
+        bool PreviewIsGallery);
+    private Task<RemotePackDetails>? _packVersionsTask;
+    private CancellationTokenSource? _packVersionsCancel;
+    private int _selectedPackVersion;
+    private Task<DownloadedResourcePack>? _packDownloadTask;
+    private CancellationTokenSource? _packDownloadCancel;
+    private ResourcePackDownloadProgress? _packDownloadProgress;
+    private int _packDownloadProgressStamp = -1;
+    private PackLibrary.Entry? _packUpdating;
+    private Task<Dictionary<string, bool>>? _packUpdateTask;
+    private CancellationTokenSource? _packUpdateCancel;
+    private bool _packUpdatesChecked;
+    private string _packDebounceText = "";
+    private double _packDebounce;
 
     /// <summary>What the pack being worn carries that we have nothing to put it on.</summary>
     private PackCoverage.Summary? _packTally;
@@ -4896,19 +5022,33 @@ public sealed class ClientHost : IDisposable
     {
         if (_options.UiCheck)
         {
-            // A real-looking accordion without reading AppData. UI validation must be reproducible
-            // on a clean machine and must never depend on whatever packs its developer has worn.
             _packs =
             [
-                new PackLibrary.Entry("Clarity Fixture", "", "Java, 32px", Readable: true),
-                new PackLibrary.Entry("Weathered Fixture", "", "Bedrock, 64px", Readable: true),
+                new PackLibrary.Entry("Clarity Fixture", "fixture-a", "Java, 32px", Readable: true,
+                    Title: "Clarity Fixture", Description: "A sparse vanilla-first fixture.",
+                    Author: "fixture maker", Source: "local", License: "CC0-1.0", Dialect: "Java",
+                    Resolution: 32, ArchiveBytes: 4_194_304, Installed: DateTimeOffset.UtcNow),
+                new PackLibrary.Entry("Weathered Fixture", "fixture-b", "Java, 64px", Readable: true,
+                    Title: "Weathered Fixture", Description: "A dependency-heavy fixture.",
+                    Author: "fixture maker", Source: "Modrinth", License: "MIT", Dialect: "Java",
+                    Resolution: 64, ArchiveBytes: 12_582_912, Installed: DateTimeOffset.UtcNow.AddDays(-2),
+                    Provider: "Modrinth", UpdateAvailable: true),
+                .. Enumerable.Range(3, 98).Select(index => new PackLibrary.Entry(
+                    $"Archive Fixture {index:000}", $"fixture-{index:000}",
+                    $"Java, {(index % 4 + 1) * 16}px", Readable: true,
+                    Title: $"Archive Fixture {index:000}", Author: index % 2 == 0 ? "Ada" : "Lin",
+                    Source: index % 3 == 0 ? "Modrinth" : "local", License: "CC0-1.0",
+                    Dialect: "Java", Resolution: (index % 4 + 1) * 16,
+                    ArchiveBytes: 1_000_000 + index * 4096,
+                    Installed: DateTimeOffset.UtcNow.AddMinutes(-index))),
             ];
             _selectedPackName ??= "Clarity Fixture";
+            _selectedPackPath ??= "fixture-a";
             _packTally = new PackCoverage.Summary(
                 1_284, 176,
                 [new PackCoverage.Gap("blocks not built yet", 604, 42)]);
             _packCompatibility = new PackCompatibility.Summary(
-                State: "partial",
+                State: PackCompatibility.WithOmissions,
                 Art: 1_284,
                 ArtUsed: 176,
                 Gui: 38,
@@ -4927,43 +5067,63 @@ public sealed class ClientHost : IDisposable
                 Models: 2_418,
                 BlockStates: 1_092,
                 External: 24,
-                Issues: []);
+                Issues: [],
+                RuntimeOmissions: 3,
+                ContentOpportunities: 1_108);
+            _hud.SetPackIcons(Enumerable.Repeat<byte[]?>(null, _packs.Count + 1).ToArray());
+            _hud.SetPackPreview(_textures.Tiles, _textures.Size);
             return;
         }
 
         _packs = PackLibrary.List();
+        RefreshPackIconAtlas();
 
-        // Keep the accordion on the active pack the first time it opens. If that pack has vanished,
-        // fall back to our art rather than leaving a details panel pointed at nothing.
         if (_selectedPackName is null)
         {
-            _selectedPackName = _settings.TexturePack.Length > 0
-                && _packs.Any(pack => pack.Readable && string.Equals(
-                    pack.Name, _settings.TexturePack, StringComparison.OrdinalIgnoreCase))
-                    ? _settings.TexturePack
-                    : "";
+            var active = _packs.FirstOrDefault(pack => pack.Readable && string.Equals(
+                pack.Name, _settings.TexturePack, StringComparison.OrdinalIgnoreCase));
+            _selectedPackName = active.Path is { Length: > 0 } ? active.Name : "";
+            _selectedPackPath = active.Path is { Length: > 0 } ? active.Path : null;
         }
-        else if (_selectedPackName.Length > 0 && !_packs.Any(pack => pack.Readable && string.Equals(
-                     pack.Name, _selectedPackName, StringComparison.OrdinalIgnoreCase)))
+        else if (_selectedPackName.Length > 0 && !_packs.Any(pack =>
+                     _selectedPackPath is { Length: > 0 }
+                         ? string.Equals(pack.Path, _selectedPackPath, StringComparison.OrdinalIgnoreCase)
+                         : string.Equals(pack.Name, _selectedPackName, StringComparison.OrdinalIgnoreCase)))
         {
             _selectedPackName = "";
+            _selectedPackPath = null;
             _packRemoveArmed = false;
         }
 
-        // ⛳ Only for the pack whose details are open. Reading every pack on the shelf would make
-        // opening this tab a benchmark; selecting one is the point at which the player asked.
         _packTally = null;
         _packCompatibility = null;
-        if (_selectedPackName.Length == 0) return;
+        if (_selectedPackName.Length == 0)
+        {
+            _hud.SetPackPreview(BlockTextureSet.Build(null, TileGen.Size, TileGen.Size).Tiles);
+            StartPackUpdateChecks();
+            return;
+        }
 
-        var selected = _packs.FirstOrDefault(pack => pack.Readable && string.Equals(
-            pack.Name, _selectedPackName, StringComparison.OrdinalIgnoreCase));
-        if (selected.Path is null) return;
+        var selected = _packs.FirstOrDefault(pack => _selectedPackPath is { Length: > 0 }
+            ? string.Equals(pack.Path, _selectedPackPath, StringComparison.OrdinalIgnoreCase)
+            : string.Equals(pack.Name, _selectedPackName, StringComparison.OrdinalIgnoreCase));
+        if (selected.Path is not { Length: > 0 }) return;
+        _selectedPackPath = selected.Path;
+        if (!selected.Readable)
+        {
+            _hud.SetPackPreview(null);
+            StartPackUpdateChecks();
+            return;
+        }
 
         try
         {
             _packTally = PackCoverage.Tally(selected.Path);
-            _packCompatibility = PackCompatibility.Inspect(selected.Path);
+            _packCompatibility = PackCompatibility.Inspect(
+                selected.Path, selected.PackDependencies, selected.Sha512);
+            PackLibrary.UpdateMetadata(selected.Path, _packCompatibility.Value.State);
+            var preview = BlockTextureSet.Build(selected.Path, TileGen.Size, TileGen.Size);
+            _hud.SetPackPreview(preview.Tiles, preview.Size);
         }
         catch (Exception error) when (
             error is IOException or UnauthorizedAccessException or InvalidDataException
@@ -4971,9 +5131,12 @@ public sealed class ClientHost : IDisposable
         {
             _packTally = null;
             _packCompatibility = new PackCompatibility.Summary(
-                "issues", 0, 0, 0, 0, 0, 0, [], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                PackCompatibility.WithOmissions, 0, 0, 0, 0, 0, 0, [], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
                 [$"inspection: {error.Message}"]);
+            _hud.SetPackPreview(null);
         }
+
+        StartPackUpdateChecks();
     }
 
     /// <summary>
@@ -4993,180 +5156,314 @@ public sealed class ClientHost : IDisposable
     /// </remarks>
     private void BuildPackRows()
     {
-        var wearing = _settings.TexturePack;
-
-        _hudScreen.Rows.Add(new MenuRow(
-            _packs.Count == 1 ? "texture pack shelf - 1 installed"
-                : $"texture pack shelf - {_packs.Count} installed", Heading: true));
-
-        var ownSelected = _selectedPackName is "";
-        var ownActive = wearing.Length == 0;
-        _hudScreen.Rows.Add(new MenuRow(
-            BuiltInPackRow,
-            ownActive ? ownSelected ? "active | open" : "active" : ownSelected ? "details open" : "",
-            Note: ownSelected
-                ? "Built into Driftwood; its complete compatibility details are open below"
-                : "Enter opens details. Drawn in code and guaranteed to cover the whole game"));
-
-        if (ownSelected) AddSelectedPackRows(null);
-
-        foreach (var pack in _packs)
-        {
-            var selected = string.Equals(pack.Name, _selectedPackName, StringComparison.OrdinalIgnoreCase);
-            var active = string.Equals(pack.Name, wearing, StringComparison.OrdinalIgnoreCase);
-            _hudScreen.Rows.Add(new MenuRow(
-                pack.Name,
-                !pack.Readable ? "cannot read"
-                    : active ? selected ? "active | open" : "active"
-                    : selected ? "details open" : "",
-                Note: pack.Readable
-                    ? selected
-                        ? $"{pack.Kind}. Runtime compatibility and actions are open directly below"
-                        : $"{pack.Kind}. Enter opens compatibility details; applying is a separate action"
-                    : $"{pack.Kind}. Enter takes it off the shelf"));
-
-            if (selected && pack.Readable) AddSelectedPackRows(pack);
-        }
-
-        _hudScreen.Rows.Add(new MenuRow("add one", Heading: true));
-
-        // ⛳ WHATEVER THE LAST IMPORT SAID, ON WHICHEVER ROW YOU ARE STANDING ON. A note is drawn
-        // for the selected row only, and the row somebody is on after an import is the one they
-        // pressed — so pinning the answer to the typed-path row alone means browsing for a pack
-        // succeeds or fails in silence.
+        _installedPackRows.Clear();
+        _remotePackRows.Clear();
+        _hudScreen.PackDetailImage = -1;
+        _hudScreen.PackDetailImageIsGallery = false;
         string Said(string otherwise) => _packNote.Length > 0 ? _packNote : otherwise;
 
-        if (NativeFilePicker.Available)
-        {
-            _hudScreen.Rows.Add(new MenuRow(
-                BrowseFileRow, _packPicker.Busy ? "choosing" : "",
-                Note: Said($"Opens a file browser. {PackLibrary.FilterLabel} — whichever one you "
-                         + "downloaded, wherever it landed")));
+        _hudScreen.Rows.Add(new MenuRow(MyPacksRow, _packBrowse ? "" : "OPEN",
+            Note: "Installed packs remain available without a network connection."));
+        _hudScreen.Rows.Add(new MenuRow(BrowsePacksRow, _packBrowse ? "OPEN" : "",
+            Note: "Searches Java resource packs on Modrinth without an account or API key."));
+        _hudScreen.Rows.Add(new MenuRow(PackSearchRow, Edits: _packSearchBox,
+            Note: _packBrowse ? "Search Modrinth; typing is debounced before the request."
+                : "Matches installed name, author and source."));
 
+        if (!_packBrowse)
+        {
+            _hudScreen.Rows.Add(new MenuRow(PackSortRow, _packSort switch
+            {
+                PackLibrary.SortOrder.RecentlyAdded => "RECENT",
+                PackLibrary.SortOrder.Source => "SOURCE",
+                _ => "NAME",
+            }, Note: "The worn pack remains pinned first in every order."));
+
+            var visible = PackLibrary.Query(_packs, _packSearchBox.Text, _packSort, _settings.TexturePack);
             _hudScreen.Rows.Add(new MenuRow(
-                BrowseFolderRow, _packPicker.Busy ? "choosing" : "",
-                Note: Said("Opens a folder browser, for a pack that has already been unzipped — "
-                         + "pick the folder with pack.mcmeta or manifest.json in it")));
+                visible.Count == 1 ? "1 INSTALLED PACK" : $"{visible.Count:N0} INSTALLED PACKS",
+                Heading: true));
+
+            var ownSelected = _selectedPackName is "";
+            _hudScreen.Rows.Add(new MenuRow(BuiltInPackRow,
+                _settings.TexturePack.Length == 0 ? "WORN · BUILT IN" : "BUILT IN",
+                Note: "Driftwood-owned art covers every runtime layer and is always available.",
+                Card: true, Icon: 0));
+
+            var names = new HashSet<string>(StringComparer.Ordinal) { BuiltInPackRow };
+            foreach (var pack in visible)
+            {
+                var label = UniquePackLabel(pack.DisplayTitle, names);
+                names.Add(label);
+                _installedPackRows[label] = pack;
+                var badges = new List<string>();
+                if (string.Equals(pack.Name, _settings.TexturePack, StringComparison.OrdinalIgnoreCase))
+                    badges.Add("WORN");
+                if (!pack.Readable) badges.Add("UNREADABLE");
+                if (pack.UpdateAvailable) badges.Add("UPDATE");
+                if (pack.Provider.Length > 0) badges.Add(pack.Provider.ToUpperInvariant());
+                else badges.Add("LOCAL");
+                var icon = Array.FindIndex(_packs.ToArray(), candidate => string.Equals(
+                    candidate.Path, pack.Path, StringComparison.OrdinalIgnoreCase)) + 1;
+                _hudScreen.Rows.Add(new MenuRow(label, string.Join(" · ", badges),
+                    Note: pack.Readable ? $"{pack.Kind}. Enter opens a stable details pane."
+                        : pack.Kind, Card: true, Icon: Math.Max(0, icon)));
+            }
+
+            _hudScreen.Rows.Add(new MenuRow("LOCAL IMPORT", Heading: true));
+            if (NativeFilePicker.Available)
+            {
+                _hudScreen.Rows.Add(new MenuRow(BrowseFileRow, _packPicker.Busy ? "choosing" : "",
+                    Note: Said($"Choose {PackLibrary.FilterLabel} from anywhere on this machine.")));
+                _hudScreen.Rows.Add(new MenuRow(BrowseFolderRow, _packPicker.Busy ? "choosing" : "",
+                    Note: Said("Choose an unpacked folder containing pack.mcmeta or manifest.json.")));
+            }
+            _hudScreen.Rows.Add(new MenuRow("from a path", Edits: _packBox,
+                Note: Said("Copies a folder, ZIP, JAR, MCPACK or MCADDON into the durable shelf.")));
+
+            PackLibrary.Entry? selected = null;
+            if (!ownSelected)
+                selected = _packs.FirstOrDefault(pack => _selectedPackPath is { Length: > 0 }
+                    ? string.Equals(pack.Path, _selectedPackPath, StringComparison.OrdinalIgnoreCase)
+                    : string.Equals(pack.Name, _selectedPackName, StringComparison.OrdinalIgnoreCase));
+            AddSelectedPackRows(ownSelected ? null : selected);
+            return;
         }
 
-        _hudScreen.Rows.Add(new MenuRow(
-            "from a path", Edits: _packBox,
-            Note: Said("A folder, a .zip, a .mcpack or a .mcaddon. Enter opens the box, enter again "
-                     + "copies it onto the shelf — Java, pre-flattening Java and Bedrock all read")));
+        _hudScreen.Rows.Add(new MenuRow(PackSortRow, _packBrowseSort.ToString().ToUpperInvariant(),
+            Note: "Cycles relevance, downloads, newest and recently updated."));
+        _hudScreen.Rows.Add(new MenuRow("category", Edits: _packCategoryBox,
+            Note: "Optional Modrinth category slug, such as realistic, simplistic or 16x."));
+        _hudScreen.Rows.Add(new MenuRow("Minecraft version", Edits: _packVersionBox,
+            Note: "Optional catalog filter only; compatibility is decided from the exact archive."));
+        _hudScreen.Rows.Add(new MenuRow(PackRefreshRow,
+            _packSearchTask is null ? "" : "SEARCHING",
+            Note: Said("Refreshes online metadata; MY PACKS never depends on the result.")));
 
-        _hudScreen.Rows.Add(new MenuRow(
-            "the shelf", "", Note: $"Packs live in {PackLibrary.Folder} — dropping one in there by "
-                               + "hand works just as well"));
+        if (_packSearchTask is not null)
+            _hudScreen.Rows.Add(new MenuRow("MODRINTH — SEARCHING", Heading: true));
+        else if (_packPage is { } page)
+        {
+            var first = page.Total == 0 ? 0 : page.Offset + 1;
+            var last = Math.Min(page.Total, page.Offset + page.Packs.Count);
+            _hudScreen.Rows.Add(new MenuRow(page.Total == 0 ? "MODRINTH — NO MATCHES"
+                : $"MODRINTH — {first:N0}-{last:N0} OF {page.Total:N0}"
+                  + (page.Cached ? " · OFFLINE CACHE" : ""), Heading: true));
+            var names = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var remote in page.Packs)
+            {
+                var label = UniquePackLabel(remote.Name, names);
+                names.Add(label);
+                _remotePackRows[label] = remote;
+                var installed = _packs.Any(pack => pack.ProjectId == remote.Id);
+                var selected = _selectedRemotePack?.Id == remote.Id;
+                var downloading = _packDownloadTask is not null
+                    && (_selectedRemotePack?.Id == remote.Id || _packUpdating?.ProjectId == remote.Id);
+                var progress = downloading ? Volatile.Read(ref _packDownloadProgress) : null;
+                var badges = installed ? "INSTALLED · MODRINTH" : selected ? "SELECTED · MODRINTH" : "MODRINTH";
+                _hudScreen.Rows.Add(new MenuRow(label, badges,
+                    Note: $"by {remote.Author} · {FriendlyLicense(remote.License)} · {remote.Downloads:N0} downloads",
+                    Progress: downloading ? progress?.Fraction ?? 0f : -1f, Card: true,
+                    Icon: _remotePackIconLayers.GetValueOrDefault(remote.Id, 0)));
+            }
+            if (page.HasPrevious) _hudScreen.Rows.Add(new MenuRow(PackPreviousRow));
+            if (page.HasNext) _hudScreen.Rows.Add(new MenuRow(PackNextRow));
+        }
+        else _hudScreen.Rows.Add(new MenuRow("MODRINTH — PRESS REFRESH", Heading: true));
+
+        if (_selectedRemotePack is { } selectedRemote)
+        {
+            _hudScreen.PackDetailImage = _selectedPackPreviewLayer >= 0
+                ? _selectedPackPreviewLayer
+                : _remotePackIconLayers.GetValueOrDefault(selectedRemote.Id, 0);
+            _hudScreen.PackDetailImageIsGallery = _selectedPackPreviewLayer >= 0
+                && _selectedPackPreviewIsGallery;
+        }
+        AddSelectedRemotePackRows();
     }
 
     /// <summary>The compatibility accordion immediately below the pack a player selected.</summary>
     private void AddSelectedPackRows(PackLibrary.Entry? pack)
     {
-        _hudScreen.Rows.Add(new MenuRow("selected pack details", Heading: true));
+        void Detail(string label, string value = "", string note = "", bool heading = false) =>
+            _hudScreen.Rows.Add(new MenuRow(label, value, Heading: heading, Note: note,
+                Pane: MenuPane.Detail));
+        void Action(string label, string value = "", string note = "", bool narrowOnly = false) =>
+            _hudScreen.Rows.Add(new MenuRow(label, value, Note: note, Pane: MenuPane.Detail,
+                Action: true, NarrowOnly: narrowOnly));
+
+        Detail(pack?.DisplayTitle ?? "DRIFTWOOD'S OWN ART", heading: true);
 
         if (pack is null)
         {
-            _hudScreen.Rows.Add(new MenuRow(
-                "runtime fit", "complete",
-                Note: "Driftwood's own blocks, items, interface, creatures and particles are all covered"));
-            _hudScreen.Rows.Add(new MenuRow(
-                "font", "95 / 95 ASCII",
-                Note: "The built-in readable pixel font remains as a sparse fallback under every pack font"));
-            _hudScreen.Rows.Add(new MenuRow(
-                "audio layer", "5 fallbacks",
-                Note: "Owned recordings stay underneath texture-pack sounds and the Audio tab's explicit pack"));
-            _hudScreen.Rows.Add(new MenuRow(
-                UseSelectedPackRow, _settings.TexturePack.Length == 0 ? "active" : "restart",
-                Note: _settings.TexturePack.Length == 0
-                    ? "This is already the active art"
-                    : "Applies the built-in art and restarts once so every texture is rebuilt together"));
+            Detail("runtime compatibility", PackCompatibility.Verified,
+                "Every standard asset family relevant to Driftwood is supplied by the built-in theme.");
+            Detail("content coverage", "COMPLETE", "Every Driftwood block, item and interface layer is covered.");
+            Detail("font", "95 / 95 ASCII", "The readable built-in font remains under every sparse pack font.");
+            Detail("audio layer", "5 FALLBACKS", "Owned recordings stay beneath texture/audio pack overrides.");
+            Action(PackBackRow, narrowOnly: true);
+            Action(UseSelectedPackRow, _settings.TexturePack.Length == 0 ? "WORN" : "RESTART");
+            Action(PackOpenShelfRow);
             return;
         }
 
+        if (!pack.Value.Readable)
+        {
+            Detail("status", PackCompatibility.Invalid, pack.Value.Kind);
+            Detail("file", System.IO.Path.GetFileName(pack.Value.Path), pack.Value.Kind);
+            Action(PackBackRow, narrowOnly: true);
+            Action(RemoveSelectedPackRow, _packRemoveArmed ? "CONFIRM" : "");
+            Action(PackOpenShelfRow);
+            return;
+        }
+
+        Detail("description", pack.Value.Description.Length > 0 ? pack.Value.Description : "not supplied",
+            pack.Value.Description.Length > 0 ? pack.Value.Description : "This manifest has no description.");
+        Detail("author", pack.Value.Author.Length > 0 ? pack.Value.Author : "not supplied",
+            pack.Value.Source.Length > 0 ? pack.Value.Source : "Local import; no catalog provenance is required.");
+        Detail("license", FriendlyLicense(pack.Value.License), LicenseNote(pack.Value.License));
+        Detail("format", pack.Value.Kind, $"{SoundPackArchive.DescribeBytes(pack.Value.ArchiveBytes)} installed "
+            + $"{pack.Value.Installed.LocalDateTime:g}");
+        if (pack.Value.Version.Length > 0)
+            Detail("installed release", pack.Value.Version,
+                $"{pack.Value.Provider} project {pack.Value.ProjectId}, version {pack.Value.VersionId}");
+
         if (_packCompatibility is not { } fit)
         {
-            _hudScreen.Rows.Add(new MenuRow(
-                "runtime fit", "not available",
-                Note: "The pack opened, but its compatibility inventory could not be completed"));
+            Detail("runtime compatibility", PackCompatibility.NotChecked,
+                "The pack opened, but its compatibility inventory could not be completed.");
         }
         else
         {
             var fitNote = fit.State switch
             {
-                "compatible" => "Every standard asset this pack supplies has a Driftwood runtime destination",
-                "external features" => "Standard assets fit; loader-specific extras are listed separately below",
-                "issues" => "The pack can still use sparse fallbacks; inspect the warning row below",
-                _ => "Supported assets are used sparsely; Driftwood fills every missing slot with its own art",
+                PackCompatibility.Verified => "Every relevant standard asset this exact archive supplies is safely consumed.",
+                PackCompatibility.RequiresExternal => "A required dependency or the archive's principal feature needs an external runtime.",
+                PackCompatibility.Invalid => "The staged archive failed structural validation.",
+                _ => "Safe standard layers work; named omissions fall back independently.",
             };
-            _hudScreen.Rows.Add(new MenuRow("runtime fit", fit.State, Note: fitNote));
-
-            _hudScreen.Rows.Add(new MenuRow(
-                "blocks & items", fit.Art == 0 ? "none" : $"{fit.ArtUsed:N0} / {fit.Art:N0}",
-                Note: fit.Art == 0
-                    ? "No standard block or item pictures were found"
-                    : $"{fit.ArtUsed:N0} pictures land on content Driftwood has today; the rest stays inventoried"));
+            Detail("runtime compatibility", fit.State, fitNote + (fit.Cached ? " Result loaded from the verified-hash cache." : ""));
+            Detail("content coverage", fit.Art == 0 ? "NO ART" : $"{fit.ArtUsed:N0} / {fit.Art:N0}",
+                $"{fit.ContentOpportunities:N0} supplied pictures describe content or systems Driftwood does not own; they are not load failures.");
 
             var fontNote = fit.FontGlyphs == 0
                 ? "No supported bitmap ASCII font was found, so Driftwood's readable font stays in place"
                 : $"Loaded through {fit.FontProviders:N0} bitmap, space or reference providers; missing glyphs fall back";
             if (fit.FontOmissions.Count > 0) fontNote += $". Not read: {fit.FontOmissions[0]}";
-            _hudScreen.Rows.Add(new MenuRow(
-                "interface & font", $"{fit.GuiUsed:N0}/{fit.Gui:N0} gui | {fit.FontGlyphs}/95",
-                Note: fontNote));
-
-            _hudScreen.Rows.Add(new MenuRow(
-                "audio", fit.Sounds == 0 ? "none" : $"{fit.SoundSlots}/{SoundPackArchive.RequiredNames.Count} slots",
-                Note: fit.Sounds == 0
+            Detail("interface & font", $"{fit.GuiUsed:N0}/{fit.Gui:N0} GUI · {fit.FontGlyphs}/95", fontNote);
+            Detail("audio", fit.Sounds == 0 ? "NONE" : $"{fit.SoundSlots}/{SoundPackArchive.RequiredNames.Count} SLOTS",
+                fit.Sounds == 0
                     ? "No standard sounds in this texture pack; the Audio tab and local fallbacks continue underneath"
-                    : $"{fit.Sounds:N0} clips become the middle layer; an Audio-tab pack remains the final override"));
-
-            _hudScreen.Rows.Add(new MenuRow(
-                "creatures & armour",
+                    : $"{fit.Sounds:N0} clips become the middle layer; an Audio-tab pack remains the final override");
+            Detail("creatures & armour",
                 fit.Entities + fit.Armour == 0 ? "none" : $"{fit.EntitiesUsed + fit.ArmourUsed:N0} / {fit.Entities + fit.Armour:N0}",
-                Note: $"{fit.EntitiesUsed:N0}/{fit.Entities:N0} creature sheets and "
-                    + $"{fit.ArmourUsed:N0}/{fit.Armour:N0} wearable armour sheets match runtime paths"));
-
-            _hudScreen.Rows.Add(new MenuRow(
-                "particles", fit.Particles == 0 ? "none" : $"{fit.ParticlesUsed:N0} / {fit.Particles:N0}",
-                Note: "Mapped particles replace their generated tile; unsupported particle art remains untouched"));
+                $"{fit.EntitiesUsed:N0}/{fit.Entities:N0} creature sheets and {fit.ArmourUsed:N0}/{fit.Armour:N0} armour sheets match owned runtime paths.");
+            Detail("particles", fit.Particles == 0 ? "NONE" : $"{fit.ParticlesUsed:N0} / {fit.Particles:N0}",
+                "Flame, smoke and block debris map to emitted behaviours; unrelated particle art is not fake debt.");
 
             if (fit.Models + fit.BlockStates > 0)
-                _hudScreen.Rows.Add(new MenuRow(
-                    "models & blockstates", $"{fit.Models + fit.BlockStates:N0} not read",
-                    Note: $"{fit.Models:N0} model and {fit.BlockStates:N0} blockstate JSON files describe geometry "
-                        + "Driftwood does not interpret yet"));
+                Detail("models & blockstates", $"{fit.Models:N0} · {fit.BlockStates:N0}",
+                    "Owned Java definitions are resolved through parents, variables, variants/multipart and model geometry; unrelated content is not applicable.");
 
             if (fit.External > 0)
-                _hudScreen.Rows.Add(new MenuRow(
-                    "loader extensions", $"{fit.External:N0} not read",
-                    Note: "OptiFine, MCPatcher, shader, Polytone, CIT Resewn and similar extras need their own runtimes"));
+                Detail("loader extensions", $"{fit.External:N0} OMITTED",
+                    "OptiFine, MCPatcher, core shaders, CEM, CIT and CTM remain visibly separate from core support.");
 
             if (fit.Issues.Count > 0)
-                _hudScreen.Rows.Add(new MenuRow(
-                    "pack warning", $"{fit.Issues.Count:N0}", Note: fit.Issues[0]));
+                Detail("named omissions", $"{fit.Issues.Count:N0}", fit.Issues[0]);
 
             if (_packTally is { Biggest.Count: > 0 } tally)
             {
                 var gap = tally.Biggest[0];
-                _hudScreen.Rows.Add(new MenuRow(
-                    "largest unused family", $"{gap.Files - gap.Covered:N0} pictures",
-                    Note: $"{gap.Label}: Driftwood currently uses {gap.Covered:N0} of {gap.Files:N0}"));
+                Detail("largest content gap", $"{gap.Files - gap.Covered:N0} PICTURES",
+                    $"{gap.Label}: Driftwood currently uses {gap.Covered:N0} of {gap.Files:N0}.");
             }
         }
 
         var active = string.Equals(pack.Value.Name, _settings.TexturePack, StringComparison.OrdinalIgnoreCase);
-        _hudScreen.Rows.Add(new MenuRow(
-            UseSelectedPackRow, active ? "active" : "restart",
-            Note: active
-                ? "This is already the active pack"
-                : "Applies this pack and restarts once so art, font and sounds are rebuilt together"));
-        _hudScreen.Rows.Add(new MenuRow(
-            RemoveSelectedPackRow, active ? "switch first" : _packRemoveArmed ? "enter again" : "",
-            Note: active
-                ? "Choose Driftwood's art or another pack before removing the active one"
-                : _packRemoveArmed
-                    ? $"Enter again to remove '{pack.Value.Name}' from the local shelf"
-                    : "Takes only this installed copy off the shelf; press once to ask for confirmation"));
+        Action(PackBackRow, narrowOnly: true);
+        Action(UseSelectedPackRow, active ? "WORN" : "RESTART",
+            active ? "This is already active." : "Restarts once so every texture is rebuilt together.");
+        Action(RemoveSelectedPackRow, active ? "SWITCH FIRST" : _packRemoveArmed ? "CONFIRM" : "");
+        Action(PackOpenShelfRow);
+        if (pack.Value.UpdateAvailable) Action(PackUpdateRow);
+    }
+
+    private void AddSelectedRemotePackRows()
+    {
+        void Detail(string label, string value = "", string note = "", bool heading = false) =>
+            _hudScreen.Rows.Add(new MenuRow(label, value, Heading: heading, Note: note,
+                Pane: MenuPane.Detail));
+        void Action(string label, string value = "", string note = "", bool narrowOnly = false) =>
+            _hudScreen.Rows.Add(new MenuRow(label, value, Note: note, Pane: MenuPane.Detail,
+                Action: true, NarrowOnly: narrowOnly));
+
+        if (_selectedRemotePack is not { } remote)
+        {
+            Detail("SELECT A RESOURCE PACK", heading: true);
+            Detail("runtime compatibility", PackCompatibility.NotChecked,
+                "Catalog metadata cannot verify an archive. Select a card, inspect its release and dependencies, then download explicitly.");
+            Action(PackBackRow, narrowOnly: true);
+            return;
+        }
+
+        Detail(remote.Name.ToUpperInvariant(), heading: true);
+        Detail("description", remote.Description, remote.Description);
+        Detail("author", remote.Author, $"{remote.Downloads:N0} Modrinth downloads.");
+        Detail("license", FriendlyLicense(remote.License), LicenseNote(remote.License));
+        Detail("game versions", remote.GameVersions.Count == 0 ? "not supplied"
+            : string.Join(", ", remote.GameVersions.Take(4)),
+            "These are author/catalog labels, not Driftwood compatibility promises.");
+        Detail("gallery", remote.GalleryImages.Count switch
+            {
+                0 => "NONE",
+                1 => "1 IMAGE",
+                _ => $"{remote.GalleryImages.Count:N0} IMAGES",
+            },
+            remote.GalleryImages.Count == 0
+                ? "No gallery images were supplied for this project."
+                : "Gallery URLs and the project icon are accepted only from Modrinth's HTTPS CDN and cached locally.");
+        Detail("runtime compatibility", PackCompatibility.NotChecked,
+            "Only the exact downloaded version can receive a verified compatibility verdict.");
+
+        if (_packVersionsTask is not null)
+        {
+            Detail("release metadata", "LOADING", "Reading releases, files and dependencies from Modrinth.");
+        }
+        else if (_selectedPackVersions.Count > 0)
+        {
+            _selectedPackVersion = Math.Clamp(_selectedPackVersion, 0, _selectedPackVersions.Count - 1);
+            var version = _selectedPackVersions[_selectedPackVersion];
+            var file = version.PrimaryFile;
+            Detail(PackVersionRow, $"{version.Number} · {version.Channel.ToUpperInvariant()}",
+                $"Published {version.Published.LocalDateTime:g}; Enter cycles {_selectedPackVersions.Count:N0} sensible releases.");
+            Detail("archive", file is null ? "NO ZIP" : SoundPackArchive.DescribeBytes(file.Size),
+                file?.FileName ?? "This release has no bounded primary ZIP.");
+            foreach (var group in version.Dependencies.GroupBy(static dependency => dependency.Type).Take(4))
+                Detail($"{group.Key} dependencies", group.Count().ToString("N0"),
+                    string.Join(", ", group.Select(dependency => dependency.ProjectId.Length > 0
+                        ? dependency.ProjectId : dependency.FileName).Where(name => name.Length > 0).Take(4)));
+        }
+
+        var progress = Volatile.Read(ref _packDownloadProgress);
+        Action(PackBackRow, narrowOnly: true);
+        Action(PackSourceRow);
+        Action(PackDownloadRow, _packDownloadTask is null ? ""
+            : progress is null ? "STARTING" : $"{MathF.Floor(progress.Fraction * 100f):F0}%",
+            _packDownloadTask is null
+                ? "Streams only after this action, verifies length/SHA-512/host/archive, then atomically installs."
+                : "Enter again cancels the in-progress download.");
+    }
+
+    private static string UniquePackLabel(string wanted, IEnumerable<string> existing)
+    {
+        var names = new HashSet<string>(existing, StringComparer.Ordinal);
+        if (!names.Contains(wanted)) return wanted;
+        for (var copy = 2; ; copy++)
+        {
+            var candidate = $"{wanted} ({copy})";
+            if (!names.Contains(candidate)) return candidate;
+        }
     }
 
     /// <summary>
@@ -5225,36 +5522,28 @@ public sealed class ClientHost : IDisposable
         if (label == BuiltInPackRow)
         {
             _selectedPackName = "";
+            _selectedPackPath = null;
             _packRemoveArmed = false;
-            _packNote = "Driftwood's built-in art selected; its details and apply action are open below";
+            _hudScreen.PackDetailsOpen = true;
+            _packNote = "Driftwood's built-in art selected";
             ReadPacksFolder();
             RefreshScreen();
+            FocusPackDetails();
             return;
         }
 
-        foreach (var pack in _packs)
+        if (_installedPackRows.TryGetValue(label, out var pack))
         {
-            if (!string.Equals(pack.Name, label, StringComparison.Ordinal)) continue;
-
-            // ⛳ An unreadable row is the only way to get rid of a bad file without leaving the game,
-            // which is the whole reason it is listed rather than skipped.
-            if (!pack.Readable)
-            {
-                _packNote = PackLibrary.Remove(pack.Name)
-                    ? $"'{pack.Name}' taken off the shelf"
-                    : $"'{pack.Name}' could not be removed — it may be open in something else";
-
-                ReadPacksFolder();
-                RefreshScreen();
-                return;
-            }
-
             _selectedPackName = pack.Name;
+            _selectedPackPath = pack.Path;
             _packRemoveArmed = false;
-            _packNote = $"'{pack.Name}' selected; compatibility details and actions are open below";
+            _hudScreen.PackDetailsOpen = true;
+            _packNote = pack.Readable
+                ? $"'{pack.DisplayTitle}' selected"
+                : $"'{pack.DisplayTitle}' is unreadable; its exact reason and guarded remove action are shown";
             ReadPacksFolder();
             RefreshScreen();
-            return;
+            FocusPackDetails();
         }
     }
 
@@ -5293,11 +5582,14 @@ public sealed class ClientHost : IDisposable
         }
 
         var removing = _selectedPackName;
+        var removingPath = _selectedPackPath;
         _packRemoveArmed = false;
-        _packNote = PackLibrary.Remove(removing)
+        _packNote = removingPath is { Length: > 0 } && PackLibrary.RemovePath(removingPath)
             ? $"'{removing}' taken off the shelf"
             : $"'{removing}' could not be removed — it may be open in something else";
         _selectedPackName = null;
+        _selectedPackPath = null;
+        _hudScreen.PackDetailsOpen = false;
         ReadPacksFolder();
         RefreshScreen();
     }
@@ -5372,6 +5664,8 @@ public sealed class ClientHost : IDisposable
         if (entry is { } added)
         {
             _selectedPackName = added.Name;
+            _selectedPackPath = added.Path;
+            _hudScreen.PackDetailsOpen = true;
             _packRemoveArmed = false;
             _packNote = $"'{added.Name}' added — {added.Kind}. Its details and apply action are open";
             _packBox.Clear();
@@ -5385,6 +5679,520 @@ public sealed class ClientHost : IDisposable
 
         ReadPacksFolder();
         RefreshScreen();
+        if (entry is not null) FocusPackDetails();
+    }
+
+    private void ShowMyPacks()
+    {
+        _packBrowse = false;
+        _selectedRemotePack = null;
+        _selectedPackPreview = null;
+        _selectedPackPreviewLayer = -1;
+        _selectedPackPreviewIsGallery = false;
+        _hudScreen.PackDetailsOpen = false;
+        _hudScreen.PackListScroll = 0;
+        ReadPacksFolder();
+        RefreshScreen();
+    }
+
+    private void ShowBrowsePacks()
+    {
+        _packBrowse = true;
+        _hudScreen.PackDetailsOpen = false;
+        _hudScreen.PackListScroll = 0;
+        if (_packPage is null && _packSearchTask is null) StartPackSearch(0);
+        RefreshScreen();
+    }
+
+    private void StartPackSearch(int offset)
+    {
+        if (_options.UiCheck) return;
+        CancelPackSearch();
+        _packSearchCancel = new CancellationTokenSource();
+        _packPageOffset = Math.Max(0, offset);
+        _packNote = "searching Modrinth resource packs…";
+        _packSearchTask = _modrinthPacks.SearchAsync(
+            _packSearchBox.Text, _packBrowseSort,
+            _packCategoryBox.Text, _packVersionBox.Text,
+            _packPageOffset, cancellationToken: _packSearchCancel.Token);
+        if (OnTab(GameTab.Packs)) RefreshScreen();
+    }
+
+    private void CancelPackSearch()
+    {
+        if (_packSearchTask is { } previous)
+        {
+            var cancellation = _packSearchCancel;
+            cancellation?.Cancel();
+            _ = previous.ContinueWith(completed =>
+            {
+                if (completed.IsFaulted) _ = completed.Exception;
+                cancellation?.Dispose();
+            }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        }
+        else _packSearchCancel?.Dispose();
+        _packSearchTask = null;
+        _packSearchCancel = null;
+        CancelPackIconLoad();
+    }
+
+    private void CancelPackIconLoad()
+    {
+        if (_packIconsTask is { } previous)
+        {
+            var cancellation = _packIconsCancel;
+            cancellation?.Cancel();
+            _ = previous.ContinueWith(completed =>
+            {
+                if (completed.IsFaulted) _ = completed.Exception;
+                cancellation?.Dispose();
+            }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        }
+        else _packIconsCancel?.Dispose();
+        _packIconsTask = null;
+        _packIconsCancel = null;
+    }
+
+    private void CancelPackBrowsing()
+    {
+        CancelPackSearch();
+        if (_packVersionsTask is { } previous)
+        {
+            var cancellation = _packVersionsCancel;
+            cancellation?.Cancel();
+            _ = previous.ContinueWith(completed =>
+            {
+                if (completed.IsFaulted) _ = completed.Exception;
+                cancellation?.Dispose();
+            }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        }
+        else _packVersionsCancel?.Dispose();
+        _packVersionsTask = null;
+        _packVersionsCancel = null;
+    }
+
+    private void SelectRemotePack(RemoteResourcePack remote)
+    {
+        _selectedRemotePack = remote;
+        _selectedPackVersions = [];
+        _selectedPackPreview = null;
+        _selectedPackPreviewLayer = -1;
+        _selectedPackPreviewIsGallery = false;
+        _selectedPackVersion = 0;
+        _hudScreen.PackDetailsOpen = true;
+        _packVersionsCancel?.Cancel();
+        _packVersionsCancel?.Dispose();
+        _packVersionsCancel = new CancellationTokenSource();
+        _packVersionsTask = LoadRemotePackDetails(remote, _packVersionsCancel.Token);
+        _packNote = $"'{remote.Name}' selected — loading releases and dependencies";
+        RefreshScreen();
+        FocusPackDetails();
+    }
+
+    private async Task<RemotePackDetails> LoadRemotePackDetails(
+        RemoteResourcePack card,
+        CancellationToken cancellationToken)
+    {
+        var projectWork = _modrinthPacks.ProjectAsync(card.Id, cancellationToken: cancellationToken);
+        var versionWork = _modrinthPacks.VersionsAsync(card.Id, cancellationToken: cancellationToken);
+        await Task.WhenAll(projectWork, versionWork).ConfigureAwait(false);
+        var project = await projectWork.ConfigureAwait(false);
+        // Search supplies the public author name; the project endpoint's team field is an opaque ID.
+        project = project with
+        {
+            Author = card.Author,
+            LatestVersionId = card.LatestVersionId,
+            IconUri = project.IconUri ?? card.IconUri,
+        };
+
+        var preview = Array.Empty<byte>();
+        var previewIsGallery = false;
+        // Gallery art is presentation-only: bad or unavailable art must not hide valid release data.
+        for (var index = 0; index < Math.Min(project.GalleryImages.Count, 3); index++)
+        {
+            try
+            {
+                var candidate = await _modrinthPacks.GalleryImageAsync(
+                    project, index, cancellationToken: cancellationToken).ConfigureAwait(false);
+                if (!UsablePackPreview(candidate)) continue;
+                preview = candidate;
+                previewIsGallery = true;
+                break;
+            }
+            catch (ResourcePackProviderException) { }
+        }
+        if (preview.Length == 0)
+        {
+            try
+            {
+                var candidate = await _modrinthPacks.IconAsync(project,
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
+                if (UsablePackPreview(candidate)) preview = candidate;
+            }
+            catch (ResourcePackProviderException) { }
+        }
+
+        return new RemotePackDetails(project, await versionWork.ConfigureAwait(false),
+            preview, previewIsGallery);
+    }
+
+    private static bool UsablePackPreview(byte[] encoded) =>
+        Png.TryReadDimensions(encoded, out var width, out var height, out _)
+        && width <= 8192 && height <= 8192 && (long)width * height <= 16_777_216;
+
+    private void StartPackIconLoad(ResourcePackPage page)
+    {
+        CancelPackIconLoad();
+        _packIconsCancel = new CancellationTokenSource();
+        _packIconsTask = LoadPackIcons(page.Packs, page.Cached, _packIconsCancel.Token);
+    }
+
+    private async Task<Dictionary<string, byte[]>> LoadPackIcons(
+        IReadOnlyList<RemoteResourcePack> packs,
+        bool offlineOnly,
+        CancellationToken cancellationToken)
+    {
+        var found = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+        foreach (var pack in packs)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                var icon = await _modrinthPacks.IconAsync(pack, offlineOnly, cancellationToken)
+                    .ConfigureAwait(false);
+                if (icon.Length > 0) found[pack.Id] = icon;
+            }
+            catch (ResourcePackProviderException) { }
+        }
+        return found;
+    }
+
+    private void RefreshPackIconAtlas()
+    {
+        var icons = new List<byte[]?> { null };
+        icons.AddRange(_packs.Select(static pack => pack.Icon));
+        _remotePackIconLayers.Clear();
+        _selectedPackPreviewLayer = -1;
+        if (_packPage is { } page)
+        {
+            foreach (var pack in page.Packs)
+            {
+                if (!_remotePackIcons.TryGetValue(pack.Id, out var icon)) continue;
+                _remotePackIconLayers[pack.Id] = icons.Count;
+                icons.Add(icon);
+            }
+        }
+        if (_selectedPackPreview is { Length: > 0 } preview)
+        {
+            _selectedPackPreviewLayer = icons.Count;
+            icons.Add(preview);
+        }
+        _hud.SetPackIcons(icons);
+    }
+
+    private void CyclePackVersion(int by = 1)
+    {
+        if (_selectedPackVersions.Count <= 1) return;
+        _selectedPackVersion = (_selectedPackVersion + Math.Sign(by) + _selectedPackVersions.Count)
+                               % _selectedPackVersions.Count;
+        var version = _selectedPackVersions[_selectedPackVersion];
+        _packNote = $"release {version.Number} selected ({version.Channel})";
+        RefreshScreen();
+    }
+
+    private void DownloadSelectedPack()
+    {
+        if (_packDownloadTask is not null)
+        {
+            _packDownloadCancel?.Cancel();
+            _packNote = "cancelling the resource-pack download…";
+            RefreshScreen();
+            return;
+        }
+        if (_selectedRemotePack is not { } project || _selectedPackVersions.Count == 0)
+        {
+            _packNote = "choose a result and wait for its release metadata first";
+            RefreshScreen();
+            return;
+        }
+
+        _selectedPackVersion = Math.Clamp(_selectedPackVersion, 0, _selectedPackVersions.Count - 1);
+        StartPackDownload(project, _selectedPackVersions[_selectedPackVersion], replacing: null);
+    }
+
+    private void UpdateSelectedPack()
+    {
+        var installed = _packs.FirstOrDefault(pack => _selectedPackPath is { Length: > 0 }
+            && string.Equals(pack.Path, _selectedPackPath, StringComparison.OrdinalIgnoreCase));
+        if (installed.Path is not { Length: > 0 } || installed.ProjectId.Length == 0)
+        {
+            _packNote = "that pack has no update provenance";
+            RefreshScreen();
+            return;
+        }
+        if (_packDownloadTask is not null)
+        {
+            _packNote = "a resource pack is already downloading";
+            RefreshScreen();
+            return;
+        }
+
+        _packDownloadCancel?.Dispose();
+        _packDownloadCancel = new CancellationTokenSource();
+        _packUpdating = installed;
+        Volatile.Write(ref _packDownloadProgress, new ResourcePackDownloadProgress(0, 0));
+        var progress = new InlineProgress<ResourcePackDownloadProgress>(value =>
+            Volatile.Write(ref _packDownloadProgress, value));
+        _packDownloadTask = DownloadPackUpdate(installed, progress, _packDownloadCancel.Token);
+        _packNote = $"checking and staging an update for '{installed.DisplayTitle}'…";
+        RefreshScreen();
+    }
+
+    private async Task<DownloadedResourcePack> DownloadPackUpdate(
+        PackLibrary.Entry installed,
+        IProgress<ResourcePackDownloadProgress> progress,
+        CancellationToken cancellationToken)
+    {
+        var versions = await _modrinthPacks.VersionsAsync(installed.ProjectId,
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+        var version = ModrinthResourcePackProvider.ChooseDefault(versions);
+        if (version.Id == installed.VersionId)
+            throw new ResourcePackProviderException(ResourcePackProviderFailure.InvalidRequest,
+                "that pack is already on its newest stable release");
+        var source = Uri.TryCreate(installed.Source, UriKind.Absolute, out var uri)
+            ? uri : new Uri($"https://modrinth.com/resourcepack/{installed.ProjectId}");
+        var project = new RemoteResourcePack(
+            installed.ProjectId, installed.ProjectId, installed.DisplayTitle,
+            installed.Author, installed.License, 0, installed.Description, source,
+            null, null, [], [], DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch);
+        return await _modrinthPacks.DownloadAsync(project, version, progress,
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+    }
+
+    private void StartPackDownload(
+        RemoteResourcePack project,
+        RemoteResourcePackVersion version,
+        PackLibrary.Entry? replacing)
+    {
+        _packDownloadCancel?.Dispose();
+        _packDownloadCancel = new CancellationTokenSource();
+        _packUpdating = replacing;
+        var size = version.PrimaryFile?.Size ?? 0;
+        Volatile.Write(ref _packDownloadProgress, new ResourcePackDownloadProgress(0, size));
+        _packDownloadProgressStamp = -1;
+        var progress = new InlineProgress<ResourcePackDownloadProgress>(value =>
+            Volatile.Write(ref _packDownloadProgress, value));
+        _packDownloadTask = _modrinthPacks.DownloadAsync(
+            project, version, progress, cancellationToken: _packDownloadCancel.Token);
+        _packNote = $"staging '{project.Name}' release {version.Number}…";
+        RefreshScreen();
+    }
+
+    private void OpenPackSource()
+    {
+        Uri? uri = _selectedRemotePack?.ProjectUri;
+        if (uri is null && _selectedPackPath is { Length: > 0 })
+        {
+            var installed = _packs.FirstOrDefault(pack => string.Equals(
+                pack.Path, _selectedPackPath, StringComparison.OrdinalIgnoreCase));
+            if (!Uri.TryCreate(installed.Source, UriKind.Absolute, out uri)) uri = null;
+        }
+        if (uri is null || uri.Scheme != Uri.UriSchemeHttps
+            || !uri.Host.Equals("modrinth.com", StringComparison.OrdinalIgnoreCase))
+        {
+            _packNote = "that pack has no safe Modrinth source page";
+            RefreshScreen();
+            return;
+        }
+        try { Process.Start(new ProcessStartInfo(uri.ToString()) { UseShellExecute = true }); }
+        catch (Exception error) { _packNote = $"could not open the source page: {error.Message}"; }
+        RefreshScreen();
+    }
+
+    private void OpenPackShelf()
+    {
+        try
+        {
+            Directory.CreateDirectory(PackLibrary.Folder);
+            Process.Start(new ProcessStartInfo(PackLibrary.Folder) { UseShellExecute = true });
+            _packNote = "the pack shelf is open in the system file browser";
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException
+                                      or System.ComponentModel.Win32Exception)
+        {
+            _packNote = $"could not open the shelf: {error.Message}";
+        }
+        RefreshScreen();
+    }
+
+    private void StartPackUpdateChecks(bool force = false)
+    {
+        if (_options.UiCheck || _packUpdateTask is not null || _packUpdatesChecked && !force) return;
+        var candidates = _packs.Where(pack => pack.Readable
+            && pack.Provider.Equals("Modrinth", StringComparison.OrdinalIgnoreCase)
+            && pack.ProjectId.Length > 0).ToArray();
+        if (candidates.Length == 0) { _packUpdatesChecked = true; return; }
+        _packUpdateCancel?.Dispose();
+        _packUpdateCancel = new CancellationTokenSource();
+        var token = _packUpdateCancel.Token;
+        _packUpdateTask = CheckPackUpdates(candidates, token);
+    }
+
+    private async Task<Dictionary<string, bool>> CheckPackUpdates(
+        IReadOnlyList<PackLibrary.Entry> candidates,
+        CancellationToken cancellationToken)
+    {
+        var result = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+        foreach (var pack in candidates)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                result[pack.Path] = await _modrinthPacks.UpdateAvailableAsync(pack,
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
+            }
+            catch (ResourcePackProviderException error) when (error.Failure is
+                ResourcePackProviderFailure.Offline or ResourcePackProviderFailure.RateLimited)
+            {
+                break;
+            }
+        }
+        return result;
+    }
+
+    private void PollPackWork(double dt)
+    {
+        if (OnTab(GameTab.Packs) && _packBrowse && ReferenceEquals(_hudScreen.Typing, _packSearchBox))
+        {
+            if (_packSearchBox.Text != _packDebounceText)
+            {
+                _packDebounceText = _packSearchBox.Text;
+                _packDebounce = 0.35;
+            }
+            else if (_packDebounce > 0 && (_packDebounce -= dt) <= 0) StartPackSearch(0);
+        }
+
+        if (_packSearchTask is { IsCompleted: true } search)
+        {
+            _packSearchTask = null;
+            try
+            {
+                _packPage = search.GetAwaiter().GetResult();
+                _packPageOffset = _packPage.Offset;
+                _packNote = _packPage.Packs.Count == 0 ? "Modrinth found no matching resource packs"
+                    : $"Modrinth found {_packPage.Total:N0} resource packs"
+                      + (_packPage.Cached ? " in the offline cache" : "");
+                StartPackIconLoad(_packPage);
+            }
+            catch (OperationCanceledException) { }
+            catch (ResourcePackProviderException error) { _packNote = error.Message; }
+            catch (Exception error) { _packNote = $"could not search Modrinth: {error.Message}"; }
+            finally { _packSearchCancel?.Dispose(); _packSearchCancel = null; }
+            if (OnTab(GameTab.Packs)) RefreshScreen();
+        }
+
+        if (_packVersionsTask is { IsCompleted: true } versions)
+        {
+            _packVersionsTask = null;
+            try
+            {
+                var details = versions.GetAwaiter().GetResult();
+                _selectedRemotePack = details.Project;
+                _selectedPackVersions = details.Versions;
+                _selectedPackPreview = details.Preview;
+                _selectedPackPreviewIsGallery = details.PreviewIsGallery;
+                RefreshPackIconAtlas();
+                var preferred = ModrinthResourcePackProvider.ChooseDefault(_selectedPackVersions,
+                    _packVersionBox.Empty ? null : _packVersionBox.Text);
+                _selectedPackVersion = Math.Max(0, _selectedPackVersions.ToList().FindIndex(
+                    version => version.Id == preferred.Id));
+                _packNote = $"{_selectedPackVersions.Count:N0} releases available; newest stable selected";
+            }
+            catch (OperationCanceledException) { }
+            catch (ResourcePackProviderException error) { _packNote = error.Message; }
+            catch (Exception error) { _packNote = $"could not read releases: {error.Message}"; }
+            finally { _packVersionsCancel?.Dispose(); _packVersionsCancel = null; }
+            if (OnTab(GameTab.Packs)) RefreshScreen();
+        }
+
+        if (_packIconsTask is { IsCompleted: true } iconWork)
+        {
+            _packIconsTask = null;
+            try
+            {
+                foreach (var (id, bytes) in iconWork.GetAwaiter().GetResult())
+                    _remotePackIcons[id] = bytes;
+                RefreshPackIconAtlas();
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception error) { _packNote = $"could not cache pack icons: {error.Message}"; }
+            finally { _packIconsCancel?.Dispose(); _packIconsCancel = null; }
+            if (OnTab(GameTab.Packs)) RefreshScreen();
+        }
+
+        if (_packUpdateTask is { IsCompleted: true } updates)
+        {
+            _packUpdateTask = null;
+            try
+            {
+                foreach (var (path, available) in updates.GetAwaiter().GetResult())
+                    PackLibrary.UpdateMetadata(path, updateAvailable: available);
+                _packUpdatesChecked = true;
+                _packs = PackLibrary.List();
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception error) { _packNote = $"update check failed: {error.Message}"; }
+            finally { _packUpdateCancel?.Dispose(); _packUpdateCancel = null; }
+            if (OnTab(GameTab.Packs)) { ReadPacksFolder(); RefreshScreen(); }
+        }
+
+        if (_packDownloadTask is not { } work) return;
+        if (!work.IsCompleted)
+        {
+            var progress = Volatile.Read(ref _packDownloadProgress);
+            if (progress is null) return;
+            var stamp = progress.TotalBytes > 0
+                ? (int)MathF.Floor(progress.Fraction * 100f)
+                : (int)Math.Min(int.MaxValue, progress.BytesReceived / 1024 / 1024);
+            if (stamp == _packDownloadProgressStamp) return;
+            _packDownloadProgressStamp = stamp;
+            _packNote = progress.TotalBytes > 0
+                ? $"downloading — {SoundPackArchive.DescribeBytes(progress.BytesReceived)} of "
+                  + $"{SoundPackArchive.DescribeBytes(progress.TotalBytes)} ({stamp}%)"
+                : $"downloading — {SoundPackArchive.DescribeBytes(progress.BytesReceived)}";
+            if (OnTab(GameTab.Packs)) RefreshScreen();
+            return;
+        }
+
+        _packDownloadTask = null;
+        try
+        {
+            using var downloaded = work.GetAwaiter().GetResult();
+            var installed = downloaded.Install(out var why, replacing: _packUpdating);
+            if (installed is null) _packNote = $"could not install the verified pack: {why}";
+            else
+            {
+                _packBrowse = false;
+                _selectedPackName = installed.Value.Name;
+                _selectedPackPath = installed.Value.Path;
+                _hudScreen.PackDetailsOpen = true;
+                _packNote = $"'{installed.Value.DisplayTitle}' installed — {downloaded.Compatibility.State}";
+                _packUpdatesChecked = false;
+            }
+        }
+        catch (OperationCanceledException) { _packNote = "the resource-pack download was cancelled"; }
+        catch (ResourcePackProviderException error) { _packNote = error.Message; }
+        catch (Exception error) { _packNote = $"could not download that resource pack: {error.Message}"; }
+        finally
+        {
+            _packDownloadCancel?.Dispose();
+            _packDownloadCancel = null;
+            _packUpdating = null;
+            Volatile.Write(ref _packDownloadProgress, null);
+            _packDownloadProgressStamp = -1;
+        }
+        ReadPacksFolder();
+        if (OnTab(GameTab.Packs)) RefreshScreen();
     }
 
     /// <summary>Reads the audio shelf and, only while its tab is open, starts the public catalog.</summary>
@@ -5425,8 +6233,10 @@ public sealed class ClientHost : IDisposable
         _remoteSoundRows.Clear();
         _hudScreen.Rows.Add(new MenuRow("sound", Heading: true));
         _hudScreen.Rows.Add(new MenuRow(
-            "volume", _settings.Mute ? $"muted · {_settings.Volume}%" : $"{_settings.Volume}%"));
-        _hudScreen.Rows.Add(new MenuRow("mute", OnOff(_settings.Mute)));
+            "volume", _settings.Mute ? $"muted · {_settings.Volume}%" : $"{_settings.Volume}%",
+            Control: MenuControl.Slider, ControlAmount: _settings.Volume / 100f));
+        _hudScreen.Rows.Add(new MenuRow("mute", OnOff(_settings.Mute),
+            Control: MenuControl.Checkbox, ControlAmount: _settings.Mute ? 1f : 0f));
 
         _hudScreen.Rows.Add(new MenuRow(
             _soundPacks.Count == 1 ? "1 sound pack installed" : $"{_soundPacks.Count} sound packs installed",
@@ -5473,7 +6283,8 @@ public sealed class ClientHost : IDisposable
             Note: SaidSound("Searches Modrinth's audio resource packs. Blank shows the most downloaded")));
         _hudScreen.Rows.Add(new MenuRow(
             SoundOpenOnlyRow, OnOff(_soundOpenOnly),
-            Note: "Off includes every license and says which one before download. On asks Modrinth for open-source packs only"));
+            Note: "Off includes every license and says which one before download. On asks Modrinth for open-source packs only",
+            Control: MenuControl.Checkbox, ControlAmount: _soundOpenOnly ? 1f : 0f));
         _hudScreen.Rows.Add(new MenuRow(
             "search now", _soundSearchTask is null ? "" : "searching",
             Note: SaidSound("Enter refreshes the first page. No account or API key is used")));
@@ -6470,6 +7281,15 @@ public sealed class ClientHost : IDisposable
             // pressing enter follows exactly the same path.
             Action<bool>? accepted = box == _packBox
                 ? kept => { if (kept) ImportPack(_packBox.Text); }
+                : box == _packSearchBox
+                    ? kept =>
+                    {
+                        if (!kept) return;
+                        if (_packBrowse) StartPackSearch(0);
+                        else RefreshScreen();
+                    }
+                : box == _packCategoryBox || box == _packVersionBox
+                    ? kept => { if (kept) StartPackSearch(0); }
                 : box == _soundSearchBox
                     ? kept => { if (kept) StartSoundSearch(0); }
                     : box == _soundPackBox
@@ -6592,12 +7412,48 @@ public sealed class ClientHost : IDisposable
             // row reaching ChoosePack that is not one quietly does nothing whatever.
             switch (row.Label)
             {
+                case MyPacksRow: ShowMyPacks(); return;
+                case BrowsePacksRow: ShowBrowsePacks(); return;
+                case PackBackRow:
+                    _hudScreen.PackDetailsOpen = false;
+                    RefreshScreen();
+                    FocusPackCard();
+                    return;
+                case PackSortRow:
+                    if (_packBrowse)
+                    {
+                        _packBrowseSort = (ResourcePackSort)(((int)_packBrowseSort + 1)
+                            % Enum.GetValues<ResourcePackSort>().Length);
+                        StartPackSearch(0);
+                    }
+                    else
+                    {
+                        _packSort = (PackLibrary.SortOrder)(((int)_packSort + 1)
+                            % Enum.GetValues<PackLibrary.SortOrder>().Length);
+                        RefreshScreen();
+                    }
+                    return;
+                case PackRefreshRow: StartPackSearch(0); return;
+                case PackPreviousRow:
+                    StartPackSearch(Math.Max(0, _packPageOffset - ModrinthResourcePackProvider.PageSize));
+                    return;
+                case PackNextRow:
+                    StartPackSearch(_packPageOffset + ModrinthResourcePackProvider.PageSize);
+                    return;
+                case PackVersionRow: CyclePackVersion(); return;
+                case PackDownloadRow: DownloadSelectedPack(); return;
+                case PackUpdateRow: UpdateSelectedPack(); return;
+                case PackSourceRow: OpenPackSource(); return;
+                case PackOpenShelfRow: OpenPackShelf(); return;
                 case BrowseFileRow: BrowseForPack(NativeFilePicker.Want.File); return;
                 case BrowseFolderRow: BrowseForPack(NativeFilePicker.Want.Folder); return;
                 case UseSelectedPackRow: UseSelectedPack(); return;
                 case RemoveSelectedPackRow: RemoveSelectedPack(); return;
-                case "the shelf": return;
-                default: ChoosePack(row.Label); return;
+                default:
+                    if (_remotePackRows.TryGetValue(row.Label, out var remote)) SelectRemotePack(remote);
+                    else if (_installedPackRows.ContainsKey(row.Label) || row.Label == BuiltInPackRow)
+                        ChoosePack(row.Label);
+                    return;
             }
         }
 
@@ -7730,6 +8586,11 @@ public sealed class ClientHost : IDisposable
         if (_hudScreen.Kind == HudScreenKind.Game
             || (_hudScreen.Kind == HudScreenKind.Player && !_hudScreen.IsContainer))
         {
+            if (OnTab(GameTab.Packs))
+            {
+                ScrollPackRows(-Math.Sign(wheelY) * 3);
+                return;
+            }
             ScrollRows(_hudScreen.Scroll - Math.Sign(wheelY) * 3);
             return;
         }
@@ -7749,6 +8610,31 @@ public sealed class ClientHost : IDisposable
         _hudScreen.Scroll = Math.Clamp(
             to, 0, Math.Max(0, _hudScreen.Rows.Count - ScreenLayout.MenuLines(LayoutHeight)));
 
+    private void ScrollPackRows(int by)
+    {
+        var hoveredPane = _hudScreen.Hovered is { Kind: ZoneKind.Row } hovered
+                          && hovered.Index >= 0 && hovered.Index < _hudScreen.Rows.Count
+            ? _hudScreen.Rows[hovered.Index].Pane : (MenuPane?)null;
+        var narrow = _window.Size.X / HudRenderer.ScaleFor(_window.Size.Y) < 412f;
+        var detail = hoveredPane == MenuPane.Detail
+                     || hoveredPane is null && narrow && _hudScreen.PackDetailsOpen
+                     || hoveredPane is null && _hudScreen.Selected >= 0
+                     && _hudScreen.Selected < _hudScreen.Rows.Count
+                     && _hudScreen.Rows[_hudScreen.Selected].Pane == MenuPane.Detail;
+        if (detail)
+        {
+            var count = _hudScreen.Rows.Count(row => row.Pane == MenuPane.Detail && !row.Action);
+            _hudScreen.PackDetailScroll = Math.Clamp(_hudScreen.PackDetailScroll + by, 0,
+                Math.Max(0, count - 5));
+        }
+        else
+        {
+            var count = _hudScreen.Rows.Count(row => row.Pane == MenuPane.List);
+            _hudScreen.PackListScroll = Math.Clamp(_hudScreen.PackListScroll + by, 0,
+                Math.Max(0, count - 1));
+        }
+    }
+
     /// <summary>How tall the screen is in layout units — what the overlay lays everything out in.</summary>
     private float LayoutHeight => _window.Size.Y / HudRenderer.ScaleFor(_window.Size.Y);
 
@@ -7764,6 +8650,32 @@ public sealed class ClientHost : IDisposable
     {
         if (_hudScreen.Kind != HudScreenKind.Game
             && !(_hudScreen.Kind == HudScreenKind.Player && !_hudScreen.IsContainer)) return;
+
+        if (OnTab(GameTab.Packs) && _hudScreen.Selected >= 0
+            && _hudScreen.Selected < _hudScreen.Rows.Count)
+        {
+            var pane = _hudScreen.Rows[_hudScreen.Selected].Pane;
+            var rows = _hudScreen.Rows.Select((row, index) => (row, index))
+                .Where(pair => pair.row.Pane == pane && (pane != MenuPane.Detail || !pair.row.Action))
+                .ToArray();
+            var position = Array.FindIndex(rows, pair => pair.index == _hudScreen.Selected);
+            if (position < 0) return; // fixed action strip is always visible.
+            if (pane == MenuPane.List)
+            {
+                if (position < _hudScreen.PackListScroll)
+                    _hudScreen.PackListScroll = position;
+                else if (position >= _hudScreen.PackListScroll + 6)
+                    _hudScreen.PackListScroll = Math.Max(0, position - 5);
+            }
+            else
+            {
+                if (position < _hudScreen.PackDetailScroll)
+                    _hudScreen.PackDetailScroll = position;
+                else if (position >= _hudScreen.PackDetailScroll + 8)
+                    _hudScreen.PackDetailScroll = Math.Max(0, position - 7);
+            }
+            return;
+        }
 
         var lines = ScreenLayout.MenuLines(LayoutHeight);
 
@@ -8439,6 +9351,7 @@ public sealed class ClientHost : IDisposable
         TakePickedPack();
         TakePickedSoundPack();
         TakePickedSkin();
+        PollPackWork(dt);
         PollSoundPackWork();
         PollSkinWork();
 
@@ -11502,7 +12415,7 @@ public sealed class ClientHost : IDisposable
                 break;
             case 221:
                 SampleUi(size, "radial");
-                ProbeRadialHotbar();
+                ProbeRadialHotbar(size);
                 _hudScreen.RadialHotbar = false;
                 _hudScreen.RadialSlot = -1;
                 OpenGame(GameTab.Controls);
@@ -11676,6 +12589,18 @@ public sealed class ClientHost : IDisposable
             case 375:
                 SampleUi(size, "packs");
                 ProbePackTab();
+                FocusPackDetails();
+                break;
+
+            case 376:
+                SampleUi(size, "packs detail");
+                ProbePackDetailNavigation(size);
+                PreparePackBrowseFixture();
+                break;
+
+            case 377:
+                SampleUi(size, "packs browse");
+                ProbePackBrowseGallery(size);
                 CloseScreen();
                 OpenGame(GameTab.Audio);
                 break;
@@ -12655,6 +13580,8 @@ public sealed class ClientHost : IDisposable
     private int _uiAudioRemote = -1;
 
     private bool _uiPackRows;
+    private bool _uiPackNavigation;
+    private bool _uiPackBrowseGallery;
     private readonly HashSet<GameTab> _uiSettingsChrome = [];
     private readonly List<string> _uiSettingsChromeFaults = [];
 
@@ -13073,10 +14000,24 @@ public sealed class ClientHost : IDisposable
         Console.Out.Flush();
     }
 
-    private void ProbeRadialHotbar()
+    private unsafe void ProbeRadialHotbar(Vector2D<int> size)
     {
         _uiRadialSlots = _hudScreen.RadialDrawnSlots;
         _uiRadialBounds = _hudScreen.RadialBounds.Z > 0f && _hudScreen.RadialBounds.W > 0f;
+        if (_uiRadialBounds)
+        {
+            // The wheel deliberately has a clear centre. Sample its upper ring, not the hole, so
+            // scale 1 does not ask one world pixel whether a 118-pixel control was drawn around it.
+            var scale = HudRenderer.ScaleFor(size.Y);
+            var x = Math.Clamp((int)MathF.Round(
+                (_hudScreen.RadialBounds.X + _hudScreen.RadialBounds.Z * 0.5f) * scale), 0, size.X - 1);
+            var topY = (_hudScreen.RadialBounds.Y + 8f) * scale;
+            var y = Math.Clamp(size.Y - 1 - (int)MathF.Round(topY), 0, size.Y - 1);
+            Span<byte> pixel = stackalloc byte[4];
+            fixed (byte* pointer = pixel)
+                _gl.ReadPixels(x, y, 1, 1, PixelFormat.Rgba, PixelType.UnsignedByte, pointer);
+            _uiSamples["radial"] = (pixel[0], pixel[1], pixel[2]);
+        }
         Console.WriteLine(
             $"ui-check    radial      {_uiRadialSlots} slots, selected {_hudScreen.RadialSlot + 1}, "
             + $"bounds {_hudScreen.RadialBounds.X:F0},{_hudScreen.RadialBounds.Y:F0} "
@@ -13129,23 +14070,71 @@ public sealed class ClientHost : IDisposable
         Console.Out.Flush();
     }
 
-    /// <summary>Proves the texture shelf exposes its compatibility accordion and safe actions.</summary>
+    /// <summary>Proves the collection-scale texture shelf exposes two panes and only draws its window.</summary>
     private void ProbePackTab()
     {
         var rows = _hudScreen.Rows;
+        var cards = rows.Select((row, index) => (row, index))
+            .Where(pair => pair.row.Pane == MenuPane.List && pair.row.Card).ToArray();
+        var drawnCards = _layout.Zones.Count(zone => zone.Kind == ZoneKind.Row
+            && zone.Index >= 0 && zone.Index < rows.Count && rows[zone.Index].Card);
+        var details = rows.Where(row => row.Pane == MenuPane.Detail).ToArray();
+        var actions = details.Where(row => row.Action).ToArray();
         _uiPackRows = _hudScreen.TabNames.Length == Enum.GetValues<GameTab>().Length
-            && rows.Any(row => row.Label == "selected pack details" && row.Heading)
-            && rows.Any(row => row.Label == "runtime fit" && row.Value == "partial")
+            && rows.Any(row => row.Label == MyPacksRow)
+            && rows.Any(row => row.Label == BrowsePacksRow)
+            && rows.Any(row => row.Label == PackSearchRow && row.Edits == _packSearchBox)
+            && cards.Length == _packs.Count + 1
+            && drawnCards > 0 && drawnCards < cards.Length
+            && details.Any(row => row.Heading && row.Label == "Clarity Fixture")
+            && details.Any(row => row.Label == "runtime compatibility"
+                                      && row.Value == PackCompatibility.WithOmissions)
+            && details.Any(row => row.Label == "content coverage")
             && rows.Any(row => row.Label == "interface & font" && row.Value.Contains("95", StringComparison.Ordinal))
             && rows.Any(row => row.Label == "audio" && row.Value.Contains("/", StringComparison.Ordinal))
             && rows.Any(row => row.Label == "models & blockstates")
-            && rows.Any(row => row.Label == UseSelectedPackRow)
-            && rows.Any(row => row.Label == RemoveSelectedPackRow);
+            && actions.Any(row => row.Label == UseSelectedPackRow)
+            && actions.Any(row => row.Label == RemoveSelectedPackRow)
+            && actions.Any(row => row.Label == PackOpenShelfRow);
 
         Console.WriteLine(
-            $"ui-check    packs       accordion {_uiPackRows}, {_packs.Count} planted packs, "
-            + $"{rows.Count} rows without reading AppData");
+            $"ui-check    packs       two-pane {_uiPackRows}, {cards.Length} cards, "
+            + $"{drawnCards} drawn, {details.Length} stable detail/action rows without reading AppData");
         Console.Out.Flush();
+    }
+
+    /// <summary>Checks the narrow replacement pane and its Back path, or both simultaneous wide panes.</summary>
+    private void ProbePackDetailNavigation(Vector2D<int> size)
+    {
+        var scale = HudRenderer.ScaleFor(size.Y);
+        var logicalWidth = MathF.Floor(size.X / scale);
+        var narrow = logicalWidth < HudRenderer.GameMenuPanel + 34f;
+        var detailZones = _layout.Zones.Where(zone => zone.Kind == ZoneKind.Row
+            && zone.Index >= 0 && zone.Index < _hudScreen.Rows.Count
+            && _hudScreen.Rows[zone.Index].Pane == MenuPane.Detail).ToArray();
+        var cardZones = _layout.Zones.Where(zone => zone.Kind == ZoneKind.Row
+            && zone.Index >= 0 && zone.Index < _hudScreen.Rows.Count
+            && _hudScreen.Rows[zone.Index].Pane == MenuPane.List
+            && _hudScreen.Rows[zone.Index].Card).ToArray();
+
+        if (!narrow)
+        {
+            _uiPackNavigation = detailZones.Length > 0 && cardZones.Length > 0;
+            return;
+        }
+
+        var back = Array.FindIndex(_hudScreen.Rows.ToArray(), row => row.Label == PackBackRow);
+        var backDrawn = detailZones.Any(zone => zone.Index == back);
+        var replacedList = detailZones.Length > 0 && cardZones.Length == 0 && _hudScreen.PackDetailsOpen;
+        if (back >= 0)
+        {
+            _hudScreen.Selected = back;
+            ActivateRow();
+        }
+        var returned = !_hudScreen.PackDetailsOpen
+            && _hudScreen.Selected >= 0 && _hudScreen.Selected < _hudScreen.Rows.Count
+            && _hudScreen.Rows[_hudScreen.Selected].Pane == MenuPane.List;
+        _uiPackNavigation = replacedList && backDrawn && returned;
     }
 
     /// <summary>
@@ -13167,8 +14156,11 @@ public sealed class ClientHost : IDisposable
         var rows = _layout.Zones.Where(zone => zone.Kind is ZoneKind.Row or ZoneKind.Field).ToArray();
         var scale = HudRenderer.ScaleFor(size.Y);
         var logicalWidth = MathF.Floor(size.X / scale);
-        var left = MathF.Round((logicalWidth - HudRenderer.GameMenuPanel) * 0.5f);
-        var right = left + HudRenderer.GameMenuPanel;
+        var panelWidth = tab == GameTab.Packs && logicalWidth < HudRenderer.GameMenuPanel + 34f
+            ? MathF.Min(HudRenderer.MenuPanel, logicalWidth - 24f)
+            : HudRenderer.GameMenuPanel;
+        var left = MathF.Round((logicalWidth - panelWidth) * 0.5f);
+        var right = left + panelWidth;
 
         void Fault(string message)
         {
@@ -13257,6 +14249,74 @@ public sealed class ClientHost : IDisposable
             $"ui-check    skins      rows {_uiSkinRows}, canvas {_uiSkinCanvas}, "
             + $"{_uiSkinQuads} model faces, {_uiSkinInk} non-background pixels, "
             + $"row turn {_uiSkinButton}, drag {_uiSkinDragged}");
+        Console.Out.Flush();
+    }
+
+    /// <summary>Plants one complete remote detail without contacting Modrinth or touching AppData.</summary>
+    private void PreparePackBrowseFixture()
+    {
+        var project = new RemoteResourcePack(
+            "RemoteFixture1", "remote-fixture", "Remote Gallery Fixture", "fixture maker", "MIT",
+            42_000, "A vanilla-first remote fixture with a real cached gallery thumbnail.",
+            new Uri("https://modrinth.com/resourcepack/remote-fixture"),
+            new Uri("https://cdn.modrinth.com/data/RemoteFixture1/icon.png"), null,
+            ["16x", "simplistic"], ["1.21.8"], DateTimeOffset.UnixEpoch,
+            DateTimeOffset.UnixEpoch, "VersionFixture1",
+            [new Uri("https://cdn.modrinth.com/data/RemoteFixture1/images/gallery.png")]);
+        var file = new RemoteResourcePackFile(
+            "remote-fixture.zip", new Uri("https://cdn.modrinth.com/data/RemoteFixture1/file.zip"),
+            1_048_576, new string('a', 128), "", true);
+        _packPage = new ResourcePackPage([project], 0, 1, false, false, false);
+        _packBrowse = true;
+        _selectedRemotePack = project;
+        _selectedPackVersions =
+        [
+            new RemoteResourcePackVersion(
+                "VersionFixture1", project.Id, "1.0", "1.0", "release",
+                DateTimeOffset.UnixEpoch, ["1.21.8"], [], [file]),
+        ];
+        _selectedPackVersion = 0;
+        _selectedPackPreview = Png.Encode(new Image(1, 1, [188, 188, 188, 255]));
+        _selectedPackPreviewIsGallery = true;
+        _packNote = "remote fixture loaded from the offline UI check";
+        _hudScreen.PackDetailsOpen = true;
+        _hud.SetPackPreview(null);
+        RefreshPackIconAtlas();
+        RefreshScreen();
+        FocusPackDetails();
+    }
+
+    /// <summary>Reads the planted gallery thumbnail back from the framebuffer and its detail rows.</summary>
+    private unsafe void ProbePackBrowseGallery(Vector2D<int> size)
+    {
+        var box = _hudScreen.PackDetailImageBox;
+        var rows = _hudScreen.Rows;
+        var metadata = rows.Any(row => row.Pane == MenuPane.Detail && row.Label == "gallery"
+            && row.Value == "1 IMAGE")
+            && rows.Any(row => row.Pane == MenuPane.Detail && row.Label == PackVersionRow)
+            && rows.Any(row => row.Pane == MenuPane.Detail && row.Label == PackDownloadRow
+                                      && row.Action)
+            && _hudScreen.PackDetailImageIsGallery;
+        var pixel = (R: (byte)0, G: (byte)0, B: (byte)0);
+        if (box.Z > 0f && box.W > 0f)
+        {
+            var scale = HudRenderer.ScaleFor(size.Y);
+            var x = Math.Clamp((int)MathF.Round((box.X + box.Z * 0.5f) * scale), 0, size.X - 1);
+            var y = Math.Clamp(size.Y - 1
+                - (int)MathF.Round((box.Y + box.W * 0.5f) * scale), 0, size.Y - 1);
+            Span<byte> sample = stackalloc byte[4];
+            fixed (byte* pointer = sample)
+                _gl.ReadPixels(x, y, 1, 1, PixelFormat.Rgba, PixelType.UnsignedByte, pointer);
+            pixel = (sample[0], sample[1], sample[2]);
+        }
+
+        _uiPackBrowseGallery = metadata && box.Z > 0f
+            && pixel.R > 150 && pixel.G > 150 && pixel.B > 150
+            && Math.Max(pixel.R, Math.Max(pixel.G, pixel.B))
+               - Math.Min(pixel.R, Math.Min(pixel.G, pixel.B)) <= 4;
+        Console.WriteLine(
+            $"ui-check    pack browse gallery {_uiPackBrowseGallery}, pixel "
+            + $"{pixel.R} {pixel.G} {pixel.B}, detail {box.Z:F0}x{box.W:F0}");
         Console.Out.Flush();
     }
 
@@ -13564,6 +14624,7 @@ public sealed class ClientHost : IDisposable
         var videoPanel = Read("video");
         var worldPanel = Read("world");
         var packsPanel = Read("packs");
+        var packDetailPanel = Read("packs detail");
         var audioPanel = Read("audio");
         var world = Read("no screen corner");
 
@@ -13588,6 +14649,7 @@ public sealed class ClientHost : IDisposable
         if (videoPanel == bare) faults.Add("opening video settings changed nothing on screen");
         if (worldPanel == bare) faults.Add("opening world settings changed nothing on screen");
         if (packsPanel == bare) faults.Add("opening the texture-pack shelf changed nothing on screen");
+        if (packDetailPanel == bare) faults.Add("opening texture-pack details changed nothing on screen");
         if (audioPanel == bare) faults.Add("opening the audio shelf changed nothing on screen");
 
         if (_uiSettingsChrome.Count != Enum.GetValues<GameTab>().Length)
@@ -13695,6 +14757,10 @@ public sealed class ClientHost : IDisposable
 
         if (!_uiPackRows)
             faults.Add("the texture-pack tab is missing compatibility details or explicit apply/remove actions");
+        if (!_uiPackNavigation)
+            faults.Add("the texture-pack list/detail panes or narrow Back navigation disagree with their drawn zones");
+        if (!_uiPackBrowseGallery)
+            faults.Add("the texture-pack browser did not draw its cached gallery image and release actions");
 
         if (!_uiSkinRows)
             faults.Add("the skin tab is missing its shelf, preview, import, or community controls");
@@ -14210,7 +15276,7 @@ public sealed class ClientHost : IDisposable
                 ? "pack-skinned panels"
                 : "original graphite panels in neutral grey";
             Console.WriteLine(
-                "OK  the overlay reaches the screen: crosshair, controller radial, seventeen screen states, "
+                "OK  the overlay reaches the screen: crosshair, controller radial, nineteen screen states, "
                 + panelReceipt + ", "
                 + $"{_uiProbes.Sum(p => p.Value.Hits)} squares answering for their own middles");
         }
@@ -14238,8 +15304,26 @@ public sealed class ClientHost : IDisposable
         Span<byte> middle = stackalloc byte[4];
         Span<byte> corner = stackalloc byte[4];
 
-        fixed (byte* p = middle)
-            _gl.ReadPixels(midX, midY, 1, 1, PixelFormat.Rgba, PixelType.UnsignedByte, p);
+        if (what == "no screen")
+        {
+            // The authored crosshair has a one-pixel hole at its exact centre. Read the small
+            // footprint and retain its brightest pixel; the old probe hit an arm at 2x and the
+            // hole at 1x, measuring pixel rounding rather than whether the crosshair arrived.
+            Span<byte> crosshair = stackalloc byte[7 * 7 * 4];
+            fixed (byte* p = crosshair)
+                _gl.ReadPixels(midX - 3, midY - 3, 7, 7,
+                    PixelFormat.Rgba, PixelType.UnsignedByte, p);
+            var best = 0;
+            for (var at = 0; at < crosshair.Length; at += 4)
+                if (crosshair[at] + crosshair[at + 1] + crosshair[at + 2]
+                    > crosshair[best] + crosshair[best + 1] + crosshair[best + 2]) best = at;
+            crosshair.Slice(best, 4).CopyTo(middle);
+        }
+        else
+        {
+            fixed (byte* p = middle)
+                _gl.ReadPixels(midX, midY, 1, 1, PixelFormat.Rgba, PixelType.UnsignedByte, p);
+        }
         fixed (byte* p = corner)
             _gl.ReadPixels(4, size.Y - 5, 1, 1, PixelFormat.Rgba, PixelType.UnsignedByte, p);
 

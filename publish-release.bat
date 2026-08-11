@@ -63,7 +63,11 @@ REM The audit runs headless and cannot see the screen at all, and the overlay sp
 REM life being back-face culled: built correctly, submitted correctly, no GL error reported, and
 REM never once drawn. Every check in the project passed throughout. Nothing but this catches it.
 echo [6/7] checking every interface reaches the screen...
-call :run_windowed --ui-check --chunks 6 --seed driftwood
+call :run_windowed --ui-check --chunks 6 --seed driftwood --width 400 --height 480
+if errorlevel 1 goto :failed_ui
+call :run_windowed --ui-check --chunks 6 --seed driftwood --width 1600 --height 900
+if errorlevel 1 goto :failed_ui
+call :run_windowed --ui-check --chunks 6 --seed driftwood --width 1920 --height 1440
 if errorlevel 1 goto :failed_ui
 
 REM The public asset is a versioned ZIP containing exactly the gated executable, plus a checksum

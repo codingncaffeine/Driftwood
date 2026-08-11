@@ -31,7 +31,7 @@ reachable from bare hands, in seven rounds, with no starting kit.
 | Creature drops, sixteen colours of wool and dye, food that heals | working |
 | **Flowing water and lava, buckets, swimming, burning** | working |
 | **Fire and smoke — anything alight shows it, anything that dies leaves a puff** | working |
-| **A texture-pack shelf and importer, in the menu** | working |
+| **A searchable texture-pack library, verified Modrinth browser and updater** | working |
 | **An audio shelf, local importer and verified Modrinth browser** | working |
 | Armour, hunger, signals, rails, farming | working |
 | Controller support — SDL3 hot-plug, named devices, snap-nav, radial hotbar, assist, rumble, rebinding | working |
@@ -339,9 +339,10 @@ leaves a complete world. A pack is never unpacked — it is read where it sits a
 
 That sparse layering now includes the interface and readable font, not only world art. Driftwood's
 default menus use an original graphite-and-pewter pixel theme with tiled shading, bevel states,
-etched corners and joined tabs. Thirteen first-party fallback sprites cover the standard menu,
-list/options surfaces, buttons, text fields, tabs and tooltips; a resource pack can replace any of
-those among the 44 mapped GUI destinations without making the remaining controls look unfinished.
+etched corners and joined tabs. Twenty-six first-party fallback sprites cover the standard menu,
+list/options surfaces, buttons, text fields, tabs, sliders, checkboxes, scrollbars, tooltips and
+toasts; a resource pack can replace any of those among the 55 mapped GUI destinations without making
+the remaining controls look unfinished.
 The wider eight-tab settings shell measures and shortens long labels and values before drawing, so
 pack fonts cannot push the two columns through one another.
 
@@ -350,26 +351,42 @@ providers can replace the 95 printable ASCII glyphs sparsely. A missing glyph ke
 readable drawing. TTF, Unihex, Unicode shaping and arbitrary mod font providers are named as
 unsupported instead of guessed; those need a substantially different text renderer.
 
-There is a **shelf** in the options screen, reachable from the menu before a world exists. Packs
-installed onto it live in `%APPDATA%\Driftwood\packs`, and the setting stores a **name** rather than
-a path, so it survives the file being moved and swapping between two packs stops meaning going to
-find either of them. Dropping a pack into that folder by hand works exactly as well as the screen.
+There is a dedicated **PACKS** library in the options screen, reachable before a world exists. Its
+MY PACKS side is a searchable, sortable, virtualized card list beside one stable detail pane; on a
+narrow window the detail replaces the list and has a drawn Back action. A hundred-pack shelf remains
+the same fixed-size screen. Pack title, description, author, icon, dialect, native resolution, size,
+install time and optional provider/version provenance are cached in a small sidecar. Packs themselves
+live in `%APPDATA%\Driftwood\packs`, and dropping one there by hand still works.
 
 ```
 Driftwood.exe --packs                          list the shelf
 Driftwood.exe --packs --pack C:\a\Pack.zip     install one and say what it turned out to be
+Driftwood.exe --pack-matrix C:\packs\corpus     classify an ignored local compatibility corpus
 ```
 
-Every row says **what the thing is** — which layout it turned out to be and what resolution it is
-drawn at, rather than a filename — because that is the only line that says whether the file somebody
-downloaded is the file they meant. Enter opens an accordion of measured runtime compatibility before
-anything is applied: blocks/items, GUI/font, texture-pack audio, creatures/armour and particles each
-get their own count, while models, blockstates and loader extensions are named as unread rather than
-quietly claimed. Applying and removing are separate, confirmed actions. A pack that will not open is
+The BROWSE side searches Java resource packs on Modrinth without a token, with sorting, category and
+Minecraft-version filters, lazy pages and offline metadata/icon/gallery caching. Project details show
+the author, license, icon or gallery image, supported versions, releases and required/optional/
+incompatible/embedded dependencies before the explicit download action. Downloads stream to a
+bounded temporary file, check the HTTPS host, byte count and SHA-512, inspect the exact archive, then
+install or update atomically. A cancel or rejected replacement leaves the old pack recoverable.
+
+Every pack receives one of four archive-derived outcomes: **DRIFTWOOD VERIFIED**, **WORKS WITH
+OMISSIONS**, **REQUIRES EXTERNAL FEATURE**, or **INVALID**. That is separate from content coverage:
+art for a block or system Driftwood does not have is a planning opportunity, not a decoder failure.
+Compatibility is cached by verified archive hash, and named counts keep optional OptiFine/CIT/CTM/
+CEM/core-shader material separate from standard support. Applying and removing remain explicit,
+confirmed actions. A pack that will not open is
 **listed with the reason** rather than dropped: "no packs" and "a pack I cannot read" are otherwise
 the same four words, and packs arrive broken far more often than saves do. A layout not read yet is
 named as such — a 2012-era atlas pack is a real thing somebody may be holding, not a mistake they
 made.
+
+For blocks and items Driftwood owns, standard Java blockstates and inherited models now resolve
+texture variables, element geometry, face UV/culling/tint, rotations, weighted variants, multipart
+conditions, legacy item models and current `items/*.json` definitions. Pack `sounds.json` files also
+resolve event references, weights and replacement rules; a malformed or undecodable higher-priority
+clip falls through per event to the next pack layer and finally Driftwood's owned recording.
 
 Animated textures play, at whatever frame rate the pack asks for, with the whole mip chain uploaded
 per layer so a lake does not freeze at distance.
@@ -388,6 +405,11 @@ The first says which of Driftwood's layers the pack supplied and which kept our 
 has nothing to put it on, which is how content gets planned against something real. The same tally
 is on the packs screen for whatever is being worn, so it is a thing a player can see rather than a
 flag only the author knows about.
+
+`--pack-matrix` asks the other question across every top-level pack in a private corpus: which exact
+standard features decode, which of the four outcomes each archive earns, which feature families recur,
+and whether a remaining gap belongs to Java compatibility, rendering materials, Bedrock support or
+new game content. Third-party archives never enter the repository or release artifact.
 
 A pack is a complete inventory of what a game in this genre contains, one file per thing, organised
 by its author into folders that mean something — so by subtraction it is the clearest available

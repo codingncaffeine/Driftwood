@@ -666,6 +666,10 @@ public static class WorldAudit
         Check("a pack can be put on the shelf and named", shelfFaults.Count == 0,
             shelfFaults.Count == 0 ? shelfDetail : string.Join("; ", shelfFaults));
 
+        var p76Faults = PackP76SelfTest.Run(out var p76Detail);
+        Check("a hundred-pack library can browse, verify, update and recover offline", p76Faults.Count == 0,
+            p76Faults.Count == 0 ? p76Detail : string.Join("; ", p76Faults));
+
         var soundShelfFaults = SoundPackLibrarySelfTest.Run(out var soundShelfDetail);
         Check("a sound pack stays separate, bounded, and attributable", soundShelfFaults.Count == 0,
             soundShelfFaults.Count == 0 ? soundShelfDetail : string.Join("; ", soundShelfFaults));
@@ -2920,6 +2924,19 @@ public static class WorldAudit
             GuiTextureSet.Layer.TabSelected,
             GuiTextureSet.Layer.TabSelectedHighlighted,
             GuiTextureSet.Layer.TooltipBackground,
+            GuiTextureSet.Layer.ToastBackground,
+            GuiTextureSet.Layer.ToastSlot,
+            GuiTextureSet.Layer.Slider,
+            GuiTextureSet.Layer.SliderHighlighted,
+            GuiTextureSet.Layer.SliderHandle,
+            GuiTextureSet.Layer.SliderHandleHighlighted,
+            GuiTextureSet.Layer.Checkbox,
+            GuiTextureSet.Layer.CheckboxHighlighted,
+            GuiTextureSet.Layer.CheckboxSelected,
+            GuiTextureSet.Layer.CheckboxSelectedHighlighted,
+            GuiTextureSet.Layer.Scroller,
+            GuiTextureSet.Layer.ScrollerHighlighted,
+            GuiTextureSet.Layer.ScrollerBackground,
         ];
 
         foreach (var layer in themed)
@@ -2946,6 +2963,46 @@ public static class WorldAudit
         if (theme.Tiles[(int)GuiTextureSet.Layer.Tab].AsSpan().SequenceEqual(
                 theme.Tiles[(int)GuiTextureSet.Layer.TabSelected]))
             faults.Add("normal and selected first-party tabs are the same sprite");
+        if (theme.Tiles[(int)GuiTextureSet.Layer.Slider].AsSpan().SequenceEqual(
+                theme.Tiles[(int)GuiTextureSet.Layer.SliderHighlighted]))
+            faults.Add("normal and highlighted first-party sliders are the same sprite");
+        if (theme.Tiles[(int)GuiTextureSet.Layer.SliderHandle].AsSpan().SequenceEqual(
+                theme.Tiles[(int)GuiTextureSet.Layer.SliderHandleHighlighted]))
+            faults.Add("normal and highlighted first-party slider handles are the same sprite");
+        if (theme.Tiles[(int)GuiTextureSet.Layer.Checkbox].AsSpan().SequenceEqual(
+                theme.Tiles[(int)GuiTextureSet.Layer.CheckboxSelected]))
+            faults.Add("clear and selected first-party checkboxes are the same sprite");
+        if (theme.Tiles[(int)GuiTextureSet.Layer.Scroller].AsSpan().SequenceEqual(
+                theme.Tiles[(int)GuiTextureSet.Layer.ScrollerHighlighted]))
+            faults.Add("normal and highlighted first-party scrollbars are the same sprite");
+
+        var partialRoot = Path.Combine(Path.GetTempPath(), "driftwood-partial-gui-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(partialRoot, "assets", "minecraft", "textures", "gui", "sprites", "widget"));
+            File.WriteAllText(Path.Combine(partialRoot, "pack.mcmeta"),
+                "{\"pack\":{\"pack_format\":64,\"description\":\"partial GUI\"}}");
+            File.WriteAllBytes(Path.Combine(partialRoot, "assets", "minecraft", "textures", "gui", "sprites", "widget", "slider.png"),
+                Png.Encode(new Image(8, 8, Enumerable.Repeat((byte)155, 8 * 8 * 4).ToArray())));
+            using var partialPack = TexturePack.Open(partialRoot, out var partialWhy);
+            if (partialPack is null) faults.Add($"the partial GUI control would not open: {partialWhy}");
+            else
+            {
+                var partial = GuiTextureSet.Load(partialPack);
+                if (!partial.FromPack[(int)GuiTextureSet.Layer.Slider])
+                    faults.Add("a supplied slider did not overlay the first-party layer");
+                if (partial.FromPack[(int)GuiTextureSet.Layer.Checkbox]
+                    || !partial.Present[(int)GuiTextureSet.Layer.Checkbox]
+                    || !partial.Tiles[(int)GuiTextureSet.Layer.Checkbox].AsSpan().SequenceEqual(
+                        theme.Tiles[(int)GuiTextureSet.Layer.Checkbox]))
+                    faults.Add("a missing checkbox layer did not visibly retain its first-party fallback");
+            }
+        }
+        finally
+        {
+            try { if (Directory.Exists(partialRoot)) Directory.Delete(partialRoot, recursive: true); }
+            catch (IOException) { }
+        }
 
         var surfaceTones = theme.Tiles[(int)GuiTextureSet.Layer.OptionsBackground]
             .Where((_, index) => index % 4 == 0)
@@ -10240,8 +10297,8 @@ public static class WorldAudit
             var wrong = Path.Combine(root, "notes.txt");
             File.WriteAllText(wrong, "hello");
 
-            var shelf = PackLibrary.Folder;
-            var installed = PackLibrary.Install(good, out var why);
+            var shelf = Path.Combine(root, "shelf");
+            var installed = PackLibrary.Install(good, out var why, shelf);
 
             if (installed is not { } entry)
             {
@@ -10254,31 +10311,31 @@ public static class WorldAudit
 
             // ⛳ Found again BY NAME, which is what the setting stores — an index would mean something
             // different the moment anything else is added, and adding is what the screen is for.
-            if (PackLibrary.PathOf(entry.Name) is null)
+            if (PackLibrary.PathOf(entry.Name, shelf) is null)
                 faults.Add($"'{entry.Name}' went on the shelf and cannot be found by name");
 
-            var listed = PackLibrary.List();
+            var listed = PackLibrary.List(shelf);
             if (!listed.Any(p => p.Name == entry.Name))
                 faults.Add($"'{entry.Name}' is on the shelf and not in the list");
 
             // ⛔ THE CONTROL. A shelf that takes anything passes every row above.
-            if (PackLibrary.Install(bad, out var badWhy) is not null)
+            if (PackLibrary.Install(bad, out var badWhy, shelf) is not null)
                 faults.Add("a file that is not a pack was accepted onto the shelf");
             else if (badWhy.Length == 0)
                 faults.Add("a broken pack was refused with no reason given");
 
-            if (PackLibrary.Install(wrong, out var wrongWhy) is not null)
+            if (PackLibrary.Install(wrong, out var wrongWhy, shelf) is not null)
                 faults.Add("a .txt was accepted as a texture pack");
             else if (!wrongWhy.Contains(".txt"))
                 faults.Add($"a .txt was refused without saying what was wrong with it: '{wrongWhy}'");
 
             // Re-importing replaces rather than piling up, which is what an updated pack needs.
-            PackLibrary.Install(good, out _);
-            if (PackLibrary.List().Count(p => p.Name == entry.Name) != 1)
+            PackLibrary.Install(good, out _, shelf);
+            if (PackLibrary.List(shelf).Count(p => p.Name == entry.Name) != 1)
                 faults.Add("importing the same pack twice left two of it on the shelf");
 
-            if (!PackLibrary.Remove(entry.Name)) faults.Add("a pack could not be taken off the shelf");
-            if (PackLibrary.PathOf(entry.Name) is not null)
+            if (!PackLibrary.Remove(entry.Name, shelf)) faults.Add("a pack could not be taken off the shelf");
+            if (PackLibrary.PathOf(entry.Name, shelf) is not null)
                 faults.Add("a pack was removed and is still found by name");
 
             detail = $"a {entry.Kind} pack copied to the shelf, found by name, replaced on re-import "

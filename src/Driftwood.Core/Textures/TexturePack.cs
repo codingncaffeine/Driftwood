@@ -22,6 +22,12 @@ namespace Driftwood.Core.Textures;
 /// </remarks>
 public sealed class TexturePack : IDisposable
 {
+    public const int MaxEntries = 65_536;
+    public const long MaxExpandedBytes = 16L * 1024 * 1024 * 1024;
+    public const long MaxSingleEntryBytes = 512L * 1024 * 1024;
+
+    public readonly record struct ArchiveInventory(int Entries, long ExpandedBytes, long LargestEntry);
+
     private readonly ZipArchive? _zip;
     private readonly string? _root;
     private readonly Dictionary<string, ZipArchiveEntry> _entries = new(StringComparer.OrdinalIgnoreCase);
@@ -180,6 +186,10 @@ public sealed class TexturePack : IDisposable
         if (!assets && textures) return PackDialect.Bedrock;
         if (java) return PackDialect.Java;
         if (plural) return PackDialect.JavaLegacy;
+        // A valid Java pack may contain only entity art, sounds, fonts or loader-extension data.
+        // The top-level Java manifest plus assets/ is enough to identify that sparse layout; block
+        // and item folders determine modern-vs-legacy when either is actually present above.
+        if (assets && Has($"{_prefix}pack.mcmeta")) return PackDialect.Java;
 
         return PackDialect.Unknown;
     }
@@ -389,7 +399,7 @@ public sealed class TexturePack : IDisposable
 
         if (_root is null || !Directory.Exists(_root)) yield break;
 
-        foreach (var path in Directory.EnumerateFiles(_root, "*", SearchOption.AllDirectories))
+        foreach (var path in FolderFiles(_root))
             yield return Path.GetRelativePath(_root, path).Replace(Path.DirectorySeparatorChar, '/');
     }
 
@@ -443,37 +453,46 @@ public sealed class TexturePack : IDisposable
     {
         var name = Path.GetFileNameWithoutExtension(path);
         why = null;
+        TexturePack? pack = null;
+        try
+        {
+            if (Directory.Exists(path))
+            {
+                pack = new TexturePack(name, null, path);
+            }
+            else if (!File.Exists(path))
+            {
+                why = "there is nothing at that path";
+                return null;
+            }
+            else if (Extensions.Contains(Path.GetExtension(path), StringComparer.OrdinalIgnoreCase))
+            {
+                pack = new TexturePack(name, ZipFile.OpenRead(path), null);
+            }
+            else
+            {
+                var extension = Path.GetExtension(path);
 
-        TexturePack pack;
-        if (Directory.Exists(path))
-        {
-            pack = new TexturePack(name, null, path);
+                var known = UnreadableArchives.FirstOrDefault(
+                    a => string.Equals(a.Extension, extension, StringComparison.OrdinalIgnoreCase));
+
+                why = known.Extension is not null
+                    ? $"{known.Format} archives cannot be read — unpack it, or re-zip it as {string.Join(" or ", Extensions)}"
+                    : $"a pack is a folder or {string.Join(", ", Extensions)} — not {extension}";
+
+                return null;
+            }
+
+            pack.ReadManifest();
+            return pack;
         }
-        else if (!File.Exists(path))
+        catch (Exception error) when (error is InvalidDataException or IOException
+                                      or UnauthorizedAccessException or NotSupportedException)
         {
-            why = "there is nothing at that path";
+            pack?.Dispose();
+            why = $"the archive could not be read: {error.Message}";
             return null;
         }
-        else if (Extensions.Contains(Path.GetExtension(path), StringComparer.OrdinalIgnoreCase))
-        {
-            pack = new TexturePack(name, ZipFile.OpenRead(path), null);
-        }
-        else
-        {
-            var extension = Path.GetExtension(path);
-
-            var known = UnreadableArchives.FirstOrDefault(
-                a => string.Equals(a.Extension, extension, StringComparison.OrdinalIgnoreCase));
-
-            why = known.Extension is not null
-                ? $"{known.Format} archives cannot be read — unpack it, or re-zip it as {string.Join(" or ", Extensions)}"
-                : $"a pack is a folder or {string.Join(", ", Extensions)} — not {extension}";
-
-            return null;
-        }
-
-        pack.ReadManifest();
-        return pack;
     }
 
     /// <summary>
@@ -558,6 +577,64 @@ public sealed class TexturePack : IDisposable
         }
     }
 
+    /// <summary>Bounded archive measurements used before an import becomes a shelf entry.</summary>
+    public ArchiveInventory Inventory()
+    {
+        var count = 0;
+        long expanded = 0, largest = 0;
+        if (_zip is not null)
+        {
+            foreach (var entry in _zip.Entries)
+            {
+                if (entry.FullName.EndsWith('/')) continue;
+                count++;
+                expanded = checked(expanded + entry.Length);
+                largest = Math.Max(largest, entry.Length);
+            }
+        }
+        else if (_root is not null && Directory.Exists(_root))
+        {
+            foreach (var path in FolderFiles(_root))
+            {
+                var length = new FileInfo(path).Length;
+                count++;
+                expanded = checked(expanded + length);
+                largest = Math.Max(largest, length);
+            }
+        }
+        return new ArchiveInventory(count, expanded, largest);
+    }
+
+    public bool WithinSafetyBounds(out string why)
+    {
+        try
+        {
+            var inventory = Inventory();
+            if (inventory.Entries > MaxEntries)
+            {
+                why = $"the pack has {inventory.Entries:N0} files; the safe limit is {MaxEntries:N0}";
+                return false;
+            }
+            if (inventory.ExpandedBytes > MaxExpandedBytes)
+            {
+                why = $"the pack expands to {inventory.ExpandedBytes:N0} bytes; the safe limit is {MaxExpandedBytes:N0}";
+                return false;
+            }
+            if (inventory.LargestEntry > MaxSingleEntryBytes)
+            {
+                why = $"one pack file expands to {inventory.LargestEntry:N0} bytes; the safe limit is {MaxSingleEntryBytes:N0}";
+                return false;
+            }
+            why = "";
+            return true;
+        }
+        catch (OverflowException)
+        {
+            why = "the pack's expanded size overflows the safe counter";
+            return false;
+        }
+    }
+
     /// <summary>
     /// Reads one ordinary asset without decoding it, using the same dialect and namespace search as
     /// the texture loaders.
@@ -568,7 +645,21 @@ public sealed class TexturePack : IDisposable
     /// The returned bytes are owned by the caller.
     /// </remarks>
     public byte[]? TryReadAssetBytes(string assetPath, out string from) =>
-        ReadAsset(assetPath, out from);
+        ReadAsset(assetPath, MaxSingleEntryBytes, out from);
+
+    public byte[]? TryReadAssetBytes(string assetPath, int maximumBytes, out string from) =>
+        ReadAsset(assetPath, ReadLimit(maximumBytes), out from);
+
+    /// <summary>Reads a safe file relative to the detected pack root, without decoding it.</summary>
+    public byte[]? TryReadRootBytes(string relativePath)
+        => TryReadRootBytes(relativePath, checked((int)MaxSingleEntryBytes));
+
+    public byte[]? TryReadRootBytes(string relativePath, int maximumBytes)
+    {
+        relativePath = relativePath.Replace('\\', '/').Trim('/');
+        return SafeResourcePath(relativePath)
+            ? ReadAllBytes($"{_prefix}{relativePath}", ReadLimit(maximumBytes)) : null;
+    }
 
     /// <summary>
     /// Reads a namespaced resource identifier such as <c>minecraft:font/ascii.png</c> from one
@@ -580,8 +671,13 @@ public sealed class TexturePack : IDisposable
     /// walk out of a folder pack and read an arbitrary file from the machine.
     /// </remarks>
     public byte[]? TryReadResourceBytes(
-        string resource, string category, out string from)
+        string resource, string category, out string from) =>
+        TryReadResourceBytes(resource, category, checked((int)MaxSingleEntryBytes), out from);
+
+    public byte[]? TryReadResourceBytes(
+        string resource, string category, int maximumBytes, out string from)
     {
+        var limit = ReadLimit(maximumBytes);
         from = resource;
         if (string.IsNullOrWhiteSpace(resource) || string.IsNullOrWhiteSpace(category)) return null;
 
@@ -597,7 +693,7 @@ public sealed class TexturePack : IDisposable
 
         var relative = $"assets/{space}/{category}/{name}";
         var candidate = $"{_prefix}{relative}";
-        var raw = ReadAllBytes(candidate);
+        var raw = ReadAllBytes(candidate, limit);
 
         // Bedrock and a few hand-made Java packs keep their resource folders at the pack root. The
         // normal candidate reader already knows that exception, but it cannot preserve an explicit
@@ -605,7 +701,7 @@ public sealed class TexturePack : IDisposable
         if (raw is null && space.Equals("minecraft", StringComparison.OrdinalIgnoreCase))
         {
             var ordinary = $"{category}/{name}";
-            raw = ReadAsset(ordinary, out from);
+            raw = ReadAsset(ordinary, limit, out from);
             return raw;
         }
 
@@ -622,6 +718,13 @@ public sealed class TexturePack : IDisposable
         && !path.StartsWith('/')
         && !path.Any(char.IsControl)
         && path.Split('/').All(part => part.Length > 0 && part is not "." and not "..");
+
+    private static long ReadLimit(int maximumBytes)
+    {
+        if (maximumBytes <= 0 || maximumBytes > MaxSingleEntryBytes)
+            throw new ArgumentOutOfRangeException(nameof(maximumBytes));
+        return maximumBytes;
+    }
 
     /// <summary>Loads one texture by its modern path, scaled to the given tile size.</summary>
     /// <param name="from">
@@ -903,11 +1006,14 @@ public sealed class TexturePack : IDisposable
     };
 
     /// <summary>Reads one asset, and says which of the candidates it actually came off.</summary>
-    private byte[]? ReadAsset(string assetPath, out string from)
+    private byte[]? ReadAsset(string assetPath, out string from) =>
+        ReadAsset(assetPath, MaxSingleEntryBytes, out from);
+
+    private byte[]? ReadAsset(string assetPath, long maximumBytes, out string from)
     {
         foreach (var candidate in Candidates(assetPath))
         {
-            var raw = ReadAllBytes(candidate);
+            var raw = ReadAllBytes(candidate, maximumBytes);
             if (raw is null) continue;
 
             from = candidate.Length > _prefix.Length ? candidate[_prefix.Length..] : candidate;
@@ -958,21 +1064,44 @@ public sealed class TexturePack : IDisposable
         return tile;
     }
 
-    private byte[]? ReadAllBytes(string relativePath)
+    private byte[]? ReadAllBytes(string relativePath) =>
+        ReadAllBytes(relativePath, MaxSingleEntryBytes);
+
+    private byte[]? ReadAllBytes(string relativePath, long maximumBytes)
     {
         if (_root is not null)
         {
             var full = Path.Combine(_root, relativePath.Replace('/', Path.DirectorySeparatorChar));
-            return File.Exists(full) ? File.ReadAllBytes(full) : null;
+            if (!File.Exists(full)) return null;
+            if (new FileInfo(full).Length > maximumBytes)
+                throw new InvalidDataException($"{relativePath} is larger than the {maximumBytes:N0}-byte read limit");
+            return File.ReadAllBytes(full);
         }
 
         if (!_entries.TryGetValue(relativePath, out var entry)) return null;
+        if (entry.Length > maximumBytes)
+            throw new InvalidDataException($"{relativePath} is larger than the {maximumBytes:N0}-byte read limit");
 
         using var stream = entry.Open();
-        using var buffer = new MemoryStream();
-        stream.CopyTo(buffer);
+        using var buffer = new MemoryStream(entry.Length <= int.MaxValue ? (int)entry.Length : 0);
+        var chunk = new byte[128 * 1024];
+        for (var read = stream.Read(chunk); read > 0; read = stream.Read(chunk))
+        {
+            if (buffer.Length + read > maximumBytes)
+                throw new InvalidDataException(
+                    $"{relativePath} expanded past the {maximumBytes:N0}-byte read limit");
+            buffer.Write(chunk, 0, read);
+        }
         return buffer.ToArray();
     }
+
+    private static IEnumerable<string> FolderFiles(string root) => Directory.EnumerateFiles(
+        root, "*", new EnumerationOptions
+        {
+            RecurseSubdirectories = true,
+            AttributesToSkip = FileAttributes.ReparsePoint,
+            IgnoreInaccessible = false,
+        });
 
     public void Dispose() => _zip?.Dispose();
 }

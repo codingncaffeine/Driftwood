@@ -155,6 +155,13 @@ public sealed class BlockModel
     /// </summary>
     public bool IsFullCube { get; }
 
+    /// <summary>
+    /// True when at least one element is a complete six-faced cell. Unlike
+    /// <see cref="IsFullCube"/>, texture UV rotation and extra overlay elements do not disqualify
+    /// it: those prevent greedy merging, but they do not open a hole through an opaque block.
+    /// </summary>
+    public bool OccludesCell { get; }
+
     /// <summary>Coplanar cube passes, 1 or more. Meaningless unless <see cref="IsFullCube"/>.</summary>
     public int PassCount { get; }
 
@@ -252,6 +259,7 @@ public sealed class BlockModel
         foreach (var element in elements) whole &= IsWholeBlock(element);
 
         IsFullCube = whole;
+        OccludesCell = elements.Any(IsOccludingBlock);
         PassCount = IsFullCube ? elements.Count : 0;
 
         _passLayer = new ushort[MaxPasses * Blocks.Faces.Count];
@@ -277,6 +285,17 @@ public sealed class BlockModel
     public bool PassTinted(int pass, int face) => _passTinted[pass * Blocks.Faces.Count + face];
 
     public static BlockModel FromElements(params ModelElement[] elements) => new(elements);
+
+    /// <summary>
+    /// Keeps Driftwood's physical contract while accepting a pack's visual geometry. A resource
+    /// pack is presentation data: changing one must not create a new ledge, remove a stair step, or
+    /// make an existing world traversable in a different way.
+    /// </summary>
+    public BlockModel WithCollisionFrom(BlockModel physical)
+    {
+        Collision = [.. physical.Collision];
+        return this;
+    }
 
     /// <summary>The ordinary block: one box filling the cell, three textures.</summary>
     public static BlockModel Cube(ushort top, ushort side, ushort bottom, bool tinted = false)
@@ -1368,6 +1387,16 @@ public sealed class BlockModel
             if (spec.Uv is { } uv && uv != new Vector4(0f, 0f, 16f, 16f)) return false;
         }
 
+        return true;
+    }
+
+    private static bool IsOccludingBlock(ModelElement element)
+    {
+        if (element.RotationAngle != 0f
+            || element.From != Vector3.Zero || element.To != new Vector3(16f)) return false;
+        for (var face = 0; face < Blocks.Faces.Count; face++)
+            if (element.Faces[face] is not { } spec
+                || spec.CullFace >= 0 && spec.CullFace != face) return false;
         return true;
     }
 

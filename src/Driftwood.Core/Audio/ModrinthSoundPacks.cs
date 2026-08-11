@@ -59,14 +59,16 @@ public sealed record SoundPackHttpResult(
     HttpStatusCode Status,
     string ContentType,
     byte[] Body,
-    Uri FinalUri);
+    Uri FinalUri,
+    TimeSpan? RetryAfter = null);
 
 public sealed record SoundPackFileHttpResult(
     HttpStatusCode Status,
     string ContentType,
     long Length,
     string Sha512,
-    Uri FinalUri);
+    Uri FinalUri,
+    TimeSpan? RetryAfter = null);
 
 public interface ISoundPackTransport
 {
@@ -96,7 +98,7 @@ public sealed class BoundedSoundPackTransport : ISoundPackTransport
         var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var version = typeof(ModrinthSoundPackProvider).Assembly.GetName().Version?.ToString(3) ?? "unknown";
         client.DefaultRequestHeaders.UserAgent.ParseAdd(
-            $"codingncaffeine-Driftwood/{version} (+https://github.com/codingncaffeine/Driftwood)");
+            $"codingncaffeine.Driftwood/{version} (+https://github.com/codingncaffeine/Driftwood)");
         client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/zip"));
         client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/octet-stream"));
@@ -140,7 +142,8 @@ public sealed class BoundedSoundPackTransport : ISoundPackTransport
             response.StatusCode,
             response.Content.Headers.ContentType?.MediaType ?? "",
             body.ToArray(),
-            response.RequestMessage?.RequestUri ?? uri);
+            response.RequestMessage?.RequestUri ?? uri,
+            RetryAfter(response));
     }
 
     public async Task<SoundPackFileHttpResult> DownloadAsync(
@@ -168,7 +171,8 @@ public sealed class BoundedSoundPackTransport : ISoundPackTransport
             var contentType = response.Content.Headers.ContentType?.MediaType ?? "";
 
             if ((int)response.StatusCode is < 200 or >= 300)
-                return new SoundPackFileHttpResult(response.StatusCode, contentType, 0, "", finalUri);
+                return new SoundPackFileHttpResult(response.StatusCode, contentType, 0, "", finalUri,
+                    RetryAfter(response));
 
             if (response.Content.Headers.ContentLength is > 0 and var advertised
                 && advertised > maximumBytes)
@@ -208,7 +212,8 @@ public sealed class BoundedSoundPackTransport : ISoundPackTransport
                 contentType,
                 received,
                 Convert.ToHexString(digest.GetHashAndReset()).ToLowerInvariant(),
-                finalUri);
+                finalUri,
+                RetryAfter(response));
         }
         catch
         {
@@ -216,6 +221,18 @@ public sealed class BoundedSoundPackTransport : ISoundPackTransport
             catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
             throw;
         }
+    }
+
+    private static TimeSpan? RetryAfter(HttpResponseMessage response)
+    {
+        var retry = response.Headers.RetryAfter;
+        if (retry?.Delta is { } delta) return delta < TimeSpan.Zero ? TimeSpan.Zero : delta;
+        if (retry?.Date is { } date)
+        {
+            var wait = date - DateTimeOffset.UtcNow;
+            return wait < TimeSpan.Zero ? TimeSpan.Zero : wait;
+        }
+        return null;
     }
 }
 
@@ -758,7 +775,7 @@ public static class ModrinthSoundPackSelfTest
         {
             var entry = archive.CreateEntry("assets/minecraft/sounds/step/stone1.ogg");
             using var stream = entry.Open();
-            stream.Write([0x4f, 0x67, 0x67, 0x53, 1, 2, 3, 4]);
+            stream.Write([0x4f, 0x67, 0x67, 0x53, 0, 1, 2, 3, 4]);
         }
         return bytes.ToArray();
     }

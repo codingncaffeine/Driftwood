@@ -59,6 +59,16 @@ public static class Program
             if (args.Contains("--controller-check"))
                 return ControllerCheck();
 
+            if (args.Contains("--pack-matrix"))
+            {
+                var at = Array.IndexOf(args, "--pack-matrix");
+                if (at + 1 >= args.Length || args[at + 1].StartsWith('-'))
+                    throw new ArgumentException("--pack-matrix needs an ignored corpus folder");
+                var matrix = PackMatrix.Build(args[at + 1]);
+                Console.WriteLine(matrix.Report);
+                return matrix.Passed ? 0 : 1;
+            }
+
             // ⛳ THE INSTRUMENT THIS PROJECT WAS MISSING, AND THE ONE IT NEEDED MOST. Every tile in
             // the game is drawn in code, and until now the only way to see one was to start the game
             // and look at a square the size of a fingernail. Three separate redraws of the tools
@@ -684,6 +694,9 @@ public static class Program
                 case "--audio-check":
                     if (i + 1 < args.Length && !args[i + 1].StartsWith('-')) i++;
                     break;
+                case "--pack-matrix":
+                    i++;
+                    break;
                 case "--audit":
                 case "--version":
                 case "--controller-check":
@@ -783,6 +796,8 @@ public static class Program
                                 load bundled SDL3, verify the XInput fallback ABI, enumerate any
                                 connected pads by name, and pass when no controller is attached
               --pack-coverage   with --pack, report what the pack has art for that we do not
+              --pack-matrix dir inspect every top-level pack in an ignored corpus, aggregate exact
+                                compatibility outcomes and feature families, and route gaps
               --creature-geometry <dir>
                                 put animals in the world, wearing skeletons read from this folder.
                                 Same folder --creatures reports on, and remembered once given.

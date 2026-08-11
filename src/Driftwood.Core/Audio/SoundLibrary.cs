@@ -13,6 +13,9 @@ public sealed class SoundLibrary
         string? ArchiveEntry = null,
         string? ResourceName = null);
 
+    private readonly record struct WeightedSource(ClipSource Source, int Weight);
+    private sealed record SourceLayer(IReadOnlyList<WeightedSource> Choices, SourceLayer? Fallback = null);
+
     private static readonly (string Key, string Resource)[] Embedded =
     [
         ("animals/frog", "Driftwood.Core.Sounds.animals/frog.wav"),
@@ -22,9 +25,10 @@ public sealed class SoundLibrary
         ("enemies/zombie", "Driftwood.Core.Sounds.enemies/zombie.wav"),
     ];
 
-    private readonly Dictionary<string, ClipSource> _sources = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, SourceLayer> _sources = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string?> _bare = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, WavClip?> _clips = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _reported = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>The local fallback folder, whether or not it exists in a single-file build.</summary>
     public string Root { get; }
@@ -115,14 +119,22 @@ public sealed class SoundLibrary
 
             foreach (var (key, entry) in inspection.Entries)
             {
-                var extension = Path.GetExtension(entry);
-                Add(key, new ClipSource(
-                    extension, $"{Path.GetFileName(path)}:{entry}",
-                    FilePath: folder
-                        ? Path.Combine(path, entry.Replace('/', Path.DirectorySeparatorChar))
-                        : null,
-                    ArchivePath: folder ? null : path,
-                    ArchiveEntry: folder ? null : entry), replace: true);
+                Add(key, PackSource(path, entry, folder), replace: true);
+            }
+
+            if (inspection.Variants is not null)
+            {
+                foreach (var (key, variants) in inspection.Variants)
+                {
+                    var sources = variants
+                        .Select(item => new WeightedSource(PackSource(path, item.Entry, folder), item.Weight))
+                        .ToList();
+                    if (sources.Count > 0)
+                    {
+                        _sources.TryGetValue(key, out var fallback);
+                        _sources[key] = new SourceLayer(sources, fallback);
+                    }
+                }
             }
         }
         catch (Exception error) when (
@@ -139,11 +151,13 @@ public sealed class SoundLibrary
 
         if (replace)
         {
-            _sources[key] = source;
+            _sources.TryGetValue(key, out var fallback);
+            _sources[key] = new SourceLayer([new WeightedSource(source, 1)], fallback);
             return;
         }
 
-        if (!_sources.TryAdd(key, source)) Faults.Add($"'{key}' is available more than once locally");
+        if (!_sources.TryAdd(key, new SourceLayer([new WeightedSource(source, 1)])))
+            Faults.Add($"'{key}' is available more than once locally");
     }
 
     private void BuildBareIndex()
@@ -184,34 +198,75 @@ public sealed class SoundLibrary
         var key = Resolve(name, out var whyNot);
         if (key is null)
         {
-            if (!_clips.ContainsKey(name)) Faults.Add(whyNot);
-            _clips[name] = null;
+            if (_reported.Add($"missing:{name}")) Faults.Add(whyNot);
             return null;
         }
 
-        if (_clips.TryGetValue(key, out var cached)) return cached;
+        for (SourceLayer? layer = _sources[key]; layer is not null; layer = layer.Fallback)
+        {
+            foreach (var source in PickOrder(layer.Choices))
+            {
+                var clip = Load(source, key);
+                if (clip is not null) return clip;
+            }
+        }
+        return null;
+    }
+
+    private WavClip? Load(ClipSource source, string key)
+    {
+        var cacheKey = source.Description;
+        if (_clips.TryGetValue(cacheKey, out var cached)) return cached;
 
         WavClip? clip = null;
-        var source = _sources[key];
         try
         {
-            var bytes = Read(source);
+            var bytes = ReadSource(source);
             var decoded = source.Extension.Equals(".ogg", StringComparison.OrdinalIgnoreCase)
                 ? OggVorbis.TryDecode(bytes, out clip, out var fault)
                 : Wav.TryDecode(bytes, out clip, out fault);
-            if (!decoded) Faults.Add($"'{key}' from {source.Description}: {fault}");
+            if (!decoded && _reported.Add($"decode:{cacheKey}"))
+                Faults.Add($"'{key}' from {source.Description}: {fault}");
         }
         catch (Exception error) when (
             error is IOException or UnauthorizedAccessException or InvalidDataException)
         {
-            Faults.Add($"'{key}' from {source.Description}: {error.Message}");
+            if (_reported.Add($"read:{cacheKey}"))
+                Faults.Add($"'{key}' from {source.Description}: {error.Message}");
         }
 
-        _clips[key] = clip;
+        _clips[cacheKey] = clip;
         return clip;
     }
 
-    private static byte[] Read(ClipSource source)
+    private static ClipSource PackSource(string path, string entry, bool folder) => new(
+        Path.GetExtension(entry), $"{Path.GetFileName(path)}:{entry}",
+        FilePath: folder ? Path.Combine(path, entry.Replace('/', Path.DirectorySeparatorChar)) : null,
+        ArchivePath: folder ? null : path,
+        ArchiveEntry: folder ? null : entry);
+
+    private static ClipSource Pick(IReadOnlyList<WeightedSource> choices)
+    {
+        if (choices.Count == 1) return choices[0].Source;
+        var total = choices.Sum(choice => (long)Math.Max(1, choice.Weight));
+        var pick = Random.Shared.NextInt64(total);
+        foreach (var choice in choices)
+        {
+            pick -= Math.Max(1, choice.Weight);
+            if (pick < 0) return choice.Source;
+        }
+        return choices[^1].Source;
+    }
+
+    private static IEnumerable<ClipSource> PickOrder(IReadOnlyList<WeightedSource> choices)
+    {
+        var first = Pick(choices);
+        yield return first;
+        foreach (var choice in choices)
+            if (!ReferenceEquals(choice.Source, first)) yield return choice.Source;
+    }
+
+    private static byte[] ReadSource(ClipSource source)
     {
         if (source.FilePath is not null) return File.ReadAllBytes(source.FilePath);
         if (source.ArchivePath is not null && source.ArchiveEntry is not null)

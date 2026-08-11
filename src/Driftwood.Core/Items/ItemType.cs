@@ -69,7 +69,7 @@ public sealed class ItemType
     public required string Label { get; init; }
 
     /// <summary>Texture array layer this draws as, in a slot and on the floor.</summary>
-    public required ushort IconLayer { get; init; }
+    public required ushort IconLayer { get; set; }
 
     /// <summary>How many fit in a slot. One for anything that carries wear.</summary>
     public int MaxStack { get; init; } = ItemStack.MaxCount;

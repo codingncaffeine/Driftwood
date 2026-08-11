@@ -37,6 +37,22 @@ public static class DefaultGuiTheme
         Add(GuiTextureSet.Layer.TabSelectedHighlighted, Tab(130, 24, selected: true, highlighted: true));
 
         Add(GuiTextureSet.Layer.TooltipBackground, Tooltip(100));
+        Add(GuiTextureSet.Layer.ToastBackground, Control(160, 32, 48, raised: true, seed: 101));
+        Add(GuiTextureSet.Layer.ToastSlot, Control(20, 20, 24, raised: false, seed: 103));
+
+        Add(GuiTextureSet.Layer.Slider, Slider(200, 20, highlighted: false));
+        Add(GuiTextureSet.Layer.SliderHighlighted, Slider(200, 20, highlighted: true));
+        Add(GuiTextureSet.Layer.SliderHandle, Control(8, 20, 76, raised: true, seed: 107));
+        Add(GuiTextureSet.Layer.SliderHandleHighlighted, Control(8, 20, 96, raised: true, seed: 109));
+
+        Add(GuiTextureSet.Layer.Checkbox, Checkbox(selected: false, highlighted: false));
+        Add(GuiTextureSet.Layer.CheckboxHighlighted, Checkbox(selected: false, highlighted: true));
+        Add(GuiTextureSet.Layer.CheckboxSelected, Checkbox(selected: true, highlighted: false));
+        Add(GuiTextureSet.Layer.CheckboxSelectedHighlighted, Checkbox(selected: true, highlighted: true));
+
+        Add(GuiTextureSet.Layer.ScrollerBackground, Control(6, 32, 22, raised: false, seed: 113));
+        Add(GuiTextureSet.Layer.Scroller, Control(6, 32, 70, raised: true, seed: 127));
+        Add(GuiTextureSet.Layer.ScrollerHighlighted, Control(6, 32, 91, raised: true, seed: 131));
         return new Result(tiles, present, present.Count(value => value));
 
         void Add(GuiTextureSet.Layer layer, byte[] source)
@@ -121,6 +137,36 @@ public static class DefaultGuiTheme
             HLine(pixels, size, y, 7 + y % 11,
                 Math.Min(29, size - 15 - y % 11), Tone(y % 2 == 0 ? 34 : 20));
         CornerBrackets(pixels, size, size, Tone(92), Tone(10));
+        return Resample(pixels, size, size);
+    }
+
+    private static byte[] Slider(int width, int height, bool highlighted)
+    {
+        var fill = highlighted ? 58 : 45;
+        var pixels = Canvas(width, height, fill);
+        Frame(pixels, width, height, fill, raised: false);
+        HLine(pixels, width, height / 2 - 1, 8, width - 16, Tone(highlighted ? 82 : 66));
+        HLine(pixels, width, height / 2, 8, width - 16, Tone(15));
+        CornerBrackets(pixels, width, height, Tone(fill + 28), Tone(fill - 25));
+        return Resample(pixels, width, height);
+    }
+
+    private static byte[] Checkbox(bool selected, bool highlighted)
+    {
+        const int size = 20;
+        var fill = highlighted ? 48 : 34;
+        var pixels = Canvas(size, size, fill);
+        Frame(pixels, size, size, fill, raised: !selected);
+        if (selected)
+        {
+            // A chunky neutral tick; the renderer supplies mint only for focus/selection state.
+            for (var i = 0; i < 4; i++)
+            {
+                Pixel(pixels, size, 5 + i, 10 + i, Tone(210));
+                Pixel(pixels, size, 9 + i, 13 - i, Tone(210));
+                Pixel(pixels, size, 12 + i, 10 - i, Tone(210));
+            }
+        }
         return Resample(pixels, size, size);
     }
 
