@@ -51,6 +51,9 @@ public sealed class Handbook(
                 + $"{item.Durability} uses, +{item.AttackDamage} attack");
         if (item.Wears is { } worn) facts.Add($"worn as {worn.ToString().ToLowerInvariant()}, {item.ArmourPoints} armour");
         if (item.ShieldShare > 0) facts.Add($"blocks {item.ShieldShare:P0} of a raised hit");
+        if (item.Use == ItemUse.Bow) facts.Add("fires arrows from your pockets");
+        if (item.Use == ItemUse.BowAmmunition) facts.Add("ammunition for a bow");
+        if (item.Use == ItemUse.ThrownFarstep) facts.Add("throw to farstep where it lands");
         if (item.IsFood) facts.Add($"restores {item.Feeds / 2f:0.#} hearts");
         if (item.BurnSeconds > 0) facts.Add($"burns for {item.BurnSeconds:0.#} seconds");
         facts.Add(item.MaxStack > 1 ? $"stacks to {item.MaxStack}" : "one per slot");

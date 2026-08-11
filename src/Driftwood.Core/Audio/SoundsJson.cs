@@ -211,6 +211,7 @@ internal static class SoundsJson
         yield return ("entity.player.burp", ActionSounds.Burp);
         yield return ("item.hoe.till", ActionSounds.Till);
         yield return ("block.crop.break", ActionSounds.Harvest);
+        yield return ("entity.arrow.shoot", ActionSounds.BowShoot);
         yield return ("item.sweet_berries.pick_from_bush", ActionSounds.BerryPick);
         yield return ("block.pumpkin.carve", ActionSounds.PumpkinCarve);
         yield return ("item.bucket.fill", ActionSounds.BucketFillWater);

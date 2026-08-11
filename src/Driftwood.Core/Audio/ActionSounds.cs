@@ -60,6 +60,9 @@ public static class ActionSounds
     public static readonly string[] Till = Run("item/hoe/till", 4);
     public static readonly string[] Harvest = Run("item/plant/harvest", 4);
 
+    /// <summary>The string releasing an arrow. Optional, like every action slot in this file.</summary>
+    public static readonly string[] BowShoot = ["item/bow/shoot"];
+
     /// <summary>Berries coming off the bush, which stays standing.</summary>
     public static readonly string[] BerryPick = Run("item/sweet_berries/pick_from_bush", 2);
 
@@ -150,7 +153,7 @@ public static class ActionSounds
                 DoorOpen, DoorClose, ChestOpen, ChestClose, BarrelOpen, BarrelClose,
                 FurnaceCrackle, BlastFurnaceCrackle, SmokerCrackle, CampfireCrackle,
                 FireIgnite, FireOut, Fizz,
-                ToolBreaks, Burp, Till, Harvest,
+                ToolBreaks, Burp, Till, Harvest, BowShoot,
                 BucketFillWater, BucketEmptyWater, BucketFillLava, BucketEmptyLava,
                 AnvilUse, ComposterFill, ComposterRaise, ComposterReady, ComposterEmpty,
                 FallSmall, FallBig, DrownGasp, BurnHurt, BubblePop,

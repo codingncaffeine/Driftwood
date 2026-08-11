@@ -587,6 +587,11 @@ public static class BlockTextureSet
         new("bed_foot_top", "", false),
         new("bed_head_top", "", false),
         new("bed_side", "", false),
+
+        // Ordinary projectile items. Unlike a bed sheet these are true item sprites, so both pack
+        // dialects have a direct file to offer.
+        new("bow", "textures/item/bow.png", true, "textures/items/bow_standby.png"),
+        new("arrow", "textures/item/arrow.png", true, "textures/items/arrow.png"),
     ];
 
     /// <summary>
@@ -1607,6 +1612,9 @@ public static class BlockTextureSet
             StarterBlocks.LayerBedFootTop => StationArt.BedFootTopTile(),
             StarterBlocks.LayerBedHeadTop => StationArt.BedHeadTopTile(),
             StarterBlocks.LayerBedSide => StationArt.BedSideTile(),
+
+            StarterBlocks.LayerBow => TileGen.IconBow(1394),
+            StarterBlocks.LayerArrow => TileGen.IconArrow(1395),
 
             _ when layer >= StarterBlocks.LayerGateFirst
                    && layer < StarterBlocks.LayerGateFirst + 10 =>

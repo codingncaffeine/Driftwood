@@ -635,7 +635,11 @@ public static class StarterBlocks
     public const ushort LayerBedHeadTop = LayerCobweb + 54;
     public const ushort LayerBedSide = LayerCobweb + 55;
 
-    public const int LayerCount = LayerBedSide + 1;
+    // The non-magic half of #78: two ordinary item drawings appended after the completed bed set.
+    public const ushort LayerBow = LayerBedSide + 1;
+    public const ushort LayerArrow = LayerBedSide + 2;
+
+    public const int LayerCount = LayerArrow + 1;
 
     /// <summary>One anvil's name, by how worn it is and which way it lies.</summary>
     /// <remarks>

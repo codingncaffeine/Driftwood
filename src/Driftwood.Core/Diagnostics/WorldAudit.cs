@@ -10,6 +10,7 @@ using Driftwood.Core.Lighting;
 using Driftwood.Core.Meshing;
 using Driftwood.Core.Particles;
 using Driftwood.Core.Physics;
+using Driftwood.Core.Projectiles;
 using Driftwood.Core.Players;
 using Driftwood.Core.Saves;
 using Driftwood.Core.Settings;
@@ -963,6 +964,12 @@ public static class WorldAudit
             particleFaults.Count == 0
                 ? "a burst lands on the floor, empties the pool, uses every crop, and allocates nothing"
                 : $"{particleFaults.Count} faults: {particleFaults[0]}");
+
+        var projectileFaults = ProjectileSelfTest(registry, out var projectileDetail);
+        Check("fast projectiles hit what they cross", projectileFaults.Count == 0,
+            projectileFaults.Count == 0
+                ? projectileDetail
+                : $"{projectileFaults.Count} faults: {projectileFaults[0]}");
 
         var skyFaults = SkySelfTest();
         Check("the sun crosses the sky", skyFaults.Count == 0,
@@ -7678,6 +7685,104 @@ public static class WorldAudit
     }
 
     /// <summary>
+    /// Drives the projectile pool across partial shapes, creatures, chunk seams and its hard cap.
+    /// </summary>
+    /// <remarks>
+    /// A destination-only collision check passes every ordinary frame and fails exactly when a fast
+    /// arrow matters, so both arms are here: one shot clears the empty half of a slab and one crosses
+    /// its solid half at the same speed. Allocation is measured after warm-up, as the particle gate's
+    /// is, so this checks the loop rather than the runtime's first visit to it.
+    /// </remarks>
+    private static List<string> ProjectileSelfTest(BlockRegistry registry, out string detail)
+    {
+        var faults = new List<string>();
+        var slab = registry.ByName("stone_slab_lower").Id;
+
+        // One loaded chunk, with a half-height obstacle in it. The high path crosses the cell and
+        // must miss its shape; the low path crosses several blocks in one update and must hit.
+        var shapedWorld = new VoxelWorld(registry);
+        shapedWorld.GetOrCreateChunk(ChunkPos.FromWorld(0, 0, 0));
+        shapedWorld.SetBlock(6, 1, 1, slab);
+
+        var high = new ProjectileSystem(registry);
+        high.Spawn(
+            ProjectileKind.Arrow, ProjectileOwner.Player,
+            new Vector3(2f, 1.75f, 1.5f), Vector3.UnitX,
+            speed: 40f, gravity: 0f, damage: ProjectileSystem.ArrowDamage);
+        high.Update(shapedWorld, null, 0.2f);
+        if (high.Impacts.Length != 0)
+            faults.Add("an arrow through the empty half of a slab hit the whole cell");
+
+        var low = new ProjectileSystem(registry);
+        low.Spawn(
+            ProjectileKind.Arrow, ProjectileOwner.Player,
+            new Vector3(2f, 1.25f, 1.5f), Vector3.UnitX,
+            speed: 40f, gravity: 0f, damage: ProjectileSystem.ArrowDamage);
+        low.Update(shapedWorld, null, 0.2f);
+        if (low.Impacts.Length != 1 || low.Impacts[0].X != 6 || low.Count != 0)
+            faults.Add("a fast arrow crossed the slab's solid half without one retiring impact");
+
+        // A creature nearer than terrain owns the shot. Restoring one is the public, save-shaped
+        // route into a herd and avoids giving the test a privileged insertion door.
+        var herdWorld = new VoxelWorld(registry);
+        herdWorld.GetOrCreateChunk(ChunkPos.FromWorld(0, 0, 0));
+        herdWorld.SetBlock(9, 1, 1, registry.ByName("stone").Id);
+        var herd = new CreatureHerd(0xA220);
+        herd.Restore(
+            [new CreatureHerd.SavedCreature(
+                "cow", new Vector3(5f, 1f, 1.5f), 0f, 10, false, 0f, false, 1f)],
+            _ => new SpawnKind("cow", new Vector3(0.9f, 1.4f, 0.9f)),
+            out _);
+
+        var aimed = new ProjectileSystem(registry);
+        aimed.Spawn(
+            ProjectileKind.Arrow, ProjectileOwner.Player,
+            new Vector3(2f, 1.7f, 1.5f), Vector3.UnitX,
+            speed: 40f, gravity: 0f, damage: ProjectileSystem.ArrowDamage);
+        aimed.Update(herdWorld, herd, 0.2f);
+        if (aimed.Impacts.Length != 1 || aimed.Impacts[0].Creature != herd.All[0])
+            faults.Add("terrain behind a creature won the projectile's nearest-hit comparison");
+
+        // Unloaded space is not transparent world. Crossing x=32 retires the shot without claiming
+        // an impact on a block that does not exist yet.
+        var edge = new ProjectileSystem(registry);
+        edge.Spawn(
+            ProjectileKind.Farpearl, ProjectileOwner.Player,
+            new Vector3(31.5f, 1.5f, 1.5f), Vector3.UnitX,
+            speed: 20f, gravity: 0f, damage: 0);
+        edge.Update(shapedWorld, null, 0.1f);
+        if (edge.Count != 0 || edge.Impacts.Length != 0)
+            faults.Add("a projectile survived or struck something after entering an unloaded chunk");
+
+        var full = new ProjectileSystem(registry);
+        for (var i = 0; i < ProjectileSystem.Capacity; i++)
+            if (!full.Spawn(
+                    ProjectileKind.Arrow, ProjectileOwner.Player,
+                    new Vector3(1f, 2f, 1f), Vector3.UnitX, 1f, 0f, 1))
+                faults.Add($"the fixed pool refused slot {i} before it was full");
+        if (full.Count != ProjectileSystem.Capacity
+            || full.Spawn(
+                ProjectileKind.Arrow, ProjectileOwner.Player,
+                new Vector3(1f, 2f, 1f), Vector3.UnitX, 1f, 0f, 1))
+            faults.Add("the fixed pool grew or accepted a shot past its cap");
+
+        var allocation = new ProjectileSystem(registry);
+        allocation.Spawn(
+            ProjectileKind.Arrow, ProjectileOwner.Player,
+            new Vector3(1f, 2f, 1f), Vector3.UnitX, 0.1f, 0f, 1);
+        allocation.Update(shapedWorld, null, 1f / 60f); // warm the complete live-flight path
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < 120; i++) allocation.Update(shapedWorld, null, 1f / 60f);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        if (allocated != 0) faults.Add($"the live projectile update allocated {allocated} bytes");
+
+        detail = $"{ProjectileSystem.Capacity}-slot pool; a fast arrow clears and strikes the two halves "
+               + $"of one slab, a creature beats the wall behind it, unloaded space retires cleanly, "
+               + $"and 120 live updates allocate {allocated} bytes";
+        return faults;
+    }
+
+    /// <summary>
     /// Walks the whole day a minute at a time and checks the sky against what a sky has to do.
     /// </summary>
     /// <remarks>
@@ -8452,13 +8557,15 @@ public static class WorldAudit
         (StarterBlocks.LayerCherryLogSide, "cherry_log"),
         (StarterBlocks.LayerCherryLeaves, "cherry_leaves"),
 
-        // The moving pin: the LAST layer, by name. It has caught NINE appends in the act —
+        // The moving pin: the LAST layer, by name. It has caught ten appends in the act —
         // fifteen crop rows landing after "the last layer is bonemeal", the composter's four
         // landing after black glass, the berry bush's three after compost-ready, seagrass after
         // mossy rubble, the signal kit after seagrass, the track after the gates, the fried egg
         // after the cart, the cask after the slime block, and the stations after the cask.
-        // Keep it pointed at the true end.
-        ((ushort)(StarterBlocks.LayerCount - 1), "bed_side"),
+        // Keep it pointed at the true end, handing the bed's end to its own fixed pin.
+        (StarterBlocks.LayerBedSide, "bed_side"),
+        (StarterBlocks.LayerBow, "bow"),
+        ((ushort)(StarterBlocks.LayerCount - 1), "arrow"),
     ];
 
     /// <summary>

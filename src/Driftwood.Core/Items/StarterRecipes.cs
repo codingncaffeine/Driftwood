@@ -266,6 +266,13 @@ public static class StarterRecipes
         // out of a furnace are the same thing on the end of a stick.
         Shaped("torch", "torch", 4, ["C", "S"]);
 
+        // ⛳ Ranged combat, without asking the magic arc for any of its spells. Three sticks bend
+        // round three strings; one rough-stone head, one shaft and one feather make four shots.
+        // Rough stone is the material Driftwood already has where the reference would introduce a
+        // flint item solely for this recipe, and the shape still says exactly what is being made.
+        Shaped("bow", "bow", 1, [" SJ", "S J", " SJ"], station: CraftStation.Bench);
+        Shaped("arrows", "arrow", 4, ["R", "S", "H"], station: CraftStation.Bench);
+
         // The rest of it, and the reason a torch stops being the only answer. A lantern is iron
         // shut round a flame, so it is brighter, whiter and can be hung; a campfire is timber and
         // kindling with something to light it, laid out as a picture of the thing it makes; and
@@ -674,6 +681,7 @@ public static class StarterRecipes
         'Y' => "gold_ingot",
         'E' => "sand",
         'J' => "string",
+        'H' => "feather",
         _ => throw new InvalidOperationException($"recipe '{recipe}' uses unknown key '{key}'"),
     };
 }

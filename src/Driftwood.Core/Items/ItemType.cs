@@ -49,6 +49,19 @@ public enum ToolClass
     Hoe,
 }
 
+/// <summary>What right-clicking with a non-placeable item does.</summary>
+/// <remarks>
+/// Named on the item rather than inferred from its id, so the client, handbook and recipe report
+/// all agree that a farpearl is spent by throwing and an arrow is spent by a bow.
+/// </remarks>
+public enum ItemUse
+{
+    None,
+    Bow,
+    BowAmmunition,
+    ThrownFarstep,
+}
+
 /// <summary>
 /// Static description of one thing a player can carry. Registered at startup, then read-only.
 /// </summary>
@@ -86,6 +99,9 @@ public sealed class ItemType
     /// item's purpose is placement, exactly as <see cref="Places"/> says it for blocks.
     /// </remarks>
     public bool PlacesEntity { get; init; }
+
+    /// <summary>Its non-placement use, if it has one.</summary>
+    public ItemUse Use { get; init; }
 
     /// <summary>True when this draws as a cube rather than as a flat sprite.</summary>
     /// <remarks>

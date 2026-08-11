@@ -13,6 +13,7 @@ using Driftwood.Core.Items;
 using Driftwood.Core.Lighting;
 using Driftwood.Core.Meshing;
 using Driftwood.Core.Particles;
+using Driftwood.Core.Projectiles;
 using Driftwood.Core.Players;
 using Driftwood.Core.Saves;
 using Driftwood.Core.Settings;
@@ -599,6 +600,9 @@ public sealed class ClientHost : IDisposable
     /// <summary>Chips, bursts and dust.</summary>
     private ParticleSystem _particles = null!;
     private ParticleRenderer _particleRenderer = null!;
+
+    /// <summary>Arrows and thrown farpearls; later spell shots ride this same fixed pool.</summary>
+    private ProjectileSystem _projectiles = null!;
 
     /// <summary>Voices, and the clips they play. Null when the run asked for silence.</summary>
     private AudioEngine? _audio;
@@ -1678,6 +1682,7 @@ public sealed class ClientHost : IDisposable
         _player = new PlayerBody(registry);
         _vitals = new PlayerVitals(registry);
         _particles = new ParticleSystem(registry);
+        _projectiles = new ProjectileSystem(registry);
         _growth = new Growth(registry);
         _leafBlock = ids.Leaves;
         _cherryLeafBlock = ids.CherryLeaves;
@@ -8353,6 +8358,90 @@ public sealed class ClientHost : IDisposable
         }
     }
 
+    /// <summary>Advances the shared flight pool and turns its plain impact records into game effects.</summary>
+    private void StepProjectiles(float dt)
+    {
+        _projectiles.Update(_streamer.World, _herd, dt);
+
+        foreach (ref readonly var impact in _projectiles.Impacts)
+        {
+            if (impact.Kind == ProjectileKind.Farpearl)
+            {
+                FarstepTo(impact);
+                continue;
+            }
+
+            if (impact.Creature is { } creature && _herd is not null)
+            {
+                var before = creature.Health;
+                _herd.Hurt(creature, impact.Damage, impact.Position - impact.Velocity);
+                if (creature.Health == before) continue;
+
+                _audio?.Play(Pick(CreatureSounds.Blows), impact.Position, 0.58f, 1.08f);
+                var cry = CreatureSounds.HurtFor(creature.Kind);
+                if (cry.Length > 0 && creature.Alive)
+                    _audio?.Play(Pick(cry), creature.Middle, 0.82f, Wobble());
+                Rumble(0.18f, 0.5f, 65);
+                continue;
+            }
+
+            if (impact.Face < 0) continue;
+            var struck = _registry[_streamer.World.GetBlock(impact.X, impact.Y, impact.Z)];
+            _particles.Chip(struck, impact.X, impact.Y, impact.Z, impact.Face, 5);
+            PlaySound(struck, SoundEvent.Hit, impact.Position, 0.38f, 1.16f);
+        }
+    }
+
+    /// <summary>Moves the player beside a farpearl impact, refusing a destination inside a block.</summary>
+    private void FarstepTo(in ProjectileImpact impact)
+    {
+        var before = _player.Position + new Vector3(0f, _player.CurrentHeight * 0.5f, 0f);
+        var normal = impact.Normal.LengthSquared() > 1e-6f
+            ? Vector3.Normalize(impact.Normal)
+            : -Vector3.Normalize(impact.Velocity);
+
+        // A horizontal face needs half a body of clearance; a floor only needs a hair so feet land
+        // on it rather than hovering. The vertical alternatives recover a ledge or a low obstruction.
+        var nudge = new Vector3(normal.X * 0.38f, normal.Y * 0.04f, normal.Z * 0.38f);
+        var first = impact.Position + nudge;
+        ReadOnlySpan<Vector3> alternatives =
+        [
+            Vector3.Zero,
+            Vector3.UnitY,
+            -Vector3.UnitY,
+            Vector3.UnitY * 2f,
+            new Vector3(normal.X * 0.45f, 0f, normal.Z * 0.45f),
+        ];
+
+        foreach (var offset in alternatives)
+        {
+            var candidate = first + offset;
+            var feet = ChunkPos.FromWorld(
+                (int)MathF.Floor(candidate.X),
+                (int)MathF.Floor(candidate.Y),
+                (int)MathF.Floor(candidate.Z));
+            var head = ChunkPos.FromWorld(
+                (int)MathF.Floor(candidate.X),
+                (int)MathF.Floor(candidate.Y + _player.CurrentHeight),
+                (int)MathF.Floor(candidate.Z));
+
+            if (!_streamer.World.TryGetChunk(feet, out _)
+                || !_streamer.World.TryGetChunk(head, out _)
+                || _player.Collides(_streamer.World, candidate))
+                continue;
+
+            _player.Teleport(candidate);
+            var after = candidate + new Vector3(0f, _player.CurrentHeight * 0.5f, 0f);
+            _particles.DeathPuff(before, 0.65f, StarterBlocks.LayerFarpearl, 8);
+            _particles.DeathPuff(after, 0.65f, StarterBlocks.LayerFarpearl, 8);
+            _audio?.Play(Pick(CreatureSounds.Blinks), after, 0.7f, 0.92f);
+            Rumble(0.32f, 0.4f, 80);
+            return;
+        }
+
+        Notice("farstep blocked", _items.ByName("farpearl"));
+    }
+
     /// <summary>One blast landing on the world: the crater, the drops, the hurt, the noise.</summary>
     /// <remarks>
     /// <para>⛳ <b>The shape is Core's</b> (<see cref="Explosion"/>); this walks the carved cells
@@ -9446,6 +9535,7 @@ public sealed class ClientHost : IDisposable
         StepFuses((float)dt);
         StepLeaffall((float)dt);
         StepFurnaces((float)dt);
+        StepProjectiles((float)dt);
         StepCreatures((float)dt);
         StepCarts((float)dt);
         StepToasts((float)dt);
@@ -10284,7 +10374,65 @@ public sealed class ClientHost : IDisposable
         // the click, and only a click the world had no use for becomes a meal.
         if (PlaceOnTarget()) return;
 
+        if (UseHeldProjectile()) return;
+
         EatHeld();
+    }
+
+    /// <summary>Fires or throws the held projectile item after the aimed world declines the click.</summary>
+    /// <remarks>
+    /// A chest still opens with a bow in hand because block use gets first refusal above. Payment is
+    /// after the pool accepts the shot: a saturated pool can say no, but it can never eat an arrow or
+    /// pearl it did not put into the world.
+    /// </remarks>
+    private bool UseHeldProjectile()
+    {
+        if (_inventory.HeldType is not { } held) return false;
+
+        var origin = _camera.Position + _camera.Forward * 0.45f;
+
+        switch (held.Use)
+        {
+            case ItemUse.Bow:
+            {
+                var arrow = _items.ByName("arrow");
+                if (_inventory.CountOf(arrow.Id) == 0)
+                {
+                    Notice("no arrows", held);
+                    return true;
+                }
+
+                if (!_projectiles.ShootArrow(origin, _camera.Forward))
+                {
+                    Notice("too many shots in flight", held);
+                    return true;
+                }
+
+                if (_inventory.Take(arrow.Id, 1) != 1)
+                    throw new InvalidOperationException("an arrow vanished between the bow's check and payment");
+
+                _audio?.Play(Pick(ActionSounds.BowShoot), origin, 0.62f, 1.02f);
+                Rumble(0.10f, 0.22f, 45);
+                if (WearHeld())
+                    _audio?.Play(Pick(ActionSounds.ToolBreaks), _viewPosition, 0.7f, Wobble());
+                return true;
+            }
+
+            case ItemUse.ThrownFarstep:
+                if (!_projectiles.ThrowFarpearl(origin, _camera.Forward))
+                {
+                    Notice("too many shots in flight", held);
+                    return true;
+                }
+
+                _inventory.SpendHeld();
+                _audio?.Play(Pick(CreatureSounds.Blinks), origin, 0.55f, 1.08f);
+                Rumble(0.08f, 0.14f, 38);
+                return true;
+
+            default:
+                return false;
+        }
     }
 
     /// <summary>
@@ -11534,6 +11682,8 @@ public sealed class ClientHost : IDisposable
         // unit zero by now.
         _blockTextures.Bind();
         _itemRenderer.Draw(_drops, _registry, _items, viewProj, at => ParticleLight(at));
+        _itemRenderer.DrawProjectiles(
+            _projectiles, _registry, _items, viewProj, at => ParticleLight(at));
         DrawCookingFood(viewProj);
         _particleRenderer.Draw(
             _particles, viewProj, _viewPosition, _viewForward,

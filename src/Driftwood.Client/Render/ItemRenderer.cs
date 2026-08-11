@@ -1,6 +1,7 @@
 using System.Numerics;
 using Driftwood.Core.Blocks;
 using Driftwood.Core.Items;
+using Driftwood.Core.Projectiles;
 using Silk.NET.OpenGL;
 
 namespace Driftwood.Client.Render;
@@ -94,6 +95,9 @@ public sealed class ItemRenderer : IDisposable
 
     /// <summary>Items the last <see cref="Draw"/> put on screen.</summary>
     public int DrawnItems { get; private set; }
+
+    /// <summary>Flights the last projectile pass put on screen.</summary>
+    public int DrawnProjectiles { get; private set; }
 
     /// <summary>How many icon layers were extruded, for the startup line.</summary>
     public int SpriteCount => _sprites.Count;
@@ -264,6 +268,70 @@ public sealed class ItemRenderer : IDisposable
         }
 
         _gl.BindVertexArray(0);
+    }
+
+    /// <summary>Draws the same real item meshes in flight rather than inventing projectile art.</summary>
+    public void DrawProjectiles(
+        ProjectileSystem flights,
+        BlockRegistry registry,
+        ItemRegistry catalogue,
+        Matrix4x4 viewProj,
+        Func<Vector3, Vector3> lightAt)
+    {
+        DrawnProjectiles = 0;
+        if (flights.Count == 0) return;
+
+        var arrow = catalogue.ByName("arrow");
+        var farpearl = catalogue.ByName("farpearl");
+
+        _shader.Use();
+        _shader.SetMatrix4("uViewProj", viewProj);
+        _shader.SetInt("uBlocks", 0);
+
+        for (var i = 0; i < ProjectileSystem.Capacity; i++)
+        {
+            if (!flights.ActiveAt(i)) continue;
+            var shot = flights.SnapshotAt(i);
+            var type = shot.Kind == ProjectileKind.Arrow ? arrow : farpearl;
+
+            Matrix4x4 model;
+            if (shot.Kind == ProjectileKind.Arrow)
+            {
+                // The generated arrow points along item-space +Y. Rotate that axis onto its flight
+                // vector, preserving the icon's whole recognisable silhouette rather than drawing a
+                // generic line whose texture pack can never replace.
+                var direction = Vector3.Normalize(shot.Velocity);
+                var rotation = FromTo(Vector3.UnitY, direction);
+                model = Matrix4x4.CreateScale(0.72f)
+                      * Matrix4x4.CreateFromQuaternion(rotation)
+                      * Matrix4x4.CreateTranslation(shot.Position);
+            }
+            else
+            {
+                model = Matrix4x4.CreateScale(0.28f)
+                      * Matrix4x4.CreateRotationX(shot.Age * 2.1f)
+                      * Matrix4x4.CreateRotationY(shot.Age * 4.7f)
+                      * Matrix4x4.CreateTranslation(shot.Position);
+            }
+
+            _shader.SetMatrix4("uModel", model);
+            _shader.SetVec3("uLight", lightAt(shot.Position));
+            SetLayers(type, registry);
+            DrawMesh(type);
+            DrawnProjectiles++;
+        }
+
+        _gl.BindVertexArray(0);
+    }
+
+    private static Quaternion FromTo(Vector3 from, Vector3 to)
+    {
+        var dot = Math.Clamp(Vector3.Dot(from, to), -1f, 1f);
+        if (dot > 0.99999f) return Quaternion.Identity;
+        if (dot < -0.99999f) return Quaternion.CreateFromAxisAngle(Vector3.UnitX, MathF.PI);
+
+        var axis = Vector3.Cross(from, to);
+        return Quaternion.Normalize(new Quaternion(axis, 1f + dot));
     }
 
     /// <summary>

@@ -221,6 +221,7 @@ public static class RecipeReport
             if (type.Places is not null) continue;    // a block you put down is its own purpose
             if (type.PlacesEntity) continue;          // and so is a cart clicked onto a rail
             if (Buckets.IsCarrier(type.Name)) continue;   // a carrier is used, never consumed
+            if (type.Use != ItemUse.None) continue;   // bows, their ammunition, and thrown items
 
             // ⚠ Counted rather than listed. The smithing table is their transformer: a worn tool
             // and the next rung's material become the same tool a tier up, wear carried — which

@@ -4038,6 +4038,94 @@ public static class TileGen
         return t;
     }
 
+    /// <summary>A bent stave and taut string, one connected silhouette from tip to tip.</summary>
+    public static byte[] IconBow(int seed)
+    {
+        string[] rows =
+        [
+            "................",
+            ".........bb.....",
+            "........bbs.....",
+            "......bbb.s.....",
+            ".....bb...s.....",
+            "....bb....s.....",
+            "...bb.....s.....",
+            "...b......s.....",
+            "...b......s.....",
+            "...bb.....s.....",
+            "....bb....s.....",
+            ".....bb...s.....",
+            "......bbb.s.....",
+            "........bbs.....",
+            ".........bb.....",
+            "................",
+        ];
+
+        var t = new byte[BytesPerTile];
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var mark = rows[y][x];
+            if (mark == '.') continue;
+
+            if (mark == 's')
+            {
+                var lift = (int)((Noise(x, y, seed + 17) * 2f - 1f) * 8f);
+                Put(t, x, y, Clamp(216 + lift), Clamp(208 + lift), Clamp(188 + lift), 255);
+                continue;
+            }
+
+            var edge = x <= 3 || x >= 9 || y is <= 2 or >= 13;
+            var d = (edge ? -22 : 12) + (int)((Noise(x, y, seed) * 2f - 1f) * 10f);
+            Put(t, x, y, Clamp(130 + d), Clamp(88 + d), Clamp(48 + d), 255);
+        }
+
+        return t;
+    }
+
+    /// <summary>A stone point, timber shaft and feathered tail, pointing up in item space.</summary>
+    public static byte[] IconArrow(int seed)
+    {
+        string[] rows =
+        [
+            "................",
+            ".......tt.......",
+            "......tttt......",
+            ".....tttttt.....",
+            ".......ww.......",
+            ".......ww.......",
+            ".......ww.......",
+            ".......ww.......",
+            ".......ww.......",
+            ".......ww.......",
+            "....ff.ww.ff....",
+            ".....ffwwff.....",
+            "......fwwf......",
+            ".......ww.......",
+            "................",
+            "................",
+        ];
+
+        var t = new byte[BytesPerTile];
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var mark = rows[y][x];
+            if (mark == '.') continue;
+
+            var noise = (int)((Noise(x, y, seed) * 2f - 1f) * 8f);
+            var (r, g, b) = mark switch
+            {
+                't' => (112, 112, 116),
+                'f' => (232, 232, 226),
+                _ => (132, 92, 54),
+            };
+            Put(t, x, y, Clamp(r + noise), Clamp(g + noise), Clamp(b + noise), 255);
+        }
+
+        return t;
+    }
+
     /// <summary>A rounded nugget — coal, a raw metal, a ball of clay.</summary>
     public static byte[] IconLump(int seed, byte r, byte g, byte b)
     {

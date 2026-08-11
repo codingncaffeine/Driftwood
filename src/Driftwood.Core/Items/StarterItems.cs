@@ -664,10 +664,8 @@ public static class StarterItems
         // turning a forest into paper to feed a furnace when the planks would do it five times over.
         Loose(items, "paper", "paper", StarterBlocks.LayerPaper, burn: 1f);
 
-        // What an animal leaves. ⚠ Feather is a component with nothing yet to spend it on, and
-        // that is honest rather than an oversight — arrows are what it is for, and the projectile
-        // pool they ride on is M4's own work (#78). It is obtainable, which is what the
-        // reachability walk asks of an item; being consumed is a different claim.
+        // What an animal leaves. Feather now closes into the arrow below: the first ordinary
+        // consumer of the shared projectile pool, split cleanly from M4's later spell payloads.
         Loose(items, "leather", "leather", StarterBlocks.LayerLeather);
         Loose(items, "feather", "feather", StarterBlocks.LayerFeather);
         Loose(items, "egg", "egg", StarterBlocks.LayerEgg);
@@ -685,6 +683,20 @@ public static class StarterItems
         // who fought their way through a night has something and not much.
         Loose(items, "string", "string", StarterBlocks.LayerString);
         Loose(items, "bone", "bone", StarterBlocks.LayerBone);
+
+        // ⛳ The ranged pair. The bow carries wear; the arrow stacks and is spent out of any pocket
+        // when a shot actually enters the fixed pool. Both name their use so neither the client nor
+        // the recipe report has to know them by string.
+        items.Register(new ItemType
+        {
+            Name = "bow", Label = "bow", IconLayer = StarterBlocks.LayerBow,
+            MaxStack = 1, Durability = 384, Use = ItemUse.Bow,
+        });
+        items.Register(new ItemType
+        {
+            Name = "arrow", Label = "arrow", IconLayer = StarterBlocks.LayerArrow,
+            Use = ItemUse.BowAmmunition,
+        });
 
         // Nine pack away into the slime block (#97) — the metals' own gesture, and the block is
         // the point: the first floor that returns a landing.
@@ -736,8 +748,13 @@ public static class StarterItems
             });
         }
 
-        // The farwalker's pearl — the teleport reagent M1's summons are written against.
-        Loose(items, "farpearl", "farpearl", StarterBlocks.LayerFarpearl);
+        // The farwalker's pearl: thrown through the ordinary projectile pool and spent only after
+        // that pool accepts it. It remains a later magic reagent too; use and ingredient can coexist.
+        items.Register(new ItemType
+        {
+            Name = "farpearl", Label = "farpearl", IconLayer = StarterBlocks.LayerFarpearl,
+            Use = ItemUse.ThrownFarstep,
+        });
 
         // The rabbit's pair and its hide. ⚠ Standalone rather than rows in Meats, because that
         // table's icon layers are a fixed run mid-numbering — see StarterBlocks.LayerRawRabbit.
