@@ -10958,7 +10958,7 @@ public sealed class ClientHost : IDisposable
                     SpellParticleEffects.Emit(_particles, spell.Particle, SpellParticlePhase.Impact,
                         cast.Origin, summoned.Position, cast.Rank);
                     NoticeMagic($"summoned {CompanionService.Definition(summoned.Kind).Name}",
-                        SpellIconAtlas.LayerFor(spell.Particle), "follow · guard · attack · stop · go away");
+                        SpellIconAtlas.LayerFor(spell.Particle), "follow · guard · attack · stay · go away");
                 }
                 break;
 
@@ -11109,7 +11109,8 @@ public sealed class ClientHost : IDisposable
         _companions.Update(
             dt,
             owner => owner == LocalPlayerId ? _player.Position : null,
-            id => CreatureById(id)?.Position);
+            id => CreatureById(id)?.Position,
+            CompanionCatchUpPosition);
 
         foreach (var change in _companions.TakeEvents())
         {
@@ -11123,6 +11124,14 @@ public sealed class ClientHost : IDisposable
                 case "died": PlayMagic(MagicSounds.PetDeathFor(change.Kind), at, 0.58f); break;
                 case "hurt": PlayMagic(MagicSounds.PetHurtFor(change.Kind), at, 0.42f); break;
                 case "command": PlayMagic(MagicSounds.Command(change.Command), at, 0.4f); break;
+                case "caught_up":
+                    PlayMagic(MagicSounds.Summon, at, 0.36f);
+                    var catchUpDefinition = CompanionService.Definition(change.Kind);
+                    var spell = SpellCatalogue.ById(catchUpDefinition.Spell);
+                    SpellParticleEffects.Emit(
+                        _particles, spell.Particle, SpellParticlePhase.Impact,
+                        at, at, _companions.For(change.OwnerPlayerId)?.Rank ?? 1);
+                    break;
             }
         }
 
@@ -11180,6 +11189,37 @@ public sealed class ClientHost : IDisposable
             pet.Position, target.Middle, pet.Rank);
     }
 
+    /// <summary>Finds loaded headroom beside the owner for a pet that broke its leash.</summary>
+    /// <remarks>
+    /// Dry cells win, but water is a valid fallback when the owner is swimming. The bounded search
+    /// stays around the player's present Y, so entering a cave brings the pet into the cave instead
+    /// of scanning upward and depositing it on the surface. Tree blocks remain collision, never a
+    /// spawn platform, by the same rule used for players, residents and ordinary creatures.
+    /// </remarks>
+    private Vector3? CompanionCatchUpPosition(Companion pet, Vector3 owner)
+    {
+        var dry = CompanionService.FindCatchUpPosition(
+            owner, (x, y, z) => CompanionCanStand(pet, x, y, z, requireDry: true));
+        return dry ?? CompanionService.FindCatchUpPosition(
+            owner, (x, y, z) => CompanionCanStand(pet, x, y, z, requireDry: false));
+    }
+
+    private bool CompanionCanStand(
+        Companion pet, int x, int feetY, int z, bool requireDry)
+    {
+        if (!SpawnCellsLoaded(x, feetY, z)
+            || !TreeFreeSpawnSupport(x, feetY - 1, z)) return false;
+
+        var cells = Math.Max(1, (int)MathF.Ceiling(CompanionService.Definition(pet.Kind).Height));
+        for (var y = feetY; y < feetY + cells; y++)
+        {
+            var block = _registry[_streamer.World.GetBlock(x, y, z)];
+            if (block.Solid || requireDry && block.Fluid != FluidKind.None) return false;
+        }
+
+        return true;
+    }
+
     private void StepCompanionVoice(Companion pet, bool moved, float dt)
     {
         if (moved)
@@ -11234,7 +11274,10 @@ public sealed class ClientHost : IDisposable
         }
         if (!_companions.Command(LocalPlayerId, command, target?.RuntimeId ?? "")) return;
         if (command == CompanionCommand.GoAway) _character.LinkCompanion("");
-        NoticeMagic(command == CompanionCommand.GoAway ? "companion dismissed" : $"companion: {command.ToString().ToLowerInvariant()}",
+        var commandName = command == CompanionCommand.Stop
+            ? "stay"
+            : command.ToString().ToLowerInvariant();
+        NoticeMagic(command == CompanionCommand.GoAway ? "companion dismissed" : $"companion: {commandName}",
             StarterBlocks.LayerAnvilTop,
             command == CompanionCommand.Attack ? target!.Kind : "command accepted");
     }

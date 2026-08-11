@@ -35,7 +35,8 @@ public static class MagicAudit
         detail = faults.Count == 0
             ? "19 spells in 5/5/4/5 open groups; levels 1-20 derive Ranks I-IV; buy-once gold, "
               + "eight prepared slots, simulation-time casts/effects, four summons under one-pet cap, "
-              + "idempotent rifts, stable-name round trips and independent player IDs"
+              + "3D pet catch-up with a Stay exemption, idempotent rifts, stable-name round trips "
+              + "and independent player IDs"
             : $"{faults.Count} faults: {faults[0]}";
         return faults;
     }
@@ -271,6 +272,79 @@ public static class MagicAudit
         pets.Command("player-a", CompanionCommand.Stop);
         if (pets.DefendAgainst("player-a", "hostile-2"))
             faults.Add("a stopped pet accepted an automatic defensive target");
+
+        // Follow is a loose formation, while catch-up is a separate three-dimensional leash. The
+        // latter matters most underground: zero horizontal separation and thirty vertical blocks
+        // must still pop a pet beside its owner. Stay is the one explicit exception.
+        var leashed = new CompanionService();
+        var leashPet = leashed.Summon(
+            "leash-summon", "leash-owner", SpellId.SpiritWolf, 2, Vector3.Zero)!;
+        leashed.TakeEvents();
+        var formationOwner = new Vector3(10f, 0f, 0f);
+        leashed.Update(10f, _ => formationOwner, _ => null);
+        if (MathF.Abs(Vector3.Distance(leashPet.Position, formationOwner)
+                      - CompanionService.FollowDistance) > 0.001f)
+            faults.Add("a following pet did not settle at the looser formation distance");
+
+        leashPet.Position = Vector3.Zero;
+        var caveOwner = new Vector3(0.5f, 30f, 0.5f);
+        var besideOwner = new Vector3(1.5f, 30f, 0.5f);
+        var catchUpCalls = 0;
+        leashed.Update(
+            0.1f, _ => caveOwner, _ => null,
+            (_, _) => { catchUpCalls++; return besideOwner; });
+        if (leashPet.Position != besideOwner || catchUpCalls != 1
+            || !leashed.TakeEvents().Any(one => one.Event == "caught_up"))
+            faults.Add("a vertically separated following pet did not catch up beside its owner");
+
+        var caveStep = CompanionService.FindCatchUpPosition(
+            caveOwner, (x, y, z) => x == 1 && y == 28 && z == 0);
+        if (caveStep != new Vector3(1.5f, 28f, 0.5f))
+            faults.Add("the catch-up search did not find standable cave-height space beside the owner");
+
+        leashed.Command("leash-owner", CompanionCommand.Stop);
+        leashed.TakeEvents();
+        var stayed = leashPet.Position;
+        catchUpCalls = 0;
+        leashed.Update(
+            0.1f, _ => new Vector3(0.5f, 90f, 0.5f), _ => null,
+            (_, _) => { catchUpCalls++; return new Vector3(1.5f, 90f, 0.5f); });
+        if (leashPet.Position != stayed || catchUpCalls != 0
+            || leashed.TakeEvents().Any(one => one.Event == "caught_up"))
+            faults.Add("Stay did not exempt a pet from owner catch-up");
+
+        leashPet.Position = Vector3.Zero;
+        leashed.Command("leash-owner", CompanionCommand.Guard);
+        leashed.TakeEvents();
+        leashed.Update(0.1f, _ => caveOwner, _ => null, (_, _) => besideOwner);
+        if (leashPet.Position != besideOwner || leashPet.GuardPosition != besideOwner
+            || leashPet.Command != CompanionCommand.Guard)
+            faults.Add("a guarding pet did not catch up and move its guard anchor beside the owner");
+        leashed.TakeEvents();
+
+        leashPet.Position = Vector3.Zero;
+        leashed.Command("leash-owner", CompanionCommand.Attack, "near-hostile");
+        leashed.TakeEvents();
+        leashed.Update(
+            0.1f, _ => caveOwner,
+            id => id == "near-hostile" ? caveOwner + Vector3.UnitX : null,
+            (_, _) => besideOwner);
+        if (leashPet.Position != besideOwner || leashPet.Command != CompanionCommand.Attack)
+            faults.Add("an attacking pet did not catch up while retaining a nearby legal target");
+        leashed.TakeEvents();
+
+        leashPet.Position = Vector3.Zero;
+        leashed.Command("leash-owner", CompanionCommand.Attack, "far-hostile");
+        leashed.TakeEvents();
+        leashed.Update(
+            0.1f, _ => caveOwner,
+            id => id == "far-hostile"
+                ? caveOwner + new Vector3(CompanionService.CatchUpDistance + 2f, 0f, 0f)
+                : null,
+            (_, _) => besideOwner);
+        if (leashPet.Command != CompanionCommand.Follow || leashPet.TargetId.Length != 0)
+            faults.Add("catch-up kept a target beyond the owner leash and would teleport-loop");
+
         pets.RefreshRank("player-a", 4);
         if (pets.For("player-a") is not { Rank: 4 } ranked || ranked.Health <= before)
             faults.Add("a rank boundary did not update the active pet's health snapshot");

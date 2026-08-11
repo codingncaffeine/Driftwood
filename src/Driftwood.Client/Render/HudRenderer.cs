@@ -1277,8 +1277,13 @@ public sealed class HudRenderer : IDisposable
             var active = pet.Command == command && command != CompanionCommand.GoAway;
             if (active) Rect(_plain, left + 3f, y - 1f, width - 6f, line - 1f,
                 new Vector4(0.26f, 0.30f, 0.32f, 0.92f));
-            Text(command == CompanionCommand.GoAway ? "go away" : command.ToString().ToLowerInvariant(),
-                left + 6f, y + 1f, 6f, active ? Vector4.One : InkDim);
+            var label = command switch
+            {
+                CompanionCommand.GoAway => "go away",
+                CompanionCommand.Stop => "stay",
+                _ => command.ToString().ToLowerInvariant(),
+            };
+            Text(label, left + 6f, y + 1f, 6f, active ? Vector4.One : InkDim);
             if (screen.SpellBank > 0)
                 Text(controller[row], left + width - 29f, y + 1f, 5f, InkFaint);
             if (screen.SpellCursor)

@@ -32,6 +32,19 @@ public readonly record struct CompanionEvent(
 /// <summary>One authoritative commanded companion per stable player identity.</summary>
 public sealed class CompanionService
 {
+    /// <summary>How far a commanded pet may be from its owner before it catches up instantly.</summary>
+    /// <remarks>
+    /// Twelve blocks is short enough to rescue a pet at the mouth of a stair or on the floor above
+    /// without making ordinary pursuit flicker. The distance is three-dimensional on purpose: the
+    /// old horizontal-only check could call a pet directly overhead "near" through an entire cave.
+    /// </remarks>
+    public const float CatchUpDistance = 12f;
+
+    /// <summary>Comfortable formation distance for an unoccupied Follow companion.</summary>
+    public const float FollowDistance = 3.8f;
+
+    private const float CatchUpDistanceSquared = CatchUpDistance * CatchUpDistance;
+
     private static readonly CompanionDefinition[] AllDefinitions =
     [
         new(CompanionKind.Bones, SpellId.SummonBones, "Bones", "summoned_skeleton", CompanionRole.Striker,
@@ -156,16 +169,66 @@ public sealed class CompanionService
         Dirty = true;
     }
 
-    public void Update(float dt, Func<string, Vector3?> ownerPosition, Func<string, Vector3?> targetPosition)
+    public void Update(
+        float dt,
+        Func<string, Vector3?> ownerPosition,
+        Func<string, Vector3?> targetPosition,
+        Func<Companion, Vector3, Vector3?>? catchUpPosition = null)
     {
         if (dt <= 0f) return;
         foreach (var pet in _byOwner.Values)
         {
+            var owner = ownerPosition(pet.OwnerPlayerId);
+
+            // Stop is the saved/internal name of the player's Stay order. Every active order keeps
+            // the pet with its owner; Stay is the one explicit promise that it will remain behind.
+            // Resolve a safe arrival in the live world rather than blindly putting a tall skeleton
+            // inside the wall beside a player. Pure simulations retain the old deterministic offset.
+            if (pet.Command != CompanionCommand.Stop
+                && owner is { } ownerAt
+                && Finite(ownerAt)
+                && Vector3.DistanceSquared(pet.Position, ownerAt) > CatchUpDistanceSquared)
+            {
+                var beside = catchUpPosition is null
+                    ? ownerAt + new Vector3(-1f, 0f, 0f)
+                    : catchUpPosition(pet, ownerAt);
+                if (beside is { } arrival && Finite(arrival))
+                {
+                    // An explicit attack survives when its target is still inside the owner's
+                    // leash. A target beyond it cannot be pursued without immediately breaking the
+                    // leash again, so owner priority naturally returns that pet to Follow.
+                    if (pet.Command == CompanionCommand.Attack)
+                    {
+                        var target = targetPosition(pet.TargetId);
+                        if (target is not { } hunted
+                            || !Finite(hunted)
+                            || Vector3.DistanceSquared(hunted, ownerAt) > CatchUpDistanceSquared)
+                        {
+                            pet.Command = CompanionCommand.Follow;
+                            pet.TargetId = "";
+                        }
+                    }
+                    else
+                    {
+                        // Guard and Follow targets are opportunistic; the client will acquire a
+                        // relevant nearby hostile again after the pet arrives.
+                        pet.TargetId = "";
+                    }
+
+                    pet.Position = arrival;
+                    if (pet.Command == CompanionCommand.Guard) pet.GuardPosition = arrival;
+                    _events.Add(new(
+                        pet.OwnerPlayerId, pet.InstanceId, pet.Kind, "caught_up", pet.Command));
+                    Dirty = true;
+                    continue;
+                }
+            }
+
             Vector3? destination = pet.Command switch
             {
                 CompanionCommand.Attack => targetPosition(pet.TargetId),
                 CompanionCommand.Guard => targetPosition(pet.TargetId) ?? pet.GuardPosition,
-                CompanionCommand.Follow => targetPosition(pet.TargetId) ?? ownerPosition(pet.OwnerPlayerId),
+                CompanionCommand.Follow => targetPosition(pet.TargetId) ?? owner,
                 _ => null,
             };
             if (destination is not { } goal) continue;
@@ -174,20 +237,55 @@ public sealed class CompanionService
             var distance = delta.Length();
             var definition = Definition(pet.Kind);
             var pursuing = pet.TargetId.Length > 0;
-            var stop = pet.Command == CompanionCommand.Follow && !pursuing ? 1.8f : definition.Reach;
+            var stop = pet.Command == CompanionCommand.Follow && !pursuing
+                ? FollowDistance
+                : definition.Reach;
             if (distance <= stop || distance < 0.001f) continue;
-            if (distance > 32f && pet.Command == CompanionCommand.Follow)
-            {
-                pet.Position = goal + new Vector3(-1f, 0f, 0f);
-            }
-            else
-            {
-                var direction = delta / distance;
-                pet.Position += direction * MathF.Min(distance - stop, definition.Speed * dt);
-                pet.Yaw = float.RadiansToDegrees(MathF.Atan2(direction.Z, direction.X));
-            }
+            var direction = delta / distance;
+            pet.Position += direction * MathF.Min(distance - stop, definition.Speed * dt);
+            pet.Yaw = float.RadiansToDegrees(MathF.Atan2(direction.Z, direction.X));
             Dirty = true;
         }
+    }
+
+    /// <summary>Finds the nearest standable cell beside an owner, including cave-height steps.</summary>
+    /// <remarks>
+    /// The world-specific predicate owns loaded chunks, support, fluids and model headroom. This
+    /// method owns only the bounded nearest-first search: same elevation first, then up/down three,
+    /// and never the owner's own cell. Keeping it here makes the underground rule headlessly
+    /// testable without teaching companion authority about blocks.
+    /// </remarks>
+    public static Vector3? FindCatchUpPosition(
+        Vector3 owner, Func<int, int, int, bool> canStand)
+    {
+        ArgumentNullException.ThrowIfNull(canStand);
+        if (!Finite(owner)) return null;
+
+        var centreX = (int)MathF.Floor(owner.X);
+        var centreY = (int)MathF.Floor(owner.Y);
+        var centreZ = (int)MathF.Floor(owner.Z);
+
+        // 0, +1, -1, +2, -2, +3, -3: preserve the player's cave floor when possible, but still
+        // cross a short stair, ledge or one-storey opening without looking for surface terrain.
+        for (var vertical = 0; vertical <= 6; vertical++)
+        {
+            var dy = vertical == 0
+                ? 0
+                : (vertical + 1) / 2 * (vertical % 2 == 1 ? 1 : -1);
+            for (var radius = 1; radius <= 3; radius++)
+            for (var dz = -radius; dz <= radius; dz++)
+            for (var dx = -radius; dx <= radius; dx++)
+            {
+                if (Math.Max(Math.Abs(dx), Math.Abs(dz)) != radius) continue;
+                var x = centreX + dx;
+                var feet = centreY + dy;
+                var z = centreZ + dz;
+                if (canStand(x, feet, z))
+                    return new Vector3(x + 0.5f, feet, z + 0.5f);
+            }
+        }
+
+        return null;
     }
 
     public List<CompanionEvent> TakeEvents()

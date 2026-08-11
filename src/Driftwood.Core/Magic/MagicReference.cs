@@ -243,14 +243,14 @@ public static class MagicReference
             sb.AppendLine($"| {pet.Name} | {pet.Role} | {pet.Health[0]} | {pet.Health[3]} | {pet.Damage[0]} | {pet.Damage[3]} |");
         sb.AppendLine();
         sb.AppendLine("- **Attack** engages the legal hostile under the owner's crosshair.");
-        sb.AppendLine("- **Guard** anchors here, engages nearby hostiles, then returns.");
-        sb.AppendLine("- **Follow** clears guard/stop and follows the owner.");
-        sb.AppendLine("- **Stop** clears the target and waits passively.");
+        sb.AppendLine("- **Guard** anchors here, engages nearby hostiles, then returns until its owner breaks the catch-up leash.");
+        sb.AppendLine($"- **Follow** clears guard/stay and trails the owner at about {CompanionService.FollowDistance:F0} blocks rather than crowding their feet.");
+        sb.AppendLine("- **Stay** clears the target and waits passively. This is the only order that disables owner catch-up.");
         sb.AppendLine("- **Go Away** dismisses the pet without corpse, loot, coins, or XP.");
         sb.AppendLine();
         sb.AppendLine("The non-modal panel shows portrait, name, role, Rank I–IV, exact health bar and numbers, and current command. Earth Elemental is an original irregular stone biped about half player height; Spirit Wolf has a black-and-grey coat and bright blue eyes.");
         sb.AppendLine();
-        sb.AppendLine("Hold the spell cursor and right-click the companion panel for its lock option. When unlocked, drag the decorated title strip; its bounded position is remembered. Guard and Follow automatically engage nearby hostiles, and a companion close to an incoming melee blow can intercept it.");
+        sb.AppendLine($"Hold the spell cursor and right-click the companion panel for its lock option. When unlocked, drag the decorated title strip; its bounded position is remembered. Guard and Follow automatically engage nearby hostiles, and a companion close to an incoming melee blow can intercept it. Unless told to Stay, a pet more than {CompanionService.CatchUpDistance:F0} blocks from its owner teleports to loaded, standable space beside them; the leash measures vertical cave separation as well as horizontal distance.");
         return sb.ToString();
     }
 
