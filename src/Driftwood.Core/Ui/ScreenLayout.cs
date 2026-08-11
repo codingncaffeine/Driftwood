@@ -93,7 +93,7 @@ public enum ZoneKind
     /// <summary>Something that does one thing when pressed. The index says which.</summary>
     Button,
 
-    /// <summary>The explored map canvas; dragging it pans without stealing clicks from its tabs.</summary>
+    /// <summary>The explored map canvas; a click marks it and a purposeful drag pans it.</summary>
     Map,
 
     /// <summary>The rotatable player model on the skin shelf.</summary>
@@ -119,6 +119,7 @@ public enum MagicWindowKind
 {
     Companion,
     Spellbook,
+    SpellBar,
 }
 
 /// <summary>The real controls along the foot of the two-pane resident shop.</summary>
@@ -569,7 +570,7 @@ public sealed class ScreenLayout
     /// How many lines of a settings list are shown at once.
     /// </summary>
     /// <remarks>
-    /// <b>Capped, and the cap is the point.</b> The controls tab has twenty eight rows in it and
+    /// <b>Capped, and the cap is the point.</b> The controls tab has twenty-nine rows in it and
     /// every new binding adds one, so a list drawn at its full length is a panel that grows until it
     /// runs off the bottom of the window — and then keeps growing, invisibly. Twelve lines is a
     /// panel that reads at a glance, and what does not fit is scrolled to. Held further down on a

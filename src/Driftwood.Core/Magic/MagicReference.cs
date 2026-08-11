@@ -220,7 +220,7 @@ public static class MagicReference
 
         All spells use renewable Focus, simulation-time cooldowns, range and line-of-sight preflight. Invalid targets spend nothing. Driftwood uses no spell reagents, ammunition, class gates, purchased ranks, or appearance-changing spell forms.
 
-        The spellbook has a decorated movable frame. Right-click it, choose **unlock window**, and drag the title border; right-click again to lock it against accidental movement. The position is remembered between sessions.
+        The spellbook and eight-slot spell bar have decorated movable frames. Hold the spell cursor for the world-space bar. Drag an unlocked title/grip to move it; right-click either frame to lock or unlock it. A drag attempted while locked opens the unlock action instead of failing silently. New layouts begin unlocked, and all positions and lock choices are remembered between sessions.
         """;
 
     private static string Effects() =>
@@ -250,7 +250,7 @@ public static class MagicReference
         sb.AppendLine();
         sb.AppendLine("The non-modal panel shows portrait, name, role, Rank I–IV, exact health bar and numbers, and current command. Earth Elemental is an original irregular stone biped about half player height; Spirit Wolf has a black-and-grey coat and bright blue eyes.");
         sb.AppendLine();
-        sb.AppendLine($"Hold the spell cursor and right-click the companion panel for its lock option. When unlocked, drag the decorated title strip; its bounded position is remembered. Guard and Follow automatically engage nearby hostiles, and a companion close to an incoming melee blow can intercept it. Unless told to Stay, a pet more than {CompanionService.CatchUpDistance:F0} blocks from its owner teleports to loaded, standable space beside them; the leash measures vertical cave separation as well as horizontal distance.");
+        sb.AppendLine($"Hold the spell cursor and right-click the companion panel for its lock option. Drag its decorated title strip while unlocked; trying while locked opens that option instead of failing silently. Its bounded position is remembered. Guard and Follow automatically engage nearby hostiles, and a companion close to an incoming melee blow can intercept it. Unless told to Stay, a pet more than {CompanionService.CatchUpDistance:F0} blocks from its owner teleports to loaded, standable space beside them; the leash measures vertical cave separation as well as horizontal distance.");
         return sb.ToString();
     }
 

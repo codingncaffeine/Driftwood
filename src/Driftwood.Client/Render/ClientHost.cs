@@ -564,6 +564,7 @@ public sealed class ClientHost : IDisposable
     private int _spellControllerBank;
     private int _spellLastControllerBank = 1;
     private readonly string[] _spellFaceLabels = new string[4];
+    private Vector2 _spellBarWindowOffset;
     private Vector2 _companionWindowOffset;
     private Vector2 _spellbookWindowOffset;
     private readonly WorldMap _map = new();
@@ -1036,6 +1037,8 @@ public sealed class ClientHost : IDisposable
         // Whatever the player changed last time, before anything reads a key or a field of view.
         // A bad file costs the setting it names and nothing else — see GameSettings.Load.
         _settings = GameSettings.Load();
+        _spellBarWindowOffset = new Vector2(
+            _settings.SpellBarWindowX, _settings.SpellBarWindowY);
         _companionWindowOffset = new Vector2(
             _settings.CompanionWindowX, _settings.CompanionWindowY);
         _spellbookWindowOffset = new Vector2(
@@ -1868,6 +1871,7 @@ public sealed class ClientHost : IDisposable
         Console.WriteLine("Hold left to mine, right to place — the arm swings and the swing takes the block");
         Console.WriteLine(
             $"{keys.Describe(GameAction.OpenInventory)} inventory and crafting, "
+            + $"{keys.Describe(GameAction.OpenMap)} map, "
             + $"{keys.Describe(GameAction.OpenOptions)} options — controls, video, audio, world");
         Console.WriteLine(
             $"{keys.Describe(GameAction.ToggleWireframe)} wireframe, "
@@ -2663,6 +2667,13 @@ public sealed class ClientHost : IDisposable
                 OpenPlayer(PlayerTab.Items, atBench: false, default);
                 break;
 
+            // Direct rather than walking five tabs from inventory: the mark is a navigation tool,
+            // so reaching it should be as immediate as reaching the pockets beside it.
+            case GameAction.OpenMap:
+                if (_bench is not null) break;
+                OpenPlayer(PlayerTab.Map, atBench: false, default);
+                break;
+
             // What this installation is set to. Opening it gives the mouse back, which is one
             // gesture in every game in this space and is why nothing else needs to.
             case GameAction.OpenOptions:
@@ -2913,6 +2924,15 @@ public sealed class ClientHost : IDisposable
         // On a panel of squares the arrows drive the pointer itself rather than a separate
         // selection, so there is one cursor and not two things arguing about what is picked out.
         // Enter is then simply a left click where it is, which is also what a gamepad will want.
+        // Rebindable screen keys go first: if somebody puts MAP on W, W must close the map rather
+        // than still acting like the old hard-coded pan key underneath their chosen binding.
+        if (_keys.ActionFor(key) is GameAction.OpenInventory or GameAction.OpenMap
+            or GameAction.OpenOptions)
+        {
+            CloseScreen();
+            return true;
+        }
+
         if (_hudScreen.IsContainer)
         {
             switch (key)
@@ -2987,10 +3007,6 @@ public sealed class ClientHost : IDisposable
             // Whichever key opened it closes it, and escape always does — a screen you cannot back
             // out of with escape is one people press escape at twice and then alt-tab out of.
             case Key.Escape:
-                CloseScreen();
-                return true;
-
-            case var _ when _keys.ActionFor(key) is GameAction.OpenInventory or GameAction.OpenOptions:
                 CloseScreen();
                 return true;
 
@@ -3254,7 +3270,9 @@ public sealed class ClientHost : IDisposable
     private bool _draggingScrollbar;
 
     private bool _draggingMap;
-    private Vector2 _mapDragAt;
+    private Vector2 _mapDragOrigin;
+    private Vector2 _mapPanAtDrag;
+    private bool _mapDragMoved;
     private bool _draggingSkinPreview;
     private Vector2 _skinDragAt;
     private bool _draggingFigure;
@@ -4333,6 +4351,7 @@ public sealed class ClientHost : IDisposable
         _tradingWith = null;
         _hudScreen.Hovered = null;
         _draggingMap = false;
+        _mapDragMoved = false;
         _draggingSkinPreview = false;
         _draggingFigure = false;
         _draggingMagicWindow = null;
@@ -4552,7 +4571,9 @@ public sealed class ClientHost : IDisposable
             {
                 HudScreenKind.Start => $"left stick or d-pad picks, {_controller.Label(ControllerControl.South)} chooses",
                 HudScreenKind.Player when _hudScreen.Tab == (int)PlayerTab.Map =>
-                    $"left stick pans{tabs}, {_controller.Label(ControllerControl.East)} closes",
+                    $"left stick pans, {_controller.Label(ControllerControl.South)} marks, "
+                    + $"{_controller.Label(ControllerControl.West)} clears{tabs}, "
+                    + $"{_controller.Label(ControllerControl.East)} closes",
                 HudScreenKind.Trade =>
                     $"up and down pick, left and right set quantity, "
                     + $"{_controller.Label(ControllerControl.South)} confirms, "
@@ -4566,7 +4587,10 @@ public sealed class ClientHost : IDisposable
         }
 
         var close = _settings.Keys.Primary(
-            _hudScreen.Kind == HudScreenKind.Game ? GameAction.OpenOptions : GameAction.OpenInventory);
+            _hudScreen.Kind == HudScreenKind.Game ? GameAction.OpenOptions
+            : _hudScreen.Kind == HudScreenKind.Player && _hudScreen.Tab == (int)PlayerTab.Map
+                ? GameAction.OpenMap
+                : GameAction.OpenInventory);
 
         if (_hudScreen.IsContainer)
             return _hudScreen.BookOut
@@ -4585,7 +4609,7 @@ public sealed class ClientHost : IDisposable
                 $"up and down pick, left and right change it, tab changes tab{wheel}, "
                 + $"{close} goes back to the menu",
             HudScreenKind.Player when _hudScreen.Tab == (int)PlayerTab.Map =>
-                $"drag or arrows pan, wheel zooms, home follows you, tab changes tab, {close} closes",
+                $"left click marks, right click clears, drag or arrows pan, wheel zooms, {close} closes",
             HudScreenKind.Player when _hudScreen.Tab == (int)PlayerTab.Items =>
                 $"click moves items, drag the model to turn it, h opens the handbook, "
                 + $"tab changes tab, {close} closes",
@@ -9723,6 +9747,34 @@ public sealed class ClientHost : IDisposable
         RefreshScreen();
     }
 
+    private Vector2 MapWorldAt(Vector2 point)
+    {
+        var bounds = _hudScreen.MapBounds;
+        var zoom = Math.Clamp(_hudScreen.MapZoom, 0.25f, 4f);
+        var centre = _hudScreen.MapPlayer + _hudScreen.MapPan * Chunk.Size;
+        return centre + new Vector2(
+            point.X - (bounds.X + bounds.Z * 0.5f),
+            point.Y - (bounds.Y + bounds.W * 0.5f)) / zoom;
+    }
+
+    private void SetMapWaypoint(Vector2 point)
+    {
+        if (_hudScreen.MapBounds.Z <= 0f || _hudScreen.MapBounds.W <= 0f) return;
+        var world = MapWorldAt(point);
+        var x = (int)MathF.Round(world.X);
+        var z = (int)MathF.Round(world.Y);
+        if (!_map.SetWaypoint(x, z)) return;
+        PushToast("waypoint marked", $"x {x}, z {z} · follow the guide after closing the map");
+        RefreshScreen();
+    }
+
+    private void ClearMapWaypoint()
+    {
+        if (!_map.ClearWaypoint()) return;
+        PushToast("waypoint cleared", "the navigation guide is off");
+        RefreshScreen();
+    }
+
     /// <summary>Moves the settings list's window, held inside what there is to look at.</summary>
     private void ScrollRows(int to) =>
         _hudScreen.Scroll = Math.Clamp(
@@ -9852,13 +9904,21 @@ public sealed class ClientHost : IDisposable
         // system's arrow appeared over a screen full of squares, and every click landed on nothing.
         if (_hudScreen.IsOpen)
         {
-            if (button == MouseButton.Left
-                && _hudScreen.Kind == HudScreenKind.Player
+            if (_hudScreen.Kind == HudScreenKind.Player
                 && _hudScreen.Tab == (int)PlayerTab.Map
                 && _layout.At(_hudScreen.Pointer.X, _hudScreen.Pointer.Y) is { Kind: ZoneKind.Map })
             {
-                _draggingMap = true;
-                _mapDragAt = _hudScreen.Pointer;
+                if (button == MouseButton.Left)
+                {
+                    _draggingMap = true;
+                    _mapDragOrigin = _hudScreen.Pointer;
+                    _mapPanAtDrag = _hudScreen.MapPan;
+                    _mapDragMoved = false;
+                }
+                else if (button == MouseButton.Right)
+                {
+                    ClearMapWaypoint();
+                }
                 return;
             }
 
@@ -9932,14 +9992,14 @@ public sealed class ClientHost : IDisposable
         MagicWindowKind? panel = null;
         if (_spellCursorOpen && Contains(_hudScreen.CompanionPanelBounds, point))
             panel = MagicWindowKind.Companion;
+        else if (_spellCursorOpen && Contains(_hudScreen.SpellBarBounds, point))
+            panel = MagicWindowKind.SpellBar;
         else if (IsOpenSpellbook() && Contains(_hudScreen.SpellbookPanelBounds, point))
             panel = MagicWindowKind.Spellbook;
 
         if (button == MouseButton.Right && panel is { } context)
         {
-            _hudScreen.MagicWindowContext = (int)context;
-            _hudScreen.MagicWindowContextAt = point + new Vector2(4f, 3f);
-            PlayMagicUi(MagicSounds.Prepare, 0.24f, 0.92f);
+            OpenMagicWindowContext(context, point);
             return true;
         }
 
@@ -9954,6 +10014,13 @@ public sealed class ClientHost : IDisposable
                 _draggingMagicWindow = kind;
                 _magicWindowDragAt = point;
             }
+            else
+            {
+                // A locked grip should explain itself, not consume the exact drag the player was
+                // trying with no movement and no feedback.
+                OpenMagicWindowContext(kind, point);
+                PushToast($"{MagicWindowName(kind)} is locked", "click unlock window, then drag the grip", false);
+            }
             return true;
         }
 
@@ -9962,32 +10029,52 @@ public sealed class ClientHost : IDisposable
         return false;
     }
 
+    private void OpenMagicWindowContext(MagicWindowKind kind, Vector2 point)
+    {
+        _hudScreen.MagicWindowContext = (int)kind;
+        _hudScreen.MagicWindowContextAt = point + new Vector2(4f, 3f);
+        PlayMagicUi(MagicSounds.Prepare, 0.24f, 0.92f);
+    }
+
+    private static string MagicWindowName(MagicWindowKind kind) => kind switch
+    {
+        MagicWindowKind.Companion => "companion window",
+        MagicWindowKind.Spellbook => "spellbook",
+        _ => "spell bar",
+    };
+
     private bool IsOpenSpellbook() =>
         _hudScreen.Kind == HudScreenKind.Player && _hudScreen.Tab == (int)PlayerTab.Spells;
 
     private bool MagicWindowLocked(MagicWindowKind kind) => kind switch
     {
         MagicWindowKind.Companion => _settings.CompanionWindowLocked,
-        _ => _settings.SpellbookWindowLocked,
+        MagicWindowKind.Spellbook => _settings.SpellbookWindowLocked,
+        _ => _settings.SpellBarWindowLocked,
     };
 
     private void ToggleMagicWindowLock(MagicWindowKind kind)
     {
-        bool locked;
-        if (kind == MagicWindowKind.Companion)
-            locked = _settings.CompanionWindowLocked = !_settings.CompanionWindowLocked;
-        else locked = _settings.SpellbookWindowLocked = !_settings.SpellbookWindowLocked;
+        var locked = kind switch
+        {
+            MagicWindowKind.Companion =>
+                _settings.CompanionWindowLocked = !_settings.CompanionWindowLocked,
+            MagicWindowKind.Spellbook =>
+                _settings.SpellbookWindowLocked = !_settings.SpellbookWindowLocked,
+            _ => _settings.SpellBarWindowLocked = !_settings.SpellBarWindowLocked,
+        };
         _hudScreen.MagicWindowContext = -1;
         if (locked && _draggingMagicWindow == kind) _draggingMagicWindow = null;
         SaveMagicWindowSettings();
-        NoticeMagic($"{(kind == MagicWindowKind.Companion ? "companion window" : "spellbook")} "
-                    + (locked ? "locked" : "unlocked"),
+        NoticeMagic($"{MagicWindowName(kind)} {(locked ? "locked" : "unlocked")}",
             StarterBlocks.LayerAnvilTop,
-            locked ? "protected from accidental movement" : "drag its decorated title border to move it");
+            locked ? "protected from accidental movement" : "drag its decorated grip to move it");
     }
 
     private void SaveMagicWindowSettings()
     {
+        _settings.SpellBarWindowX = (int)MathF.Round(_spellBarWindowOffset.X);
+        _settings.SpellBarWindowY = (int)MathF.Round(_spellBarWindowOffset.Y);
         _settings.CompanionWindowX = (int)MathF.Round(_companionWindowOffset.X);
         _settings.CompanionWindowY = (int)MathF.Round(_companionWindowOffset.Y);
         _settings.SpellbookWindowX = (int)MathF.Round(_spellbookWindowOffset.X);
@@ -10004,11 +10091,20 @@ public sealed class ClientHost : IDisposable
 
     private Vector2 ConstrainMagicWindowMove(MagicWindowKind kind, Vector2 moved)
     {
-        var bounds = kind == MagicWindowKind.Companion
-            ? _hudScreen.CompanionPanelBounds : _hudScreen.SpellbookPanelBounds;
+        var bounds = kind switch
+        {
+            MagicWindowKind.Companion => _hudScreen.CompanionPanelBounds,
+            MagicWindowKind.Spellbook => _hudScreen.SpellbookPanelBounds,
+            _ => _hudScreen.SpellBarBounds,
+        };
         if (bounds.Z <= 0f || bounds.W <= 0f) return Vector2.Zero;
-        var margin = kind == MagicWindowKind.Companion ? 4f : 8f;
-        var bottom = kind == MagicWindowKind.Companion ? 44f : 25f;
+        var margin = kind == MagicWindowKind.Spellbook ? 8f : 4f;
+        var bottom = kind switch
+        {
+            MagicWindowKind.Companion => 44f,
+            MagicWindowKind.Spellbook => 25f,
+            _ => 4f,
+        };
         return new Vector2(
             Math.Clamp(moved.X, margin - bounds.X,
                 LayoutWidth - margin - bounds.X - bounds.Z),
@@ -10025,6 +10121,7 @@ public sealed class ClientHost : IDisposable
                 _mouseBreakHeld = false;
                 _holdingBreak = _controllerBreakHeld;
                 _draggingScrollbar = false;
+                if (_draggingMap && !_mapDragMoved) SetMapWaypoint(_mapDragOrigin);
                 _draggingMap = false;
                 _draggingSkinPreview = false;
                 _draggingFigure = false;
@@ -10105,10 +10202,13 @@ public sealed class ClientHost : IDisposable
 
             if (_draggingMap)
             {
-                var moved = _hudScreen.Pointer - _mapDragAt;
-                var zoom = Math.Clamp(_hudScreen.MapZoom, 0.25f, 4f);
-                _hudScreen.MapPan -= moved / (Chunk.Size * zoom);
-                _mapDragAt = _hudScreen.Pointer;
+                var moved = _hudScreen.Pointer - _mapDragOrigin;
+                if (!_mapDragMoved && moved.LengthSquared() >= 9f) _mapDragMoved = true;
+                if (_mapDragMoved)
+                {
+                    var zoom = Math.Clamp(_hudScreen.MapZoom, 0.25f, 4f);
+                    _hudScreen.MapPan = _mapPanAtDrag - moved / (Chunk.Size * zoom);
+                }
                 RefreshScreen();
             }
 
@@ -10133,8 +10233,12 @@ public sealed class ClientHost : IDisposable
             {
                 var moved = ConstrainMagicWindowMove(
                     magicWindow, _hudScreen.Pointer - _magicWindowDragAt);
-                if (magicWindow == MagicWindowKind.Companion) _companionWindowOffset += moved;
-                else _spellbookWindowOffset += moved;
+                switch (magicWindow)
+                {
+                    case MagicWindowKind.Companion: _companionWindowOffset += moved; break;
+                    case MagicWindowKind.Spellbook: _spellbookWindowOffset += moved; break;
+                    default: _spellBarWindowOffset += moved; break;
+                }
                 _magicWindowDragAt = _hudScreen.Pointer;
                 if (IsOpenSpellbook()) RefreshScreen();
             }
@@ -10458,6 +10562,11 @@ public sealed class ClientHost : IDisposable
             if (horizontal != 0) _hudScreen.MapPan.X += horizontal;
             if (vertical != 0) _hudScreen.MapPan.Y += vertical;
             if (horizontal != 0 || vertical != 0) RefreshScreen();
+            if (_controller.Pressed(ControllerControl.South))
+                SetMapWaypoint(new Vector2(
+                    _hudScreen.MapBounds.X + _hudScreen.MapBounds.Z * 0.5f,
+                    _hudScreen.MapBounds.Y + _hudScreen.MapBounds.W * 0.5f));
+            if (_controller.Pressed(ControllerControl.West)) ClearMapWaypoint();
             return;
         }
 
@@ -10735,6 +10844,9 @@ public sealed class ClientHost : IDisposable
         }
         else
         {
+            if (_draggingMagicWindow is not null) SaveMagicWindowSettings();
+            _draggingMagicWindow = null;
+            _hudScreen.MagicWindowContext = -1;
             _hudScreen.Hovered = null;
             SetMouseCaptured(true);
         }
@@ -14374,10 +14486,17 @@ public sealed class ClientHost : IDisposable
         _spellFaceLabels[2] = _controller.Label(ControllerControl.West);
         _spellFaceLabels[3] = _controller.Label(ControllerControl.North);
         _hudScreen.SpellFaceLabels = _spellFaceLabels;
+        _hudScreen.SpellBarWindowOffset = _spellBarWindowOffset;
+        _hudScreen.SpellBarWindowLocked = _settings.SpellBarWindowLocked;
         _hudScreen.CompanionWindowOffset = _companionWindowOffset;
         _hudScreen.CompanionWindowLocked = _settings.CompanionWindowLocked;
         _hudScreen.SpellbookWindowOffset = _spellbookWindowOffset;
         _hudScreen.SpellbookWindowLocked = _settings.SpellbookWindowLocked;
+        _hudScreen.NavigationWaypoint = _map.Waypoint is { } waypoint
+            ? new Vector2(waypoint.X, waypoint.Z)
+            : null;
+        _hudScreen.NavigationPlayer = new Vector2(_player.Position.X, _player.Position.Z);
+        _hudScreen.NavigationFacing = _camera.Yaw;
         _hudScreen.DeveloperMode = _developerMode;
         _hudScreen.DeveloperPosition = _camera.Position;
         _hudScreen.DeveloperDriftstead = _developerDriftstead is { } village
@@ -15999,6 +16118,11 @@ public sealed class ClientHost : IDisposable
     private bool _uiMapCanvas;
     private bool _uiMapDragged;
     private bool _uiMapZoomed;
+    private bool _uiMapCaptions;
+    private bool _uiMapWaypoint;
+    private bool _uiMapWaypointCleared;
+    private bool _uiMapNavigationHud;
+    private bool _uiMapShortcut;
     private int _uiMapTiles = -1;
 
     private bool _uiCharacterTab;
@@ -16023,6 +16147,9 @@ public sealed class ClientHost : IDisposable
     private bool _uiPetFrame;
     private bool _uiPetContext;
     private bool _uiPetDragged;
+    private bool _uiSpellBarFrame;
+    private bool _uiSpellBarContext;
+    private bool _uiSpellBarDragged;
     private int _uiSpellBarInk = -1;
     private int _uiPetPanelInk = -1;
 
@@ -16365,8 +16492,10 @@ public sealed class ClientHost : IDisposable
     /// <summary>Builds the most demanding honest P10.5 UI state without reading a player's save.</summary>
     private void PrepareMagicUiCheck()
     {
+        _settings.SpellBarWindowLocked = true;
         _settings.CompanionWindowLocked = true;
         _settings.SpellbookWindowLocked = true;
+        _spellBarWindowOffset = Vector2.Zero;
         _companionWindowOffset = Vector2.Zero;
         _spellbookWindowOffset = Vector2.Zero;
         _hudScreen.MagicWindowContext = -1;
@@ -16508,6 +16637,47 @@ public sealed class ClientHost : IDisposable
         _spellControllerBank = 1;
         var frame = HudOnlyFrame(size);
 
+        var firstBar = _hudScreen.SpellBarBounds;
+        var barTitle = _layout.Zones.FirstOrDefault(zone => zone.Kind == ZoneKind.MagicWindowTitle
+            && zone.Index == (int)MagicWindowKind.SpellBar);
+        _uiSpellBarFrame = firstBar.Z > 0f && firstBar.W > 0f
+                           && barTitle.W > 0f && barTitle.H > 0f;
+        if (barTitle.W > 0f && barTitle.H > 0f)
+        {
+            // This is the reported path: the first left-drag on a locked bar must explain itself
+            // by opening the unlock action, rather than disappearing into an inert rectangle.
+            _hudScreen.Pointer = new Vector2(barTitle.CentreX, barTitle.CentreY);
+            OnMouseDown(MouseButton.Left);
+            frame = HudOnlyFrame(size);
+            var option = _layout.Zones.FirstOrDefault(zone => zone.Kind == ZoneKind.MagicWindowOption
+                && zone.Index == (int)MagicWindowKind.SpellBar);
+            _uiSpellBarContext = option.W > 0f && option.H > 0f
+                                 && _hudScreen.MagicWindowContextBounds.Z > 0f;
+            if (option.W > 0f && option.H > 0f)
+            {
+                _hudScreen.Pointer = new Vector2(option.CentreX, option.CentreY);
+                OnMouseDown(MouseButton.Left);
+                OnMouseUp(MouseButton.Left);
+                frame = HudOnlyFrame(size);
+                barTitle = _layout.Zones.FirstOrDefault(zone => zone.Kind == ZoneKind.MagicWindowTitle
+                    && zone.Index == (int)MagicWindowKind.SpellBar);
+                if (barTitle.W > 0f && barTitle.H > 0f)
+                {
+                    var before = _spellBarWindowOffset;
+                    var scale = HudRenderer.ScaleFor(size.Y);
+                    _hudScreen.Pointer = new Vector2(barTitle.CentreX, barTitle.CentreY);
+                    OnMouseDown(MouseButton.Left);
+                    var grabbed = _draggingMagicWindow == MagicWindowKind.SpellBar;
+                    OnMouseMove((_hudScreen.Pointer + new Vector2(-18f, -10f)) * scale);
+                    OnMouseUp(MouseButton.Left);
+                    frame = HudOnlyFrame(size);
+                    _uiSpellBarDragged = grabbed
+                                         && Vector2.DistanceSquared(before, _spellBarWindowOffset) > 4f
+                                         && !_settings.SpellBarWindowLocked;
+                }
+            }
+        }
+
         var firstPanel = _hudScreen.CompanionPanelBounds;
         _uiPetFrame = firstPanel.Z > 0f && firstPanel.W > 0f
                       && _hudScreen.MagicWindowAccentsDrawn >= 8
@@ -16570,7 +16740,8 @@ public sealed class ClientHost : IDisposable
             $"ui-check    magic HUD    {_uiMagicScale}x: {_uiSpellSlots} memory slots/{_uiSpellZones} mouse zones, "
             + $"{_uiSpellBankSlots} controller choices, {_uiPetCommands} pet commands/{_uiPetCommandZones} zones, "
             + $"ink {_uiSpellBarInk}+{_uiPetPanelInk}, health {_uiPetHealth}, bounded {_uiMagicBounds}, "
-            + $"frame {_uiPetFrame}, menu {_uiPetContext}, drag {_uiPetDragged}");
+            + $"bar frame/menu/drag {_uiSpellBarFrame}/{_uiSpellBarContext}/{_uiSpellBarDragged}, "
+            + $"pet frame/menu/drag {_uiPetFrame}/{_uiPetContext}/{_uiPetDragged}");
         Console.Out.Flush();
 
         _spellCursorOpen = oldCursor;
@@ -16643,6 +16814,9 @@ public sealed class ClientHost : IDisposable
         _uiMapCanvas = canvas.W > 0f && canvas.H > 0f
             && _layout.At(canvas.CentreX, canvas.CentreY) is { Kind: ZoneKind.Map };
         _uiMapTiles = _map.Tiles.Count;
+        _uiMapCaptions = _hudScreen.MapCaptionsSeparated;
+        _uiMapShortcut = Bindings.Defaults().Primary(GameAction.OpenMap) == "M"
+                         && GameActions.Label(GameAction.OpenMap) == "map";
 
         if (_uiMapCanvas)
         {
@@ -16653,15 +16827,45 @@ public sealed class ClientHost : IDisposable
             OnMouseMove(new Vector2((canvas.CentreX + 32f) * scale, (canvas.CentreY + 16f) * scale));
             OnMouseUp(MouseButton.Left);
             _uiMapDragged = Vector2.DistanceSquared(before, _hudScreen.MapPan) > 0.0001f;
+
+            var mark = new Vector2(canvas.CentreX - 24f, canvas.CentreY + 13f);
+            _hudScreen.Pointer = mark;
+            OnMouseDown(MouseButton.Left);
+            OnMouseUp(MouseButton.Left);
+            _uiMapWaypoint = _map.Waypoint is not null;
+            if (_options.ShotPath is not null)
+            {
+                _ = HudOnlyFrame(size);
+                WriteShot(size, "ui-map-marked");
+            }
+
+            _hudScreen.Pointer = mark;
+            OnMouseDown(MouseButton.Right);
+            _uiMapWaypointCleared = _map.Waypoint is null;
+
+            // Leave one active for the closed-map guide check and for the saved-map round trip.
+            OnMouseDown(MouseButton.Left);
+            OnMouseUp(MouseButton.Left);
         }
 
         var zoom = _hudScreen.MapZoom;
         OnScroll(1f);
         _uiMapZoomed = _hudScreen.MapZoom > zoom;
 
+        CloseScreen();
+        var worldHud = HudOnlyFrame(size);
+        if (_options.ShotPath is not null) WriteShot(size, "ui-map-guide");
+        _uiMapNavigationHud = _map.Waypoint is not null
+                              && _hudScreen.NavigationBounds.Z > 0f
+                              && _hudScreen.NavigationBounds.W > 0f
+                              && CountHudInk(worldHud, size, _hudScreen.NavigationBounds,
+                                  (int)HudRenderer.ScaleFor(size.Y)) > 0;
+
         Console.WriteLine(
             $"ui-check    map         {_uiMapTiles} tiles, canvas {_uiMapCanvas}, "
-            + $"drag {_uiMapDragged}, zoom {zoom:0.##} to {_hudScreen.MapZoom:0.##}");
+            + $"drag {_uiMapDragged}, zoom {zoom:0.##} to {_hudScreen.MapZoom:0.##}, "
+            + $"mark/clear {_uiMapWaypoint}/{_uiMapWaypointCleared}, "
+            + $"captions {_uiMapCaptions}, closed guide {_uiMapNavigationHud}, M shortcut {_uiMapShortcut}");
         Console.Out.Flush();
     }
 
@@ -17475,6 +17679,8 @@ public sealed class ClientHost : IDisposable
         if (_uiSpellSlots != CharacterProgression.PreparedCapacity
             || _uiSpellZones != CharacterProgression.PreparedCapacity)
             faults.Add($"the held-mouse spell bar drew {_uiSpellSlots} slots and {_uiSpellZones} clickable zones, not eight of each");
+        if (!_uiSpellBarFrame || !_uiSpellBarContext || !_uiSpellBarDragged)
+            faults.Add("the spell bar is missing its visible grip, locked-drag unlock prompt, or unlocked drag path");
         if (_uiSpellBankSlots != 4)
             faults.Add($"a held controller trigger offered {_uiSpellBankSlots} face-button spells instead of four");
         if (_uiPetCommands != Enum.GetValues<CompanionCommand>().Length
@@ -17499,10 +17705,18 @@ public sealed class ClientHost : IDisposable
             faults.Add("the map tab opened without a single explored surface tile");
         if (!_uiMapCanvas)
             faults.Add("the map drew no canvas that can answer a pointer");
+        if (!_uiMapCaptions)
+            faults.Add("the map's explored/coordinate captions overlap each other or the footer");
         if (!_uiMapDragged)
             faults.Add("dragging the map canvas did not pan it");
         if (!_uiMapZoomed)
             faults.Add("scrolling over the map did not zoom it");
+        if (!_uiMapWaypoint || !_uiMapWaypointCleared)
+            faults.Add("the map canvas did not place and right-click-clear one player waypoint");
+        if (!_uiMapNavigationHud)
+            faults.Add("closing the map with a waypoint did not draw a direction-and-distance guide");
+        if (!_uiMapShortcut)
+            faults.Add("the map's rebindable shipped keyboard shortcut is not M");
 
         if (!_uiFigureCanvas)
             faults.Add("the inventory player preview drew no draggable canvas");
@@ -17738,7 +17952,7 @@ public sealed class ClientHost : IDisposable
         if (behind.R > 70 || behind.G > 70 || behind.B > 80)
             faults.Add($"the figure's window is not the dark inset it is drawn in — read {behind.R} {behind.G} {behind.B}");
 
-        // The capped list. A controls tab with twenty eight rows in it must show a dozen and no
+        // The capped list. A controls tab with twenty-nine rows in it must show a dozen and no
         // more, must start at the top, and must scroll all the way to the last one — the row that
         // cannot be reached is the whole reason a cap needs a scrollbar rather than just a cap.
         var lines = ScreenLayout.MenuLines(LayoutHeight);

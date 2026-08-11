@@ -2884,8 +2884,22 @@ public static class WorldAudit
         if (loaded.Visit(0.5f, 0.5f, terrain, world))
             faults.Add("a loaded map forgot which chunk had been explored");
 
+        var navigation = new WorldMap();
+        if (!navigation.SetWaypoint(24, -11)
+            || navigation.SetWaypoint(24, -11)
+            || navigation.Waypoint is not { X: 24, Z: -11 }
+            || navigation.Markers.Count != 1 || navigation.ChartedCount != 0)
+            faults.Add("placing the one player waypoint duplicated it or counted it as a chart");
+        if (!navigation.SetWaypoint(-7, 31)
+            || navigation.Waypoint is not { X: -7, Z: 31 }
+            || navigation.Markers.Count != 1)
+            faults.Add("moving the player waypoint did not replace its old destination");
+        if (!navigation.ClearWaypoint() || navigation.Waypoint is not null
+            || navigation.ClearWaypoint())
+            faults.Add("clearing the player waypoint was not an idempotent removal");
+
         detail = $"7 broken, 5 placed, 12.5 walked, y -19 deepest; "
-               + $"{map.Tiles.Count} highest-opaque map columns drawn once";
+               + $"{map.Tiles.Count} highest-opaque map columns drawn once; one movable waypoint";
         return faults;
     }
 
@@ -4626,6 +4640,7 @@ public static class WorldAudit
         map.Reload([new WorldMap.Tile(-2, 3, Biome.Woodland, WorldMap.Surface.Grass, 71)]);
         map.Reveal(new WorldMap.Marker(
             "p14/stormvault/1/2", "storm vault", 417, -203, (byte)StructureKind.StormVault));
+        map.SetWaypoint(-81, 144);
         exploration.Brush("p14/buriedgallery/0/1");
         exploration.Begin("p14/stormvault/1/2", EncounterKind.Trial);
         exploration.SetPhase("p14/stormvault/1/2", 2);
@@ -4812,10 +4827,13 @@ public static class WorldAudit
                 || !backMap.Tiles.Contains(
                     new WorldMap.Tile(-2, 3, Biome.Woodland, WorldMap.Surface.Grass, 71)))
                 faults.Add("the explored map tile did not come back whole");
-            if (backMap.Markers.Count != 1
+            if (backMap.Markers.Count != 2
                 || !backMap.Markers.Contains(new WorldMap.Marker(
                     "p14/stormvault/1/2", "storm vault", 417, -203, (byte)StructureKind.StormVault)))
                 faults.Add("the charted exploration marker did not come back whole");
+            if (backMap.Waypoint is not { X: -81, Z: 144 }
+                || backMap.ChartedCount != 1)
+                faults.Add("the player's map waypoint did not come back separate from authored charts");
             if (backMap.Dirty) faults.Add("a loaded explored map immediately asks to be saved");
 
             var encounter = backExploration.At("p14/stormvault/1/2");
@@ -6664,6 +6682,8 @@ public static class WorldAudit
 
         var defaults = new GameSettings();
         foreach (var fault in defaults.Keys.Faults()) faults.Add($"the shipped keys: {fault}");
+        if (defaults.Keys.Primary(GameAction.OpenMap) != "M")
+            faults.Add("the shipped map shortcut is not M");
         foreach (var fault in defaults.Pad.Faults()) faults.Add($"the shipped controller: {fault}");
         foreach (var fault in ControllerTuning.Faults()) faults.Add($"controller shaping: {fault}");
 
@@ -6693,12 +6713,15 @@ public static class WorldAudit
             ControllerInvertY = true,
             ControllerTargetAssist = 62,
             ControllerRumble = 35,
-            CompanionWindowLocked = false,
+            CompanionWindowLocked = true,
             CompanionWindowX = 37,
             CompanionWindowY = -18,
-            SpellbookWindowLocked = false,
+            SpellbookWindowLocked = true,
             SpellbookWindowX = -42,
             SpellbookWindowY = 23,
+            SpellBarWindowLocked = true,
+            SpellBarWindowX = 54,
+            SpellBarWindowY = -27,
             TexturePack = "weathered",
             PlayerSkin = "salt wanderer",
             Keys = Bindings.Defaults(),
@@ -6747,10 +6770,12 @@ public static class WorldAudit
         if (!read.ControllerInvertY) faults.Add("controller invert Y came back off");
         if (read.ControllerTargetAssist != 62) faults.Add($"target assist came back {read.ControllerTargetAssist}, not 62");
         if (read.ControllerRumble != 35) faults.Add($"rumble came back {read.ControllerRumble}, not 35");
-        if (read.CompanionWindowLocked || read.CompanionWindowX != 37 || read.CompanionWindowY != -18)
-            faults.Add("the unlocked companion-window position did not survive settings round trip");
-        if (read.SpellbookWindowLocked || read.SpellbookWindowX != -42 || read.SpellbookWindowY != 23)
-            faults.Add("the unlocked spellbook position did not survive settings round trip");
+        if (!read.CompanionWindowLocked || read.CompanionWindowX != 37 || read.CompanionWindowY != -18)
+            faults.Add("the locked companion-window position did not survive settings round trip");
+        if (!read.SpellbookWindowLocked || read.SpellbookWindowX != -42 || read.SpellbookWindowY != 23)
+            faults.Add("the locked spellbook position did not survive settings round trip");
+        if (!read.SpellBarWindowLocked || read.SpellBarWindowX != 54 || read.SpellBarWindowY != -27)
+            faults.Add("the locked spell-bar position did not survive settings round trip");
         if (read.TexturePack != "weathered") faults.Add($"texture pack came back '{read.TexturePack}'");
         if (read.PlayerSkin != "salt wanderer") faults.Add($"player skin came back '{read.PlayerSkin}'");
 
@@ -6818,6 +6843,35 @@ public static class WorldAudit
             try { File.Delete(stale); } catch (IOException) { }
         }
 
+        // Older builds wrote both existing windows as locked by default and knew no spell-bar
+        // layout key. The new key is the migration marker: those inherited defaults unlock once,
+        // so a returning player's first purposeful R-drag is not silently refused.
+        var oldLayout = System.IO.Path.Combine(
+            System.IO.Path.GetTempPath(), "driftwood-settings-old-magic-layout.txt");
+        try
+        {
+            File.WriteAllText(
+                oldLayout,
+                "ui.companionwindow.locked=true\nui.spellbookwindow.locked=true\n");
+            var migrated = GameSettings.Load(oldLayout);
+            if (migrated.CompanionWindowLocked || migrated.SpellbookWindowLocked
+                || migrated.SpellBarWindowLocked)
+                faults.Add("the pre-spell-bar magic layout did not migrate to movable defaults");
+
+            File.WriteAllText(
+                oldLayout,
+                "ui.companionwindow.locked=true\nui.companionwindow.x=17\n"
+                + "ui.spellbookwindow.locked=true\nui.spellbookwindow.y=-9\n");
+            migrated = GameSettings.Load(oldLayout);
+            if (!migrated.CompanionWindowLocked || !migrated.SpellbookWindowLocked
+                || migrated.CompanionWindowX != 17 || migrated.SpellbookWindowY != -9)
+                faults.Add("the magic-layout upgrade overrode a deliberately moved and relocked window");
+        }
+        finally
+        {
+            try { File.Delete(oldLayout); } catch (IOException) { }
+        }
+
         // A file that says nothing about keys keeps the shipped ones rather than ending up with none.
         var bare = GameSettings.Load(System.IO.Path.Combine(
             System.IO.Path.GetTempPath(), "driftwood-settings-absent.txt"));
@@ -6835,7 +6889,8 @@ public static class WorldAudit
             faults.Add("releasing and reversing a menu stick did not reset its repeat");
 
         detail = $"{GameActions.All.Length} keyboard and {ControllerActions.All.Length} controller actions, "
-               + "25 settings out and back unchanged; radial deadzone, nine-way selection and UI repeat pinned";
+               + "28 settings out and back unchanged; untouched old magic layouts unlock once, radial deadzone, "
+               + "nine-way selection and UI repeat pinned";
 
         return faults;
     }

@@ -49,6 +49,9 @@ public enum GameAction
     /// <summary>Opens what this character is carrying and can make. Closes it again.</summary>
     OpenInventory,
 
+    /// <summary>Opens the explored-world map directly. Closes it again.</summary>
+    OpenMap,
+
     /// <summary>
     /// Opens what this installation is set to, and lets go of the mouse while it is up.
     /// </summary>
@@ -119,6 +122,7 @@ public static class GameActions
         GameAction.RaiseShield => "raise shield",
         GameAction.SwapHands => "swap hands",
         GameAction.OpenInventory => "inventory",
+        GameAction.OpenMap => "map",
         GameAction.OpenOptions => "options",
         GameAction.ToggleView => "change view",
         GameAction.ToggleFly => "walk or fly",

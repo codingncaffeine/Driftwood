@@ -262,11 +262,16 @@ The Spirit Wolf uses its own dark coat and blue eyes; the Earth Elemental is an 
 stone biped about half player height. Every pet has identity-specific movement, idle, attack, hurt,
 low-health and death audio semantics.
 
-The spellbook and pet panel have original pixel-art frames and accents. Right-click either panel to
-unlock it, drag its decorated title strip, then right-click to lock it again; bounded positions are
-remembered. For the world-space pet panel, hold the spell cursor first. Complete generated rank
+The spellbook, eight-slot casting bar and pet panel have original pixel-art frames and accents.
+Their decorated title/grip drags while unlocked; a locked drag opens the unlock action instead of
+silently doing nothing. Right-click locks them again, and bounded positions are remembered. Hold
+the spell cursor for either world-space panel. Complete generated rank
 tables and practical spell guidance live in the
 [Driftwood wiki](https://github.com/codingncaffeine/Driftwood/wiki).
+
+The explored-world map opens directly with the rebindable `M` action. Left-click places or moves
+one saved waypoint, right-click clears it, and dragging still pans. Closing the map leaves a compact
+bearing, turn direction, coordinates and distance on the HUD so the marked place can be followed.
 
 ## Crafting
 

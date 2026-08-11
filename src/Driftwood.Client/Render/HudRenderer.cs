@@ -220,6 +220,19 @@ public sealed class HudScreen
 
     public Vector2 MapPan;
 
+    /// <summary>The drawn canvas and the one saved destination followed by the world HUD.</summary>
+    public Vector4 MapBounds;
+
+    public bool MapCaptionsSeparated;
+
+    public Vector2? NavigationWaypoint;
+
+    public Vector2 NavigationPlayer;
+
+    public float NavigationFacing;
+
+    public Vector4 NavigationBounds;
+
     /// <summary>The rotatable skin preview on the SKINS tab, in degrees around the model.</summary>
     public float SkinPreviewYaw;
 
@@ -283,14 +296,18 @@ public sealed class HudScreen
 
     public Vector4 CompanionPanelBounds;
 
-    /// <summary>Resolution-independent player offsets and lock states for the two magic windows.</summary>
+    /// <summary>Resolution-independent player offsets and lock states for the three magic windows.</summary>
+    public Vector2 SpellBarWindowOffset;
+
+    public bool SpellBarWindowLocked;
+
     public Vector2 CompanionWindowOffset;
 
-    public bool CompanionWindowLocked = true;
+    public bool CompanionWindowLocked;
 
     public Vector2 SpellbookWindowOffset;
 
-    public bool SpellbookWindowLocked = true;
+    public bool SpellbookWindowLocked;
 
     public Vector4 SpellbookPanelBounds;
 
@@ -782,6 +799,9 @@ public sealed class HudRenderer : IDisposable
         screen.RadialBounds = Vector4.Zero;
         screen.SpellSlotsDrawn = 0;
         screen.SpellBarBounds = Vector4.Zero;
+        screen.MapBounds = Vector4.Zero;
+        screen.MapCaptionsSeparated = false;
+        screen.NavigationBounds = Vector4.Zero;
         screen.SpellBankSlotsDrawn = 0;
         screen.CompanionCommandsDrawn = 0;
         screen.CompanionPanelBounds = Vector4.Zero;
@@ -864,6 +884,7 @@ public sealed class HudRenderer : IDisposable
             SpellBar(screen, layout, w, h);
             CharacterMeters(screen, w, h);
             CompanionPanel(screen, layout, w, h);
+            WaypointPanel(screen, w);
             DeveloperPanel(screen, w);
         }
 
@@ -1108,11 +1129,25 @@ public sealed class HudRenderer : IDisposable
 
         const float slot = 20f;
         const float gap = 2f;
-        var width = CharacterProgression.PreparedCapacity * slot
+        const float inset = 4f;
+        const float frameHeight = 34f;
+        var slotsWidth = CharacterProgression.PreparedCapacity * slot
             + (CharacterProgression.PreparedCapacity - 1) * gap;
-        var left = MathF.Round((w - width) * 0.5f);
-        var top = MathF.Round(h - 70f);
-        screen.SpellBarBounds = new Vector4(left, top, width, slot);
+        var frameWidth = slotsWidth + inset * 2f;
+        var defaultLeft = MathF.Round((w - frameWidth) * 0.5f);
+        // The frame ends four units above the heart/food row. Its first version reused the old
+        // slot baseline and added a grip underneath, putting the new label through both vitals.
+        var defaultTop = MathF.Round(h - 82f);
+        var frameLeft = Math.Clamp(defaultLeft + screen.SpellBarWindowOffset.X,
+            4f, MathF.Max(4f, w - frameWidth - 4f));
+        var frameTop = Math.Clamp(defaultTop + screen.SpellBarWindowOffset.Y,
+            4f, MathF.Max(4f, h - frameHeight - 4f));
+        var left = frameLeft + inset;
+        var top = frameTop + inset;
+        screen.SpellBarBounds = new Vector4(frameLeft, frameTop, frameWidth, frameHeight);
+
+        MagicFrame(frameLeft, frameTop, frameWidth, frameHeight,
+            new Vector4(0.48f, 0.62f, 0.94f, 0.92f), screen);
 
         for (var i = 0; i < CharacterProgression.PreparedCapacity; i++)
         {
@@ -1144,6 +1179,17 @@ public sealed class HudRenderer : IDisposable
             Text(character.Rank.ToString(), x + slot - 6f, top + slot - 7f, 5f, Vector4.One);
         }
 
+        // A real, visible grab strip instead of treating eight cast buttons as an invisible title.
+        // It stays below the slots at the default position, clear of both the meters and hotbar.
+        Rect(_plain, frameLeft + 4f, frameTop + 25f, frameWidth - 8f, 6f,
+            new Vector4(0.055f, 0.065f, 0.085f, 0.98f));
+        Text("spell bar", frameLeft + 8f, frameTop + 26f, 5f, InkDim);
+        var state = screen.SpellBarWindowLocked ? "locked" : "drag";
+        Text(state, frameLeft + frameWidth - TextWidth(state, 5f) - 8f,
+            frameTop + 26f, 5f, screen.SpellBarWindowLocked ? InkFaint : Picked);
+        layout.Add(ZoneKind.MagicWindowTitle, (int)MagicWindowKind.SpellBar,
+            frameLeft + 4f, frameTop + 24f, frameWidth - 8f, 8f);
+
         if (screen.SpellCursor && screen.Hovered is { Kind: ZoneKind.Spell } hovered
             && (uint)hovered.Index < CharacterProgression.PreparedCapacity
             && character.Prepared[hovered.Index] is { } hoveredName
@@ -1156,7 +1202,7 @@ public sealed class HudRenderer : IDisposable
                 : $"{rank.Focus} Focus · ready";
             const float tipWidth = 174f;
             var tipLeft = MathF.Round((w - tipWidth) * 0.5f);
-            var tipTop = top - 30f;
+            var tipTop = frameTop - 30f;
             Bevel(tipLeft, tipTop, tipWidth, 25f, raised: true,
                 new Vector4(0.045f, 0.05f, 0.06f, 0.96f));
             Text(FitText($"{hoveredSpell.DisplayName} · R{character.Rank}", tipWidth - 8f, 7f),
@@ -1214,7 +1260,9 @@ public sealed class HudRenderer : IDisposable
         if (screen.Character is not { } character) return;
         const float width = 174f;
         var left = MathF.Round((w - width) * 0.5f);
-        var top = MathF.Round(h - 83f);
+        // Travels above the movable spell frame as one compact stack; the frame's default top is
+        // h-82, leaving a clean seven-unit gutter below these two bars.
+        var top = MathF.Round(h - 99f);
         var stats = character.Statistics;
         var xp = character.Level >= CharacterProgression.MaximumLevel
             ? 1f : character.Experience / (float)Math.Max(1, character.ExperienceNeeded);
@@ -1346,6 +1394,44 @@ public sealed class HudRenderer : IDisposable
         return points[(int)MathF.Floor(turn * points.Length + 0.5f) % points.Length];
     }
 
+    /// <summary>A compact bearing and distance that remains after the map closes.</summary>
+    private void WaypointPanel(HudScreen screen, float w)
+    {
+        if (screen.NavigationWaypoint is not { } target) return;
+
+        var dx = target.X - screen.NavigationPlayer.X;
+        var dz = target.Y - screen.NavigationPlayer.Y;
+        var distance = MathF.Sqrt(dx * dx + dz * dz);
+        var bearing = float.RadiansToDegrees(MathF.Atan2(dz, dx));
+        var relative = bearing - screen.NavigationFacing;
+        while (relative <= -180f) relative += 360f;
+        while (relative > 180f) relative -= 360f;
+
+        const float width = 178f;
+        const float height = 27f;
+        var left = MathF.Round((w - width) * 0.5f);
+        const float top = 7f;
+        screen.NavigationBounds = new Vector4(left, top, width, height);
+        Bevel(left, top, width, height, raised: true,
+            new Vector4(0.035f, 0.045f, 0.055f, 0.94f));
+        Rect(_plain, left + 3f, top + 3f, width - 6f, 1f,
+            new Vector4(0.94f, 0.49f, 0.72f, 0.94f));
+
+        var arrow = MathF.Abs(relative) <= 22.5f ? "^"
+            : MathF.Abs(relative) >= 157.5f ? "v"
+            : relative > 0f ? ">" : "<";
+        Text(arrow, left + 8f, top + 8f, 10f,
+            new Vector4(1f, 0.66f, 0.84f, 1f));
+        Text(FitText($"WAYPOINT · {distance:0}m {CompassPoint(dx, dz)}", width - 31f, 7f),
+            left + 24f, top + 5f, 7f, Highlight);
+        var guidance = distance < 2f ? "arrived · clear it on the map"
+            : MathF.Abs(relative) <= 22.5f ? "straight ahead"
+            : MathF.Abs(relative) >= 157.5f ? "turn around"
+            : relative > 0f ? "turn right" : "turn left";
+        Text(FitText($"{guidance} · x {target.X:0} z {target.Y:0}", width - 31f, 5f),
+            left + 24f, top + 16f, 5f, InkDim);
+    }
+
     /// <summary>A double pixel frame with clipped-looking corner clasps for magic-only windows.</summary>
     private void MagicFrame(float x, float y, float w, float h, Vector4 accent, HudScreen screen)
     {
@@ -1368,14 +1454,17 @@ public sealed class HudRenderer : IDisposable
         screen.MagicWindowAccentsDrawn += 8;
     }
 
-    /// <summary>The single lock action offered after a right click on either movable panel.</summary>
+    /// <summary>The single lock action offered after a right click on any movable magic panel.</summary>
     private void MagicWindowMenu(HudScreen screen, ScreenLayout layout, float w, float h)
     {
-        if (screen.MagicWindowContext < (int)MagicWindowKind.Companion
-            || screen.MagicWindowContext > (int)MagicWindowKind.Spellbook) return;
         var kind = (MagicWindowKind)screen.MagicWindowContext;
-        var locked = kind == MagicWindowKind.Companion
-            ? screen.CompanionWindowLocked : screen.SpellbookWindowLocked;
+        if (!Enum.IsDefined(kind)) return;
+        var locked = kind switch
+        {
+            MagicWindowKind.Companion => screen.CompanionWindowLocked,
+            MagicWindowKind.Spellbook => screen.SpellbookWindowLocked,
+            _ => screen.SpellBarWindowLocked,
+        };
         const float width = 126f;
         const float height = 25f;
         var left = Math.Clamp(screen.MagicWindowContextAt.X, 4f, MathF.Max(4f, w - width - 4f));
@@ -1387,7 +1476,12 @@ public sealed class HudRenderer : IDisposable
         Rect(_plain, left + 3f, top + 3f, 2f, height - 6f,
             new Vector4(0.55f, 0.98f, 0.78f, 0.9f));
         Text(locked ? "unlock window" : "lock window", left + 10f, top + 5f, 8f, Highlight);
-        Text(kind == MagicWindowKind.Companion ? "companion" : "spellbook",
+        Text(kind switch
+            {
+                MagicWindowKind.Companion => "companion",
+                MagicWindowKind.Spellbook => "spellbook",
+                _ => "spell bar",
+            },
             left + 10f, top + 15f, 5f, InkFaint);
         layout.Add(ZoneKind.MagicWindowOption, (int)kind, left, top, width, height);
     }
@@ -2253,7 +2347,9 @@ public sealed class HudRenderer : IDisposable
     /// <summary>The visited surface, centred on the player unless it has been panned away.</summary>
     private void MapScreen(HudScreen screen, ScreenLayout layout, float w, float h)
     {
-        var size = MathF.Floor(MathF.Min(300f, MathF.Min(w - 36f, h - 105f)));
+        // Leave two honest metadata lines above the shared footer. The old h-105 canvas put both
+        // map captions on one baseline and the footer immediately through them at short windows.
+        var size = MathF.Floor(MathF.Min(300f, MathF.Min(w - 36f, h - 128f)));
         var left = MathF.Round((w - size) * 0.5f);
         var top = MathF.Round((h - size) * 0.44f);
 
@@ -2261,6 +2357,7 @@ public sealed class HudRenderer : IDisposable
         Bevel(left - 4f, top - 4f, size + 8f, size + 8f, raised: true, PanelFill);
         Rect(_plain, left, top, size, size, new Vector4(0.06f, 0.07f, 0.07f, 1f));
         layout.Add(ZoneKind.Map, 0, left, top, size, size);
+        screen.MapBounds = new Vector4(left, top, size, size);
 
         var zoom = Math.Clamp(screen.MapZoom, 0.25f, 4f);
         var centre = screen.MapPlayer + screen.MapPan * Chunk.Size;
@@ -2286,6 +2383,7 @@ public sealed class HudRenderer : IDisposable
             // icon-free: the mark stays readable at every zoom and every pack resolution.
             foreach (var marker in map.Markers)
             {
+                if (WorldMap.IsWaypoint(marker)) continue;
                 var x = MathF.Round(left + size * 0.5f + (marker.X - centre.X) * zoom);
                 var y = MathF.Round(top + size * 0.5f + (marker.Z - centre.Y) * zoom);
                 if (x < left + 3f || y < top + 3f || x >= left + size - 3f || y >= top + size - 3f)
@@ -2297,8 +2395,35 @@ public sealed class HudRenderer : IDisposable
                 Rect(_plain, x - 1f, y - 3f, 3f, 7f, colour);
             }
 
-            Text($"{map.Tiles.Count:N0} explored · {map.Markers.Count} charted",
-                left + 4f, top + size + 10f, 8f, InkDim);
+            if (map.Waypoint is { } waypoint)
+            {
+                var x = MathF.Round(left + size * 0.5f + (waypoint.X - centre.X) * zoom);
+                var y = MathF.Round(top + size * 0.5f + (waypoint.Z - centre.Y) * zoom);
+                if (x >= left + 5f && y >= top + 5f && x < left + size - 5f && y < top + size - 5f)
+                {
+                    var dark = new Vector4(0.16f, 0.03f, 0.10f, 0.92f);
+                    var bright = new Vector4(1f, 0.46f, 0.75f, 1f);
+                    Rect(_plain, x - 5f, y - 2f, 11f, 5f, dark);
+                    Rect(_plain, x - 2f, y - 5f, 5f, 11f, dark);
+                    Rect(_plain, x - 4f, y - 1f, 9f, 3f, bright);
+                    Rect(_plain, x - 1f, y - 4f, 3f, 9f, bright);
+                }
+            }
+
+            var captionY = top + size + 7f;
+            var explored = $"{map.Tiles.Count:N0} explored · {map.ChartedCount} charted";
+            var position = $"x {screen.MapPlayer.X:F0}  z {screen.MapPlayer.Y:F0}  ·  {zoom:0.##} px/block";
+            var shownExplored = FitText(explored, size * 0.46f, 6f);
+            Text(shownExplored, left + 3f, captionY, 6f, InkDim);
+            var shownPosition = FitText(position, size * 0.52f, 6f);
+            var positionX = left + size - TextWidth(shownPosition, 6f) - 3f;
+            Text(shownPosition, positionX, captionY, 6f, InkDim);
+            TextCentred(map.Waypoint is null
+                    ? "left click marks · drag pans · wheel zooms"
+                    : "left click moves mark · right click clears",
+                left + size * 0.5f, captionY + 10f, 6f, InkFaint);
+            screen.MapCaptionsSeparated = left + 3f + TextWidth(shownExplored, 6f) + 2f <= positionX
+                                          && captionY + 16f <= h - 46f;
         }
 
         // A bright square and a short nose: position and facing, both legible over every biome.
@@ -2310,9 +2435,6 @@ public sealed class HudRenderer : IDisposable
         var dy = MathF.Sin(yaw) * 9f;
         MapNeedle(px, py, dx, dy);
 
-        TextCentred(
-            $"x {screen.MapPlayer.X:F0}  z {screen.MapPlayer.Y:F0}  {zoom:0.##} px/block",
-            left + size * 0.5f, top + size + 10f, 8f, InkDim);
     }
 
     private void MapNeedle(float x, float y, float dx, float dy)
@@ -2424,7 +2546,7 @@ public sealed class HudRenderer : IDisposable
     /// A settings tab: a label on the left and what it is set to on the right.
     /// </summary>
     /// <remarks>
-    /// <para>A window onto the list rather than the whole of it. The controls tab is twenty eight
+    /// <para>A window onto the list rather than the whole of it. The controls tab is twenty-nine
     /// rows and grows by one with every binding added, so drawn at its full length it is a panel
     /// that eventually runs off the bottom of the window — and a panel that has run off the bottom
     /// looks exactly like a panel that is fine, from everywhere except the row nobody can reach.

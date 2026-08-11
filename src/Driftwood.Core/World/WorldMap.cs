@@ -2,9 +2,15 @@ using Driftwood.Core.Gen;
 
 namespace Driftwood.Core.World;
 
-/// <summary>A saved, exploration-only map: one sampled surface tile per visited horizontal chunk.</summary>
+/// <summary>A saved explored map: one sampled surface tile per visited chunk plus chart and waypoint marks.</summary>
 public sealed class WorldMap
 {
+    /// <summary>A reserved saved marker owned by the player rather than an exploration chart.</summary>
+    public const string WaypointId = "player/waypoint";
+
+    /// <summary>Kept outside the authored structure range so old saves still round-trip it safely.</summary>
+    public const byte WaypointKind = byte.MaxValue;
+
     public enum Surface : byte { Grass, Soil, Sand, Stone, Snow, Wood, Water, Other }
 
     public readonly record struct Tile(int X, int Z, Biome Biome, Surface Top, short Height);
@@ -17,6 +23,8 @@ public sealed class WorldMap
 
     public IReadOnlyCollection<Tile> Tiles => _tiles.Values;
     public IReadOnlyCollection<Marker> Markers => _markers.Values;
+    public Marker? Waypoint => _markers.TryGetValue(WaypointId, out var marker) ? marker : null;
+    public int ChartedCount => _markers.Count - (Waypoint is null ? 0 : 1);
     public bool Dirty { get; private set; }
 
     /// <summary>Records the chunk under the player once, using the generator's authoritative surface.</summary>
@@ -75,6 +83,25 @@ public sealed class WorldMap
         Dirty = true;
         return true;
     }
+
+    /// <summary>Places or moves the one navigation mark that follows the player out of the map.</summary>
+    public bool SetWaypoint(int x, int z)
+    {
+        var marker = new Marker(WaypointId, "waypoint", x, z, WaypointKind);
+        if (_markers.TryGetValue(WaypointId, out var previous) && previous == marker) return false;
+        _markers[WaypointId] = marker;
+        Dirty = true;
+        return true;
+    }
+
+    public bool ClearWaypoint()
+    {
+        if (!_markers.Remove(WaypointId)) return false;
+        Dirty = true;
+        return true;
+    }
+
+    public static bool IsWaypoint(Marker marker) => marker.Id == WaypointId;
 
     public void ReloadMarkers(IEnumerable<Marker> markers)
     {

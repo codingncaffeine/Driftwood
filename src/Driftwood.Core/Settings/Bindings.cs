@@ -55,6 +55,7 @@ public sealed class Bindings
         // to press. Two keys per action exists precisely so that is not a choice anybody has to
         // make. Escape opens the options and gives the mouse back, which is one gesture everywhere.
         bindings.Set(GameAction.OpenInventory, "I", "E");
+        bindings.Set(GameAction.OpenMap, "M");
         bindings.Set(GameAction.OpenOptions, "Escape");
 
         bindings.Set(GameAction.ToggleView, "F5");

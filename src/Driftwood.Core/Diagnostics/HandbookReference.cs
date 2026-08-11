@@ -201,6 +201,7 @@ public static class HandbookReference
                 settings.TemporalAntialiasing,
                 settings.CompanionWindowLocked,
                 settings.SpellbookWindowLocked,
+                settings.SpellBarWindowLocked,
             },
             controls = new { keyboard, controller },
             blocks = blockRows,

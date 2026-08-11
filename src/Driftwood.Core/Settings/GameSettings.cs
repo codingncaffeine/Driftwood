@@ -122,18 +122,24 @@ public sealed class GameSettings
     /// </remarks>
     public bool RecipeNotices { get; set; } = true;
 
-    /// <summary>Movable magic panels start protected from accidental drags.</summary>
-    public bool CompanionWindowLocked { get; set; } = true;
+    /// <summary>Movable magic panels begin unlocked so their decorated grips work on first use.</summary>
+    public bool CompanionWindowLocked { get; set; }
 
     public int CompanionWindowX { get; set; }
 
     public int CompanionWindowY { get; set; }
 
-    public bool SpellbookWindowLocked { get; set; } = true;
+    public bool SpellbookWindowLocked { get; set; }
 
     public int SpellbookWindowX { get; set; }
 
     public int SpellbookWindowY { get; set; }
+
+    public bool SpellBarWindowLocked { get; set; }
+
+    public int SpellBarWindowX { get; set; }
+
+    public int SpellBarWindowY { get; set; }
 
     /// <summary>
     /// A folder of creature skeletons to read at startup, or empty for no animals.
@@ -201,6 +207,7 @@ public sealed class GameSettings
         // no bind lines in it keeps the shipped keys rather than ending up with none.
         var boundAnything = false;
         var boundPadAnything = false;
+        var sawSpellBarLayout = false;
         var namedPadActions = new HashSet<ControllerAction>();
 
         foreach (var raw in lines)
@@ -271,6 +278,14 @@ public sealed class GameSettings
                     settings.SpellbookWindowX = Int(value, -4096, 4096, settings.SpellbookWindowX); break;
                 case "ui.spellbookwindow.y":
                     settings.SpellbookWindowY = Int(value, -4096, 4096, settings.SpellbookWindowY); break;
+                case "ui.spellbarwindow.locked":
+                    settings.SpellBarWindowLocked = Bool(value, settings.SpellBarWindowLocked);
+                    sawSpellBarLayout = true;
+                    break;
+                case "ui.spellbarwindow.x":
+                    settings.SpellBarWindowX = Int(value, -4096, 4096, settings.SpellBarWindowX); break;
+                case "ui.spellbarwindow.y":
+                    settings.SpellBarWindowY = Int(value, -4096, 4096, settings.SpellBarWindowY); break;
 
                 // ⚠ Taken verbatim, not trimmed of anything but its edges. A Windows path is full of
                 // characters every other value here would reject, and one of them is a backslash.
@@ -297,6 +312,22 @@ public sealed class GameSettings
             // layout remains byte-for-intent intact and merely receives genuinely free defaults.
             if (settings.Pad.IsLegacyDefault(namedPadActions)) settings.Pad = ControllerBindings.Defaults();
             else settings.Pad.FillGapsFrom(ControllerBindings.Defaults(), namedPadActions);
+        }
+
+        // The spell bar became movable after the other two panels. Its key is therefore also the
+        // exact version marker for the layout: an older settings file may contain the old shipped
+        // "locked=true" values even though the player never chose them. Unlock the untouched
+        // shipped layout once; the new key written on save then preserves every deliberate choice.
+        if (!sawSpellBarLayout)
+        {
+            // Zero-position locked values are exactly the old shipped state. A non-zero position
+            // could only have been reached by somebody deliberately unlocking, moving and locking
+            // the panel, so preserve that choice while still repairing untouched installations.
+            if (settings.CompanionWindowX == 0 && settings.CompanionWindowY == 0)
+                settings.CompanionWindowLocked = false;
+            if (settings.SpellbookWindowX == 0 && settings.SpellbookWindowY == 0)
+                settings.SpellbookWindowLocked = false;
+            settings.SpellBarWindowLocked = false;
         }
 
         return settings;
@@ -371,6 +402,9 @@ public sealed class GameSettings
         text.AppendLine($"ui.spellbookwindow.locked={Text(SpellbookWindowLocked)}");
         text.AppendLine($"ui.spellbookwindow.x={SpellbookWindowX}");
         text.AppendLine($"ui.spellbookwindow.y={SpellbookWindowY}");
+        text.AppendLine($"ui.spellbarwindow.locked={Text(SpellBarWindowLocked)}");
+        text.AppendLine($"ui.spellbarwindow.x={SpellBarWindowX}");
+        text.AppendLine($"ui.spellbarwindow.y={SpellBarWindowY}");
         text.AppendLine();
 
         // Only written when there is one, so a file from a machine with no creature geometry does
