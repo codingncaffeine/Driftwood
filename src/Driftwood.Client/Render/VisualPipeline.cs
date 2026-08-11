@@ -74,6 +74,7 @@ public sealed class VisualPipeline : IDisposable
         uniform mat4 uPrevViewProj;
         uniform float uNear;
         uniform float uFar;
+        uniform float uHdrIntensity;
         uniform int uSsao;
         uniform int uBloomEnabled;
         uniform int uGodRays;
@@ -92,11 +93,16 @@ public sealed class VisualPipeline : IDisposable
         {
             if (uBloomEnabled == 0)
                 return pow(clamp(hdr, vec3(0.0), vec3(1.0)), vec3(1.0 / 2.2));
-            // A fixed photographic exposure keeps night intact while rolling bright lamps and sun
-            // highlights into display range. The curve is monotonic and cannot clip a color channel.
-            vec3 exposed = vec3(1.0) - exp(-hdr * 1.12);
-            return pow(max(exposed, vec3(0.0)), vec3(1.0 / 2.2));
+            // Full intensity is P9's original curve. Lower values calmly reduce exposure, chroma
+            // and bloom together rather than making a player balance three expert controls.
+            float exposure = mix(0.86, 1.12, uHdrIntensity);
+            vec3 exposed = vec3(1.0) - exp(-hdr * exposure);
+            vec3 display = pow(max(exposed, vec3(0.0)), vec3(1.0 / 2.2));
+            float luminance = dot(display, vec3(0.2126, 0.7152, 0.0722));
+            return mix(vec3(luminance), display, mix(0.82, 1.0, uHdrIntensity));
         }
+
+        float bloomScale() { return mix(0.16, 0.42, uHdrIntensity); }
 
         float ambientOcclusion(float centreDepth)
         {
@@ -119,7 +125,7 @@ public sealed class VisualPipeline : IDisposable
         vec3 currentAt(vec2 uv)
         {
             vec3 hdr = texture(uScene, uv).rgb;
-            if (uBloomEnabled != 0) hdr += texture(uBloom, uv).rgb * 0.42;
+            if (uBloomEnabled != 0) hdr += texture(uBloom, uv).rgb * bloomScale();
             return mapped(hdr);
         }
 
@@ -128,7 +134,7 @@ public sealed class VisualPipeline : IDisposable
             float depth = texture(uDepth, vUv).r;
             vec3 hdr = texture(uScene, vUv).rgb;
             hdr *= ambientOcclusion(depth);
-            if (uBloomEnabled != 0) hdr += texture(uBloom, vUv).rgb * 0.42;
+            if (uBloomEnabled != 0) hdr += texture(uBloom, vUv).rgb * bloomScale();
 
             // Radial sky visibility toward the projected sun. Terrain interrupts the samples, so
             // the shafts appear round a ridge or canopy and vanish when the sun is fully covered.
@@ -348,6 +354,7 @@ public sealed class VisualPipeline : IDisposable
         _composite.SetVec3("uSunColor", sunColor);
         _composite.SetFloat("uNear", nearPlane);
         _composite.SetFloat("uFar", farPlane);
+        _composite.SetFloat("uHdrIntensity", settings.HdrIntensity / 100f);
         _composite.SetInt("uSsao", settings.AmbientOcclusion ? 1 : 0);
         _composite.SetInt("uBloomEnabled", settings.Bloom ? 1 : 0);
         _composite.SetInt("uGodRays", settings.GodRays ? 1 : 0);

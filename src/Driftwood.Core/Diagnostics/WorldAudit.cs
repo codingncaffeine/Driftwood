@@ -6580,6 +6580,7 @@ public static class WorldAudit
             Weather = false,
             GodRays = false,
             Bloom = false,
+            HdrIntensity = 37,
             TemporalAntialiasing = false,
             Volume = 43,
             Mute = true,
@@ -6627,6 +6628,7 @@ public static class WorldAudit
         if (read.Weather) faults.Add("weather came back on");
         if (read.GodRays) faults.Add("sun shafts came back on");
         if (read.Bloom) faults.Add("bloom came back on");
+        if (read.HdrIntensity != 37) faults.Add($"HDR intensity came back {read.HdrIntensity}, not 37");
         if (read.TemporalAntialiasing) faults.Add("TAA came back on");
         if (read.Volume != 43) faults.Add($"volume came back {read.Volume}, not 43");
         if (!read.Mute) faults.Add("mute came back off");
@@ -6722,7 +6724,7 @@ public static class WorldAudit
             faults.Add("releasing and reversing a menu stick did not reset its repeat");
 
         detail = $"{GameActions.All.Length} keyboard and {ControllerActions.All.Length} controller actions, "
-               + "24 settings out and back unchanged; radial deadzone, nine-way selection and UI repeat pinned";
+               + "25 settings out and back unchanged; radial deadzone, nine-way selection and UI repeat pinned";
 
         return faults;
     }

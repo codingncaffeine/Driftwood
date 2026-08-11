@@ -130,10 +130,12 @@ adds depth-occluded sun shafts, photographic exposure, a restrained half-resolut
 neighbourhood-clamped temporal antialiasing.
 
 Each P9 effect has its own checkbox under **OPTIONS → VIDEO**: shadows, ambient occlusion, material
-maps, water optics, rain/snow, sun shafts, exposure/bloom and TAA. Failed optional framebuffer or
-shadow allocation is named at startup and falls back to the original direct renderer; it cannot keep
-the game from opening. Startup also prints the live attachment limits and memory estimate so a visual
-setting is paired with an honest machine-specific receipt.
+maps, water optics, rain/snow, sun shafts, exposure/bloom and TAA. **HDR intensity** defaults to a
+calmer 65% and adjusts exposure, colour intensity and bloom together; 100% preserves the original P9
+grade. Failed optional framebuffer or shadow allocation is named at startup and falls back to the
+original direct renderer; it cannot keep the game from opening. Startup also prints the live
+attachment limits and memory estimate so a visual setting is paired with an honest machine-specific
+receipt.
 
 ## Building
 

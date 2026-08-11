@@ -19,6 +19,8 @@ namespace Driftwood.Core.Settings;
 /// </remarks>
 public sealed class GameSettings
 {
+    public const int DefaultHdrIntensity = 65;
+
     /// <summary>How far the world is kept loaded, in chunks. Applies when the game is next opened.</summary>
     public int ViewDistance { get; set; } = 8;
 
@@ -48,6 +50,11 @@ public sealed class GameSettings
 
     /// <summary>HDR exposure and a soft bloom pass for bright light sources.</summary>
     public bool Bloom { get; set; } = true;
+
+    /// <summary>
+    /// Strength of the photographic exposure, colour intensity and bloom contribution, 0 to 100.
+    /// </summary>
+    public int HdrIntensity { get; set; } = DefaultHdrIntensity;
 
     /// <summary>Temporal anti-aliasing with a reprojected, clamped history buffer.</summary>
     public bool TemporalAntialiasing { get; set; } = true;
@@ -220,6 +227,9 @@ public sealed class GameSettings
                 case "video.weather": settings.Weather = Bool(value, settings.Weather); break;
                 case "video.godrays": settings.GodRays = Bool(value, settings.GodRays); break;
                 case "video.bloom": settings.Bloom = Bool(value, settings.Bloom); break;
+                case "video.hdrintensity":
+                    settings.HdrIntensity = Int(value, 0, 100, settings.HdrIntensity);
+                    break;
                 case "video.taa": settings.TemporalAntialiasing = Bool(value, settings.TemporalAntialiasing); break;
 
                 // ⚠ Zero means uncapped and is inside the range on purpose, so a player who wants
@@ -307,6 +317,7 @@ public sealed class GameSettings
         text.AppendLine($"video.weather={Text(Weather)}");
         text.AppendLine($"video.godrays={Text(GodRays)}");
         text.AppendLine($"video.bloom={Text(Bloom)}");
+        text.AppendLine($"video.hdrintensity={HdrIntensity}");
         text.AppendLine($"video.taa={Text(TemporalAntialiasing)}");
         text.AppendLine();
         text.AppendLine($"audio.volume={Volume}");

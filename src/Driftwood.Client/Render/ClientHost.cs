@@ -995,6 +995,7 @@ public sealed class ClientHost : IDisposable
             _settings.Weather = true;
             _settings.GodRays = true;
             _settings.Bloom = true;
+            _settings.HdrIntensity = GameSettings.DefaultHdrIntensity;
             _settings.TemporalAntialiasing = true;
         }
         _keys = new InputMap(_settings.Keys);
@@ -4405,6 +4406,11 @@ public sealed class ClientHost : IDisposable
                 _hudScreen.Rows.Add(new MenuRow("exposure and bloom", OnOff(_settings.Bloom),
                     Note: _visuals.Available ? "HDR exposure with a half-resolution soft bloom" : _visuals.Failure,
                     Control: MenuControl.Checkbox, ControlAmount: _settings.Bloom ? 1f : 0f));
+                _hudScreen.Rows.Add(new MenuRow("HDR intensity", $"{_settings.HdrIntensity}%",
+                    Note: _settings.Bloom
+                        ? "lower this for calmer colour, highlights and bloom"
+                        : "saved for when exposure and bloom is turned on",
+                    Control: MenuControl.Slider, ControlAmount: _settings.HdrIntensity / 100f));
                 _hudScreen.Rows.Add(new MenuRow("temporal antialiasing", OnOff(_settings.TemporalAntialiasing),
                     Note: "eight-sample jitter with reprojected, neighborhood-clamped history",
                     Control: MenuControl.Checkbox, ControlAmount: _settings.TemporalAntialiasing ? 1f : 0f));
@@ -4718,6 +4724,10 @@ public sealed class ClientHost : IDisposable
                         break;
                     case "exposure and bloom":
                         _settings.Bloom = !_settings.Bloom;
+                        _visuals.ResetHistory();
+                        break;
+                    case "HDR intensity":
+                        _settings.HdrIntensity = Nudge(_settings.HdrIntensity, by * 5, 0, 100);
                         _visuals.ResetHistory();
                         break;
                     case "temporal antialiasing":
