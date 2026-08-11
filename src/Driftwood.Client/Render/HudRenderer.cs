@@ -253,6 +253,13 @@ public sealed class HudScreen
 
     public Companion? Companion;
 
+    /// <summary>Fast testing flight and the authored settlement it is guiding the camera toward.</summary>
+    public bool DeveloperMode;
+
+    public Vector3 DeveloperPosition;
+
+    public Vector3? DeveloperDriftstead;
+
     /// <summary>Held keyboard cursor mode and held controller bank (0, 1 or 2).</summary>
     public bool SpellCursor;
 
@@ -823,9 +830,10 @@ public sealed class HudRenderer : IDisposable
             SpellBar(screen, layout, w, h);
             CharacterMeters(screen, w, h);
             CompanionPanel(screen, layout, w, h);
+            DeveloperPanel(screen, w);
         }
 
-        Toasts(toasts, w);
+        Toasts(toasts, w, screen.DeveloperMode && !screen.IsOpen ? 79f : 8f);
 
         // A right-click menu belongs over the panel it controls and over every row inside it.
         // Drawing and zoning it here also gives it the final hit-test priority.
@@ -1243,6 +1251,60 @@ public sealed class HudRenderer : IDisposable
                 layout.Add(ZoneKind.CompanionCommand, row, left + 3f, y - 1f, width - 6f, line - 1f);
             screen.CompanionCommandsDrawn++;
         }
+    }
+
+    /// <summary>
+    /// A small always-live instrument panel for the tilde testing flight. It stays out of the
+    /// centre, bars and companion window, but says enough to reach an authored settlement without
+    /// turning a development session into another blind hike.
+    /// </summary>
+    private void DeveloperPanel(HudScreen screen, float w)
+    {
+        if (!screen.DeveloperMode) return;
+
+        const float width = 180f;
+        const float height = 63f;
+        var left = MathF.Round(w - width - 8f);
+        const float top = 8f;
+
+        Bevel(left, top, width, height, raised: true,
+            new Vector4(0.035f, 0.045f, 0.052f, 0.94f));
+        Rect(_plain, left + 3f, top + 3f, width - 6f, 1f,
+            new Vector4(0.34f, 0.82f, 0.76f, 0.88f));
+        Text("DEV FLIGHT", left + 6f, top + 6f, 8f,
+            new Vector4(0.50f, 0.96f, 0.88f, 1f));
+
+        var here = screen.DeveloperPosition;
+        Text($"xyz {MathF.Floor(here.X):0}  {MathF.Floor(here.Y):0}  {MathF.Floor(here.Z):0}",
+            left + 6f, top + 18f, 6f, InkDim);
+
+        if (screen.DeveloperDriftstead is { } target)
+        {
+            var dx = target.X - here.X;
+            var dz = target.Z - here.Z;
+            var distance = MathF.Sqrt(dx * dx + dz * dz);
+            Text(FitText($"village {distance:0}m {CompassPoint(dx, dz)}", width - 12f, 7f),
+                left + 6f, top + 28f, 7f, Highlight);
+            Text($"Driftstead {target.X:0}, {target.Z:0}", left + 6f, top + 39f, 6f, InkDim);
+        }
+        else
+        {
+            Text("no driftstead found", left + 6f, top + 28f, 7f, Highlight);
+        }
+
+        Text("space up · ctrl down · shift boost", left + 6f, top + 49f, 5f, InkDim);
+        Text("tilde exits · alt precision", left + 6f, top + 56f, 5f, InkFaint);
+    }
+
+    private static string CompassPoint(float dx, float dz)
+    {
+        if (MathF.Abs(dx) < 0.001f && MathF.Abs(dz) < 0.001f) return "HERE";
+
+        // Zero is north (-Z), then clockwise through east (+X), matching the exploration map.
+        var turn = MathF.Atan2(dx, -dz) / MathF.Tau;
+        if (turn < 0f) turn += 1f;
+        ReadOnlySpan<string> points = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+        return points[(int)MathF.Floor(turn * points.Length + 0.5f) % points.Length];
     }
 
     /// <summary>A double pixel frame with clipped-looking corner clasps for magic-only windows.</summary>
@@ -2383,7 +2445,7 @@ public sealed class HudRenderer : IDisposable
     /// gradually is a thing you notice after it has finished saying itself; something leaving
     /// gradually is a thing you can still read while it goes.</para>
     /// </remarks>
-    private void Toasts(IReadOnlyList<Toast> toasts, float w)
+    private void Toasts(IReadOnlyList<Toast> toasts, float w, float top)
     {
         if (toasts.Count == 0) return;
 
@@ -2391,7 +2453,6 @@ public sealed class HudRenderer : IDisposable
         const float Height = 30f;
 
         var left = MathF.Round(w - Width - 8f);
-        var top = 8f;
 
         foreach (var toast in toasts)
         {

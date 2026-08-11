@@ -680,10 +680,21 @@ public sealed class ClientHost : IDisposable
     private BlockId _cherryLeafBlock;
 
     /// <summary>
-    /// Walking rather than flying. The fly camera stays available behind F3 — it is how terrain
-    /// gets inspected, and a bug you can only reach by walking to it is a bug you look at twice.
+    /// Walking rather than flying. The fly camera stays available behind F3 and the faster tilde
+    /// development mode — a bug you can only reach by walking to it is a bug you look at twice.
     /// </summary>
     private bool _walking = true;
+
+    /// <summary>The high-speed, no-clip testing layer toggled by the grave/tilde key.</summary>
+    private bool _developerMode;
+
+    private bool _developerReturnsToWalking;
+    private float _developerPreviousMoveSpeed;
+    private float _developerPreviousBoost;
+    private StructureSite? _developerDriftstead;
+
+    private const float DeveloperMoveSpeed = 64f;
+    private const float DeveloperBoostMultiplier = 4f;
 
     /// <summary>
     /// Physics is held until the ground the player stands on has actually streamed in. Unloaded
@@ -1862,6 +1873,7 @@ public sealed class ClientHost : IDisposable
             $"{keys.Describe(GameAction.ToggleWireframe)} wireframe, "
             + $"{keys.Describe(GameAction.ToggleCulling)} culling, "
             + $"{keys.Describe(GameAction.ToggleFly)} walk/fly, "
+            + $"{keys.Describe(GameAction.ToggleDeveloper)} developer flight, "
             + $"{keys.Describe(GameAction.ToggleView)} view");
     }
 
@@ -2673,7 +2685,16 @@ public sealed class ClientHost : IDisposable
             // only reach by walking to it is a bug you look at twice.
             case GameAction.ToggleFly:
                 if (_bench is not null) break;
-                ToggleFly();
+                if (_developerMode) ToggleDeveloper();
+                else ToggleFly();
+                break;
+
+            // A one-key testing layer rather than a second movement implementation: the ordinary
+            // no-clip camera already has the right immunity and streaming semantics, while this
+            // wrapper gives it useful speed and a deterministic destination.
+            case GameAction.ToggleDeveloper:
+                if (_bench is not null || _atStartScreen || _hudScreen.Kind == HudScreenKind.Death) break;
+                ToggleDeveloper();
                 break;
 
             // First, over the shoulder, then facing. The middle one is the reason the model exists;
@@ -2718,6 +2739,56 @@ public sealed class ClientHost : IDisposable
 
         _player.Teleport(_camera.Position - new Vector3(0f, _player.CurrentEyeHeight, 0f));
         _spawned = false;
+    }
+
+    private void ToggleDeveloper()
+    {
+        if (_developerMode)
+        {
+            _developerMode = false;
+            _camera.MoveSpeed = _developerPreviousMoveSpeed;
+            _camera.BoostMultiplier = _developerPreviousBoost;
+            _developerDriftstead = null;
+
+            if (_developerReturnsToWalking && !_walking) ToggleFly();
+
+            PushToast(
+                "developer flight off",
+                _walking ? "walking from the camera" : "normal flight remains");
+            return;
+        }
+
+        // Tilde is an immediate way back into the world even if a normal panel was open. Closing
+        // through the ordinary path first preserves carried stacks and writes changed settings.
+        if (_hudScreen.IsOpen) CloseScreen();
+        if (_hudScreen.IsOpen) return;
+
+        _developerMode = true;
+        _developerReturnsToWalking = _walking;
+        _developerPreviousMoveSpeed = _camera.MoveSpeed;
+        _developerPreviousBoost = _camera.BoostMultiplier;
+        _camera.MoveSpeed = DeveloperMoveSpeed;
+        _camera.BoostMultiplier = DeveloperBoostMultiplier;
+        _walking = false;
+
+        var x = (int)MathF.Floor(_camera.Position.X);
+        var z = (int)MathF.Floor(_camera.Position.Z);
+        _developerDriftstead = _terrain.Exploration.FindNearest(
+            StructureKind.Driftstead, x, z, rings: 12);
+
+        if (_developerDriftstead is { } village)
+        {
+            var dx = village.X + 0.5f - _camera.Position.X;
+            var dz = village.Z + 0.5f - _camera.Position.Z;
+            _camera.Yaw = float.RadiansToDegrees(MathF.Atan2(dz, dx));
+            _camera.Pitch = -10f;
+            var distance = MathF.Sqrt(dx * dx + dz * dz);
+            PushToast("developer flight", $"village ahead · {distance:0}m");
+        }
+        else
+        {
+            PushToast("developer flight", "no Driftstead found nearby");
+        }
     }
 
     private void CycleView() => _view = _view switch
@@ -14120,6 +14191,11 @@ public sealed class ClientHost : IDisposable
         _hudScreen.CompanionWindowLocked = _settings.CompanionWindowLocked;
         _hudScreen.SpellbookWindowOffset = _spellbookWindowOffset;
         _hudScreen.SpellbookWindowLocked = _settings.SpellbookWindowLocked;
+        _hudScreen.DeveloperMode = _developerMode;
+        _hudScreen.DeveloperPosition = _camera.Position;
+        _hudScreen.DeveloperDriftstead = _developerDriftstead is { } village
+            ? new Vector3(village.X, village.Y, village.Z)
+            : null;
     }
 
     /// <summary>

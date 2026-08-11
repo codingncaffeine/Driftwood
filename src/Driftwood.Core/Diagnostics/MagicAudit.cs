@@ -302,6 +302,8 @@ public static class MagicAudit
     {
         var keys = Bindings.Defaults();
         if (keys.Primary(GameAction.SpellCursor).Length == 0) faults.Add("the held spell cursor has no default key");
+        if (keys.Primary(GameAction.ToggleDeveloper) != "GraveAccent")
+            faults.Add("developer flight is not on the tilde/grave key");
         var pad = ControllerBindings.Defaults();
         if (pad.Control(ControllerAction.SpellBankLeft) != ControllerControl.LeftTrigger
             || pad.Control(ControllerAction.SpellBankRight) != ControllerControl.RightTrigger

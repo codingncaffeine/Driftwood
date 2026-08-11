@@ -224,6 +224,7 @@ public sealed unsafe class RawInput : IDisposable
             (Key.A, GlfwKeys.A),
             (Key.Z, GlfwKeys.Z),
             (Key.Number0, GlfwKeys.Number0),
+            (Key.GraveAccent, GlfwKeys.GraveAccent),
             (Key.Escape, GlfwKeys.Escape),
             (Key.Enter, GlfwKeys.Enter),
             (Key.Tab, GlfwKeys.Tab),

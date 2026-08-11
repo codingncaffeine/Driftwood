@@ -59,6 +59,7 @@ public sealed class Bindings
 
         bindings.Set(GameAction.ToggleView, "F5");
         bindings.Set(GameAction.ToggleFly, "F3");
+        bindings.Set(GameAction.ToggleDeveloper, "GraveAccent");
         bindings.Set(GameAction.ToggleWireframe, "F1");
         bindings.Set(GameAction.ToggleCulling, "F2");
         bindings.Set(GameAction.HoldClock, "F6");
@@ -78,13 +79,19 @@ public sealed class Bindings
     /// <summary>What the controls screen shows on one line.</summary>
     public string Describe(GameAction action)
     {
-        var first = Primary(action);
-        var second = Secondary(action);
+        var first = DisplayName(Primary(action));
+        var second = DisplayName(Secondary(action));
 
         if (first.Length == 0 && second.Length == 0) return "unbound";
         if (second.Length == 0) return first;
         return $"{first} or {second}";
     }
+
+    private static string DisplayName(string key) => key switch
+    {
+        "GraveAccent" => "Tilde",
+        _ => key,
+    };
 
     /// <summary>
     /// Binds a key, taking it off whatever else was using it.

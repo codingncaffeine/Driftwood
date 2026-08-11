@@ -62,6 +62,12 @@ public enum GameAction
 
     ToggleView,
     ToggleFly,
+
+    /// <summary>
+    /// Enters fast no-clip testing flight and points the world HUD at the nearest Driftstead.
+    /// </summary>
+    ToggleDeveloper,
+
     ToggleWireframe,
     ToggleCulling,
     HoldClock,
@@ -116,6 +122,7 @@ public static class GameActions
         GameAction.OpenOptions => "options",
         GameAction.ToggleView => "change view",
         GameAction.ToggleFly => "walk or fly",
+        GameAction.ToggleDeveloper => "developer flight",
         GameAction.ToggleWireframe => "wireframe",
         GameAction.ToggleCulling => "frustum culling",
         GameAction.HoldClock => "hold the clock",

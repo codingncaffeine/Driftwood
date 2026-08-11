@@ -187,6 +187,12 @@ across seeds, so one seed does not hand you a continent and the next an archipel
 | Hold `R` | release mouse-look and click one of eight prepared spells; movement stays live | |
 | `Esc` | options — keys, controller, video, audio, world, saves, packs, skins | |
 | `F3` / `F5` | walk or fly / cycle the view | |
+| Tilde (`` ` ``) | toggle fast developer no-clip flight; faces and tracks the nearest Driftstead | |
+
+Developer flight runs at 64 blocks per second, or 256 while holding `Shift`. Its corner panel keeps
+live coordinates plus the nearest Driftstead's bearing, distance and target coordinates on screen;
+use `Space`/`Ctrl` to rise or descend, and `Alt` for precision movement. Press tilde again after
+descending to return the walking body to the camera's position.
 
 Controllers are discovered through **SDL3 after the first frame is already visible**, so a slow or
 sleeping Bluetooth device never holds the window's startup hostage. Connection and hot-plug notices
