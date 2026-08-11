@@ -11707,8 +11707,14 @@ public sealed class ClientHost : IDisposable
         // views answer different questions — whether the board faces the way the player does, and
         // whether the arm has actually come across the chest rather than swung out beside it.
         new(356, "22-offhand-torch", "iron_sword", ViewMode.ThirdFacing, false, Offhand: "torch"),
-        new(368, "23-guard-facing", "iron_sword", ViewMode.ThirdFacing, false, Wears: "iron", Guard: true),
-        new(380, "24-guard-behind", "iron_sword", ViewMode.ThirdBehind, false, Wears: "iron", Guard: true),
+
+        // The first-person pairing has its own composition: the sword owns the lower-right corner
+        // while a shield stands at the lower left and only crosses inward when it is raised. Take the
+        // lowered frame before the guard sequence and the raised one after it has had time to settle.
+        new(380, "23-first-sword-shield", "iron_sword", ViewMode.First, false, Offhand: "shield"),
+        new(420, "24-guard-behind", "iron_sword", ViewMode.ThirdBehind, false, Wears: "iron", Guard: true),
+        new(460, "25-guard-facing", "iron_sword", ViewMode.ThirdFacing, false, Wears: "iron", Guard: true),
+        new(500, "26-first-guard", "iron_sword", ViewMode.First, false, Offhand: "shield", Guard: true),
     ];
 
     /// <summary>
@@ -15813,6 +15819,8 @@ public sealed class ClientHost : IDisposable
     /// arm in the corner of the screen for the whole game.</para>
     /// <para>⚠ It does not swing. The swing belongs to the hand that strikes, and passing the main
     /// hand's progress in here would send a torch through the same arc as the sword beside it.</para>
+    /// <para>A shield is the deliberate exception to the generic mirrored grip: it rests lower and
+    /// farther left, then follows the animator's smoothed guard amount upward when raised.</para>
     /// </remarks>
     private void DrawOffhandItem(Matrix4x4 projection, EntityLight light)
     {
@@ -15820,11 +15828,14 @@ public sealed class ClientHost : IDisposable
         if (stack.IsEmpty) return;
 
         var other = _items[stack.Item];
+        var transform = other.ShieldShare > 0f
+            ? _playerRenderer.ShieldTransform(_itemRenderer.HoldPoint(other), _animator.BlockAmount)
+            : _playerRenderer.OffhandTransform(!other.DrawsAsBlock, _itemRenderer.HoldPoint(other));
 
         _blockTextures.Bind();
         _itemRenderer.DrawInHand(
             projection,
-            _playerRenderer.OffhandTransform(!other.DrawsAsBlock, _itemRenderer.HoldPoint(other)),
+            transform,
             other,
             _registry,
             HandLight(light));

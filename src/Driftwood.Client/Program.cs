@@ -819,8 +819,9 @@ public static class Program
               --bench [secs]    fly a fixed path once the world has settled, report frame-time
                                 percentiles, then exit (default 15 s, seed defaults to 'driftwood')
               --shot <folder>   photograph what is in the hand — a pickaxe, a sword, a torch and a
-                                block, in each view, at rest and mid-swing — write them there and
-                                quit. With --ui-check, write each deterministic UI state instead.
+                                block, in each view, at rest and mid-swing, plus first-person sword
+                                and shield lowered/raised — write them there and quit. With
+                                --ui-check, write each deterministic UI state instead.
                                 The real world, the real camera, the real grip; the way to look at
                                 a held thing without starting the game and holding one.
               --uploads <n>     chunk uploads allowed per frame (default 4)

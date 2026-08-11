@@ -161,9 +161,9 @@ public static class HeldGrip
     /// <para>⛔ <b>And it does not swing.</b> The offhand is not what a click strikes with — the swing
     /// curve belongs to the main hand — so passing the main hand's <c>t</c> in here would put a torch
     /// through the same arc as the sword beside it every time the player attacked.</para>
-    /// <para>⚠ The guard is a separate movement and lives on <c>PlayerAnimator.BlockAmount</c>, which
-    /// is third-person. In first person a raised shield shows on the HUD; bringing the view-model arm
-    /// across the screen is the thing left to judge by eye, and the numbers to change are here.</para>
+    /// <para>⚠ A shield adds its own view-space placement in <see cref="InViewShield"/>. Keeping that
+    /// movement out of this mirror matters: a torch should stay at the side when the shield key is
+    /// held, and a broad board needs a different composition from a narrow carried item.</para>
     /// </remarks>
     public static Matrix4x4 OffhandArmTransform() =>
         Matrix4x4.CreateRotationZ(-RestRoll)
@@ -273,6 +273,16 @@ public static class HeldGrip
     /// </remarks>
     public static readonly Grip FirstFlat = new(
         -0.20f, -MathF.PI / 2f, 0f, new Vector3(0.12f, 0f, 0.12f), Twist: 0.34f);
+
+    /// <summary>A first-person shield faces the player as a board, not as a second diagonal blade.</summary>
+    /// <remarks>
+    /// The ordinary flat grip twists a weapon around its handle so its cutting edge leads. A shield
+    /// has no such edge: giving it the sword's twist tips its broad inner corner toward the sword and
+    /// makes the two read as one crowded cluster. Its dedicated grip keeps the face nearly square;
+    /// <see cref="InViewShield"/> then owns the Minecraft-like lower-left and raised positions.
+    /// </remarks>
+    public static readonly Grip FirstShield = new(
+        -0.20f, -MathF.PI / 2f, 0f, new Vector3(0.12f, 0f, 0.12f));
 
     /// <summary>Third person: the picture faces out of the player's own side.</summary>
     /// <remarks>
@@ -429,6 +439,27 @@ public static class HeldGrip
       * OffhandArmTransform();
 
     /// <summary>
+    /// Where a shield sits in first person: parked low and wide at rest, lifted inward to block.
+    /// </summary>
+    /// <param name="guard">Smoothed 0..1 blocking amount from <see cref="PlayerAnimator"/>.</param>
+    /// <remarks>
+    /// These are camera-space offsets deliberately applied last. The rest pose moves the board away
+    /// from the lower-right sword instead of treating both hands as a symmetric pair. Raising it
+    /// follows Minecraft's readable silhouette: up first, modestly inward, and still anchored on the
+    /// left half rather than teleporting over the crosshair.
+    /// </remarks>
+    public static Matrix4x4 InViewShield(Vector3 hold, ArmStyle arms, float guard)
+    {
+        guard = Math.Clamp(guard, 0f, 1f);
+        var rest = new Vector3(-0.30f, -0.08f, 0f);
+        var raised = new Vector3(-0.08f, 0.30f, -0.04f);
+
+        return InFist(FirstShield, HeldSize(flat: true), hold, arms, right: false)
+             * OffhandArmTransform()
+             * Matrix4x4.CreateTranslation(Vector3.Lerp(rest, raised, guard));
+    }
+
+    /// <summary>
     /// Where the held thing is in third person: in the model's own right fist, in the world.
     /// </summary>
     /// <remarks>
@@ -532,6 +563,7 @@ public static class HeldGrip
 
         faults.AddRange(ValidateOffhand(feet));
         faults.AddRange(ValidateOffhandInView());
+        faults.AddRange(ValidateShieldInView());
         return faults;
     }
 
@@ -584,6 +616,39 @@ public static class HeldGrip
             var mid = Vector3.Transform(hold, InViewOffhand(flat, hold, arms));
             if (Vector3.Distance(mid, other) > 0.001f)
                 faults.Add($"{label} in the other hand is not the same twice, so something is animating it");
+        }
+
+        return faults;
+    }
+
+    /// <summary>Pins the shield's deliberately asymmetric first-person composition and guard lift.</summary>
+    private static List<string> ValidateShieldInView()
+    {
+        var faults = new List<string>();
+        var hold = new Vector3(-0.21f, -0.36f, 0f);
+
+        foreach (var arms in (ReadOnlySpan<ArmStyle>)[ArmStyle.Classic, ArmStyle.Slim])
+        {
+            var sword = Vector3.Transform(hold, InView(0f, flat: true, hold, arms));
+            var ordinary = Vector3.Transform(hold, InViewOffhand(flat: true, hold, arms));
+            var lowered = Vector3.Transform(hold, InViewShield(hold, arms, guard: 0f));
+            var raised = Vector3.Transform(hold, InViewShield(hold, arms, guard: 1f));
+
+            if (sword.X - lowered.X < 1.05f)
+                faults.Add($"the resting {arms} sword and shield grips are only "
+                         + $"{sword.X - lowered.X:F2} blocks apart in first person");
+            if (lowered.X > ordinary.X - 0.20f)
+                faults.Add($"the lowered {arms} shield is only {ordinary.X - lowered.X:F2} farther left "
+                         + "than an ordinary offhand item");
+            if (lowered.Y > ordinary.Y - 0.04f)
+                faults.Add($"the lowered {arms} shield is not below the ordinary offhand pose");
+            if (raised.Y < lowered.Y + 0.30f)
+                faults.Add($"the raised {arms} shield rises only {raised.Y - lowered.Y:F2} blocks");
+            if (raised.X <= lowered.X || raised.X >= 0f)
+                faults.Add($"the raised {arms} shield moves from x {lowered.X:F2} to {raised.X:F2}, "
+                         + "rather than inward while staying left of the crosshair");
+            if (lowered.Z >= 0f || raised.Z >= 0f)
+                faults.Add($"the first-person {arms} shield crossed behind the camera");
         }
 
         return faults;

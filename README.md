@@ -206,6 +206,10 @@ face button backs out, and the shoulders change tabs. Face prompts follow the at
 on Xbox, cross/circle on PlayStation). The CONTROLLER tab exposes radial deadzone, look speed,
 invert-Y, attack-only target assist, rumble strength, and every discrete binding.
 
+In first person, a sword stays diagonal in the lower-right attack hand while a shield rests low at
+the far left. Raising it smoothly brings the board upright toward the crosshair, matching the clear
+sword-and-shield composition familiar from Minecraft instead of drawing two mirrored items together.
+
 The figure in your pockets is the same projected, layered player model used by the SKINS preview:
 it updates as soon as a skin or classic/slim model is chosen, keeps worn armour and both held items,
 and can be dragged to turn it while its limbs hold a quiet idle pose.
@@ -524,7 +528,8 @@ pixel can.
 Combining `--ui-check` with `--shot` produces a contact sheet for checking tab joins, text fit,
 pack-skinned controls and every menu state by eye. `--shot` on its own exists because a tile can be
 looked at and a tile **in a fist** cannot: that is a projection, a swing, a grip and two entirely
-different arm poses on top of the drawing.
+different arm poses on top of the drawing. Its matrix now includes first-person sword-and-shield
+frames with the shield both lowered and raised.
 
 ## Measuring frame time
 
