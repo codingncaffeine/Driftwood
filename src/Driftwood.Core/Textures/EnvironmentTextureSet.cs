@@ -5,6 +5,7 @@ public static class EnvironmentTextureSet
 {
     public sealed record Result(
         Image Sun, Image Moon, Image Rain, Image Snow,
+        bool SunUsesAdditiveCanvas,
         bool SunFromPack, bool MoonFromPack, bool RainFromPack, bool SnowFromPack,
         IReadOnlyList<string> Sources)
     {
@@ -27,7 +28,48 @@ public static class EnvironmentTextureSet
         var snow = Load(pack, size,
             ["textures/environment/snow.png", "textures/weather/snow.png"],
             Snow(size), sources, out var snowPack);
-        return new Result(sun, moon, rain, snow, sunPack, moonPack, rainPack, snowPack, sources);
+        return new Result(
+            sun, moon, rain, snow, UsesAdditiveSunCanvas(sun),
+            sunPack, moonPack, rainPack, snowPack, sources);
+    }
+
+    /// <summary>
+    /// True when a sun image uses the older emissive convention: opaque black round the artwork
+    /// means "add no light", not "paint a black rectangle over the sky".
+    /// </summary>
+    /// <remarks>
+    /// Only the border decides. A dark spot inside a normally alpha-backed sun is still artwork,
+    /// while a predominantly opaque near-black perimeter is the unmistakable canvas used by
+    /// additive sun sprites. Keeping the decision beside image loading makes directory and ZIP
+    /// packs behave identically and lets the shader retain ordinary alpha compositing for modern
+    /// transparent sprites.
+    /// </remarks>
+    private static bool UsesAdditiveSunCanvas(Image image)
+    {
+        var border = 0;
+        var opaqueBlack = 0;
+
+        void Count(int x, int y)
+        {
+            var p = (y * image.Width + x) * 4;
+            border++;
+            if (image.Pixels[p + 3] >= 240
+                && Math.Max(image.Pixels[p], Math.Max(image.Pixels[p + 1], image.Pixels[p + 2])) <= 32)
+                opaqueBlack++;
+        }
+
+        for (var x = 0; x < image.Width; x++)
+        {
+            Count(x, 0);
+            if (image.Height > 1) Count(x, image.Height - 1);
+        }
+        for (var y = 1; y + 1 < image.Height; y++)
+        {
+            Count(0, y);
+            if (image.Width > 1) Count(image.Width - 1, y);
+        }
+
+        return border > 0 && opaqueBlack * 4 >= border * 3;
     }
 
     private static Image LoadMoon(
@@ -175,6 +217,8 @@ public static class EnvironmentTextureSet
     {
         var faults = new List<string>();
         var result = Build(null, 32);
+        if (result.SunUsesAdditiveCanvas)
+            faults.Add("the transparent generated sun was mistaken for an opaque-black additive canvas");
         foreach (var (name, image) in new[]
                  {
                      ("sun", result.Sun), ("moon", result.Moon),
@@ -193,7 +237,7 @@ public static class EnvironmentTextureSet
             var environment = Path.Combine(root, "assets", "minecraft", "textures", "environment");
             Directory.CreateDirectory(environment);
             File.WriteAllText(Path.Combine(root, "pack.mcmeta"), "{\"pack\":{\"pack_format\":34}}");
-            File.WriteAllBytes(Path.Combine(environment, "sun.png"), Solid(2, 244, 80, 30));
+            File.WriteAllBytes(Path.Combine(environment, "sun.png"), AdditiveSun(4));
             File.WriteAllBytes(Path.Combine(environment, "rain.png"), Solid(2, 30, 90, 220));
             File.WriteAllBytes(Path.Combine(environment, "snow.png"), Solid(2, 210, 225, 250));
 
@@ -213,6 +257,8 @@ public static class EnvironmentTextureSet
 
             var packed = Build(root, 16);
             if (packed.FromPack != 4) faults.Add($"a Java environment pack supplied {packed.FromPack} of 4 sprites");
+            if (!packed.SunUsesAdditiveCanvas)
+                faults.Add("an opaque-black sun canvas was not routed to emissive compositing");
             if (packed.Moon.Pixels[0] < 200 || packed.Moon.Pixels[2] > 60)
                 faults.Add("the moon renderer squeezed the whole phase sheet instead of cropping phase zero");
         }
@@ -226,8 +272,26 @@ public static class EnvironmentTextureSet
             catch (IOException) { }
         }
 
-        detail = "sun, moon, rain and snow have generated fallbacks; a Java pack replaces all four and its moon sheet is cropped";
+        detail = "sun, moon, rain and snow have generated fallbacks; transparent and opaque-black emissive suns composite without a billboard square, and a Java moon sheet is cropped";
         return faults;
+
+        static byte[] AdditiveSun(int size)
+        {
+            var pixels = new byte[size * size * 4];
+            for (var y = 0; y < size; y++)
+            for (var x = 0; x < size; x++)
+            {
+                var p = (y * size + x) * 4;
+                if (x > 0 && x + 1 < size && y > 0 && y + 1 < size)
+                {
+                    pixels[p] = 255;
+                    pixels[p + 1] = 220;
+                    pixels[p + 2] = 120;
+                }
+                pixels[p + 3] = 255;
+            }
+            return Png.Encode(new Image(size, size, pixels));
+        }
 
         static byte[] Solid(int size, byte r, byte g, byte b)
         {

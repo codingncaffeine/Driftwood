@@ -50,6 +50,7 @@ public sealed class SkyRenderer : IDisposable
         uniform vec3 uMoonDir;
         uniform vec3 uSunColor;
         uniform float uStarFade;
+        uniform int uSunAdditiveCanvas;
         uniform sampler2D uSunSprite;
         uniform sampler2D uMoonSprite;
 
@@ -115,7 +116,14 @@ public sealed class SkyRenderer : IDisposable
             color += uSunColor * pow(max(toSun, 0.0), 220.0) * 1.4;
             color += uSunColor * pow(max(toSun, 0.0), 8.0) * 0.10;
             vec4 sun = celestial(uSunSprite, uSunDir, ray, 0.043);
-            color = mix(color, sun.rgb, sun.a);
+            // Older and photoreal packs often store the sun on an opaque-black canvas because the
+            // source renderer treats it as emitted light. Alpha blending that image paints its
+            // rectangular canvas black. Keep ordinary transparent sprites unchanged, but restore
+            // the intended emissive rule for a canvas identified at load time: black adds nothing.
+            if (uSunAdditiveCanvas != 0)
+                color += sun.rgb * sun.a;
+            else
+                color = mix(color, sun.rgb, sun.a);
 
             FragColor = vec4(color, 1.0);
         }
@@ -130,6 +138,7 @@ public sealed class SkyRenderer : IDisposable
     private readonly uint _vbo;
     private readonly Texture2D _sun;
     private readonly Texture2D _moon;
+    private readonly bool _sunAdditiveCanvas;
 
     public unsafe SkyRenderer(GL gl, EnvironmentTextureSet.Result? art = null)
     {
@@ -138,6 +147,7 @@ public sealed class SkyRenderer : IDisposable
         art ??= EnvironmentTextureSet.Build(null);
         _sun = new Texture2D(gl, art.Sun);
         _moon = new Texture2D(gl, art.Moon);
+        _sunAdditiveCanvas = art.SunUsesAdditiveCanvas;
 
         _vao = _gl.GenVertexArray();
         _gl.BindVertexArray(_vao);
@@ -175,6 +185,7 @@ public sealed class SkyRenderer : IDisposable
         // goes out several minutes before it reaches the horizon.
         _shader.SetVec3("uSunColor", Vector3.Max(sky.SunColor, new Vector3(0.45f, 0.30f, 0.18f)));
         _shader.SetFloat("uStarFade", sky.StarFade);
+        _shader.SetInt("uSunAdditiveCanvas", _sunAdditiveCanvas ? 1 : 0);
         _shader.SetInt("uSunSprite", 0);
         _shader.SetInt("uMoonSprite", 1);
         _sun.Bind(TextureUnit.Texture0);
