@@ -1738,6 +1738,12 @@ public static class WorldAudit
                 ? $"{StarterCreatures.All.Count} models, nets sound, assembled, feet on the ground"
                 : $"{ourCreatures.Count} faults: {ourCreatures[0]}");
 
+        var villagerLayerFaults = CreatureLibrary.SelfTestLayeredSkins(out var villagerLayerDetail);
+        Check("resident skins keep every vanilla-style layer", villagerLayerFaults.Count == 0,
+            villagerLayerFaults.Count == 0
+                ? villagerLayerDetail
+                : $"{villagerLayerFaults.Count} faults: {villagerLayerFaults[0]}");
+
         // And what they leave, which is the half the reachability walk cannot check on its own:
         // wool comes off a dead sheep as well as a live one, so a shear gate that had been forgotten
         // entirely would still leave wool reachable. Asked directly, with three things in hand.

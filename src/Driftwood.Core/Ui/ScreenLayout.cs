@@ -72,6 +72,15 @@ public enum ZoneKind
     /// <summary>One command on the compact owned-companion panel.</summary>
     CompanionCommand,
 
+    /// <summary>One item or spell on the resident's side of a trading screen.</summary>
+    TradeOffer,
+
+    /// <summary>One of the explicit quantity, confirm, or close buttons in a trade.</summary>
+    TradeControl,
+
+    /// <summary>A visible player pocket on the inventory side of a trade.</summary>
+    TradeInventory,
+
     /// <summary>The grab strip of a movable magic window; its index is a <see cref="MagicWindowKind"/>.</summary>
     MagicWindowTitle,
 
@@ -110,6 +119,16 @@ public enum MagicWindowKind
 {
     Companion,
     Spellbook,
+}
+
+/// <summary>The real controls along the foot of the two-pane resident shop.</summary>
+public enum TradeControl
+{
+    QuantityDown,
+    QuantityUp,
+    QuantityMax,
+    Confirm,
+    Close,
 }
 
 /// <summary>Which button. The index of a <see cref="ZoneKind.Button"/> zone.</summary>

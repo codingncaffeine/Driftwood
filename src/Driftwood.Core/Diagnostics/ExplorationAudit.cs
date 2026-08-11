@@ -330,6 +330,15 @@ internal static class ExplorationAudit
                 else if (pockets.CountOf(cost.Id) != (cost.Id == result.Id ? offer.ResultCount : 0)
                          || pockets.CountOf(result.Id) != offer.ResultCount)
                     faults.Add($"{profession}'s '{offer.Label}' does not settle both sides exactly");
+
+                var batch = new Inventory(items);
+                batch.Add(new ItemStack(cost.Id, offer.CostCount * 4));
+                if (Trading.Maximum(offer, batch, items) != 4)
+                    faults.Add($"{profession}'s '{offer.Label}' does not expose its payable quantity");
+                else if (!Trading.TryMake(offer, batch, items, 4)
+                         || batch.CountOf(result.Id) != offer.ResultCount * 4
+                         || cost.Id != result.Id && batch.CountOf(cost.Id) != 0)
+                    faults.Add($"{profession}'s '{offer.Label}' does not settle a four-trade batch atomically");
             }
         }
     }

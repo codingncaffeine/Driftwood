@@ -24,8 +24,9 @@ namespace Driftwood.Core.Entities;
 public static class StarterCreatures
 {
     private static CreatureCube Box(
-        float x, float y, float z, float w, float h, float d, int u, int v, bool mirror = false) =>
-        new(new Vector3(x, y, z), new Vector3(w, h, d), u, v, mirror, 0f);
+        float x, float y, float z, float w, float h, float d, int u, int v,
+        bool mirror = false, float inflate = 0f) =>
+        new(new Vector3(x, y, z), new Vector3(w, h, d), u, v, mirror, inflate);
 
     private static CreatureBone Bone(string name, string parent, Vector3 pivot, params CreatureCube[] cubes) =>
         new(name, parent, pivot, Vector3.Zero, Vector3.Zero, cubes);
@@ -275,10 +276,52 @@ public static class StarterCreatures
 
     public static CreatureModel Husk() => Humanoid("husk", 78f);
 
-    public static CreatureModel Shorewright() => Humanoid("shorewright", 0f);
-    public static CreatureModel Forager() => Humanoid("forager", 0f);
-    public static CreatureModel Waykeeper() => Humanoid("waykeeper", 0f);
-    public static CreatureModel Lorekeeper() => Humanoid("lorekeeper", 0f);
+    /// <summary>
+    /// The modern villager net used by vanilla-style base, biome and profession layers.
+    /// </summary>
+    /// <remarks>
+    /// Measured from the installed reference geometry rather than inferred from the PNG. Residents
+    /// used to share <see cref="Humanoid"/>, which is the player/zombie net: the same 64×64 sheet
+    /// dimensions hid that mismatch while every robe, sleeve, hat and nose sampled the wrong
+    /// texels. The outer head and brim stay as separate cutout boxes because profession art owns
+    /// them; the body carries the longer robe and the arms are folded in the recognisable trading
+    /// pose.
+    /// </remarks>
+    private static CreatureModel Villager(string name) => new(
+        name, 64, 64,
+        [
+            Bone("body", "", new Vector3(0f, 24f, 0f),
+                Box(-4f, 12f, -3f, 8f, 12f, 6f, 16, 20),
+                Box(-4f, 6f, -3f, 8f, 18f, 6f, 0, 38, inflate: 0.5f)),
+
+            Bone("head", "body", new Vector3(0f, 24f, 0f),
+                Box(-4f, 24f, -4f, 8f, 10f, 8f, 0, 0)),
+
+            Bone("helmet", "head", new Vector3(0f, 24f, 0f),
+                Box(-4f, 24f, -4f, 8f, 10f, 8f, 32, 0, inflate: 0.5f)),
+
+            Posed("brim", "head", new Vector3(0f, 24f, 0f), new Vector3(-90f, 0f, 0f),
+                Box(-8f, 16f, -6f, 16f, 16f, 1f, 30, 47, inflate: 0.1f)),
+
+            Bone("nose", "head", new Vector3(0f, 26f, 0f),
+                Box(-1f, 23f, -6f, 2f, 4f, 2f, 24, 0)),
+
+            Bone("arms", "body", new Vector3(0f, 22f, 0f),
+                Box(-4f, 16f, -2f, 8f, 4f, 4f, 40, 38),
+                Box(-8f, 16f, -2f, 4f, 8f, 4f, 44, 22),
+                Box(4f, 16f, -2f, 4f, 8f, 4f, 44, 22, mirror: true)),
+
+            Bone("leg0", "body", new Vector3(-2f, 12f, 0f),
+                Box(-4f, 0f, -2f, 4f, 12f, 4f, 0, 22)),
+
+            Bone("leg1", "body", new Vector3(2f, 12f, 0f),
+                Box(0f, 0f, -2f, 4f, 12f, 4f, 0, 22, mirror: true)),
+        ]);
+
+    public static CreatureModel Shorewright() => Villager("shorewright");
+    public static CreatureModel Forager() => Villager("forager");
+    public static CreatureModel Waykeeper() => Villager("waykeeper");
+    public static CreatureModel Lorekeeper() => Villager("lorekeeper");
     public static CreatureModel StormSentinel() => Humanoid("storm_sentinel", 58f);
     public static CreatureModel Starwarden() => Humanoid("starwarden", 36f);
 

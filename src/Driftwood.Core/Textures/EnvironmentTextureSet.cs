@@ -5,7 +5,7 @@ public static class EnvironmentTextureSet
 {
     public sealed record Result(
         Image Sun, Image Moon, Image Rain, Image Snow,
-        bool SunUsesAdditiveCanvas,
+        bool SunUsesAdditiveCanvas, bool MoonUsesAdditiveCanvas,
         bool SunFromPack, bool MoonFromPack, bool RainFromPack, bool SnowFromPack,
         IReadOnlyList<string> Sources)
     {
@@ -29,12 +29,13 @@ public static class EnvironmentTextureSet
             ["textures/environment/snow.png", "textures/weather/snow.png"],
             Snow(size), sources, out var snowPack);
         return new Result(
-            sun, moon, rain, snow, UsesAdditiveSunCanvas(sun),
+            sun, moon, rain, snow,
+            UsesAdditiveCelestialCanvas(sun), UsesAdditiveCelestialCanvas(moon),
             sunPack, moonPack, rainPack, snowPack, sources);
     }
 
     /// <summary>
-    /// True when a sun image uses the older emissive convention: opaque black round the artwork
+    /// True when a celestial image uses the older emissive convention: opaque black round the artwork
     /// means "add no light", not "paint a black rectangle over the sky".
     /// </summary>
     /// <remarks>
@@ -44,7 +45,7 @@ public static class EnvironmentTextureSet
     /// packs behave identically and lets the shader retain ordinary alpha compositing for modern
     /// transparent sprites.
     /// </remarks>
-    private static bool UsesAdditiveSunCanvas(Image image)
+    private static bool UsesAdditiveCelestialCanvas(Image image)
     {
         var border = 0;
         var opaqueBlack = 0;
@@ -219,6 +220,8 @@ public static class EnvironmentTextureSet
         var result = Build(null, 32);
         if (result.SunUsesAdditiveCanvas)
             faults.Add("the transparent generated sun was mistaken for an opaque-black additive canvas");
+        if (result.MoonUsesAdditiveCanvas)
+            faults.Add("the transparent generated moon was mistaken for an opaque-black additive canvas");
         foreach (var (name, image) in new[]
                  {
                      ("sun", result.Sun), ("moon", result.Moon),
@@ -241,15 +244,19 @@ public static class EnvironmentTextureSet
             File.WriteAllBytes(Path.Combine(environment, "rain.png"), Solid(2, 30, 90, 220));
             File.WriteAllBytes(Path.Combine(environment, "snow.png"), Solid(2, 210, 225, 250));
 
-            // Four by two phases. Only the red first phase should reach the runtime moon sprite.
+            // Four by two phases. Only the first phase should reach the runtime moon sprite. It is
+            // deliberately painted on opaque black, like several real high-resolution packs, so
+            // the compositor must treat that canvas as emitted light rather than a black billboard.
             var phases = new byte[8 * 4 * 4];
             for (var y = 0; y < 4; y++)
             for (var x = 0; x < 8; x++)
             {
                 var p = (y * 8 + x) * 4;
-                phases[p] = x < 2 && y < 2 ? (byte)230 : (byte)20;
-                phases[p + 1] = 20;
-                phases[p + 2] = x < 2 && y < 2 ? (byte)30 : (byte)230;
+                var firstPhaseDisc = x == 1 && y == 1;
+                var laterPhase = x >= 2 || y >= 2;
+                phases[p] = firstPhaseDisc ? (byte)230 : laterPhase ? (byte)20 : (byte)0;
+                phases[p + 1] = firstPhaseDisc ? (byte)20 : (byte)0;
+                phases[p + 2] = firstPhaseDisc ? (byte)30 : laterPhase ? (byte)230 : (byte)0;
                 phases[p + 3] = 255;
             }
             File.WriteAllBytes(Path.Combine(environment, "moon_phases.png"),
@@ -259,7 +266,10 @@ public static class EnvironmentTextureSet
             if (packed.FromPack != 4) faults.Add($"a Java environment pack supplied {packed.FromPack} of 4 sprites");
             if (!packed.SunUsesAdditiveCanvas)
                 faults.Add("an opaque-black sun canvas was not routed to emissive compositing");
-            if (packed.Moon.Pixels[0] < 200 || packed.Moon.Pixels[2] > 60)
+            if (!packed.MoonUsesAdditiveCanvas)
+                faults.Add("an opaque-black moon canvas was not routed to emissive compositing");
+            var moonCentre = ((16 / 2) * 16 + 16 / 2) * 4;
+            if (packed.Moon.Pixels[moonCentre] < 200 || packed.Moon.Pixels[moonCentre + 2] > 60)
                 faults.Add("the moon renderer squeezed the whole phase sheet instead of cropping phase zero");
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
@@ -272,7 +282,7 @@ public static class EnvironmentTextureSet
             catch (IOException) { }
         }
 
-        detail = "sun, moon, rain and snow have generated fallbacks; transparent and opaque-black emissive suns composite without a billboard square, and a Java moon sheet is cropped";
+        detail = "sun, moon, rain and snow have generated fallbacks; transparent and opaque-black celestial canvases composite without billboard squares, and a Java moon sheet is cropped";
         return faults;
 
         static byte[] AdditiveSun(int size)

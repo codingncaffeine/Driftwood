@@ -51,6 +51,7 @@ public sealed class SkyRenderer : IDisposable
         uniform vec3 uSunColor;
         uniform float uStarFade;
         uniform int uSunAdditiveCanvas;
+        uniform int uMoonAdditiveCanvas;
         uniform sampler2D uSunSprite;
         uniform sampler2D uMoonSprite;
 
@@ -109,7 +110,10 @@ public sealed class SkyRenderer : IDisposable
 
             // The moon first, so the sun paints over it on the rare mornings they share the sky.
             vec4 moon = celestial(uMoonSprite, uMoonDir, ray, 0.052);
-            color = mix(color, moon.rgb, moon.a * uStarFade);
+            if (uMoonAdditiveCanvas != 0)
+                color += moon.rgb * moon.a * uStarFade;
+            else
+                color = mix(color, moon.rgb, moon.a * uStarFade);
 
             // The sun: a broad glow that lights the whole quarter of the sky it is in, then the disc.
             float toSun = dot(ray, uSunDir);
@@ -139,6 +143,7 @@ public sealed class SkyRenderer : IDisposable
     private readonly Texture2D _sun;
     private readonly Texture2D _moon;
     private readonly bool _sunAdditiveCanvas;
+    private readonly bool _moonAdditiveCanvas;
 
     public unsafe SkyRenderer(GL gl, EnvironmentTextureSet.Result? art = null)
     {
@@ -148,6 +153,7 @@ public sealed class SkyRenderer : IDisposable
         _sun = new Texture2D(gl, art.Sun);
         _moon = new Texture2D(gl, art.Moon);
         _sunAdditiveCanvas = art.SunUsesAdditiveCanvas;
+        _moonAdditiveCanvas = art.MoonUsesAdditiveCanvas;
 
         _vao = _gl.GenVertexArray();
         _gl.BindVertexArray(_vao);
@@ -186,6 +192,7 @@ public sealed class SkyRenderer : IDisposable
         _shader.SetVec3("uSunColor", Vector3.Max(sky.SunColor, new Vector3(0.45f, 0.30f, 0.18f)));
         _shader.SetFloat("uStarFade", sky.StarFade);
         _shader.SetInt("uSunAdditiveCanvas", _sunAdditiveCanvas ? 1 : 0);
+        _shader.SetInt("uMoonAdditiveCanvas", _moonAdditiveCanvas ? 1 : 0);
         _shader.SetInt("uSunSprite", 0);
         _shader.SetInt("uMoonSprite", 1);
         _sun.Bind(TextureUnit.Texture0);

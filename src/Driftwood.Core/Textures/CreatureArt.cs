@@ -233,6 +233,8 @@ public static class CreatureArt
         "comb" => Part.Horn,
         "mouth" => Part.Muzzle,
         "nose" => Part.Muzzle,
+        "helmet" => Part.Shell,
+        "brim" => Part.Shell,
 
         // ⛔ The slime's shell. Left entirely unpainted — transparent texels are discarded by the
         // cutout shader, which is the only honest way to draw a translucent thing without blending.

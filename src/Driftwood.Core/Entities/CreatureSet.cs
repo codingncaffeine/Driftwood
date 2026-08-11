@@ -150,8 +150,8 @@ public static class CreatureSet
         new("husk", "husk", CreatureFamily.Hostile, "zombie.husk",
             ["textures/entity/zombie/husk.png"]),
 
-        // P14 residents share the established humanoid net. Pack paths are observational bridges;
-        // Driftwood ships its own geometry and paint for all five rows.
+        // P14 residents use the folded-arm villager net. Pack paths are observational bridges;
+        // Driftwood ships complete geometry and paint when a pack lacks the layered base art.
         new("shorewright", "shorewright", CreatureFamily.Inhabitant, "villager",
             ["textures/entity/villager/profession/fisherman.png", "textures/entity/villager/villager.png"]),
         new("forager", "forager", CreatureFamily.Inhabitant, "villager",

@@ -39,20 +39,58 @@ public static class Trading
     public static IEnumerable<TradeOffer> All => Offers.Values.SelectMany(one => one);
 
     public static bool CanPay(TradeOffer offer, Inventory inventory, ItemRegistry items) =>
-        items.TryByName(offer.Cost, out var cost)
-        && items.TryByName(offer.Result, out var result)
-        && inventory.CountOf(cost.Id) >= offer.CostCount
-        && inventory.CanAdd(new ItemStack(result.Id, offer.ResultCount));
+        CanPay(offer, inventory, items, 1);
 
-    public static bool TryMake(TradeOffer offer, Inventory inventory, ItemRegistry items)
+    public static bool CanPay(
+        TradeOffer offer, Inventory inventory, ItemRegistry items, int quantity)
     {
-        if (!CanPay(offer, inventory, items)) return false;
+        if (quantity <= 0
+            || !items.TryByName(offer.Cost, out var cost)
+            || !items.TryByName(offer.Result, out var result)) return false;
+
+        var costCount = (long)offer.CostCount * quantity;
+        var resultCount = (long)offer.ResultCount * quantity;
+        return costCount <= int.MaxValue
+            && resultCount <= int.MaxValue
+            && inventory.CountOf(cost.Id) >= costCount
+            && inventory.CanAdd(new ItemStack(result.Id, (int)resultCount));
+    }
+
+    /// <summary>How many copies of one listing fit both the player's payment and pockets.</summary>
+    public static int Maximum(TradeOffer offer, Inventory inventory, ItemRegistry items)
+    {
+        if (!items.TryByName(offer.Cost, out var cost) || offer.CostCount <= 0) return 0;
+        var high = inventory.CountOf(cost.Id) / offer.CostCount;
+        var low = 0;
+
+        // Affordability is monotonic, so a binary search also handles a nearly full inventory
+        // without attempting thousands of progressively larger temporary stacks.
+        while (low < high)
+        {
+            var middle = low + (high - low + 1) / 2;
+            if (CanPay(offer, inventory, items, middle)) low = middle;
+            else high = middle - 1;
+        }
+
+        return low;
+    }
+
+    public static bool TryMake(TradeOffer offer, Inventory inventory, ItemRegistry items) =>
+        TryMake(offer, inventory, items, 1);
+
+    public static bool TryMake(
+        TradeOffer offer, Inventory inventory, ItemRegistry items, int quantity)
+    {
+        if (!CanPay(offer, inventory, items, quantity)) return false;
         var cost = items.ByName(offer.Cost);
         var result = items.ByName(offer.Result);
-        if (inventory.Take(cost.Id, offer.CostCount) != offer.CostCount)
+        var costCount = checked(offer.CostCount * quantity);
+        var resultCount = checked(offer.ResultCount * quantity);
+        if (inventory.Take(cost.Id, costCount) != costCount)
             throw new InvalidOperationException("a payable trade lost its cost before settlement");
-        var left = inventory.Add(new ItemStack(result.Id, offer.ResultCount));
+        var left = inventory.Add(new ItemStack(result.Id, resultCount));
         if (!left.IsEmpty) throw new InvalidOperationException("a preflighted trade did not fit");
         return true;
     }
+
 }

@@ -158,6 +158,11 @@ public readonly record struct MenuRow(
     int Icon = -1, bool NarrowOnly = false, MenuControl Control = MenuControl.Button,
     float ControlAmount = 0f);
 
+/// <summary>One complete merchant listing, already phrased by the gameplay side.</summary>
+public readonly record struct TradeListing(
+    string Label, string Category, string Cost, string Result, string Note,
+    int CostIcon, int ResultIcon, bool Affordable, bool Owned = false, bool Prepared = false);
+
 /// <summary>
 /// Everything the overlay needs to know about the screen the player has open.
 /// </summary>
@@ -312,6 +317,31 @@ public sealed class HudScreen
 
     /// <summary>The lines of whichever settings tab is open.</summary>
     public readonly List<MenuRow> Rows = [];
+
+    /// <summary>The two-pane resident shop's live catalogue and transaction state.</summary>
+    public readonly List<TradeListing> TradeListings = [];
+
+    public string TradePartner = "trader";
+
+    public string TradeProfession = "resident";
+
+    public int TradeQuantity = 1;
+
+    public int TradeMaximum = 1;
+
+    public string TradeVerb = "trade";
+
+    public string TradeBalance = "";
+
+    public bool TradeUsesQuantity = true;
+
+    public int TradeVisibleOffers;
+
+    public int TradeButtonsDrawn;
+
+    public Vector4 TradeMerchantBounds;
+
+    public Vector4 TradeInventoryBounds;
 
     /// <summary>Which recipe or row is picked out.</summary>
     public int Selected;
@@ -758,6 +788,10 @@ public sealed class HudRenderer : IDisposable
         screen.SpellbookPanelBounds = Vector4.Zero;
         screen.MagicWindowAccentsDrawn = 0;
         screen.MagicWindowContextBounds = Vector4.Zero;
+        screen.TradeVisibleOffers = 0;
+        screen.TradeButtonsDrawn = 0;
+        screen.TradeMerchantBounds = Vector4.Zero;
+        screen.TradeInventoryBounds = Vector4.Zero;
 
         // A whole number of screen pixels per layout unit, never a half. Everything here is pixel
         // art — a font drawn at twice its authored size, two-pixel bevels, hard edges — and all of
@@ -812,7 +846,7 @@ public sealed class HudRenderer : IDisposable
         // the bottom of the world would be the same nine slots drawn twice, in two different sizes.
         // ⚠ And nobody is carrying anything before they have started: an empty bar under the menu
         // reads as a game somebody is already losing at.
-        if (!screen.IsContainer && screen.Kind != HudScreenKind.Start)
+        if (!screen.IsContainer && screen.Kind is not (HudScreenKind.Start or HudScreenKind.Trade))
         {
             Hotbar(catalogue, inventory, w, h);
             Offhand(catalogue, equipment, vitals, w, h);
@@ -1476,6 +1510,13 @@ public sealed class HudRenderer : IDisposable
             return;
         }
 
+        if (screen.Kind == HudScreenKind.Trade)
+        {
+            TradeScreen(catalogue, inventory, screen, layout, w, h);
+            Footer(screen, w, h);
+            return;
+        }
+
         if (screen.Kind == HudScreenKind.Player && screen.Tab == (int)PlayerTab.Character)
         {
             CharacterScreen(catalogue, inventory, equipment, screen, layout, w, h);
@@ -1522,6 +1563,262 @@ public sealed class HudRenderer : IDisposable
         Rows(screen, layout, left, top + 22f, panel, h);
 
         Footer(screen, w, h);
+    }
+
+    /// <summary>A resident's stock and the player's pockets, side by side with explicit controls.</summary>
+    private void TradeScreen(
+        ItemRegistry catalogue, Inventory inventory, HudScreen screen, ScreenLayout layout,
+        float w, float h)
+    {
+        const float Gap = 10f;
+        const float Row = 25f;
+        const float Margin = 8f;
+
+        var totalWidth = MathF.Min(552f, MathF.Max(360f, w - 24f));
+        totalWidth = MathF.Min(totalWidth, w - 8f);
+        var inventoryWidth = Math.Clamp(totalWidth * 0.35f, 168f, 184f);
+        var merchantWidth = totalWidth - inventoryWidth - Gap;
+        // Footer text begins at h-46. Reserve a full strip above it so the bottom row of real
+        // buttons never shares pixels with the keyboard hint (the first pass did at 900p/2x).
+        var panelBottom = h - 58f;
+        var panelHeight = Math.Clamp(panelBottom - 12f, 220f, 380f);
+        panelHeight = MathF.Min(panelHeight, h - 64f);
+        var left = MathF.Round((w - totalWidth) * 0.5f);
+        var top = MathF.Max(6f, MathF.Round((panelBottom - panelHeight) * 0.5f));
+        var inventoryLeft = left + merchantWidth + Gap;
+
+        Frame(left, top, merchantWidth, panelHeight);
+        Frame(inventoryLeft, top, inventoryWidth, panelHeight);
+        screen.TradeMerchantBounds = new Vector4(left, top, merchantWidth, panelHeight);
+        screen.TradeInventoryBounds = new Vector4(inventoryLeft, top, inventoryWidth, panelHeight);
+
+        Text(FitText($"{screen.TradePartner}'s inventory", merchantWidth - 16f, 9f),
+            left + Margin, top + 8f, 9f, Highlight);
+        Text(FitText(screen.TradeProfession, merchantWidth - 16f, 7f),
+            left + Margin, top + 21f, 7f, InkFaint);
+        Rect(_plain, left + Margin, top + 32f, merchantWidth - Margin * 2f, 1f,
+            PanelDark with { W = 0.8f });
+
+        Text("my inventory", inventoryLeft + Margin, top + 8f, 9f, Highlight);
+        Text(FitText(screen.TradeBalance, inventoryWidth - Margin * 2f, 7f),
+            inventoryLeft + Margin, top + 22f, 7f, InkFaint);
+        Rect(_plain, inventoryLeft + Margin, top + 34f, inventoryWidth - Margin * 2f, 1f,
+            PanelDark with { W = 0.8f });
+
+        // The fixed detail and control strip leave the rest of the merchant pane to stock. Long
+        // spell catalogues scroll here; ordinary residents show all three offers without furniture.
+        var listTop = top + 39f;
+        var controlsY = top + panelHeight - 27f;
+        var detailHeight = 70f;
+        var detailTop = controlsY - detailHeight - 5f;
+        var listHeight = MathF.Max(Row, detailTop - listTop - 5f);
+        var visible = Math.Max(1, (int)MathF.Floor(listHeight / Row));
+        visible = Math.Min(visible, Math.Max(1, screen.TradeListings.Count));
+        screen.TradeVisibleOffers = visible;
+        screen.Scroll = Math.Clamp(
+            screen.Scroll, 0, Math.Max(0, screen.TradeListings.Count - visible));
+
+        var needsScroll = screen.TradeListings.Count > visible;
+        var rowWidth = merchantWidth - Margin * 2f - (needsScroll ? 9f : 0f);
+        if (screen.TradeListings.Count == 0)
+        {
+            Bevel(left + Margin, listTop, rowWidth, 36f, raised: false, SlotFill);
+            Text("nothing for sale", left + Margin + 7f, listTop + 8f, 8f, InkDim);
+        }
+        else
+        {
+            var to = Math.Min(screen.TradeListings.Count, screen.Scroll + visible);
+            for (var i = screen.Scroll; i < to; i++)
+            {
+                var listing = screen.TradeListings[i];
+                var y = listTop + (i - screen.Scroll) * Row;
+                var selected = i == screen.Selected;
+                var hot = screen.Hovered is { Kind: ZoneKind.TradeOffer } hover
+                          && hover.Index == i;
+                var usable = listing.Affordable || listing.Owned;
+                var fill = selected
+                    ? new Vector4(0.24f, 0.29f, 0.26f, 0.99f)
+                    : hot ? new Vector4(0.30f, 0.30f, 0.30f, 0.99f)
+                    : SlotFill;
+                Bevel(left + Margin, y, rowWidth, Row - 2f, raised: !selected, fill);
+                if (selected) Select(left + Margin + 1f, y + 1f, rowWidth - 2f, Row - 4f);
+
+                var tint = usable ? Vector4.One : new Vector4(0.42f, 0.42f, 0.42f, 0.82f);
+                if (listing.ResultIcon >= 0)
+                    Rect(_blocks, left + Margin + 4f, y + 3f, 17f, 17f, tint, listing.ResultIcon);
+
+                var textLeft = left + Margin + 25f;
+                Text(FitText(listing.Label, rowWidth - 31f, 8f), textLeft, y + 2f, 8f,
+                    selected ? Highlight : usable ? Ink : InkFaint);
+                var route = $"{listing.Category} · {listing.Cost} > {listing.Result}";
+                Text(FitText(route, rowWidth - 31f, 6f), textLeft, y + 13f, 6f,
+                    listing.Owned ? Picked : usable ? InkDim : InkFaint);
+                layout.Add(ZoneKind.TradeOffer, i, left + Margin, y, rowWidth, Row - 2f);
+            }
+        }
+
+        if (needsScroll)
+            Scrollbar(screen, layout, left + merchantWidth - 12f, listTop, listHeight,
+                screen.Scroll, visible, screen.TradeListings.Count);
+
+        // A fixed comparison card means picking a row never moves the buttons underneath it.
+        Bevel(left + Margin, detailTop, merchantWidth - Margin * 2f, detailHeight,
+            raised: false, new Vector4(0.12f, 0.12f, 0.12f, 0.98f));
+        if ((uint)screen.Selected < (uint)screen.TradeListings.Count)
+        {
+            var listing = screen.TradeListings[screen.Selected];
+            var iconTint = listing.Affordable || listing.Owned
+                ? Vector4.One : new Vector4(0.48f, 0.48f, 0.48f, 0.86f);
+            if (listing.ResultIcon >= 0)
+            {
+                Bevel(left + Margin + 5f, detailTop + 6f, 34f, 34f, raised: false, SlotFill);
+                Rect(_blocks, left + Margin + 9f, detailTop + 10f, 26f, 26f,
+                    iconTint, listing.ResultIcon);
+            }
+            Text(FitText(listing.Label, merchantWidth - 62f, 8f),
+                left + Margin + 45f, detailTop + 6f, 8f, Highlight);
+
+            if (listing.CostIcon >= 0)
+                Rect(_blocks, left + Margin + 45f, detailTop + 18f, 11f, 11f,
+                    iconTint, listing.CostIcon);
+            var route = $"{listing.Cost}  >  {listing.Result}";
+            Text(FitText(route, merchantWidth - 77f, 7f),
+                left + Margin + 59f, detailTop + 20f, 7f,
+                listing.Affordable || listing.Owned ? InkDim : InkFaint);
+
+            var notes = Wrap(listing.Note, merchantWidth - 60f, 6f).Take(3).ToArray();
+            for (var i = 0; i < notes.Length; i++)
+                Text(notes[i], left + Margin + 45f, detailTop + 34f + i * 8f, 6f, InkFaint);
+        }
+
+        // Real buttons: quantity is a stepper, MAX is explicit, and the transaction verb says
+        // whether this listing buys from or sells to the resident. Spell purchases stay singular.
+        var closeWidth = 46f;
+        var closeX = left + merchantWidth - Margin - closeWidth;
+        var confirmWidth = Math.Clamp(merchantWidth * 0.27f, 64f, 92f);
+        var confirmX = closeX - 4f - confirmWidth;
+        var confirmEnabled = screen.TradeMaximum > 0
+                             && !screen.TradeVerb.Equals("owned", StringComparison.Ordinal);
+
+        if (screen.TradeUsesQuantity)
+        {
+            var downX = left + Margin;
+            DrawTradeControl(screen, layout, TradeControl.QuantityDown,
+                "−", downX, controlsY, 21f, 20f, screen.TradeQuantity > 1);
+            Bevel(downX + 24f, controlsY, 30f, 20f, raised: false, SlotFill);
+            TextCentred(screen.TradeQuantity.ToString(), downX + 39f, controlsY + 6f, 8f, Highlight);
+            DrawTradeControl(screen, layout, TradeControl.QuantityUp,
+                "+", downX + 57f, controlsY, 21f, 20f,
+                screen.TradeMaximum > 0 && screen.TradeQuantity < screen.TradeMaximum);
+            DrawTradeControl(screen, layout, TradeControl.QuantityMax,
+                "max", downX + 81f, controlsY, 34f, 20f,
+                screen.TradeMaximum > 0 && screen.TradeQuantity < screen.TradeMaximum);
+        }
+
+        var confirmLabel = screen.TradeVerb.Equals("owned", StringComparison.Ordinal)
+            ? "owned"
+            : screen.TradeUsesQuantity
+                ? $"{screen.TradeVerb} {screen.TradeQuantity}"
+                : screen.TradeVerb;
+        DrawTradeControl(screen, layout, TradeControl.Confirm,
+            confirmLabel, confirmX, controlsY, confirmWidth, 20f, confirmEnabled);
+        DrawTradeControl(screen, layout, TradeControl.Close,
+            "close", closeX, controlsY, closeWidth, 20f, enabled: true);
+
+        DrawTradeInventory(catalogue, inventory, screen, layout,
+            inventoryLeft, top, inventoryWidth, panelHeight);
+    }
+
+    private void DrawTradeControl(
+        HudScreen screen, ScreenLayout layout, TradeControl control, string label,
+        float x, float y, float width, float height, bool enabled)
+    {
+        var hot = enabled && screen.Hovered is { Kind: ZoneKind.TradeControl } over
+                  && over.Index == (int)control;
+        var layer = hot ? GuiTextureSet.Layer.WidgetButtonHighlighted
+            : GuiTextureSet.Layer.WidgetButton;
+        var tint = enabled ? Vector4.One : new Vector4(0.48f, 0.48f, 0.48f, 0.78f);
+        if (HasGui(layer))
+        {
+            NineSlice(_guiUnder, x, y, width, height, layer, 200f, 20f, 4f, tint);
+            // Some packs deliberately make their widget middle almost identical to a container
+            // panel. Keep the pack artwork, but give every transaction control a physical rim so
+            // it still reads as a button instead of footer text floating over the merchant.
+            var top = hot ? PanelDark : enabled ? PanelLight : InkFaint;
+            var bottom = hot ? PanelLight : PanelDark;
+            Rect(_plain, x, y, width, 2f, top);
+            Rect(_plain, x, y, 2f, height, top);
+            Rect(_plain, x, y + height - 2f, width, 2f, bottom);
+            Rect(_plain, x + width - 2f, y, 2f, height, bottom);
+        }
+        else
+            Bevel(x, y, width, height, raised: !hot,
+                enabled ? hot ? PanelLight : PanelFill : new Vector4(0.22f, 0.22f, 0.22f, 0.96f));
+        TextCentred(FitText(label, width - 6f, 7f), x + width * 0.5f, y + 6f, 7f,
+            enabled ? hot ? Highlight : Ink : InkFaint);
+        if (enabled) layout.Add(ZoneKind.TradeControl, (int)control, x, y, width, height);
+        screen.TradeButtonsDrawn++;
+    }
+
+    private void DrawTradeInventory(
+        ItemRegistry catalogue, Inventory inventory, HudScreen screen, ScreenLayout layout,
+        float left, float top, float width, float height)
+    {
+        const float Pitch = 18f;
+        const float Square = 16f;
+        var gridLeft = MathF.Round(left + (width - Inventory.HotbarSlots * Pitch) * 0.5f + 1f);
+        var backpackTop = top + 52f;
+
+        Text("backpack", left + 10f, top + 40f, 7f, InkDim);
+        for (var row = 0; row < 3; row++)
+        for (var column = 0; column < Inventory.HotbarSlots; column++)
+            TradePocket(Inventory.HotbarSlots + row * Inventory.HotbarSlots + column,
+                gridLeft + column * Pitch, backpackTop + row * Pitch);
+
+        var hotbarTop = backpackTop + 72f;
+        Text("hotbar", left + 10f, hotbarTop - 11f, 7f, InkDim);
+        for (var column = 0; column < Inventory.HotbarSlots; column++)
+            TradePocket(column, gridLeft + column * Pitch, hotbarTop);
+
+        var used = inventory.Used;
+        Text($"{used} / {Inventory.Slots} slots used", left + 10f, hotbarTop + 24f, 7f, InkFaint);
+
+        if ((uint)screen.Selected < (uint)screen.TradeListings.Count)
+        {
+            var listing = screen.TradeListings[screen.Selected];
+            var cardTop = MathF.Min(top + height - 91f, hotbarTop + 48f);
+            Bevel(left + 8f, cardTop, width - 16f, 73f, raised: false,
+                new Vector4(0.12f, 0.12f, 0.12f, 0.98f));
+            Text("this trade", left + 14f, cardTop + 7f, 8f, Highlight);
+
+            if (listing.CostIcon >= 0)
+                Rect(_blocks, left + 15f, cardTop + 22f, 18f, 18f, Vector4.One, listing.CostIcon);
+            Text(FitText($"give {listing.Cost}", width - 54f, 7f),
+                left + 39f, cardTop + 26f, 7f,
+                listing.Affordable || listing.Owned ? Ink : InkFaint);
+
+            if (listing.ResultIcon >= 0)
+                Rect(_blocks, left + 15f, cardTop + 45f, 18f, 18f, Vector4.One, listing.ResultIcon);
+            Text(FitText($"get {listing.Result}", width - 54f, 7f),
+                left + 39f, cardTop + 49f, 7f, InkDim);
+        }
+
+        void TradePocket(int slot, float x, float y)
+        {
+            var hot = screen.Hovered is { Kind: ZoneKind.TradeInventory } hover
+                      && hover.Index == slot;
+            Bevel(x - 1f, y - 1f, Pitch, Pitch, raised: false,
+                hot ? new Vector4(0.16f, 0.18f, 0.17f, 0.99f) : SlotFill);
+            var stack = inventory[slot];
+            if (!stack.IsEmpty)
+            {
+                SlotIcon(catalogue, stack, x + 1f, y + 1f, Square - 2f, Vector4.One);
+                if (stack.Count > 1) Number(stack.Count, x + Square, y + 10f, 5f);
+            }
+            if (Inventory.InHotbar(slot) && inventory.Selected == slot)
+                Select(x, y, Square, Square);
+            layout.Add(ZoneKind.TradeInventory, slot, x, y, Square, Square);
+        }
     }
 
     /// <summary>The skin shelf's rows beside a real, rotatable projection of the player model.</summary>
@@ -3412,11 +3709,28 @@ public sealed class HudRenderer : IDisposable
                       || (zone.Index < screen.Payable.Count && screen.Payable[zone.Index]);
         }
 
-        // ⛳ The pockets go in so an unaffordable recipe can say WHAT IS MISSING rather than
-        // restating its whole cost — #46's own line, and the game already knew the answer.
-        var told = Tooltip.For(
-            zone, Contents(inventory, equipment, screen, zone), catalogue, recipe, payable,
-            inventory);
+        TooltipText told;
+        if (zone.Kind == ZoneKind.TradeInventory
+            && (uint)zone.Index < Inventory.Slots)
+        {
+            told = Tooltip.Of(inventory[zone.Index], catalogue);
+        }
+        else if (zone.Kind == ZoneKind.TradeOffer
+                 && (uint)zone.Index < (uint)screen.TradeListings.Count)
+        {
+            var listing = screen.TradeListings[zone.Index];
+            told = new TooltipText(
+                listing.Label,
+                $"{listing.Cost} → {listing.Result} · {listing.Note}");
+        }
+        else
+        {
+            // ⛳ The pockets go in so an unaffordable recipe can say WHAT IS MISSING rather than
+            // restating its whole cost — #46's own line, and the game already knew the answer.
+            told = Tooltip.For(
+                zone, Contents(inventory, equipment, screen, zone), catalogue, recipe, payable,
+                inventory);
+        }
 
         if (told.IsEmpty) return;
 

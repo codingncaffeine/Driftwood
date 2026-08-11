@@ -3111,6 +3111,19 @@ public sealed class ClientHost : IDisposable
 
         switch (at.Value.Kind)
         {
+            case ZoneKind.TradeOffer:
+                if (button == MouseButton.Left) SelectTradeOffer(at.Value.Index);
+                return;
+
+            case ZoneKind.TradeControl:
+                if (button == MouseButton.Left) UseTradeControl((TradeControl)at.Value.Index);
+                return;
+
+            case ZoneKind.TradeInventory:
+                // Visible here so a player can compare both sides without moving their things out
+                // from under the transaction. Inventory rearrangement remains on its own screen.
+                return;
+
             case ZoneKind.Tab:
                 _rebinding = null;
                 _padRebinding = null;
@@ -3252,17 +3265,24 @@ public sealed class ClientHost : IDisposable
     /// <summary>Puts the pointer's share of the track on screen.</summary>
     private void DragScrollbar(Zone track)
     {
-        var lines = ScreenLayout.MenuLines(LayoutHeight);
-        var span = Math.Max(0, _hudScreen.Rows.Count - lines);
+        var lines = _hudScreen.Kind == HudScreenKind.Trade
+            ? Math.Max(1, _hudScreen.TradeVisibleOffers)
+            : ScreenLayout.MenuLines(LayoutHeight);
+        var count = _hudScreen.Kind == HudScreenKind.Trade
+            ? _hudScreen.TradeListings.Count
+            : _hudScreen.Rows.Count;
+        var span = Math.Max(0, count - lines);
         if (span == 0) return;
 
         // Measured from the middle of where the thumb would be rather than from its top, so the
         // list does not jump by half a thumb the moment the button goes down on it.
-        var thumb = MathF.Max(10f, MathF.Round(track.H * lines / _hudScreen.Rows.Count));
+        var thumb = MathF.Max(10f, MathF.Round(track.H * lines / count));
         var travel = MathF.Max(1f, track.H - thumb - 4f);
         var along = (_hudScreen.Pointer.Y - track.Y - thumb * 0.5f) / travel;
 
-        ScrollRows((int)MathF.Round(along * span));
+        var to = (int)MathF.Round(along * span);
+        if (_hudScreen.Kind == HudScreenKind.Trade) ScrollTradeRows(to);
+        else ScrollRows(to);
     }
 
     /// <summary>One click on one square, whatever that square is a square of.</summary>
@@ -3735,6 +3755,12 @@ public sealed class ClientHost : IDisposable
         }
 
         _hudScreen.Selected = at;
+        if (_hudScreen.Kind == HudScreenKind.Trade)
+        {
+            _hudScreen.TradeQuantity = 1;
+            RefreshTradeTransaction();
+            RefreshScreen();
+        }
         if (OnTab(GameTab.Packs) && _hudScreen.Rows[at].Pane == MenuPane.Detail)
             _hudScreen.PackDetailsOpen = true;
         ShowSelectedRow();
@@ -3981,13 +4007,125 @@ public sealed class ClientHost : IDisposable
         _hudScreen.Kind = HudScreenKind.Trade;
         _hudScreen.TabNames = [];
         _hudScreen.Tab = 0;
-        _hudScreen.Selected = 1;
+        _hudScreen.Selected = 0;
         _hudScreen.Scroll = 0;
+        _hudScreen.TradeQuantity = 1;
         _hudScreen.Grid = null;
         _laidOut = null;
         StopHands();
         TakeThePointer();
         RefreshScreen();
+    }
+
+    /// <summary>Recomputes the selected listing's verb, quantity ceiling and enabled state.</summary>
+    private void RefreshTradeTransaction()
+    {
+        _hudScreen.TradeQuantity = Math.Max(1, _hudScreen.TradeQuantity);
+        _hudScreen.TradeMaximum = 0;
+        _hudScreen.TradeVerb = "trade";
+
+        if (_tradingWith is not { } resident
+            || (uint)_hudScreen.Selected >= (uint)_hudScreen.TradeListings.Count) return;
+
+        if (resident.Profession == Profession.Lorekeeper)
+        {
+            var spell = SpellCatalogue.All[_hudScreen.Selected];
+            var learned = _character.Learned.Contains(spell.StableName);
+            _hudScreen.TradeQuantity = 1;
+            _hudScreen.TradeMaximum = !learned && _character.Coins >= spell.Price ? 1 : 0;
+            _hudScreen.TradeVerb = learned ? "owned" : "learn";
+            return;
+        }
+
+        var offers = Trading.For(resident.Profession);
+        if ((uint)_hudScreen.Selected >= (uint)offers.Count) return;
+        var offer = offers[_hudScreen.Selected];
+        _hudScreen.TradeMaximum = Trading.Maximum(offer, _inventory, _items);
+        _hudScreen.TradeQuantity = Math.Clamp(
+            _hudScreen.TradeQuantity, 1, Math.Max(1, _hudScreen.TradeMaximum));
+        _hudScreen.TradeVerb = offer.Result.Equals("trade_token", StringComparison.Ordinal)
+            ? "sell" : "buy";
+    }
+
+    private void SelectTradeOffer(int index)
+    {
+        if (_hudScreen.TradeListings.Count == 0) return;
+        _hudScreen.Selected = Math.Clamp(index, 0, _hudScreen.TradeListings.Count - 1);
+        _hudScreen.TradeQuantity = 1;
+        RefreshTradeTransaction();
+        ShowSelectedRow();
+        RefreshScreen();
+    }
+
+    private void ChangeTradeQuantity(int by, bool maximum = false)
+    {
+        if (!_hudScreen.TradeUsesQuantity) return;
+        RefreshTradeTransaction();
+        if (_hudScreen.TradeMaximum <= 0)
+        {
+            _hudScreen.TradeQuantity = 1;
+            RefreshScreen();
+            return;
+        }
+
+        _hudScreen.TradeQuantity = maximum
+            ? _hudScreen.TradeMaximum
+            : Math.Clamp(_hudScreen.TradeQuantity + Math.Sign(by), 1, _hudScreen.TradeMaximum);
+        RefreshScreen();
+    }
+
+    private void ExecuteTrade()
+    {
+        if (_tradingWith is not { } resident) { CloseScreen(); return; }
+        if ((uint)_hudScreen.Selected >= (uint)_hudScreen.TradeListings.Count) return;
+
+        if (resident.Profession == Profession.Lorekeeper)
+        {
+            var spell = SpellCatalogue.All[_hudScreen.Selected];
+            var purchase = _character.Buy(spell.StableName, $"spell:{spell.StableName}");
+            if (purchase.Accepted)
+            {
+                PlayMagicUi(MagicSounds.Purchase, 0.52f);
+                PlayMagicUi(MagicSounds.Learn, 0.42f, 1.06f);
+                NoticeMagic($"learned {spell.DisplayName}", SpellIconAtlas.LayerFor(spell.Particle),
+                    $"paid {CharacterProgression.CoinsText(purchase.Paid)}");
+            }
+            else
+            {
+                PlayMagicUi(MagicSounds.PurchaseRefused, 0.46f);
+                NoticeMagic($"cannot learn {spell.DisplayName}", SpellIconAtlas.LayerFor(spell.Particle),
+                    purchase.Reason);
+            }
+            RefreshScreen();
+            return;
+        }
+
+        var offers = Trading.For(resident.Profession);
+        if ((uint)_hudScreen.Selected >= (uint)offers.Count) return;
+        var offer = offers[_hudScreen.Selected];
+        var quantity = Math.Max(1, _hudScreen.TradeQuantity);
+        if (!Trading.TryMake(offer, _inventory, _items, quantity))
+        {
+            Notice("that trade cannot be paid", _items.ByName(offer.Cost));
+        }
+        else
+        {
+            var result = _items.ByName(offer.Result);
+            Notice($"{_hudScreen.TradeVerb} complete · {quantity}", result);
+        }
+        RefreshScreen();
+    }
+
+    private void UseTradeControl(TradeControl control)
+    {
+        switch (control)
+        {
+            case TradeControl.QuantityDown: ChangeTradeQuantity(-1); break;
+            case TradeControl.QuantityUp: ChangeTradeQuantity(1); break;
+            case TradeControl.QuantityMax: ChangeTradeQuantity(1, maximum: true); break;
+            case TradeControl.Confirm: ExecuteTrade(); break;
+            case TradeControl.Close: CloseScreen(); break;
+        }
     }
 
     /// <summary>A chest: twenty seven slots, and the player's own pockets under them.</summary>
@@ -4415,6 +4553,10 @@ public sealed class ClientHost : IDisposable
                 HudScreenKind.Start => $"left stick or d-pad picks, {_controller.Label(ControllerControl.South)} chooses",
                 HudScreenKind.Player when _hudScreen.Tab == (int)PlayerTab.Map =>
                     $"left stick pans{tabs}, {_controller.Label(ControllerControl.East)} closes",
+                HudScreenKind.Trade =>
+                    $"up and down pick, left and right set quantity, "
+                    + $"{_controller.Label(ControllerControl.South)} confirms, "
+                    + $"{_controller.Label(ControllerControl.East)} closes",
                 _ when OnTab(GameTab.Controller) =>
                     $"left stick or d-pad picks and changes, {_controller.Label(ControllerControl.South)} listens"
                     + $"{tabs}, {_controller.Label(ControllerControl.East)} closes",
@@ -4447,6 +4589,8 @@ public sealed class ClientHost : IDisposable
             HudScreenKind.Player when _hudScreen.Tab == (int)PlayerTab.Items =>
                 $"click moves items, drag the model to turn it, h opens the handbook, "
                 + $"tab changes tab, {close} closes",
+            HudScreenKind.Trade =>
+                $"click an offer, use − / + / max, then buy or sell; arrows and enter work too, {close} closes",
             HudScreenKind.Player =>
                 $"arrows pick, enter chooses, wheel scrolls, tab changes tab, {close} closes",
             _ when OnTab(GameTab.Controls) =>
@@ -4539,6 +4683,7 @@ public sealed class ClientHost : IDisposable
     private void BuildRows()
     {
         _hudScreen.Rows.Clear();
+        _hudScreen.TradeListings.Clear();
 
         if (_hudScreen.Kind == HudScreenKind.Start)
         {
@@ -4566,53 +4711,67 @@ public sealed class ClientHost : IDisposable
         {
             if (_tradingWith is not { } resident)
             {
-                _hudScreen.Rows.Add(new MenuRow("the trader has gone", Heading: true));
+                _hudScreen.TradePartner = "the trader has gone";
+                _hudScreen.TradeProfession = "";
+                _hudScreen.TradeBalance = "";
+                _hudScreen.TradeMaximum = 0;
                 return;
             }
 
-            _hudScreen.Rows.Add(new MenuRow(
-                $"{resident.Name} · {resident.Profession.ToString().ToLowerInvariant()}", Heading: true));
+            _hudScreen.TradePartner = resident.Name;
+            _hudScreen.TradeProfession = resident.Profession.ToString().ToLowerInvariant();
 
             if (resident.Profession == Profession.Lorekeeper)
             {
-                _hudScreen.Rows.Add(new MenuRow(
-                    "your gold", CharacterProgression.CoinsText(_character.Coins),
-                    Note: "every spell is available now; rank improves automatically at levels 6, 11 and 16"));
-                foreach (var group in Enum.GetValues<SpellGroup>())
+                _hudScreen.TradeUsesQuantity = false;
+                _hudScreen.TradeBalance = $"your gold · {CharacterProgression.CoinsText(_character.Coins)}";
+                foreach (var spell in SpellCatalogue.All)
                 {
-                    _hudScreen.Rows.Add(new MenuRow(SpellGroupName(group), Heading: true));
-                    foreach (var spell in SpellCatalogue.All.Where(one => one.Group == group))
-                    {
-                        var learned = _character.Learned.Contains(spell.StableName);
-                        var prepared = _character.IsPrepared(spell.StableName);
-                        _hudScreen.Rows.Add(new MenuRow(
-                            spell.DisplayName,
-                            learned
-                                ? $"{(prepared ? "prepared" : "learned")} · {CharacterProgression.RankName(_character.Rank)}"
-                                : CharacterProgression.CoinsText(spell.Price),
-                            Note: learned
-                                ? $"{spell.Description} {SpellNumbers(spell)}"
-                                : $"{spell.Description} Enter buys it once. {SpellNumbers(spell)}",
-                            Icon: SpellIconAtlas.LayerFor(spell.Particle)));
-                    }
+                    var learned = _character.Learned.Contains(spell.StableName);
+                    var prepared = _character.IsPrepared(spell.StableName);
+                    var cost = learned ? "already learned" : CharacterProgression.CoinsText(spell.Price);
+                    var result = learned
+                        ? $"{(prepared ? "prepared" : "in spellbook")} · {CharacterProgression.RankName(_character.Rank)}"
+                        : "learn permanently";
+                    var note = $"{spell.Description} {SpellNumbers(spell)}";
+                    _hudScreen.TradeListings.Add(new TradeListing(
+                        spell.DisplayName, SpellGroupName(spell.Group), cost, result, note,
+                        StarterBlocks.LayerGoldIngot, SpellIconAtlas.LayerFor(spell.Particle),
+                        !learned && _character.Coins >= spell.Price, learned, prepared));
+                    _hudScreen.Rows.Add(new MenuRow(
+                        spell.DisplayName, cost, Note: note,
+                        Icon: SpellIconAtlas.LayerFor(spell.Particle)));
                 }
-                _hudScreen.Rows.Add(new MenuRow("done", "close trading"));
-                return;
+            }
+            else
+            {
+                _hudScreen.TradeUsesQuantity = true;
+                var token = _items.ByName("trade_token");
+                _hudScreen.TradeBalance = $"trade tokens · {_inventory.CountOf(token.Id)}";
+                foreach (var offer in Trading.For(resident.Profession))
+                {
+                    var cost = _items.ByName(offer.Cost);
+                    var result = _items.ByName(offer.Result);
+                    var have = _inventory.CountOf(cost.Id);
+                    var payable = Trading.CanPay(offer, _inventory, _items);
+                    var note = payable
+                        ? $"you have {have} {cost.Label}"
+                        : $"need {Math.Max(0, offer.CostCount - have)} more {cost.Label}";
+                    _hudScreen.TradeListings.Add(new TradeListing(
+                        offer.Label, _hudScreen.TradeProfession,
+                        $"{offer.CostCount} {cost.Label}",
+                        $"{offer.ResultCount} {result.Label}", note,
+                        cost.IconLayer, result.IconLayer, payable));
+                    _hudScreen.Rows.Add(new MenuRow(
+                        offer.Label,
+                        $"{offer.CostCount} {cost.Label} → {offer.ResultCount} {result.Label}",
+                        Note: note, Icon: result.IconLayer));
+                }
             }
 
-            foreach (var offer in Trading.For(resident.Profession))
-            {
-                var cost = _items.ByName(offer.Cost);
-                var result = _items.ByName(offer.Result);
-                var have = _inventory.CountOf(cost.Id);
-                var payable = Trading.CanPay(offer, _inventory, _items);
-                _hudScreen.Rows.Add(new MenuRow(
-                    offer.Label,
-                    $"{offer.CostCount} {cost.Label} → {offer.ResultCount} {result.Label}",
-                    Note: payable ? $"you have {have}; enter trades" : $"you have {have}; cannot trade yet",
-                    Icon: result.IconLayer));
-            }
-            _hudScreen.Rows.Add(new MenuRow("done", "close trading"));
+            _hudScreen.Selected = Math.Clamp(
+                _hudScreen.Selected, 0, Math.Max(0, _hudScreen.TradeListings.Count - 1));
+            RefreshTradeTransaction();
             return;
         }
 
@@ -5109,7 +5268,11 @@ public sealed class ClientHost : IDisposable
 
         var label = _hudScreen.Rows[_hudScreen.Selected].Label;
 
-        if (_hudScreen.Kind == HudScreenKind.Trade) return;
+        if (_hudScreen.Kind == HudScreenKind.Trade)
+        {
+            ChangeTradeQuantity(by);
+            return;
+        }
 
         if (_hudScreen.Kind == HudScreenKind.Player)
         {
@@ -7989,46 +8152,7 @@ public sealed class ClientHost : IDisposable
 
         if (_hudScreen.Kind == HudScreenKind.Trade)
         {
-            if (_tradingWith is not { } resident) { CloseScreen(); return; }
-            if (resident.Profession == Profession.Lorekeeper)
-            {
-                if (_hudScreen.Selected < 0 || _hudScreen.Selected >= _hudScreen.Rows.Count) return;
-                var selected = _hudScreen.Rows[_hudScreen.Selected];
-                if (selected.Label == "done") { CloseScreen(); return; }
-                var spell = SpellCatalogue.All.FirstOrDefault(one => one.DisplayName == selected.Label);
-                if (spell is null) return;
-
-                var purchase = _character.Buy(spell.StableName, $"spell:{spell.StableName}");
-                if (purchase.Accepted)
-                {
-                    PlayMagicUi(MagicSounds.Purchase, 0.52f);
-                    PlayMagicUi(MagicSounds.Learn, 0.42f, 1.06f);
-                    NoticeMagic($"learned {spell.DisplayName}", SpellIconAtlas.LayerFor(spell.Particle),
-                        $"paid {CharacterProgression.CoinsText(purchase.Paid)}");
-                }
-                else
-                {
-                    PlayMagicUi(MagicSounds.PurchaseRefused, 0.46f);
-                    NoticeMagic($"cannot learn {spell.DisplayName}", SpellIconAtlas.LayerFor(spell.Particle),
-                        purchase.Reason);
-                }
-                RefreshScreen();
-                return;
-            }
-            var at = _hudScreen.Selected - 1;
-            var offers = Trading.For(resident.Profession);
-            if (at == offers.Count) { CloseScreen(); return; }
-            if ((uint)at >= (uint)offers.Count) return;
-            var offer = offers[at];
-            if (!Trading.TryMake(offer, _inventory, _items))
-            {
-                Notice("that trade cannot be paid", _items.ByName(offer.Cost));
-            }
-            else
-            {
-                Notice($"traded with {resident.Name}", _items.ByName(offer.Result));
-            }
-            RefreshScreen();
+            ExecuteTrade();
             return;
         }
 
@@ -9575,6 +9699,11 @@ public sealed class ClientHost : IDisposable
         if (_hudScreen.Kind is HudScreenKind.Game or HudScreenKind.Trade
             || (_hudScreen.Kind == HudScreenKind.Player && !_hudScreen.IsContainer))
         {
+            if (_hudScreen.Kind == HudScreenKind.Trade)
+            {
+                ScrollTradeRows(_hudScreen.Scroll - Math.Sign(wheelY) * 3);
+                return;
+            }
             if (OnTab(GameTab.Packs))
             {
                 ScrollPackRows(-Math.Sign(wheelY) * 3);
@@ -9598,6 +9727,11 @@ public sealed class ClientHost : IDisposable
     private void ScrollRows(int to) =>
         _hudScreen.Scroll = Math.Clamp(
             to, 0, Math.Max(0, _hudScreen.Rows.Count - ScreenLayout.MenuLines(LayoutHeight)));
+
+    private void ScrollTradeRows(int to) =>
+        _hudScreen.Scroll = Math.Clamp(
+            to, 0, Math.Max(0,
+                _hudScreen.TradeListings.Count - Math.Max(1, _hudScreen.TradeVisibleOffers)));
 
     private void ScrollPackRows(int by)
     {
@@ -9665,6 +9799,16 @@ public sealed class ClientHost : IDisposable
                 else if (position >= _hudScreen.PackDetailScroll + 8)
                     _hudScreen.PackDetailScroll = Math.Max(0, position - 7);
             }
+            return;
+        }
+
+        if (_hudScreen.Kind == HudScreenKind.Trade)
+        {
+            var shown = Math.Max(1, _hudScreen.TradeVisibleOffers);
+            if (_hudScreen.Selected < _hudScreen.Scroll)
+                ScrollTradeRows(_hudScreen.Selected);
+            else if (_hudScreen.Selected >= _hudScreen.Scroll + shown)
+                ScrollTradeRows(_hudScreen.Selected - shown + 1);
             return;
         }
 
@@ -14836,6 +14980,22 @@ public sealed class ClientHost : IDisposable
                 SampleUi(size, "audio");
                 ProbeAudioTab();
                 CloseScreen();
+                PrepareTradeUiCheck();
+                break;
+
+            case 385:
+                SampleUi(size, "trade");
+                ProbeTradeScreen();
+                UseTradeControl(TradeControl.QuantityMax);
+                _uiTradeQuantity = _hudScreen.TradeQuantity;
+                _uiTradeLogsBefore = _inventory.CountOf(_items.ByName("driftoak_log").Id);
+                _uiTradeTokensBefore = _inventory.CountOf(_items.ByName("trade_token").Id);
+                UseTradeControl(TradeControl.Confirm);
+                break;
+
+            case 386:
+                ProbeTradeSettlement();
+                CloseScreen();
                 OpenFireForCheck();
                 break;
 
@@ -16557,6 +16717,63 @@ public sealed class ClientHost : IDisposable
         Console.Out.Flush();
     }
 
+    private int _uiTradeOfferZones = -1;
+    private int _uiTradeInventoryZones = -1;
+    private int _uiTradeButtons = -1;
+    private int _uiTradeQuantity = -1;
+    private int _uiTradeLogsBefore = -1;
+    private int _uiTradeTokensBefore = -1;
+    private bool _uiTradePanes;
+    private bool _uiTradeSettled;
+
+    /// <summary>Plants a payable ordinary resident trade without depending on a generated town.</summary>
+    private void PrepareTradeUiCheck()
+    {
+        _inventory.Clear();
+        _inventory.Add(new ItemStack(_items.ByName("driftoak_log").Id, 40));
+        OpenTrade(new Inhabitant
+        {
+            Id = "ui-check/resident",
+            SettlementId = "ui-check",
+            Name = "Mara",
+            Profession = Profession.Shorewright,
+            Position = _player.Position,
+            Home = default,
+            Work = default,
+            Commons = default,
+        });
+    }
+
+    private void ProbeTradeScreen()
+    {
+        _uiTradeOfferZones = _layout.Zones.Count(zone => zone.Kind == ZoneKind.TradeOffer);
+        _uiTradeInventoryZones = _layout.Zones.Count(zone => zone.Kind == ZoneKind.TradeInventory);
+        _uiTradeButtons = _hudScreen.TradeButtonsDrawn;
+        var merchant = _hudScreen.TradeMerchantBounds;
+        var pockets = _hudScreen.TradeInventoryBounds;
+        _uiTradePanes = merchant.Z > 0f && merchant.W > 0f
+                        && pockets.Z > 0f && pockets.W > 0f
+                        && merchant.X + merchant.Z < pockets.X;
+
+        Console.WriteLine(
+            $"ui-check    trade       panes {_uiTradePanes}, {_uiTradeOfferZones} offer zones, "
+            + $"{_uiTradeInventoryZones} inventory zones, {_uiTradeButtons} drawn controls");
+        Console.Out.Flush();
+    }
+
+    private void ProbeTradeSettlement()
+    {
+        var logs = _inventory.CountOf(_items.ByName("driftoak_log").Id);
+        var tokens = _inventory.CountOf(_items.ByName("trade_token").Id);
+        _uiTradeSettled = _uiTradeQuantity == 4
+                          && _uiTradeLogsBefore - logs == 10 * _uiTradeQuantity
+                          && tokens - _uiTradeTokensBefore == _uiTradeQuantity;
+        Console.WriteLine(
+            $"ui-check    trade max   quantity {_uiTradeQuantity}, logs {_uiTradeLogsBefore}->{logs}, "
+            + $"tokens {_uiTradeTokensBefore}->{tokens}, atomic {_uiTradeSettled}");
+        Console.Out.Flush();
+    }
+
     /// <summary>Proves the collection-scale texture shelf exposes two panes and only draws its window.</summary>
     private void ProbePackTab()
     {
@@ -17146,6 +17363,7 @@ public sealed class ClientHost : IDisposable
         var packsPanel = Read("packs");
         var packDetailPanel = Read("packs detail");
         var audioPanel = Read("audio");
+        var tradePanel = Read("trade");
         var world = Read("no screen corner");
 
         // The crosshair sits at the exact middle of an untouched frame and is nearly white. If the
@@ -17173,6 +17391,21 @@ public sealed class ClientHost : IDisposable
         if (packsPanel == bare) faults.Add("opening the texture-pack shelf changed nothing on screen");
         if (packDetailPanel == bare) faults.Add("opening texture-pack details changed nothing on screen");
         if (audioPanel == bare) faults.Add("opening the audio shelf changed nothing on screen");
+        if (tradePanel == bare) faults.Add("opening resident trading changed nothing on screen");
+
+        if (!_uiTradePanes)
+            faults.Add("resident trading did not publish two separate merchant/inventory panes");
+        if (_uiTradeOfferZones != Trading.For(Profession.Shorewright).Count)
+            faults.Add(
+                $"resident trading drew {_uiTradeOfferZones} selectable offers instead of "
+                + $"{Trading.For(Profession.Shorewright).Count}");
+        if (_uiTradeInventoryZones != Inventory.Slots)
+            faults.Add(
+                $"resident trading exposed {_uiTradeInventoryZones} of {Inventory.Slots} player pockets");
+        if (_uiTradeButtons != 5)
+            faults.Add($"resident trading drew {_uiTradeButtons} controls instead of −, +, max, confirm and close");
+        if (!_uiTradeSettled)
+            faults.Add("the trade screen's MAX and confirm controls did not settle one atomic quantity");
 
         if (_uiSettingsChrome.Count != Enum.GetValues<GameTab>().Length)
             faults.Add(
@@ -17713,7 +17946,8 @@ public sealed class ClientHost : IDisposable
                  [("items", items), ("book", book), ("bench", bench), ("chest", chestPanel),
                   ("cutter", cutter), ("game", game), ("character", characterPanel),
                   ("spells", spellsPanel), ("progress", progressPanel),
-                  ("handbook", handbookPanel), ("map", mapPanel), ("skins", skinsPanel)])
+                  ("handbook", handbookPanel), ("map", mapPanel), ("skins", skinsPanel),
+                  ("trade", tradePanel)])
         {
             var outside = Read($"{screen} corner");
             if (middle != outside) continue;
@@ -17829,7 +18063,7 @@ public sealed class ClientHost : IDisposable
                 ? "pack-skinned panels"
                 : "original graphite panels in neutral grey";
             Console.WriteLine(
-                "OK  the overlay reaches the screen: crosshair, controller radial, twenty-one screen states, "
+                "OK  the overlay reaches the screen: crosshair, controller radial, twenty-two screen states, "
                 + panelReceipt + ", "
                 + $"{_uiProbes.Sum(p => p.Value.Hits)} squares answering for their own middles");
         }

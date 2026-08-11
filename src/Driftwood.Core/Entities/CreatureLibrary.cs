@@ -17,6 +17,9 @@ namespace Driftwood.Core.Entities;
 /// </remarks>
 public static class CreatureLibrary
 {
+    private const string VillagerBase = "textures/entity/villager/villager.png";
+    private const string VillagerPlains = "textures/entity/villager/type/plains.png";
+
     /// <summary>
     /// Where an installed Bedrock client keeps its resource packs, or null when there is not one.
     /// </summary>
@@ -115,15 +118,12 @@ public static class CreatureLibrary
 
             if (pack is not null)
             {
-                foreach (var path in kind.Skins)
+                var sheet = TryLoadSkin(pack, kind, out var where);
+                if (sheet is not null)
                 {
-                    var sheet = pack.TryLoadSheet(path, out var where);
-                    if (sheet is null) continue;
-
                     from = where;
                     width = sheet.Width;
                     height = sheet.Height;
-                    break;
                 }
             }
 
@@ -144,6 +144,178 @@ public static class CreatureLibrary
         }
 
         return resolved;
+    }
+
+    /// <summary>Loads the complete skin a creature wears, composing layered villager art.</summary>
+    /// <remarks>
+    /// Modern vanilla-style villager art is three images, not three alternatives: the base face and
+    /// body, a biome/type garment, then the profession's clothes and hat. The latter two are mostly
+    /// transparent by design. Treating the profession image as a standalone skin made a resident
+    /// appear as a few floating cuffs and hat pixels. This is the one loading boundary used by both
+    /// resolution/reporting and the GL uploader, so the dimensions and the pixels cannot disagree.
+    /// </remarks>
+    public static Image? TryLoadSkin(TexturePack pack, CreatureKind kind, out string from)
+    {
+        if (kind.Family != CreatureFamily.Inhabitant)
+        {
+            foreach (var path in kind.Skins)
+            {
+                var sheet = pack.TryLoadSheet(path, out from);
+                if (sheet is not null) return sheet;
+            }
+
+            from = "";
+            return null;
+        }
+
+        // A profession layer without this base is not a skin. Fall back to Driftwood's complete
+        // generated resident instead of uploading transparent fragments from an incomplete pack.
+        var baseSheet = pack.TryLoadSheet(VillagerBase, out var baseFrom);
+        if (baseSheet is null)
+        {
+            from = "";
+            return null;
+        }
+
+        var layers = new List<(Image Image, string From)> { (baseSheet, baseFrom) };
+        AddIfPresent(VillagerPlains);
+
+        // The first resident candidate is its profession overlay. The base path is also kept in
+        // CreatureSet for the compatibility report and older pack lookup, so do not add it twice.
+        foreach (var path in kind.Skins)
+        {
+            if (path.Equals(VillagerBase, StringComparison.OrdinalIgnoreCase)) continue;
+            AddIfPresent(path);
+            break;
+        }
+
+        var pixels = (byte[])baseSheet.Pixels.Clone();
+        for (var i = 1; i < layers.Count; i++)
+            CompositeNearest(pixels, baseSheet.Width, baseSheet.Height, layers[i].Image);
+
+        from = string.Join(" + ", layers.Select(layer => layer.From));
+        return new Image(baseSheet.Width, baseSheet.Height, pixels);
+
+        void AddIfPresent(string path)
+        {
+            var image = pack.TryLoadSheet(path, out var where);
+            if (image is not null) layers.Add((image, where));
+        }
+    }
+
+    /// <summary>Source-over one pixel-art layer, resizing on the logical texel grid.</summary>
+    private static void CompositeNearest(byte[] destination, int width, int height, Image source)
+    {
+        for (var y = 0; y < height; y++)
+        for (var x = 0; x < width; x++)
+        {
+            var sx = Math.Clamp(x * source.Width / width, 0, source.Width - 1);
+            var sy = Math.Clamp(y * source.Height / height, 0, source.Height - 1);
+            var sp = (sy * source.Width + sx) * 4;
+            var sa = source.Pixels[sp + 3];
+            if (sa == 0) continue;
+
+            var dp = (y * width + x) * 4;
+            var da = destination[dp + 3];
+            var remain = 255 - sa;
+            var outAlpha = sa + (da * remain + 127) / 255;
+
+            for (var channel = 0; channel < 3; channel++)
+            {
+                var premultiplied = source.Pixels[sp + channel] * sa
+                                  + (destination[dp + channel] * da * remain + 127) / 255;
+                destination[dp + channel] = outAlpha == 0
+                    ? (byte)0
+                    : (byte)Math.Clamp((premultiplied + outAlpha / 2) / outAlpha, 0, 255);
+            }
+
+            destination[dp + 3] = (byte)outAlpha;
+        }
+    }
+
+    /// <summary>Exercises the base + biome + profession rule on a tiny on-disk Java pack.</summary>
+    public static IReadOnlyList<string> SelfTestLayeredSkins(out string detail)
+    {
+        var faults = new List<string>();
+        var root = Path.Combine(Path.GetTempPath(),
+            $"driftwood-villager-layers-{Environment.ProcessId}-{Guid.NewGuid():N}");
+        var textureRoot = Path.Combine(root, "assets", "minecraft");
+        var basePath = Path.Combine(textureRoot, VillagerBase.Replace('/', Path.DirectorySeparatorChar));
+
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(basePath)!);
+            File.WriteAllText(Path.Combine(root, "pack.mcmeta"), "{\"pack\":{\"pack_format\":34}}");
+            Write(VillagerBase, 8, 8, (_, _) => (40, 50, 60, 255));
+            Write(VillagerPlains, 2, 2,
+                (x, y) => x == 0 && y == 0 ? (20, 220, 50, 255) : (0, 0, 0, 0));
+            Write("textures/entity/villager/profession/fisherman.png", 4, 4,
+                (x, y) => x == 3 && y == 3 ? (35, 70, 230, 255) : (0, 0, 0, 0));
+
+            var shorewright = CreatureSet.All.Single(kind => kind.Name == "shorewright");
+            using (var pack = TexturePack.Open(root)
+                              ?? throw new InvalidDataException("the complete fixture pack did not open"))
+            {
+                var composed = TryLoadSkin(pack, shorewright, out var from);
+                if (composed is null) faults.Add("three complete villager layers produced no skin");
+                else
+                {
+                    if (composed.Width != 8 || composed.Height != 8)
+                        faults.Add($"an 8x8 villager base composed as {composed.Width}x{composed.Height}");
+                    Check(composed, 1, 1, 20, 220, 50, "resized plains layer");
+                    Check(composed, 7, 7, 35, 70, 230, "profession layer");
+                    Check(composed, 6, 1, 40, 50, 60, "base layer");
+                    if (from.Count(ch => ch == '+') != 2)
+                        faults.Add("the layered skin receipt did not name all three sources");
+                }
+            }
+
+            // Most important negative case: the mostly-transparent profession overlay alone must
+            // never be accepted as a complete resident again.
+            File.Delete(basePath);
+            using var incomplete = TexturePack.Open(root)
+                                   ?? throw new InvalidDataException("the incomplete fixture pack did not open");
+            if (TryLoadSkin(incomplete, shorewright, out _) is not null)
+                faults.Add("a profession overlay without a villager base was accepted as a full skin");
+        }
+        catch (Exception error)
+        {
+            faults.Add($"could not exercise layered resident art: {error.Message}");
+        }
+        finally
+        {
+            try { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); }
+            catch (IOException) { }
+        }
+
+        detail = "base villager, plains type and profession overlays compose at mixed resolutions; an orphan overlay falls back to owned art";
+        return faults;
+
+        void Write(string path, int width, int height, Func<int, int, (int R, int G, int B, int A)> colour)
+        {
+            var file = Path.Combine(textureRoot, path.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+            var pixels = new byte[width * height * 4];
+            for (var y = 0; y < height; y++)
+            for (var x = 0; x < width; x++)
+            {
+                var (r, g, b, a) = colour(x, y);
+                var p = (y * width + x) * 4;
+                pixels[p] = (byte)r;
+                pixels[p + 1] = (byte)g;
+                pixels[p + 2] = (byte)b;
+                pixels[p + 3] = (byte)a;
+            }
+            File.WriteAllBytes(file, Png.Encode(new Image(width, height, pixels)));
+        }
+
+        void Check(Image image, int x, int y, byte r, byte g, byte b, string layer)
+        {
+            var p = (y * image.Width + x) * 4;
+            if (image.Pixels[p] == r && image.Pixels[p + 1] == g
+                && image.Pixels[p + 2] == b && image.Pixels[p + 3] == 255) return;
+            faults.Add($"the {layer} did not survive source-over composition");
+        }
     }
 
     /// <summary>A line per creature: what it found, how big it is, and whether its net is sound.</summary>

@@ -67,23 +67,23 @@ public sealed class CreatureRenderer : IDisposable
             // A pack's art first, at the shape it was painted.
             if (pack is not null && entry.SkinFrom.Length > 0)
             {
-                foreach (var path in entry.Kind.Skins)
+                var sheet = CreatureLibrary.TryLoadSkin(pack, entry.Kind, out _);
+                if (sheet is not null)
                 {
-                    var sheet = pack.TryLoadSheet(path, out _);
-                    if (sheet is null) continue;
-
                     // ⚠ Only if it fits the net this skeleton is cut for. A sheet of the wrong shape
                     // puts every patch somewhere else on the animal, and ours — which fits by
                     // construction — is better than theirs worn inside out.
                     if (sheet.Width * model.SheetHeight != sheet.Height * model.SheetWidth
                         && sheet.Height * model.SheetWidth < model.SheetHeight * sheet.Width)
                     {
-                        break;
+                        sheet = null;
                     }
 
-                    skin = UploadSheet(gl, sheet);
-                    skinned++;
-                    break;
+                    if (sheet is not null)
+                    {
+                        skin = UploadSheet(gl, sheet);
+                        skinned++;
+                    }
                 }
             }
 
