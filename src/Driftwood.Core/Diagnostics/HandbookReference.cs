@@ -223,7 +223,7 @@ public static class HandbookReference
         var page = Path.Combine(folder, PageName);
         var markdown = $$"""
             <!-- Generated from Driftwood Core {{productVersion}}; regenerate with --magic-reference. -->
-            > **Development reference — Driftwood {{productVersion}}.** Counts below come from the live game registries.
+            > **Release reference — Driftwood v{{productVersion}}.** Counts below come from the live game registries.
 
             # Live registry reference
 
@@ -296,7 +296,7 @@ public static class HandbookReference
 
         var text = File.ReadAllText(page);
         if (!text.Contains($"Driftwood Core {productVersion}", StringComparison.Ordinal)
-            || !text.Contains($"Driftwood {productVersion}", StringComparison.Ordinal)
+            || !text.Contains($"Driftwood v{productVersion}", StringComparison.Ordinal)
             || !text.Contains("game-reference.json", StringComparison.Ordinal)
             || !text.Contains("magic-reference.json", StringComparison.Ordinal))
             faults.Add("the live registry page has a stale banner or missing export link");

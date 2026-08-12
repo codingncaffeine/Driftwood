@@ -18,7 +18,7 @@ public static class MagicReference
         Page("Spell-Effects", Effects());
         Page("Companions-and-Commands", Companions());
         Page("Revive", Special(SpellId.Revive,
-            "Revive only accepts a dead allied player. It never targets a living player, a creature, or the caster while alive. The host returns the ally once at the safe loaded death position or nearest safe point. The current single-player build has no eligible ally; this host-authority contract becomes reachable through P12 co-op."));
+            "Revive only accepts a dead allied player. It never targets a living player, a creature, or the caster while alive. The host returns the ally once at the safe loaded death position or nearest safe point. The current single-player release has no eligible ally; this host-authority contract becomes reachable with future multiplayer support."));
         Page("Gateway-Rift", Special(SpellId.GatewayRift,
             "Each entrant resolves their own bed or bind. Missing, unsafe, or unloaded destinations refuse without moving the player. A rift records each entrant once and temporary rifts do not persist through reload."));
         foreach (var group in Enum.GetValues<SpellGroup>()) Page(GroupTitle(group).Replace(' ', '-'), Group(group));
@@ -67,7 +67,7 @@ public static class MagicReference
         {
             var path = Path.Combine(folder, name + ".md");
             var header = $"<!-- Generated from Driftwood Core {productVersion}; edit mechanics in SpellCatalogue.cs. -->\n";
-            var banner = $"> **Development reference — Driftwood {productVersion}.** Values below are generated from the live game registry.\n\n";
+            var banner = $"> **Release reference — Driftwood v{productVersion}.** Values below are generated from the live game registry.\n\n";
             File.WriteAllText(path, header + banner + body.TrimEnd() + Environment.NewLine, new UTF8Encoding(false));
             files.Add(path);
         }
@@ -89,7 +89,7 @@ public static class MagicReference
             if (!File.Exists(path)) { faults.Add($"missing generated wiki page {page}"); continue; }
             var text = File.ReadAllText(path);
             if (!text.Contains($"Driftwood Core {productVersion}", StringComparison.Ordinal)
-                || !text.Contains($"Driftwood {productVersion}", StringComparison.Ordinal))
+                || !text.Contains($"Driftwood v{productVersion}", StringComparison.Ordinal))
                 faults.Add($"{page} has a stale or missing build banner");
             if (text.Contains("TODO", StringComparison.OrdinalIgnoreCase)
                 || text.Contains("TBD", StringComparison.OrdinalIgnoreCase)

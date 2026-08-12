@@ -5,6 +5,10 @@ An open-world survival crafting game, built from scratch in C# on .NET 11 and Op
 Spawn with nothing, punch wood, work up through tools and benches into a world where
 everything is destructible. Every world is procedurally generated from a seed.
 
+**Current release: [v0.3.0 — Magic, Exploration & Visuals](https://github.com/codingncaffeine/Driftwood/releases/tag/v0.3.0).**
+It is a portable, self-contained Windows x64 build and Driftwood's first full GitHub release rather
+than a prerelease.
+
 ## Status
 
 **A game you can play.** Walk into a world with nothing, mine what you can reach by hand, pick up
@@ -36,6 +40,7 @@ reachable from bare hands, in seven rounds, with no starting kit.
 | Armour, hunger, signals, rails, farming | working |
 | Controller support — SDL3 hot-plug, named devices, snap-nav, radial hotbar, assist, rumble, rebinding | working |
 | **Level-20 classless progression, gold, 19 ranked spells, spellbook and four commanded companions** | working |
+| Multiplayer | planned; not included in v0.3.0 |
 
 ## The world
 
@@ -184,6 +189,7 @@ across seeds, so one seed does not hand you a continent and the next an archipel
 | Hold right | place, or use what you are looking at | |
 | `E` | your own pockets, equipment and a two-by-two | |
 | `B` | fold the recipe book out beside them | |
+| `M` | open or close the explored-world map | |
 | Hold `R` | release mouse-look and click one of eight prepared spells; movement stays live | |
 | `Esc` | options — keys, controller, video, audio, world, saves, packs, skins | |
 | `F3` / `F5` | walk or fly / cycle the view | |
