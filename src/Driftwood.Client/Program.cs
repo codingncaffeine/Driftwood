@@ -862,6 +862,8 @@ public static class Program
                                 never reaches the code that writes it.
               --bench [secs]    fly a fixed path once the world has settled, report frame-time
                                 percentiles, then exit (default 15 s, seed defaults to 'driftwood')
+              --ui-check        exercise every deterministic interface in a hidden OpenGL window,
+                                read its framebuffer, report visual faults, then exit
               --shot <folder>   photograph what is in the hand — a pickaxe, a sword, a torch and a
                                 block, in each view, at rest and mid-swing, plus first-person sword
                                 and shield lowered/raised — write them there and quit. With

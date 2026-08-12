@@ -1,6 +1,7 @@
 @echo off
 REM Builds Release, publishes one self-contained executable, and runs every release gate.
-REM Run before every commit and push so the artifact never drifts from the pushed source.
+REM Run once after the complete change batch, immediately before publishing it. Do not repeat the
+REM full gate between commits that belong to the same batch.
 setlocal
 
 pushd "%~dp0"
@@ -42,34 +43,35 @@ REM Gate on the published binary, not the build output: this is the thing that s
 REM catches a publish that dropped a native dependency the build had sitting beside it.
 echo [3/7] checking release identity, embedded offline audio and P10.5 magic...
 set "DRIFTWOOD_EXPECT=Driftwood v%VERSION%"
-call :run_windowed --version
+call :run_instrument --version
 set "DRIFTWOOD_EXPECT="
 if errorlevel 1 goto :failed_version
-call :run_windowed --audio-check
+call :run_instrument --audio-check
 if errorlevel 1 goto :failed_audio
-call :run_windowed --magic-check
+call :run_instrument --magic-check
 if errorlevel 1 goto :failed_magic
 
 REM SDL is a bundled native dependency and controllers are optional hardware. This requires the
 REM former to load from the single EXE while explicitly allowing zero of the latter.
 echo [4/7] checking bundled SDL3 and controller interop...
-call :run_windowed --controller-check
+call :run_instrument --controller-check
 if errorlevel 1 goto :failed_controller
 
 echo [5/7] auditing the published build...
-call :run_windowed --audit --seed driftwood --chunks 12
+call :run_instrument --audit --seed driftwood --chunks 12
 if errorlevel 1 goto :failed_audit
 
-REM Opens a window for about two seconds and reads its own pixels back off the framebuffer.
+REM Creates a hidden OpenGL window and reads its pixels back off the framebuffer. It never appears
+REM on the desktop or takes focus, but still exercises the exact renderer and graphics driver.
 REM The audit runs headless and cannot see the screen at all, and the overlay spent its whole
 REM life being back-face culled: built correctly, submitted correctly, no GL error reported, and
 REM never once drawn. Every check in the project passed throughout. Nothing but this catches it.
 echo [6/7] checking every interface reaches the screen...
-call :run_windowed --ui-check --chunks 6 --seed driftwood --width 400 --height 480
+call :run_instrument --ui-check --chunks 6 --seed driftwood --width 400 --height 480
 if errorlevel 1 goto :failed_ui
-call :run_windowed --ui-check --chunks 6 --seed driftwood --width 1600 --height 900
+call :run_instrument --ui-check --chunks 6 --seed driftwood --width 1600 --height 900
 if errorlevel 1 goto :failed_ui
-call :run_windowed --ui-check --chunks 6 --seed driftwood --width 1920 --height 1440
+call :run_instrument --ui-check --chunks 6 --seed driftwood --width 1920 --height 1440
 if errorlevel 1 goto :failed_ui
 
 REM The public asset is a versioned ZIP containing exactly the gated executable, plus a checksum
@@ -109,7 +111,7 @@ exit /b 0
 
 REM A GUI-subsystem process does not make cmd.exe wait for it. Run explicit instruments through a
 REM console parent that waits and captures their output, or every release check races the next one.
-:run_windowed
+:run_instrument
 powershell.exe -NoProfile -Command ^
   "$ErrorActionPreference = 'Stop';" ^
   "$exe = Join-Path (Get-Location) '%OUT%\Driftwood.exe';" ^
@@ -117,7 +119,7 @@ powershell.exe -NoProfile -Command ^
   "$stderr = Join-Path ([IO.Path]::GetDirectoryName($exe)) '.release-gate.stderr';" ^
   "$code = 1;" ^
   "try {" ^
-  "$process = Start-Process -FilePath $exe -ArgumentList '%*' -NoNewWindow -Wait -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr;" ^
+  "$process = Start-Process -FilePath $exe -ArgumentList '%*' -WindowStyle Hidden -Wait -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr;" ^
   "$out = if (Test-Path -LiteralPath $stdout) { [IO.File]::ReadAllText($stdout) } else { '' };" ^
   "$err = if (Test-Path -LiteralPath $stderr) { [IO.File]::ReadAllText($stderr) } else { '' };" ^
   "if ($out.Length -gt 0) { [Console]::Out.Write($out) };" ^

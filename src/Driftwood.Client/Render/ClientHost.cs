@@ -85,14 +85,15 @@ public sealed record ClientOptions
     public bool ChunksGiven { get; init; }
 
     /// <summary>
-    /// Open a screen by itself, read the pixels back off the framebuffer, and report them.
+    /// Render each deterministic screen into a hidden window, read the pixels back off the
+    /// framebuffer, and report them.
     /// </summary>
     /// <remarks>
     /// The instrument this needed. "It is not appearing" and "it is appearing and I cannot see it"
     /// have the same symptom and completely different causes, and everything short of reading the
     /// framebuffer only proves the geometry was <em>built</em> — which it was, throughout a fault
-    /// where nothing reached the screen. Numbers off the front buffer are the only thing that
-    /// settles it, and they need no screenshot and no eyes.
+    /// where nothing reached the screen. Numbers off the framebuffer are the only thing that
+    /// settles it, and they need no screenshot, no eyes, and no focus-stealing desktop window.
     /// </remarks>
     public bool UiCheck { get; init; }
 
@@ -820,6 +821,10 @@ public sealed class ClientHost : IDisposable
             Size = new Vector2D<int>(options.Width, options.Height),
             Title = $"Driftwood v{ProductVersion}",
             VSync = options.VSync,
+            // The UI audit still needs a real OpenGL context and framebuffer, but it never needs
+            // to become a desktop window. Creating it hidden (rather than hiding it after Load)
+            // prevents even a one-frame flash or focus change while the release gate runs.
+            IsVisible = !options.UiCheck,
             API = new GraphicsAPI(
                 ContextAPI.OpenGL,
                 ContextProfile.Core,
@@ -846,6 +851,12 @@ public sealed class ClientHost : IDisposable
     {
         _window.Initialize();
 
+        if (!KeepUiCheckOffDesktop())
+        {
+            Shutdown();
+            return 1;
+        }
+
         // ⛳ Asks Windows for a one-millisecond scheduler tick, because the pacing below waits with
         // Sleep and Sleep is rounded up to the next tick of the system timer — 15.6 ms by default,
         // against a 5.7 ms frame.
@@ -861,6 +872,7 @@ public sealed class ClientHost : IDisposable
         while (!_window.IsClosing && !_stopRequested)
         {
             _window.DoEvents();
+            if (!KeepUiCheckOffDesktop()) break;
             _window.DoUpdate();
             _window.DoRender();
             PaceFrame(ref due);
@@ -871,6 +883,21 @@ public sealed class ClientHost : IDisposable
 
         Shutdown();
         return UiCheckFailed ? 1 : _exitCode;
+    }
+
+    /// <summary>
+    /// Enforces the workflow contract of <c>--ui-check</c>: it may own a graphics context and a
+    /// framebuffer, but it may never become a desktop window or take focus from the user.
+    /// </summary>
+    private bool KeepUiCheckOffDesktop()
+    {
+        if (!_options.UiCheck || !_window.IsVisible) return true;
+
+        Console.Error.WriteLine(
+            "FAULT  --ui-check created a visible window; refusing to continue the release test");
+        UiCheckFailed = true;
+        _stopRequested = true;
+        return false;
     }
 
     /// <summary>
