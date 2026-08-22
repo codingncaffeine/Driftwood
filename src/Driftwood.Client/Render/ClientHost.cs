@@ -5711,6 +5711,10 @@ public sealed class ClientHost : IDisposable
         _audio?.Dispose();
         _audio = null;
 
+        // The rain loop lived in the engine that just went; the next tick starts it again in the new one.
+        _rainLoop = false;
+        _rainLevel = 0f;
+
         if (_options.BenchSeconds > 0 || _options.Mute) return;
         _audio = new AudioEngine(new SoundLibrary(
             SoundLibrary.FindRoot(), _packPath, _soundPackPath));
@@ -8905,15 +8909,21 @@ public sealed class ClientHost : IDisposable
 
     /// <summary>
     /// The rain's own voice: one loop that fades in as the rain arrives and out as it leaves, and
-    /// quietens underground exactly as far as the sky is out of sight.
+    /// is heard only where the sky is near — the reference's own rule.
     /// </summary>
     /// <remarks>
     /// <para>⛳ The user's two asks, 2026-08-22: wire the rain recording up, and "have it fade in
     /// when it starts raining and fade out when it quits." The fade rides the weather's own
-    /// twelve-second strength ramp, and a second, shorter ramp follows the EYE: the loudness is
-    /// the share of the drops round the player that the sky can actually see (the renderer's
-    /// honest count), so walking into a cave mouth turns the rain down over a couple of seconds
-    /// and walking out turns it back up — no rain in a cellar, a little at the cave mouth.</para>
+    /// twelve-second strength ramp, with a shorter ramp of its own for walking under cover.</para>
+    /// <para>⛔⛔ <b>"I'm hearing rain even when it's not raining" — the user, the same evening.</b>
+    /// The first loudness rule was the share of the renderer's drops the sky could see, over the
+    /// whole 56-cell box round the eye: in a cave ten cells down the top of that box is still open
+    /// sky, so the rain played at half volume with nothing to be seen, and in a house at full. The
+    /// rule is the genre's now: sample the columns within ten cells of the eye AT EYE HEIGHT and
+    /// take the share that is open to the sky — a cave mouth is quiet, a cellar silent, a house
+    /// hears the rain it is standing in (its walls are thin and the street outside is open) but
+    /// muffled, lower in pitch, because the eye's own cell is roofed. A fixed lattice of 25 columns
+    /// rather than random darts, so the loudness does not flicker.</para>
     /// <para>Positioned at the eye every frame, so the engine's distance falloff never touches
     /// it; snow is silent, which is what snow sounds like.</para>
     /// </remarks>
@@ -8922,14 +8932,25 @@ public sealed class ClientHost : IDisposable
         if (_audio is null) return;
 
         var target = 0f;
+        var roofed = false;
         if (_spawned && _settings.Weather && _weather.Available)
         {
             var weather = WeatherCycle.Sample(_seed.Value, _elapsed, _viewPosition.Y);
             if (weather.Active && weather.Kind == Precipitation.Rain)
             {
-                // Over open ground about 55% of the box round the eye is sky; that is full volume.
-                var exposure = Math.Min(1f, _weather.Drawn / (WeatherField.ParticleCount * 0.55f));
-                target = weather.Strength * exposure;
+                var ex = (int)MathF.Floor(_viewPosition.X);
+                var ey = (int)MathF.Floor(_viewPosition.Y);
+                var ez = (int)MathF.Floor(_viewPosition.Z);
+                var world = _streamer.World;
+
+                var open = 0;
+                foreach (var dx in RainSampleOffsets)
+                foreach (var dz in RainSampleOffsets)
+                    if (WeatherField.SkyExposed(world, ex + dx, ey, ez + dz)) open++;
+
+                roofed = !WeatherField.SkyExposed(world, ex, ey, ez);
+                var exposure = open / (float)(RainSampleOffsets.Length * RainSampleOffsets.Length);
+                target = weather.Strength * exposure * (roofed ? 0.6f : 1f);
             }
         }
 
@@ -8937,17 +8958,21 @@ public sealed class ClientHost : IDisposable
         var rate = target > _rainLevel ? dt / 1.5f : dt / 2.5f;
         _rainLevel += (target - _rainLevel) * Math.Min(1f, rate);
 
+        // The muffle follows the same ramp, so stepping through a door never clicks.
+        var wantPitch = roofed ? 0.8f : 1f;
+        _rainPitch += (wantPitch - _rainPitch) * Math.Min(1f, dt / 0.8f);
+
         var gain = _rainLevel * 0.6f;
         if (gain > 0.01f)
         {
             if (!_rainLoop)
             {
-                _audio.StartLoop(RainLoopOwner, "ambient/weather/rain", _viewPosition, gain);
+                _audio.StartLoop(RainLoopOwner, "ambient/weather/rain", _viewPosition, gain, _rainPitch);
                 _rainLoop = true;
             }
             else
             {
-                _audio.UpdateLoop(RainLoopOwner, _viewPosition, gain);
+                _audio.UpdateLoop(RainLoopOwner, _viewPosition, gain, _rainPitch);
             }
         }
         else if (_rainLoop)
@@ -8958,8 +8983,12 @@ public sealed class ClientHost : IDisposable
         }
     }
 
+    /// <summary>Where the rain listens: a lattice ten cells either side of the eye, at eye height.</summary>
+    private static readonly int[] RainSampleOffsets = [-10, -5, 0, 5, 10];
+
     private const string RainLoopOwner = "weather:rain";
     private float _rainLevel;
+    private float _rainPitch = 1f;
     private bool _rainLoop;
 
     /// <summary>
@@ -14639,6 +14668,57 @@ public sealed class ClientHost : IDisposable
     /// cloud and would have called this bar working for as long as anybody cared to look. What is
     /// claimed is that the air is worth <em>more</em> change than a frame is worth on its own.
     /// </remarks>
+    /// <summary>Pixels the rain put on a black frame, and pixels a clear sky put there (the control).</summary>
+    private int _rainPixels = -1;
+    private int _rainControlPixels = -1;
+    private int _rainDrawn = -1;
+
+    /// <summary>
+    /// Wipes the world off the frame, draws the weather ALONE in forced rain, and counts what landed.
+    /// </summary>
+    /// <remarks>
+    /// ⛔⛔ Written the day the user heard rain that was not there (2026-08-22). The renderer had
+    /// been rewritten that morning to place its drops on the CPU and the sound was keyed on the
+    /// renderer's own count — so a renderer that counted drops and drew none would have been
+    /// exactly "rain you can hear and not see", and nothing read the screen to say otherwise. The
+    /// count is the renderer being asked about its own work; this is the screen being asked. The
+    /// control is the same draw with a clear sky, which must leave the frame black.
+    /// </remarks>
+    private void JudgeWeather(Vector2D<int> size)
+    {
+        if (!_weather.Available) return;
+
+        var aspect = size.Y > 0 ? size.X / (float)size.Y : 1f;
+        var viewProj = FlyCamera.View(_viewPosition, _viewForward) * _camera.Projection(aspect);
+
+        _gl.ClearColor(0f, 0f, 0f, 1f);
+        _gl.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
+        _weather.Draw(
+            new WeatherState(Precipitation.Rain, 1f), _streamer.World, viewProj, _viewPosition,
+            (float)_elapsed, _seed.Value, size.Y);
+        _rainDrawn = _weather.Drawn;
+        _rainPixels = LitPixels(ReadFrame(size));
+
+        _gl.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
+        _weather.Draw(
+            new WeatherState(Precipitation.Clear, 0f), _streamer.World, viewProj, _viewPosition,
+            (float)_elapsed, _seed.Value, size.Y);
+        _rainControlPixels = LitPixels(ReadFrame(size));
+
+        Console.WriteLine(
+            $"ui-check    rain px    {_rainPixels} pixels from {_rainDrawn} drops on black; "
+            + $"a clear sky left {_rainControlPixels}");
+        Console.Out.Flush();
+    }
+
+    private static int LitPixels(byte[] frame)
+    {
+        var lit = 0;
+        for (var i = 0; i + 3 < frame.Length; i += 4)
+            if (frame[i] > 8 || frame[i + 1] > 8 || frame[i + 2] > 8) lit++;
+        return lit;
+    }
+
     private void JudgeBreath()
     {
         if (_frameHalfAir is null || _frameFullAir is null || _frameFullAgain is null) return;
@@ -14915,6 +14995,9 @@ public sealed class ClientHost : IDisposable
                 _frameFullAgain = HudOnlyFrame(size);
                 JudgeBreath();
                 break;
+
+            // ⛔ The rain, asked of the screen rather than of its own count (see JudgeWeather).
+            case 57: JudgeWeather(size); break;
 
             case 60: SampleUi(size, "no screen"); break;
 
@@ -18369,6 +18452,20 @@ public sealed class ClientHost : IDisposable
             faults.Add(
                 "taking the air away changed nothing whatever on the screen, so the bubbles are "
                 + "being built and never drawn");
+
+        // ⛔⛔ THE RAIN, the same way. "I'm hearing rain even when it's not raining" is what a
+        // renderer that counts drops and draws none sounds like, because the sound follows the count.
+        if (_weather.Available)
+        {
+            if (_rainPixels < 0)
+                faults.Add("the rain was never measured against the framebuffer at all");
+            else if (_rainDrawn <= 0)
+                faults.Add("forced rain placed no drops at all round the camera, so nothing could be heard or seen");
+            else if (_rainPixels <= 0)
+                faults.Add($"forced rain placed {_rainDrawn} drops and put nothing on the screen — rain you can hear and not see");
+            else if (_rainControlPixels != 0)
+                faults.Add($"a clear sky put {_rainControlPixels} pixels on a black frame, so the weather draw is not clean");
+        }
 
         // ⛔⛔ THE FIRE'S BOOK, reported by the user as "I'm not seeing any recipes for food when i
         // look in the furnace" — and there was no list at all. Three claims, because the first two
