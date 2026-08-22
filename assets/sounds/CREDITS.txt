@@ -3,3 +3,6 @@ The five WAV recordings under animals/ and enemies/ are original Driftwood recor
 Third-party sound packs are not distributed with Driftwood. Players may download their own
 original pack archives from the Audio tab; those archives and their license metadata remain in
 the player's AppData sound-pack shelf and are never copied into Driftwood's executable or source.
+
+ambient/weather/rain.ogg is a 48-second seamless excerpt of a rain recording supplied for Driftwood by the
+project owner on 2026-08-22; the long source recording is not distributed.

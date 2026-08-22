@@ -66,6 +66,11 @@
                       LogicalName="Driftwood.Core.Sounds.enemies/spider_attack.wav" />
     <EmbeddedResource Include="..\..\assets\sounds\enemies\zombie.wav"
                       LogicalName="Driftwood.Core.Sounds.enemies/zombie.wav" />
+
+    <!-- The rain loop (2026-08-22): a 48-second seamless mono excerpt of the recording the owner
+         supplied as assets/sounds/ambient/weather/rain.mp3 (the source stays out of git). -->
+    <EmbeddedResource Include="..\..\assets\sounds\ambient\weather\rain.ogg"
+                      LogicalName="Driftwood.Core.Sounds.ambient/weather/rain.ogg" />
   </ItemGroup>
 
 </Project>

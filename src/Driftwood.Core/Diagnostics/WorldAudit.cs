@@ -889,6 +889,13 @@ public static class WorldAudit
         Check("weather changes gently and repeats from the seed", weatherFaults.Count == 0,
             weatherFaults.Count == 0 ? weatherDetail : $"{weatherFaults.Count} faults: {weatherFaults[0]}");
 
+        // ⛳ And where it falls (2026-08-22, the user's report: rain and snow visible below the
+        // surface). Positive control first — an open field rains — then the roofed cave is dry and
+        // the open pit, the user's crater, rains like anywhere else.
+        var fieldFaults = WeatherField.SelfTest(registry, out var fieldDetail);
+        Check("rain falls only where the sky can see the cell", fieldFaults.Count == 0,
+            fieldFaults.Count == 0 ? fieldDetail : $"{fieldFaults.Count} faults: {fieldFaults[0]}");
+
         var fontFaults = FontSelfTest(out var fontDetail);
         Check("every letter is drawn and distinct", fontFaults.Count == 0,
             fontFaults.Count == 0 ? fontDetail : $"{fontFaults.Count} faults: {fontFaults[0]}");
@@ -1839,6 +1846,25 @@ public static class WorldAudit
                   + $"{Growth.WaterReach} cells and no further, and a berry bush regrows on plain "
                   + "grass while refusing the crops' tilled ground"
                 : $"{growthFaults.Count} faults: {growthFaults[0]}");
+
+        // ⛳ THE TREE'S RENEWAL (2026-08-22, the user's leaf report). A sapling grown into a tree by
+        // the wild trees' own generator, felled, and its canopy watched coming down — with a placed
+        // canopy beside it as the control that must stay. ⛔ Every arm has its refusal: dark, a
+        // ceiling, a standing tree's leaf, a placed leaf.
+        var treeFaults = Growth.ValidateTrees(registry, generator);
+        Check("a sapling grows a tree, and a felled tree's leaves come down", treeFaults.Count == 0,
+            treeFaults.Count == 0
+                ? $"dark and a ceiling refuse; a lit sapling becomes a log with a canopy within "
+                  + $"{Growth.LeafReach} of its wood; felled, every leaf falls and a placed leaf never does"
+                : $"{treeFaults.Count} faults: {treeFaults[0]}");
+
+        // ⛳ And what a leaf pays, as a CENSUS IN BANDS: twenty thousand driftoak leaves under a bare
+        // hand, against the user's own table — saplings 5%, sticks 2%, apples 0.5% — and the cherry,
+        // which pays no apple at all, as the negative control. ⛔ A floor-only check passes a 50%
+        // sapling; the bands are what catch a rate wrong in either direction.
+        var leafFaults = LeafDropCensus(registry, items, drops, out var leafDetail);
+        Check("leaves pay saplings, sticks and apples at the set rates", leafFaults.Count == 0,
+            leafFaults.Count == 0 ? leafDetail : $"{leafFaults.Count} faults: {leafFaults[0]}");
 
         // ⛳ And mending it, which is the first path in the game that gives durability BACK. Every
         // tool and every plate has been strictly consumable since the day wear was added.
@@ -3227,6 +3253,21 @@ public static class WorldAudit
 
                 var left = drops.Of(block.Id);
                 if (!left.IsEmpty) changed |= Gain(left.Item);
+
+                // ⛳ And what it leaves SOMETIMES (2026-08-22): a leaf's sapling, sticks and apple
+                // are as much a source as a certain drop — a player breaks enough leaves. The tier
+                // gate above already stands over them, because a maybe is a bonus on a harvest.
+                foreach (var (maybe, _, _, _) in drops.ChancesOf(block.Id))
+                    changed |= Gain(maybe);
+
+                // And what a TOOL takes instead — shears on a leaf — once that class of tool is
+                // in hand at all: the instead-row is a different answer, not a better tier.
+                foreach (var tool in Enum.GetValues<ToolClass>())
+                {
+                    if (tool == ToolClass.None || reach[(int)tool] < 0) continue;
+                    var instead = drops.InsteadWith(block.Id, tool);
+                    if (!instead.IsEmpty) changed |= Gain(instead.Item);
+                }
             }
 
             // Hunt. ⛔ A creature is a source exactly as a block is, and the gate has the same two
@@ -7123,6 +7164,20 @@ public static class WorldAudit
                 var back = drops.Of(variant);
                 if (!back.IsEmpty) continue;
 
+                // ⛳ A block that comes back only under the right tool is not a one-way trip — a
+                // leaf block is the item again under shears and nothing under a hand, by design.
+                // The tool has to be one a player can make, which the reachability walk holds.
+                var underTool = false;
+                foreach (var tool in Enum.GetValues<ToolClass>())
+                {
+                    if (tool == ToolClass.None) continue;
+                    var instead = drops.InsteadWith(variant, tool);
+                    if (instead.IsEmpty || instead.Item.Value != item.Id.Value) continue;
+                    underTool = true;
+                    break;
+                }
+                if (underTool) continue;
+
                 // Half of a two-cell block is allowed to leave nothing, and has to: one door out
                 // of the pockets must not come back as two. The exemption is not a free pass —
                 // the other half is asked, so a door where BOTH halves leave nothing still fails,
@@ -7694,7 +7749,11 @@ public static class WorldAudit
 
         // The five owned recordings plus the compact original magic synthesis are Driftwood's
         // redistributable fallback. Everything else is a slot an installed pack may fill.
-        foreach (var name in SoundLibrary.BuiltInNames) Gate(name, "the local fallback", 8f);
+        // A loop is long on purpose — the rain bed is 48 s so its seam is rare — and is gated at a
+        // minute so a one-shot mistaken for a loop still trips something.
+        foreach (var name in SoundLibrary.BuiltInNames)
+            Gate(name, SoundLibrary.Loops.Contains(name) ? "a local loop" : "the local fallback",
+                SoundLibrary.Loops.Contains(name) ? 60f : 8f);
 
         foreach (var material in MaterialSounds.Materials)
         foreach (var which in Enum.GetValues<SoundEvent>())
@@ -8829,9 +8888,14 @@ public static class WorldAudit
         (StarterBlocks.LayerParticleBubble, "particle_bubble"),
 
         // P10.5's approved original spell sheet follows the particle alphabet. The full crop table
-        // is checked separately; these pins make its first and true final layer visible here too.
+        // is checked separately; these pins make its first and last layer visible here too.
         (StarterBlocks.LayerFirstSpellIcon, "spell_holy_might"),
-        ((ushort)(StarterBlocks.LayerCount - 1), "spell_earth_elemental"),
+        (StarterBlocks.LayerLastSpellIcon, "spell_earth_elemental"),
+
+        // The tree's renewal (2026-08-22) went on after the spell sheet; the apple is the true end.
+        (StarterBlocks.LayerDriftoakSapling, "driftoak_sapling"),
+        (StarterBlocks.LayerCherrySapling, "cherry_sapling"),
+        ((ushort)(StarterBlocks.LayerCount - 1), "apple"),
     ];
 
     /// <summary>
@@ -8843,6 +8907,107 @@ public static class WorldAudit
     /// </remarks>
     private static readonly HashSet<string> Scatters =
         new(StringComparer.Ordinal) { "seeds" };
+
+    /// <summary>
+    /// Breaks twenty thousand leaves of each species with a bare hand, and a few with shears, and
+    /// holds what came up to the user's table — in bands, both ways.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ Bands, not floors: at 20,000 rolls a 5% rate lands within about ±0.5% every time, so the
+    /// 4–6% band is wide enough never to flap and narrow enough that a rate written as 50% — or as
+    /// 0.5% — goes red. The cherry's apple count is the negative control: exactly zero, because a
+    /// census that only counts what appears cannot tell a build that pays apples from every leaf.
+    /// </remarks>
+    private static List<string> LeafDropCensus(
+        BlockRegistry registry, ItemRegistry items, BlockDrops drops, out string detail)
+    {
+        var faults = new List<string>();
+        const int Leaves = 20_000;
+        var random = new Random(0x4C454146);
+        var into = new List<ItemStack>(4);
+
+        var sapling = items.ByName(StarterBlocks.SaplingName).Id;
+        var cherrySapling = items.ByName(StarterBlocks.CherrySaplingName).Id;
+        var stick = items.ByName("stick").Id;
+        var apple = items.ByName("apple").Id;
+        var shears = items.ByName("shears");
+
+        (int Saplings, int Sticks, int StickCount, int Apples, int Other) Census(string name)
+        {
+            var type = registry.ByName(name);
+            int saplings = 0, sticks = 0, stickCount = 0, apples = 0, other = 0;
+
+            for (var i = 0; i < Leaves; i++)
+            {
+                into.Clear();
+                drops.Harvest(type, null, random, into);
+                foreach (var stack in into)
+                {
+                    if (stack.Item.Value == sapling.Value || stack.Item.Value == cherrySapling.Value) saplings++;
+                    else if (stack.Item.Value == stick.Value) { sticks++; stickCount += stack.Count; }
+                    else if (stack.Item.Value == apple.Value) apples++;
+                    else other++;
+                }
+            }
+
+            return (saplings, sticks, stickCount, apples, other);
+        }
+
+        var oak = Census("driftoak_leaves");
+        var cherry = Census("cherry_leaves");
+        var placed = Census(StarterBlocks.LeavesPlacedName);
+
+        static bool Within(int count, float low, float high) =>
+            count >= Leaves * low && count <= Leaves * high;
+
+        if (!Within(oak.Saplings, 0.04f, 0.06f))
+            faults.Add($"driftoak leaves paid {oak.Saplings} saplings in {Leaves}, outside 4-6%");
+        if (!Within(oak.Sticks, 0.015f, 0.025f))
+            faults.Add($"driftoak leaves paid sticks {oak.Sticks} times in {Leaves}, outside 1.5-2.5%");
+        if (oak.Sticks > 0 && (oak.StickCount <= oak.Sticks || oak.StickCount >= oak.Sticks * 2))
+            faults.Add($"{oak.Sticks} stick drops came to {oak.StickCount} sticks, which is not one-to-two each");
+        if (!Within(oak.Apples, 0.003f, 0.007f))
+            faults.Add($"driftoak leaves paid {oak.Apples} apples in {Leaves}, outside 0.3-0.7%");
+        if (oak.Other != 0)
+            faults.Add($"driftoak leaves paid {oak.Other} things that are not in the table");
+
+        if (!Within(cherry.Saplings, 0.04f, 0.06f))
+            faults.Add($"cherry leaves paid {cherry.Saplings} saplings in {Leaves}, outside 4-6%");
+        if (cherry.Apples != 0)
+            faults.Add($"cherry leaves paid {cherry.Apples} apples; the cherry pays none");
+
+        if (!Within(placed.Saplings, 0.04f, 0.06f))
+            faults.Add($"placed driftoak leaves paid {placed.Saplings} saplings in {Leaves}, outside 4-6%");
+
+        // Shears take the leaf itself, whole, and roll nothing beside it — from either form.
+        foreach (var name in (string[])["driftoak_leaves", StarterBlocks.LeavesPlacedName])
+        {
+            into.Clear();
+            drops.Harvest(registry.ByName(name), shears, random, into);
+            if (into.Count != 1 || into[0].Item.Value != items.ByName("driftoak_leaves").Id.Value || into[0].Count != 1)
+                faults.Add($"shears on {name} left {into.Count} stacks rather than one leaf block");
+        }
+
+        // And a bare hand on a placed leaf leaves no leaf block — the item only comes back under shears.
+        for (var i = 0; i < 200; i++)
+        {
+            into.Clear();
+            drops.Harvest(registry.ByName(StarterBlocks.LeavesPlacedName), null, random, into);
+            foreach (var stack in into)
+                if (stack.Item.Value == items.ByName("driftoak_leaves").Id.Value)
+                {
+                    faults.Add("a bare hand took a leaf block off a placed leaf");
+                    i = 200;
+                    break;
+                }
+        }
+
+        detail = $"{Leaves} driftoak leaves: {oak.Saplings / (float)Leaves * 100f:0.00}% sapling, "
+               + $"{oak.Sticks / (float)Leaves * 100f:0.00}% sticks ({oak.StickCount} in all), "
+               + $"{oak.Apples / (float)Leaves * 100f:0.00}% apple; cherry {cherry.Saplings / (float)Leaves * 100f:0.00}% "
+               + $"sapling and {cherry.Apples} apples; shears take the leaf whole";
+        return faults;
+    }
 
     private static List<string> TextureSelfTest()
     {

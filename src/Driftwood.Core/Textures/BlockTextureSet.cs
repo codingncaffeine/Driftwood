@@ -634,6 +634,13 @@ public static class BlockTextureSet
         new("spell_gateway_rift",     "", false),
         new("spell_snare",            "", false),
         new("spell_earth_elemental",  "", false),
+
+        // ⛳ The tree's renewal (2026-08-22): the saplings on the pack's own sapling files, the apple
+        // on its item file. Cutout all three — a sapling is a cross-plant and an apple is an icon
+        // with air round it.
+        new("driftoak_sapling", "textures/block/oak_sapling.png", true, "textures/blocks/sapling_oak.png"),
+        new("cherry_sapling", "textures/block/cherry_sapling.png", true, "textures/blocks/cherry_sapling.png"),
+        new("apple", "textures/item/apple.png", true, "textures/items/apple.png"),
     ];
 
     /// <summary>
@@ -1611,6 +1618,12 @@ public static class BlockTextureSet
             StarterBlocks.LayerCactusSide => TileGen.CactusSide(1361),
             StarterBlocks.LayerCactusTop => TileGen.CactusTop(1361),
             StarterBlocks.LayerDeadBush => TileGen.DeadBush(1363),
+
+            // The tree's renewal (2026-08-22).
+            StarterBlocks.LayerDriftoakSapling => TileGen.Sapling(1367, cherry: false),
+            StarterBlocks.LayerCherrySapling => TileGen.Sapling(1368, cherry: true),
+            StarterBlocks.LayerApple => TileGen.IconApple(1369),
+
             StarterBlocks.LayerGlowcap => TileGen.Glowcap(1364),
             StarterBlocks.LayerMarshReed => TileGen.MarshReed(1365),
             StarterBlocks.LayerMoss => TileGen.Moss(1366),

@@ -3447,6 +3447,96 @@ public static class TileGen
     }
 
     /// <summary>
+    /// A sapling: one thin stem with two overlapping clusters of leaf on it, knee-high, in the
+    /// species' own colour — green for the driftoak, blossom-pink for the cherry.
+    /// </summary>
+    /// <remarks>
+    /// <para>Flat tones off a ramp, lit from the upper left, the S18 grammar. Both clusters sit
+    /// across the stem column so the drawing is one island by construction; a leaf hung out on a
+    /// twig of its own would be a second piece, and the audit counts.</para>
+    /// <para>⚠ Not tinted in the world (the cross model says so): a sapling is a thing in a pocket
+    /// before it is a thing in a field, and an icon that changes colour with the climate reads as
+    /// a rendering fault.</para>
+    /// </remarks>
+    public static byte[] Sapling(int seed, bool cherry)
+    {
+        var t = new byte[BytesPerTile];
+
+        var leaf = cherry ? Ramp(226, 142, 178, 5, 0.34f) : Ramp(74, 124, 50, 5, 0.36f);
+        var wood = Ramp(86, 58, 36, 4, 0.30f);
+
+        // The stem: two columns from the ground to the upper cluster.
+        for (var y = 6; y < Size; y++)
+        for (var x = 7; x <= 8; x++)
+        {
+            var tone = x == 7 ? 2 : 1;
+            if (y >= Size - 2) tone = Math.Max(0, tone - 1);
+            Put(t, x, y, wood[tone].R, wood[tone].G, wood[tone].B, 255);
+        }
+
+        // Two clusters, the lower one wider, each an ellipse with a ragged edge.
+        (float Cx, float Cy, float Rx, float Ry)[] clusters = [(8f, 8.5f, 4.6f, 2.6f), (7f, 4.5f, 3.4f, 2.4f)];
+        foreach (var (cx, cy, rx, ry) in clusters)
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var dx = (x - cx) / rx;
+            var dy = (y - cy) / ry;
+            var ragged = 1f + (Noise(x, y, seed + 7) * 2f - 1f) * 0.22f;
+            if (dx * dx + dy * dy > ragged) continue;
+
+            // Lit from the upper left, as every tile here is; the underside of a cluster sits in
+            // its own shade. Quantised onto the ramp rather than shaded per pixel.
+            var lit = (cx - x) * 0.35f + (cy - y) * 0.55f;
+            var tone = Math.Clamp(MidTone(Noise(x, y, seed + 11)) / 2 + 1 + (lit > 1.2f ? 1 : lit < -1.2f ? -1 : 0), 0, leaf.Length - 1);
+            Put(t, x, y, leaf[tone].R, leaf[tone].G, leaf[tone].B, 255);
+        }
+
+        return t;
+    }
+
+    /// <summary>An apple: a round red fruit with a short stem and one leaf, lit from the upper left.</summary>
+    /// <remarks>
+    /// One island: the stem rises out of the top of the body and the leaf hangs off the stem. Five
+    /// flat tones of red, a highlight kept to a few pixels, and a dimple of shadow at the foot —
+    /// a fruit rather than a ball, which is the difference the ramp's last tone makes.
+    /// </remarks>
+    public static byte[] IconApple(int seed)
+    {
+        var t = new byte[BytesPerTile];
+
+        var red = Ramp(196, 44, 40, 5, 0.40f);
+        var wood = Ramp(92, 62, 38, 3, 0.30f);
+        var leaf = Ramp(78, 134, 54, 3, 0.30f);
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var dx = (x - 7.5f) / 5.6f;
+            var dy = (y - 8.6f) / 5.2f;
+
+            // The top of an apple dips toward the stem; the foot is slightly flattened.
+            var dip = y < 5 && Math.Abs(x - 7.5f) < 1.6f ? 0.18f : 0f;
+            var wobble = 1f - dip + (Noise(x >> 1, y >> 1, seed) * 2f - 1f) * 0.05f;
+            if (dx * dx + dy * dy > wobble) continue;
+
+            var lit = (7.5f - x) * 0.9f + (8.6f - y) * 1.3f;
+            var tone = lit > 4.5f ? 4 : lit > 1.5f ? 3 : lit > -2.5f ? 2 : lit > -5f ? 1 : 0;
+            if (y >= 12 && Math.Abs(x - 7.5f) < 1.6f) tone = 0;   // the dimple at the foot
+            Put(t, x, y, red[tone].R, red[tone].G, red[tone].B, 255);
+        }
+
+        // The stem, two pixels rising out of the dip, and the leaf beside it.
+        Put(t, 7, 2, wood[1].R, wood[1].G, wood[1].B, 255);
+        Put(t, 7, 3, wood[0].R, wood[0].G, wood[0].B, 255);
+        Put(t, 8, 2, leaf[2].R, leaf[2].G, leaf[2].B, 255);
+        Put(t, 9, 2, leaf[1].R, leaf[1].G, leaf[1].B, 255);
+        Put(t, 9, 3, leaf[0].R, leaf[0].G, leaf[0].B, 255);
+
+        return t;
+    }
+
+    /// <summary>
     /// Seagrass: ribbon blades swaying from the sea floor, in kelp greens.
     /// </summary>
     /// <remarks>

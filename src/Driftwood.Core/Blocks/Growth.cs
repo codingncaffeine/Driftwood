@@ -1,3 +1,4 @@
+using Driftwood.Core.Gen;
 using Driftwood.Core.World;
 
 namespace Driftwood.Core.Blocks;
@@ -18,25 +19,56 @@ namespace Driftwood.Core.Blocks;
 /// <para>⚠ <b>The rate is per chunk per second, not per frame.</b> A tick budget spent per frame is
 /// a growth rate that depends on the frame rate, which is the same class of mistake as measuring a
 /// window in frames — a field would ripen faster on a better machine.</para>
+/// <para>⛳ <b>The tree's renewal rides the same tick (2026-08-22):</b> a sapling is a block that
+/// wants to become a whole tree, and a leaf whose tree is gone is a block that wants to become air
+/// and pay its drops on the way. Neither needed a second mechanism; both needed the tick to be
+/// honest about its rate — see <see cref="CellsPerChunkPerSecond"/>.</para>
 /// </remarks>
 public sealed class Growth
 {
     /// <summary>How many cells of each loaded chunk are touched per second.</summary>
     /// <remarks>
-    /// ⚠ Dialled against how long a field should take rather than picked. A 32³ chunk is 32,768
-    /// cells, so at three a second one particular cell is looked at about every three hours — which
-    /// is why a crop advances on a CHANCE per look rather than needing many, and why the number
-    /// below is a probability and not a countdown.
+    /// <para>⛔ <b>This was 3 until 2026-08-22, and its own note promised "ten to twenty minutes" for
+    /// a field.</b> A 32³ chunk is 32,768 cells, so at three a second one particular cell was looked
+    /// at about every three HOURS, and a four-stage crop at a 0.55 chance a look took the better
+    /// part of a day — the note and the number disagreed by a hundred, and nobody had timed a field
+    /// because bone meal was always to hand. The saplings are what made it matter: a tree that
+    /// takes a day to come up is a tree nobody ever sees come up.</para>
+    /// <para>⛳ Measured against the genre rather than picked: the reference ticks three cells per
+    /// sixteen-cube section per game tick, which is 480 a second for a chunk this size — one look
+    /// per cell every 68 seconds. This is a third of that, one look every ~205 seconds, and the
+    /// chances below are dialled to it: a field in 15–20 minutes, a sapling in ten, a felled
+    /// canopy gone in a few. The cost is a few thousand cell reads a frame over every meshed chunk,
+    /// which the tick report measures.</para>
     /// </remarks>
-    public const float CellsPerChunkPerSecond = 3f;
+    public const float CellsPerChunkPerSecond = 160f;
 
     /// <summary>How likely a lit, watered crop is to move up a stage when it is looked at.</summary>
     /// <remarks>
-    /// ⛳ With the rate above this puts a four-stage crop at roughly ten to twenty minutes of real
-    /// time from seed to harvest, which is a night indoors rather than an errand — long enough that
-    /// planting is a decision and short enough that a player sees it happen in one session.
+    /// ⛳ With the rate above this puts a four-stage crop at roughly fifteen to twenty minutes of
+    /// real time from seed to harvest, which is a night indoors rather than an errand — long enough
+    /// that planting is a decision and short enough that a player sees it happen in one session.
     /// </remarks>
     public const float StageChance = 0.55f;
+
+    /// <summary>How likely a lit sapling is to become a tree when it is looked at.</summary>
+    /// <remarks>
+    /// One look in three, at one look every ~205 seconds: a tree in about ten minutes on average,
+    /// which is a little quicker than the genre's sixteen and slow enough that bone meal still
+    /// means something.
+    /// </remarks>
+    public const float SaplingChance = 0.35f;
+
+    /// <summary>How likely a helping of bone meal is to grow a sapling into its tree outright.</summary>
+    public const float BonemealSaplingChance = 0.45f;
+
+    /// <summary>How far, walking only through leaves, a leaf may be from a log before it decays.</summary>
+    /// <remarks>
+    /// Six, the genre's own reach: the widest crown the generator grows is radius four off a branch
+    /// that is itself a log, so every leaf of a standing tree is within it, and the first leaf of a
+    /// felled one is outside it the moment the last log goes.
+    /// </remarks>
+    public const int LeafReach = 6;
 
     /// <summary>Light at or above which a crop will grow at all.</summary>
     /// <remarks>
@@ -53,6 +85,11 @@ public sealed class Growth
     private readonly bool[] _isCrop;
     private readonly bool[] _onFarmland;
     private readonly bool[] _isFarmland;
+    private readonly bool[] _isSapling;
+    private readonly bool[] _saplingIsCherry;
+    private readonly bool[] _naturalLeaves;
+    private readonly bool[] _anyLeaves;
+    private readonly bool[] _isLog;
     private readonly BlockId _farmland;
     private readonly BlockId _farmlandWet;
     private readonly BlockId _grass;
@@ -65,6 +102,28 @@ public sealed class Growth
     /// <summary>And how many of those actually became something else.</summary>
     public long Grew { get; private set; }
 
+    /// <summary>How many saplings became trees.</summary>
+    public long TreesGrown { get; private set; }
+
+    /// <summary>How many leaves decayed for want of a tree.</summary>
+    public long Decayed { get; private set; }
+
+    /// <summary>
+    /// The door every write goes through. Null writes the world directly, which is right for a
+    /// headless check; the game sets the streamer's edit path so light and mesh follow a leaf
+    /// falling or a canopy appearing.
+    /// </summary>
+    public Action<int, int, int, BlockId>? Writer { get; set; }
+
+    /// <summary>Who grows the trees. Null and a sapling simply waits.</summary>
+    public TerrainGenerator? Trees { get; set; }
+
+    /// <summary>
+    /// The leaves that decayed since this was last drained, for the caller to pay their drops and
+    /// shed their particles — the tick cannot, it has no hands.
+    /// </summary>
+    public List<(int X, int Y, int Z, BlockId Was)> Fallen { get; } = new();
+
     private readonly BlockId _water;
 
     public Growth(BlockRegistry registry)
@@ -75,6 +134,11 @@ public sealed class Growth
         _isCrop = new bool[registry.Count];
         _onFarmland = new bool[registry.Count];
         _isFarmland = new bool[registry.Count];
+        _isSapling = new bool[registry.Count];
+        _saplingIsCherry = new bool[registry.Count];
+        _naturalLeaves = new bool[registry.Count];
+        _anyLeaves = new bool[registry.Count];
+        _isLog = new bool[registry.Count];
 
         for (var i = 0; i < _next.Length; i++) _next[i] = -1;
 
@@ -104,6 +168,24 @@ public sealed class Growth
             if (stage + 1 < ladder.Rungs.Length)
                 _next[here.Value] = registry.ByName(ladder.Rungs[stage + 1]).Id.Value;
         }
+
+        // ⛳ The trees, by name as well. A third species is a sapling row here, its leaves in the
+        // two lists, its log in the third — and nothing else in this file changes.
+        _isSapling[registry.ByName(StarterBlocks.SaplingName).Id.Value] = true;
+        _isSapling[registry.ByName(StarterBlocks.CherrySaplingName).Id.Value] = true;
+        _saplingIsCherry[registry.ByName(StarterBlocks.CherrySaplingName).Id.Value] = true;
+
+        foreach (var name in (string[])["driftoak_leaves", "cherry_leaves"])
+        {
+            _naturalLeaves[registry.ByName(name).Id.Value] = true;
+            _anyLeaves[registry.ByName(name).Id.Value] = true;
+        }
+
+        foreach (var name in (string[])[StarterBlocks.LeavesPlacedName, StarterBlocks.CherryLeavesPlacedName])
+            _anyLeaves[registry.ByName(name).Id.Value] = true;
+
+        foreach (var name in (string[])["driftoak_log", "cherry_log"])
+            _isLog[registry.ByName(name).Id.Value] = true;
     }
 
     /// <summary>True when this block is a crop at any stage.</summary>
@@ -115,12 +197,24 @@ public sealed class Growth
     /// <summary>True when this crop has nothing left to become.</summary>
     public bool IsRipe(BlockId block) => _isCrop[block.Value] && _next[block.Value] < 0;
 
+    /// <summary>True when this block is a sapling of any species.</summary>
+    public bool IsSapling(BlockId block) => _isSapling[block.Value];
+
+    /// <summary>True when this block is a leaf that grew on a tree — the kind that decays.</summary>
+    public bool IsNaturalLeaf(BlockId block) => _naturalLeaves[block.Value];
+
     /// <summary>The stage after this one, or the same block when there is none.</summary>
     public BlockId Next(BlockId block) =>
         _next[block.Value] < 0 ? block : new BlockId((ushort)_next[block.Value]);
 
+    private void Write(VoxelWorld world, int x, int y, int z, BlockId id)
+    {
+        if (Writer is { } writer) writer(x, y, z, id);
+        else world.SetBlock(x, y, z, id);
+    }
+
     /// <summary>
-    /// Advances one crop cell if it can, and answers whether it did.
+    /// Advances one cell if it can, and answers whether it did.
     /// </summary>
     /// <remarks>
     /// ⛔ <b>Asked of the cell rather than of a stored timer, so it is idempotent and order-free.</b>
@@ -142,8 +236,32 @@ public sealed class Growth
 
             if (here == want) return false;
 
-            world.SetBlock(x, y, z, want);
+            Write(world, x, y, z, want);
             return true;
+        }
+
+        // ⛳ A leaf with no tree: the walk to the nearest log is the whole rule, and a leaf that
+        // finds none comes down — paying what a leaf pays, through Fallen, because the tick has no
+        // hands to drop an item with. Every look, not a chance of one: the slow part is the look.
+        if (_naturalLeaves[here.Value])
+        {
+            if (Supported(world, x, y, z)) return false;
+
+            Write(world, x, y, z, BlockId.Air);
+            Fallen.Add((x, y, z, here));
+            Decayed++;
+            return true;
+        }
+
+        // ⛳ A sapling wants light and a chance, the crop's own two gates, and then the whole tree
+        // at once — there is no half-grown tree to be a stage. Blocked overhead it simply waits.
+        if (_isSapling[here.Value])
+        {
+            if (Trees is null) return false;
+            if (LightOf(world.GetLight(x, y, z)) < MinLight) return false;
+            if (roll >= SaplingChance) return false;
+
+            return GrowSapling(world, x, y, z, here, roll);
         }
 
         if (!_isCrop[here.Value] || _next[here.Value] < 0) return false;
@@ -166,9 +284,72 @@ public sealed class Growth
         if (world.GetLight(x, y, z) is var light && LightOf(light) < MinLight) return false;
         if (roll >= StageChance) return false;
 
-        world.SetBlock(x, y, z, Next(here));
+        Write(world, x, y, z, Next(here));
         return true;
     }
+
+    /// <summary>
+    /// Grows the sapling at a cell into its tree now — bone meal's door — or answers false when the
+    /// cell is not a sapling, nobody grows trees, or the trunk's column is blocked.
+    /// </summary>
+    public bool GrowSapling(VoxelWorld world, int x, int y, int z, double roll)
+    {
+        var here = world.GetBlock(x, y, z);
+        return _isSapling[here.Value] && GrowSapling(world, x, y, z, here, roll);
+    }
+
+    private bool GrowSapling(VoxelWorld world, int x, int y, int z, BlockId sapling, double roll)
+    {
+        if (Trees is not { } trees) return false;
+
+        // The shape comes off the roll and the cell, so two saplings side by side grow two trees
+        // and the same sapling looked at twice does not grow the same tree it refused.
+        var shape = unchecked((int)(roll * int.MaxValue) ^ (x * 73_856_093) ^ (y * 19_349_663) ^ (z * 83_492_791));
+        if (!trees.GrowTree(world, x, y, z, _saplingIsCherry[sapling.Value], shape, (wx, wy, wz, id) => Write(world, wx, wy, wz, id)))
+            return false;
+
+        TreesGrown++;
+        return true;
+    }
+
+    /// <summary>
+    /// True when a leaf can reach a log within <see cref="LeafReach"/> steps, walking only through
+    /// leaves of any species or placing.
+    /// </summary>
+    /// <remarks>
+    /// A breadth-first walk rather than a box search: a log six cells away across open air is not
+    /// this leaf's tree, and a box would count it. The frontier is bounded by the reach, so the
+    /// worst case is a few hundred reads for a leaf deep in a dense canopy.
+    /// </remarks>
+    public bool Supported(VoxelWorld world, int x, int y, int z)
+    {
+        var seen = new HashSet<(int, int, int)> { (x, y, z) };
+        var frontier = new Queue<(int X, int Y, int Z, int Steps)>();
+        frontier.Enqueue((x, y, z, 0));
+
+        while (frontier.Count > 0)
+        {
+            var (cx, cy, cz, steps) = frontier.Dequeue();
+            if (steps >= LeafReach) continue;
+
+            foreach (var (dx, dy, dz) in Neighbours)
+            {
+                var nx = cx + dx;
+                var ny = cy + dy;
+                var nz = cz + dz;
+                if (!seen.Add((nx, ny, nz))) continue;
+
+                var block = world.GetBlock(nx, ny, nz);
+                if (_isLog[block.Value]) return true;
+                if (_anyLeaves[block.Value]) frontier.Enqueue((nx, ny, nz, steps + 1));
+            }
+        }
+
+        return false;
+    }
+
+    private static readonly (int, int, int)[] Neighbours =
+        [(1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1)];
 
     /// <summary>
     /// Plants a field in a real world and grows it, and checks every gate on the way.
@@ -300,6 +481,105 @@ public sealed class Growth
         return faults;
     }
 
+    /// <summary>
+    /// Plants a sapling in a real world and grows a tree out of it, fells it and watches the canopy
+    /// come down, and checks the refusals on the way — with a second, placed canopy as the control
+    /// that must NOT come down.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛔ <b>Every arm has its refusal</b>: a sapling in the dark must not grow; a sapling under
+    /// a ceiling must not grow; a leaf on a standing tree must not fall; a placed leaf with no tree
+    /// anywhere near it must never fall. "The tree grew and the leaves fell" is true of a build that
+    /// grows everything and drops everything.</para>
+    /// <para>⚠ Stepped with a roll of zero, as the field check is: the chance is not under test.</para>
+    /// </remarks>
+    public static List<string> ValidateTrees(BlockRegistry registry, TerrainGenerator trees)
+    {
+        var faults = new List<string>();
+
+        var world = new VoxelWorld(registry);
+        var growth = new Growth(registry) { Trees = trees };
+
+        var dirt = registry.ByName("dirt").Id;
+        var stone = registry.ByName("stone").Id;
+        var sapling = registry.ByName(StarterBlocks.SaplingName).Id;
+        var log = registry.ByName("driftoak_log").Id;
+        var leaves = registry.ByName("driftoak_leaves").Id;
+        var placed = registry.ByName(StarterBlocks.LeavesPlacedName).Id;
+
+        // A lawn at y 64, wide enough for a crown, and a sapling in the middle of it. Dark first.
+        for (var x = -12; x <= 12; x++)
+        for (var z = -12; z <= 12; z++)
+            world.SetBlock(x, 64, z, dirt);
+
+        world.SetBlock(0, 65, 0, sapling);
+
+        if (growth.Step(world, 0, 65, 0, 0.0))
+            faults.Add("a sapling in the dark grew");
+
+        new Lighting.LightEngine(registry).LightAll(world);
+
+        // ⛔ THE CEILING ARM: a slab of stone two above the sapling. Lit from the sides (sky light
+        // spreads sideways, the field check's own lesson), so only the blockage can refuse it.
+        world.SetBlock(0, 67, 0, stone);
+        if (growth.Step(world, 0, 65, 0, 0.0))
+            faults.Add("a sapling grew a trunk through a ceiling");
+        if (world.GetBlock(0, 67, 0) != stone)
+            faults.Add("a refused sapling carved the ceiling anyway");
+        world.SetBlock(0, 67, 0, BlockId.Air);
+
+        if (!growth.Step(world, 0, 65, 0, 0.0))
+            faults.Add("a lit sapling on open ground did not grow");
+        if (world.GetBlock(0, 65, 0) != log)
+            faults.Add($"a grown sapling's cell is {registry[world.GetBlock(0, 65, 0)].Name}, not a log");
+
+        var canopy = new List<(int X, int Y, int Z)>();
+        for (var x = -8; x <= 8; x++)
+        for (var y = 65; y < 80; y++)
+        for (var z = -8; z <= 8; z++)
+            if (world.GetBlock(x, y, z) == leaves) canopy.Add((x, y, z));
+
+        if (canopy.Count < 12)
+            faults.Add($"a grown tree has {canopy.Count} leaves, which is not a canopy");
+
+        // Every leaf of a standing tree is within reach of its wood, or the reach is too short.
+        foreach (var (x, y, z) in canopy)
+            if (!growth.Supported(world, x, y, z))
+            {
+                faults.Add($"a leaf of a standing tree at {x},{y},{z} counts as unsupported");
+                break;
+            }
+
+        if (canopy.Count > 0 && growth.Step(world, canopy[0].X, canopy[0].Y, canopy[0].Z, 0.0))
+            faults.Add("a leaf on a standing tree fell");
+
+        // ⛳ A placed canopy with no log in the world at all, as the control: it must never fall.
+        world.SetBlock(10, 70, 10, placed);
+        world.SetBlock(10, 71, 10, placed);
+
+        // Fell the tree — every log, wherever the flare and the branches put them.
+        var logs = new List<(int X, int Y, int Z)>();
+        for (var x = -8; x <= 8; x++)
+        for (var y = 65; y < 80; y++)
+        for (var z = -8; z <= 8; z++)
+            if (world.GetBlock(x, y, z) == log) logs.Add((x, y, z));
+        foreach (var (x, y, z) in logs) world.SetBlock(x, y, z, BlockId.Air);
+
+        var fell = 0;
+        foreach (var (x, y, z) in canopy)
+            if (growth.Step(world, x, y, z, 0.0)) fell++;
+
+        if (fell != canopy.Count)
+            faults.Add($"{fell} of {canopy.Count} leaves fell once their tree was felled");
+        if (growth.Fallen.Count != fell)
+            faults.Add($"{growth.Fallen.Count} leaves reported fallen for {fell} that did");
+
+        if (growth.Step(world, 10, 70, 10, 0.0) || world.GetBlock(10, 70, 10) != placed)
+            faults.Add("a placed leaf with no tree near it decayed");
+
+        return faults;
+    }
+
     /// <summary>The brighter of what the sky and a torch give this cell.</summary>
     /// <remarks>
     /// ⚠ RAW sky light, not scaled by the hour. Crops grow overnight — a field that stopped at dusk
@@ -331,9 +611,9 @@ public sealed class Growth
     /// </summary>
     /// <param name="chunks">Where the loaded chunks are, in cells, at their minimum corner.</param>
     /// <remarks>
-    /// ⚠ The budget is carried between frames rather than rounded per frame. At three cells a chunk
-    /// a second and sixty frames, every frame's share is a twentieth of a cell — rounded down that
-    /// is nothing at all, and nothing would ever grow.
+    /// ⚠ The budget is carried between frames rather than rounded per frame. At a few looks a chunk
+    /// a second and sixty frames, every frame's share of one chunk is a fraction of a cell — rounded
+    /// down that is nothing at all, and nothing would ever grow.
     /// </remarks>
     public void Update(VoxelWorld world, IReadOnlyList<(int X, int Y, int Z)> chunks, float dt, Random random)
     {

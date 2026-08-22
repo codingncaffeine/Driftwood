@@ -675,7 +675,15 @@ public static class StarterBlocks
     public const ushort LayerFirstSpellIcon = LayerParticleBubble + 1;
     public const ushort LayerLastSpellIcon = LayerFirstSpellIcon + 18;
 
-    public const int LayerCount = LayerLastSpellIcon + 1;
+    /// <summary>
+    /// The tree's renewal, 2026-08-22: the two saplings and the apple the leaves pay. Appended after
+    /// the spell sheet for the same reason everything before them was.
+    /// </summary>
+    public const ushort LayerDriftoakSapling = LayerLastSpellIcon + 1;
+    public const ushort LayerCherrySapling = LayerLastSpellIcon + 2;
+    public const ushort LayerApple = LayerLastSpellIcon + 3;
+
+    public const int LayerCount = LayerApple + 1;
 
     /// <summary>One anvil's name, by how worn it is and which way it lies.</summary>
     /// <remarks>
@@ -797,7 +805,16 @@ public static class StarterBlocks
     /// a berry refuses farmland and a seed refuses a lawn — which is what keeps a click's meaning
     /// readable from the ground alone.
     /// </remarks>
-    public static string? SownOnSoil(string item) => item == "berries" ? BerryBushName : null;
+    public static string? SownOnSoil(string item) => item switch
+    {
+        "berries" => BerryBushName,
+
+        // ⛳ A sapling goes down the way a berry does — on soil, through the sowing door — rather
+        // than as a placed block, so it cannot be stood on a roof or a fence post and wait for ever.
+        SaplingName => SaplingName,
+        CherrySaplingName => CherrySaplingName,
+        _ => null,
+    };
 
     public sealed record Ids(
         BlockId Stone,
@@ -890,8 +907,25 @@ public static class StarterBlocks
         /// <summary>P14's authored-world vocabulary, resolved once by stable block name.</summary>
         BlockId Chest,
         BlockId Rail,
-        BlockId Lantern)
+        BlockId Lantern,
+
+        /// <summary>
+        /// The tree's renewal (2026-08-22): a sapling per species, and the placed form of each
+        /// species' leaves — the one a player put down, which never decays.
+        /// </summary>
+        BlockId Sapling,
+        BlockId CherrySapling,
+        BlockId LeavesPlaced,
+        BlockId CherryLeavesPlaced)
     {
+        /// <summary>Every log a canopy counts as its tree, for the decay rule.</summary>
+        public BlockId[] Logs => [Log, CherryLog];
+
+        /// <summary>Every natural canopy — the leaves that decay when their tree is gone.</summary>
+        public BlockId[] NaturalLeaves => [Leaves, CherryLeaves];
+
+        /// <summary>Every leaf form, placed or grown, for the decay walk to pass through.</summary>
+        public BlockId[] AllLeaves => [Leaves, CherryLeaves, LeavesPlaced, CherryLeavesPlaced];
         /// <summary>Every rock an ore can form in. Ore replaces rock, whichever rock it is.</summary>
         public BlockId[] Rock => [Stone, Deepstone, Coralstone, Driftstone, Saltstone];
 
@@ -1890,6 +1924,46 @@ public static class StarterBlocks
                     stage >= ComposterStages ? LayerCompostReady : LayerCompost, stage),
             });
 
+        // ⛳ THE TREE'S RENEWAL (2026-08-22, the user's leaf report). A sapling per species: a
+        // cross-plant that stands on soil, is only ever sown (so Crafted — no census finds one in
+        // the ground), and becomes a whole tree on the growth tick. And the PLACED form of each
+        // species' leaves: same art, same sound, same tint, one difference — it never decays,
+        // because a player put it there. "The stage is the block id", the crop's own rule, so a
+        // built hedge costs the save nothing and the decay walk needs no record of who placed what.
+        var sapling = registry.Register(new BlockType
+        {
+            Name = SaplingName, Hardness = 0.05f, Crafted = true,
+            Solid = false, Opaque = false, Sounds = SoundMaterial.Plant,
+            SupportFace = Faces.NegY,
+            Model = BlockModel.Cross(LayerDriftoakSapling, tinted: false),
+        });
+
+        var cherrySapling = registry.Register(new BlockType
+        {
+            Name = CherrySaplingName, Hardness = 0.05f, Crafted = true,
+            Solid = false, Opaque = false, Sounds = SoundMaterial.Plant,
+            SupportFace = Faces.NegY,
+            Model = BlockModel.Cross(LayerCherrySapling, tinted: false),
+        });
+
+        var leavesPlaced = registry.Register(new BlockType
+        {
+            Name = LeavesPlacedName, Hardness = 0.2f, Crafted = true,
+            Opaque = false, LightAttenuation = 1,
+            Sounds = SoundMaterial.Leaves,
+            Tint = TintSource.Foliage,
+            TopLayer = LayerLeaves, SideLayer = LayerLeaves, BottomLayer = LayerLeaves,
+        });
+
+        var cherryLeavesPlaced = registry.Register(new BlockType
+        {
+            Name = CherryLeavesPlacedName, Hardness = 0.2f, Crafted = true,
+            Opaque = false, LightAttenuation = 1,
+            Sounds = SoundMaterial.Leaves,
+            TopLayer = LayerCherryLeaves, SideLayer = LayerCherryLeaves,
+            BottomLayer = LayerCherryLeaves,
+        });
+
         RegisterSignals(registry);
         RegisterRails(registry);
         RegisterWaterlogged(registry);
@@ -1904,8 +1978,15 @@ public static class StarterBlocks
             moss, registry.ByName("mossy_rubble").Id, seagrass, cherryLog, cherryLeaves,
             registry.ByName("chest_north").Id,
             registry.ByName("rail_x").Id,
-            registry.ByName("lantern").Id);
+            registry.ByName("lantern").Id,
+            sapling, cherrySapling, leavesPlaced, cherryLeavesPlaced);
     }
+
+    /// <summary>The saplings and the placed leaves, by name, for the rows that speak of them.</summary>
+    public const string SaplingName = "driftoak_sapling";
+    public const string CherrySaplingName = "cherry_sapling";
+    public const string LeavesPlacedName = "driftoak_leaves_placed";
+    public const string CherryLeavesPlacedName = "cherry_leaves_placed";
 
     /// <summary>The five gate kinds, in the order their tiles sit from <see cref="LayerGateFirst"/>.</summary>
     public static readonly string[] GateKinds = ["and", "or", "xor", "not", "latch"];

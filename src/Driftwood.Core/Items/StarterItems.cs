@@ -115,10 +115,30 @@ public static class StarterItems
         Block(items, blocks, "driftoak_log", "driftoak log", StarterBlocks.LayerLogSide, Timber);
         Block(items, blocks, "driftoak_planks", "driftoak planks", StarterBlocks.LayerPlanks, Timber);
 
-        // The second species (#94). Burns like any timber; the blossom has no item, exactly as
-        // the driftoak's leaves have none.
+        // The second species (#94). Burns like any timber.
         Block(items, blocks, "cherry_log", "cherry log", StarterBlocks.LayerCherryLogSide, Timber);
         Block(items, blocks, "cherry_planks", "cherry planks", StarterBlocks.LayerCherryPlanks, Timber);
+
+        // ⛳ THE LEAVES ARE CARRIED NOW (2026-08-22). Shears take a leaf block whole, the genre's own
+        // rule, and what they take has to be an item — so each species' leaves are one, placing
+        // the PLACED form (the one that never decays) and picked up from either form. The first
+        // variant is what the item puts down; the second is only here so a natural leaf under
+        // shears maps back to the same item rather than to nothing.
+        foreach (var (name, label, placed, icon) in ((string, string, string, ushort)[])
+                 [
+                     ("driftoak_leaves", "driftoak leaves", StarterBlocks.LeavesPlacedName, StarterBlocks.LayerLeaves),
+                     ("cherry_leaves", "cherry leaves", StarterBlocks.CherryLeavesPlacedName, StarterBlocks.LayerCherryLeaves),
+                 ])
+            items.Register(new ItemType
+            {
+                Name = name, Label = label, IconLayer = icon, DrawsAsBlock = true,
+                Places = new Placeable
+                {
+                    Label = label,
+                    Kind = PlacementKind.Plain,
+                    Variants = [blocks.ByName(placed).Id, blocks.ByName(name).Id],
+                },
+            });
         Block(items, blocks, "stone", "stone", StarterBlocks.LayerStone);
         Block(items, blocks, "rubble", "rubble", StarterBlocks.LayerRubble);
         Block(items, blocks, "dirt", "dirt", StarterBlocks.LayerDirt);
@@ -516,6 +536,20 @@ public static class StarterItems
 
         // Loose things: nothing puts these down, and half the recipe tree is made of them.
         Loose(items, "stick", "stick", StarterBlocks.LayerStick, burn: 5f);
+
+        // ⛳ The saplings (2026-08-22): what a leaf pays one time in twenty, and the only way a
+        // forest comes back. Loose rather than a Block item on purpose — a sapling is SOWN on soil
+        // through SownOnSoil, the berry's door, never placed on a fence post. A sapling burns for
+        // exactly as long as a stick, the genre's own number.
+        Loose(items, StarterBlocks.SaplingName, "driftoak sapling", StarterBlocks.LayerDriftoakSapling, burn: 5f);
+        Loose(items, StarterBlocks.CherrySaplingName, "cherry sapling", StarterBlocks.LayerCherrySapling, burn: 5f);
+
+        // And the apple: what the driftoak's leaves pay one time in two hundred. Twice a berry —
+        // a real meal off a tree, and the cherry gives none (the oak's rule, read across).
+        items.Register(new ItemType
+        {
+            Name = "apple", Label = "apple", IconLayer = StarterBlocks.LayerApple, Feeds = 4,
+        });
         Loose(items, "coal", "coal", StarterBlocks.LayerCoal, burn: 80f);
         Loose(items, "charcoal", "charcoal", StarterBlocks.LayerCharcoal, burn: 80f);
         Loose(items, "raw_copper", "raw copper", StarterBlocks.LayerRawCopper);
@@ -994,8 +1028,72 @@ public static class StarterItems
         // without this row the lit form has no placing item and would leave nothing.
         rules.Add(new BlockDrops.Rule(Blocks.Blastcask.Lit, Blocks.Blastcask.Cold));
 
-        return new BlockDrops(blocks, items, [.. rules]);
+        return new BlockDrops(blocks, items, [.. rules], Maybes(), Instead());
     }
+
+    /// <summary>What a leaf pays one time in twenty: the sapling rate, the user's own table.</summary>
+    public const float SaplingChance = 0.05f;
+
+    /// <summary>What a leaf pays one time in fifty: a stick or two.</summary>
+    public const float StickChance = 0.02f;
+
+    /// <summary>What a driftoak leaf pays one time in two hundred: an apple.</summary>
+    public const float AppleChance = 0.005f;
+
+    /// <summary>
+    /// The chance rows: what a block leaves on top of its certain drop, sometimes.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ <b>THE LEAVES (2026-08-22, the user's report: "the tree leaves aren't dropping
+    /// anything").</b> Every leaf form of a species pays its sapling at 5%, one or two sticks at
+    /// 2%, and — driftoak only, the oak's rule — an apple at 0.5%. The rates are the user's table
+    /// (the genre's standard-canopy numbers; the 2.5% dense-canopy rate is reserved for a species
+    /// that does not exist yet); Fortune raises each by <see cref="BlockDrops.FortuneStepPerTier"/>
+    /// a tier when it exists. A placed leaf pays the same as a grown one: a hedge is still a tree's
+    /// worth of leaves.</para>
+    /// <para>⛳ <b>And the ripe wheat's seed</b>, which used to be the client's one hand-written
+    /// second drop — and which, being keyed on "is ripe", had been paying wheat seed for every ripe
+    /// carrot, potato and berry bush since the root crops landed. A row per block cannot make that
+    /// mistake. One to three, as it was: at exactly one a field can only break even.</para>
+    /// </remarks>
+    private static BlockDrops.Chance[] Maybes()
+    {
+        var rows = new List<BlockDrops.Chance>
+        {
+            new(StarterBlocks.WheatName(StarterBlocks.WheatStages - 1), "seeds", 1f, 1, 3),
+        };
+
+        foreach (var leaves in (string[])["driftoak_leaves", StarterBlocks.LeavesPlacedName])
+        {
+            rows.Add(new BlockDrops.Chance(leaves, StarterBlocks.SaplingName, SaplingChance));
+            rows.Add(new BlockDrops.Chance(leaves, "stick", StickChance, 1, 2));
+            rows.Add(new BlockDrops.Chance(leaves, "apple", AppleChance));
+        }
+
+        foreach (var leaves in (string[])["cherry_leaves", StarterBlocks.CherryLeavesPlacedName])
+        {
+            rows.Add(new BlockDrops.Chance(leaves, StarterBlocks.CherrySaplingName, SaplingChance));
+            rows.Add(new BlockDrops.Chance(leaves, "stick", StickChance, 1, 2));
+        }
+
+        return [.. rows];
+    }
+
+    /// <summary>
+    /// The instead rows: what a tool class takes from a block in place of everything else.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ Shears take a leaf block whole and roll nothing — the genre's rule, and the reason the
+    /// leaves became an item. A natural leaf and a placed one both come up as the one item, which
+    /// places the placed form; so a canopy clipped and rebuilt as a hedge is a hedge, and stays.
+    /// </remarks>
+    private static BlockDrops.ToolRule[] Instead() =>
+    [
+        new("driftoak_leaves", ToolClass.Shears, "driftoak_leaves"),
+        new(StarterBlocks.LeavesPlacedName, ToolClass.Shears, "driftoak_leaves"),
+        new("cherry_leaves", ToolClass.Shears, "cherry_leaves"),
+        new(StarterBlocks.CherryLeavesPlacedName, ToolClass.Shears, "cherry_leaves"),
+    ];
 
     /// <summary>
     /// What each animal leaves, and what had to happen for it to leave it.
@@ -1104,8 +1202,20 @@ public static class StarterItems
         new BlockDrops.Rule("diamond_ore", "diamond"),
         new BlockDrops.Rule("azurite_ore", "azurite", 4),
 
+        // ⛳ A leaf leaves nothing FOR CERTAIN — under a hand or an axe its whole payment is the
+        // chance rows (sapling, sticks, apple), and under shears the instead-row. The leaves became
+        // an item on 2026-08-22, so without these four nulls every canopy would pay a leaf block per
+        // leaf, which is a hedge for free and the end of shears.
         new BlockDrops.Rule("driftoak_leaves", null),
+        new BlockDrops.Rule("cherry_leaves", null),
+        new BlockDrops.Rule(StarterBlocks.LeavesPlacedName, null),
+        new BlockDrops.Rule(StarterBlocks.CherryLeavesPlacedName, null),
         new BlockDrops.Rule("vine", null),
+
+        // A sapling comes back up as itself. Said here because a sown thing has no Places, so the
+        // default — "the item that puts it down" — finds nothing.
+        new BlockDrops.Rule(StarterBlocks.SaplingName, StarterBlocks.SaplingName),
+        new BlockDrops.Rule(StarterBlocks.CherrySaplingName, StarterBlocks.CherrySaplingName),
 
         // Winter cannot be carried home yet: broken ice is simply gone. An ice ITEM would need a
         // way to keep it frozen in a pocket, which is a mechanic, not a row.

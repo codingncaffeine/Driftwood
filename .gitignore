@@ -43,3 +43,6 @@ Desktop.ini
 /assets/driftwood icon.png
 /assets/driftwood banner.png
 /assets/spell_icons_gitignore this.png
+
+## The owner's rain recording: the 48-second loop ships embedded as rain.ogg; the long source does not.
+/assets/sounds/ambient/weather/rain.mp3

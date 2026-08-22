@@ -28,6 +28,15 @@ public static class Composting
     private static readonly Dictionary<string, float> Compostables = new(StringComparer.Ordinal)
     {
         ["seeds"] = 0.3f,
+
+        // ⛳ The tree's own leavings (2026-08-22): a sapling or a leaf block is a cheap helping, the
+        // genre's 30%; an apple is a grown thing and pays like a crop.
+        [StarterBlocks.SaplingName] = 0.3f,
+        [StarterBlocks.CherrySaplingName] = 0.3f,
+        ["driftoak_leaves"] = 0.3f,
+        ["cherry_leaves"] = 0.3f,
+        ["apple"] = 0.65f,
+
         ["berries"] = 0.3f,
         ["cactus"] = 0.5f,
         ["marsh_reed"] = 0.5f,

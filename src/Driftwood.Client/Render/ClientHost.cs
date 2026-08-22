@@ -1804,7 +1804,10 @@ public sealed class ClientHost : IDisposable
         _vitals = new PlayerVitals(registry);
         _particles = new ParticleSystem(registry);
         _projectiles = new ProjectileSystem(registry);
-        _growth = new Growth(registry);
+        // ⛳ The growth tick writes through the streamer's own edit door, so a canopy appearing or a
+        // leaf falling relights and remeshes like a player's swing; and it grows its trees with the
+        // very generator that grew the wild ones (2026-08-22).
+        _growth = new Growth(registry) { Writer = _streamer.EditBlock, Trees = generator };
         _leafBlock = ids.Leaves;
         _cherryLeafBlock = ids.CherryLeaves;
         _inventory = new Inventory(_items);
@@ -2191,6 +2194,27 @@ public sealed class ClientHost : IDisposable
             _growthChunks.Add((pos.X * Chunk.Size, pos.Y * Chunk.Size, pos.Z * Chunk.Size));
 
         _growth.Update(_streamer.World, _growthChunks, dt, _growthRandom);
+
+        // ⛳ The leaves that fell this tick pay what a leaf pays — the same table a hand gets, rolled
+        // the same way — and shed the species' own petal on the way down. The tick reports them
+        // because it has no hands; this is where the hands are.
+        if (_growth.Fallen.Count > 0)
+        {
+            foreach (var (x, y, z, was) in _growth.Fallen)
+            {
+                var type = _registry[was];
+                var at = new Vector3(x + 0.5f, y + 0.5f, z + 0.5f);
+
+                _harvested.Clear();
+                _dropTable.Harvest(type, null, _growthRandom, _harvested);
+                foreach (var stack in _harvested) _drops.Drop(stack, at);
+
+                _particles.Leaf(type, new Vector3(x + 0.5f, y, z + 0.5f));
+            }
+
+            _growth.Fallen.Clear();
+        }
+
         _fires.Emit(_particles, StarterBlocks.LayerFlame, StarterBlocks.LayerSmoke, dt);
     }
 
@@ -8880,6 +8904,65 @@ public sealed class ClientHost : IDisposable
     private Dictionary<ushort, string[]>? _crackles;
 
     /// <summary>
+    /// The rain's own voice: one loop that fades in as the rain arrives and out as it leaves, and
+    /// quietens underground exactly as far as the sky is out of sight.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ The user's two asks, 2026-08-22: wire the rain recording up, and "have it fade in
+    /// when it starts raining and fade out when it quits." The fade rides the weather's own
+    /// twelve-second strength ramp, and a second, shorter ramp follows the EYE: the loudness is
+    /// the share of the drops round the player that the sky can actually see (the renderer's
+    /// honest count), so walking into a cave mouth turns the rain down over a couple of seconds
+    /// and walking out turns it back up — no rain in a cellar, a little at the cave mouth.</para>
+    /// <para>Positioned at the eye every frame, so the engine's distance falloff never touches
+    /// it; snow is silent, which is what snow sounds like.</para>
+    /// </remarks>
+    private void StepRain(float dt)
+    {
+        if (_audio is null) return;
+
+        var target = 0f;
+        if (_spawned && _settings.Weather && _weather.Available)
+        {
+            var weather = WeatherCycle.Sample(_seed.Value, _elapsed, _viewPosition.Y);
+            if (weather.Active && weather.Kind == Precipitation.Rain)
+            {
+                // Over open ground about 55% of the box round the eye is sky; that is full volume.
+                var exposure = Math.Min(1f, _weather.Drawn / (WeatherField.ParticleCount * 0.55f));
+                target = weather.Strength * exposure;
+            }
+        }
+
+        // Quicker up than down: rain arriving is an event, rain leaving is a mood.
+        var rate = target > _rainLevel ? dt / 1.5f : dt / 2.5f;
+        _rainLevel += (target - _rainLevel) * Math.Min(1f, rate);
+
+        var gain = _rainLevel * 0.6f;
+        if (gain > 0.01f)
+        {
+            if (!_rainLoop)
+            {
+                _audio.StartLoop(RainLoopOwner, "ambient/weather/rain", _viewPosition, gain);
+                _rainLoop = true;
+            }
+            else
+            {
+                _audio.UpdateLoop(RainLoopOwner, _viewPosition, gain);
+            }
+        }
+        else if (_rainLoop)
+        {
+            _audio.StopLoop(RainLoopOwner);
+            _rainLoop = false;
+            _rainLevel = 0f;
+        }
+    }
+
+    private const string RainLoopOwner = "weather:rain";
+    private float _rainLevel;
+    private bool _rainLoop;
+
+    /// <summary>
     /// Plays the noises the world makes on its own: every few seconds the nearest lit fire
     /// crackles in its own voice, lava mutters and pops, and — rarely, and only buried in the
     /// dark — the underground says something.
@@ -10773,6 +10856,7 @@ public sealed class ClientHost : IDisposable
         StepCarts((float)dt);
         StepToasts((float)dt);
         StepAmbience((float)dt);
+        StepRain((float)dt);
         StepAutosave(dt);
         _particles.Update(_streamer.World, (float)dt);
         StepFires((float)dt);
@@ -11614,24 +11698,18 @@ public sealed class ClientHost : IDisposable
 
             // What the block leaves depends on what took it. Below the tier line it still comes
             // apart and leaves nothing, which is the whole reason to go and make a pickaxe.
-            _drops.Drop(_dropTable.Harvest(target, _inventory.HeldType), centre);
+            // ⛳ EVERYTHING it leaves (2026-08-22): the certain drop, every chance row that came up
+            // — a leaf's sapling, sticks and apple on their own coins — or the tool's instead-row
+            // (shears take the leaf itself). The ripe wheat's seed is a chance row of wheat's now;
+            // it used to be an "is ripe" branch here, and that branch paid wheat seed for every ripe
+            // carrot, potato and berry bush too.
+            _harvested.Clear();
+            _dropTable.Harvest(target, _inventory.HeldType, _growthRandom, _harvested);
+            foreach (var stack in _harvested) _drops.Drop(stack, centre);
 
-            // ⛳ A RIPE CROP LEAVES ITS SEED AS WELL AS ITS HARVEST, and that is what makes a field
-            // repay itself rather than being spent. BlockDrops is one item per block by design, so
-            // the second one is here — the first honest reason this game has had for a block to
-            // leave two things.
-            //
-            // ⚠ One to three, so a field grows slowly rather than doubling every harvest. At exactly
-            // one it can only ever break even and a bad roll ends the farm; at a guaranteed two it
-            // fills a chest by the third season.
+            // A ripe crop coming up sounds like a harvest, on top of the plant's own rustle.
             if (_growth.IsRipe(target.Id))
-            {
-                _drops.Drop(
-                    new ItemStack(_items.ByName("seeds").Id, 1 + _growthRandom.Next(3)), centre);
-
-                // A ripe crop coming up sounds like a harvest, on top of the plant's own rustle.
                 _audio?.Play(Pick(ActionSounds.Harvest), centre, 0.6f, Wobble());
-            }
 
             // A tool that did the work wears from it. Only the tool: a bare hand is free, and so is
             // a plank held like a club, which is why this asks the item rather than the swing.
@@ -12575,6 +12653,9 @@ public sealed class ClientHost : IDisposable
     /// </remarks>
     private readonly Random _growthRandom = new(0x6C726F70);
 
+    /// <summary>Scratch for what one block leaves, so a break allocates nothing.</summary>
+    private readonly List<ItemStack> _harvested = new(4);
+
     /// <summary>
     /// Turns ground over with a hoe: dirt or grass becomes a field.
     /// </summary>
@@ -12747,6 +12828,24 @@ public sealed class ClientHost : IDisposable
         if (_inventory.HeldType is not { } held || held.Name != "bonemeal") return false;
 
         var crop = _streamer.World.GetBlock(hit.X, hit.Y, hit.Z);
+
+        // ⛳ A sapling takes bone meal the same way, and by the same house rule — the whole tree,
+        // no roll — so the pinch is never "nothing happened". A sapling under a ceiling refuses and
+        // keeps the meal: the trunk will not carve a floor, and the refusal is the one honest answer.
+        if (_growth.IsSapling(crop))
+        {
+            if (!_growth.GrowSapling(_streamer.World, hit.X, hit.Y, hit.Z, _growthRandom.NextDouble()))
+                return false;
+
+            _inventory.SpendHeld();
+            InteractionParticleEffects.Grew(
+                _particles, new Vector3(hit.X + 0.5f, hit.Y + 0.5f, hit.Z + 0.5f), 18);
+            PlaySound(
+                _registry[crop], SoundEvent.Place,
+                new Vector3(hit.X + 0.5f, hit.Y + 0.5f, hit.Z + 0.5f), 0.7f);
+            return true;
+        }
+
         if (!_growth.IsCrop(crop) || _growth.IsRipe(crop)) return false;
 
         _streamer.EditBlock(hit.X, hit.Y, hit.Z, _growth.Next(crop));
@@ -13870,7 +13969,7 @@ public sealed class ClientHost : IDisposable
         if (_settings.Weather)
         {
             var weather = WeatherCycle.Sample(_seed.Value, _elapsed, _viewPosition.Y);
-            _weather.Draw(weather, viewProj, _viewPosition, (float)_elapsed,
+            _weather.Draw(weather, _streamer.World, viewProj, _viewPosition, (float)_elapsed,
                 _seed.Value, size.Y);
         }
 

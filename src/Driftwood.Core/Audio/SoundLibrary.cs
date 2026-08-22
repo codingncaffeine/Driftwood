@@ -24,6 +24,10 @@ public sealed class SoundLibrary
         ("enemies/spider", "Driftwood.Core.Sounds.enemies/spider.wav"),
         ("enemies/spider_attack", "Driftwood.Core.Sounds.enemies/spider_attack.wav"),
         ("enemies/zombie", "Driftwood.Core.Sounds.enemies/zombie.wav"),
+
+        // The rain loop (2026-08-22), a 48-second seamless excerpt of the recording the owner
+        // supplied; Vorbis, through our own decoder, like every pack sound.
+        ("ambient/weather/rain", "Driftwood.Core.Sounds.ambient/weather/rain.ogg"),
     ];
 
     private readonly Dictionary<string, SourceLayer> _sources = new(StringComparer.OrdinalIgnoreCase);
@@ -46,6 +50,10 @@ public sealed class SoundLibrary
     public int LocalCount { get; private set; }
     public int PackCount { get; private set; }
     public List<string> Faults { get; } = [];
+
+    /// <summary>The built-in names that play as loops rather than one-shots: long on purpose.</summary>
+    public static IReadOnlySet<string> Loops { get; } =
+        new HashSet<string>(["ambient/weather/rain"], StringComparer.OrdinalIgnoreCase);
 
     public static IReadOnlySet<string> BuiltInNames { get; } =
         new HashSet<string>(Embedded.Select(item => item.Key).Concat(MagicSounds.All),
@@ -104,7 +112,7 @@ public sealed class SoundLibrary
         foreach (var (key, resource) in Embedded)
         {
             if (_sources.ContainsKey(key)) continue;
-            Add(key, new ClipSource(".wav", resource, ResourceName: resource), replace: false);
+            Add(key, new ClipSource(Path.GetExtension(resource), resource, ResourceName: resource), replace: false);
         }
     }
 

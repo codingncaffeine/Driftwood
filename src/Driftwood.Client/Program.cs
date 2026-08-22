@@ -477,7 +477,12 @@ public static class Program
                 Console.WriteLine(
                     $"  {name,-32} {clip.Seconds,6:F2}s  {clip.Channels}ch {clip.SampleRate}Hz  peak {clip.Peak:F2}");
                 if (clip.ToMono().Peak < 0.02f) faults.Add($"{name} plays as near silence");
-                if (clip.Seconds > 8f) faults.Add($"{name} is {clip.Seconds:F1}s, which is not a one-shot");
+                // A loop is long on purpose; a one-shot is not allowed to be.
+                if (SoundLibrary.Loops.Contains(name))
+                {
+                    if (clip.Seconds < 20f) faults.Add($"{name} is {clip.Seconds:F1}s, which is too short to loop without a seam");
+                }
+                else if (clip.Seconds > 8f) faults.Add($"{name} is {clip.Seconds:F1}s, which is not a one-shot");
             }
 
             Console.WriteLine(

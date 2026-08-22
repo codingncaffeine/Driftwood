@@ -1,41 +1,38 @@
 using System.Numerics;
 using Driftwood.Core.Sky;
 using Driftwood.Core.Textures;
+using Driftwood.Core.World;
 using Silk.NET.OpenGL;
 
 namespace Driftwood.Client.Render;
 
-/// <summary>Depth-tested rain and snow point sprites distributed deterministically around the eye.</summary>
+/// <summary>
+/// Depth-tested rain and snow point sprites, drawn wherever <see cref="WeatherField"/> says a
+/// drop exists this frame — which is only where the sky can see the cell.
+/// </summary>
+/// <remarks>
+/// ⛳ <b>This used to hash every drop's place in the vertex shader from nothing but the eye</b>,
+/// which is how rain fell through cave air and under every roof (the user's report, 2026-08-22).
+/// The world is the one thing a shader cannot ask, so the placing moved to the CPU, where the
+/// same code serves a headless check, and this file is left with what a renderer is for: a buffer
+/// of positions, a point size and a fade. <see cref="Drawn"/> is now a count of drops that exist,
+/// not of points submitted — zero in a cave, full in a field, something in a pit.
+/// </remarks>
 public sealed class WeatherRenderer : IDisposable
 {
-    private const int ParticleCount = 768;
-
     private const string VertexSource = """
         #version 330 core
+        layout(location = 0) in vec3 aPosition;
         uniform mat4 uViewProj;
         uniform vec3 uCamera;
-        uniform float uTime;
-        uniform float uSeed;
         uniform float uViewportHeight;
         uniform int uSnow;
         out float vFade;
 
-        float hash(float n) { return fract(sin(n) * 43758.5453123); }
-
         void main()
         {
-            float id = float(gl_VertexID) + uSeed;
-            vec3 random = vec3(hash(id * 17.13), hash(id * 41.71 + 3.1), hash(id * 73.37 + 9.7));
-            vec3 offset = (random - 0.5) * vec3(56.0, 38.0, 56.0);
-            float speed = uSnow != 0 ? 3.4 : 25.0;
-            offset.y = mod(offset.y - uTime * speed + 19.0, 38.0) - 19.0;
-            if (uSnow != 0)
-            {
-                offset.x += sin(uTime * 0.8 + id) * 1.8;
-                offset.z += cos(uTime * 0.6 + id * 0.7) * 1.4;
-            }
-            vec3 world = uCamera + offset;
-            gl_Position = uViewProj * vec4(world, 1.0);
+            vec3 offset = aPosition - uCamera;
+            gl_Position = uViewProj * vec4(aPosition, 1.0);
             float distanceFade = 1.0 - smoothstep(10.0, 39.0, length(offset));
             vFade = distanceFade * smoothstep(-19.0, -13.0, offset.y)
                     * (1.0 - smoothstep(13.0, 19.0, offset.y));
@@ -64,16 +61,20 @@ public sealed class WeatherRenderer : IDisposable
         """;
 
     private readonly GL _gl;
+    private readonly Vector3[] _drops = new Vector3[WeatherField.ParticleCount];
     private Shader? _shader;
     private Texture2D? _rain;
     private Texture2D? _snow;
     private uint _vao;
+    private uint _vbo;
 
     public bool Available { get; private set; }
     public string Failure { get; private set; } = "";
+
+    /// <summary>How many drops existed on the last draw — the ones the sky could see.</summary>
     public int Drawn { get; private set; }
 
-    public WeatherRenderer(GL gl, EnvironmentTextureSet.Result art)
+    public unsafe WeatherRenderer(GL gl, EnvironmentTextureSet.Result art)
     {
         _gl = gl;
         try
@@ -81,7 +82,20 @@ public sealed class WeatherRenderer : IDisposable
             _shader = new Shader(gl, VertexSource, FragmentSource);
             _rain = new Texture2D(gl, art.Rain);
             _snow = new Texture2D(gl, art.Snow);
+
             _vao = gl.GenVertexArray();
+            gl.BindVertexArray(_vao);
+            _vbo = gl.GenBuffer();
+            gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vbo);
+            gl.BufferData(
+                BufferTargetARB.ArrayBuffer,
+                (nuint)(_drops.Length * 3 * sizeof(float)),
+                null,
+                BufferUsageARB.StreamDraw);
+            gl.EnableVertexAttribArray(0);
+            gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 3 * sizeof(float), (void*)0);
+            gl.BindVertexArray(0);
+
             Available = true;
         }
         catch (Exception error)
@@ -91,8 +105,11 @@ public sealed class WeatherRenderer : IDisposable
         }
     }
 
-    public void Draw(
+    /// <summary>Draws the weather round the eye, wherever the world lets it fall.</summary>
+    /// <param name="world">Whose stored sky light decides where a drop exists.</param>
+    public unsafe void Draw(
         in WeatherState weather,
+        VoxelWorld world,
         Matrix4x4 viewProj,
         Vector3 camera,
         float elapsed,
@@ -102,11 +119,14 @@ public sealed class WeatherRenderer : IDisposable
         Drawn = 0;
         if (!Available || !weather.Active || _shader is null || _rain is null || _snow is null) return;
 
+        var count = WeatherField.Fill(
+            _drops, weather, camera, elapsed % 10_000f, seed,
+            (x, y, z) => WeatherField.SkyExposed(world, x, y, z));
+        if (count == 0) return;
+
         _shader.Use();
         _shader.SetMatrix4("uViewProj", viewProj);
         _shader.SetVec3("uCamera", camera);
-        _shader.SetFloat("uTime", elapsed % 10_000f);
-        _shader.SetFloat("uSeed", Math.Abs(seed % 8_191));
         _shader.SetFloat("uViewportHeight", viewportHeight);
         _shader.SetInt("uSnow", weather.Kind == Precipitation.Snow ? 1 : 0);
         _shader.SetFloat("uStrength", weather.Strength * 0.78f);
@@ -115,21 +135,26 @@ public sealed class WeatherRenderer : IDisposable
         _rain.Bind(TextureUnit.Texture0);
         _snow.Bind(TextureUnit.Texture1);
 
+        _gl.BindVertexArray(_vao);
+        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vbo);
+        fixed (Vector3* p = _drops)
+            _gl.BufferSubData(BufferTargetARB.ArrayBuffer, 0, (nuint)(count * 3 * sizeof(float)), p);
+
         _gl.Enable(EnableCap.ProgramPointSize);
         _gl.Enable(EnableCap.Blend);
         _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
         _gl.DepthMask(false);
-        _gl.BindVertexArray(_vao);
-        _gl.DrawArrays(PrimitiveType.Points, 0, ParticleCount);
+        _gl.DrawArrays(PrimitiveType.Points, 0, (uint)count);
         _gl.BindVertexArray(0);
         _gl.DepthMask(true);
         _gl.Disable(EnableCap.Blend);
         _gl.Disable(EnableCap.ProgramPointSize);
-        Drawn = ParticleCount;
+        Drawn = count;
     }
 
     public void Dispose()
     {
+        if (_vbo != 0) _gl.DeleteBuffer(_vbo);
         if (_vao != 0) _gl.DeleteVertexArray(_vao);
         _rain?.Dispose();
         _snow?.Dispose();

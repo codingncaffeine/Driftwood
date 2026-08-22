@@ -1185,6 +1185,7 @@ public sealed class TerrainGenerator
 
         // Fixed cell order so overlapping trees resolve the same way no matter which chunk is
         // asking — the relative order of any two trees is identical in every sub-range.
+        var canvas = new ChunkCanvas(chunk, ox, oy, oz);
         for (var cz = cellMinZ; cz <= cellMaxZ; cz++)
         for (var cx = cellMinX; cx <= cellMaxX; cx++)
         {
@@ -1198,7 +1199,7 @@ public sealed class TerrainGenerator
             if (lowest >= oy + Chunk.Size) continue;
             if (highest < oy) continue;
 
-            PlantOakInto(chunk, ox, oy, oz, tree);
+            PlantOakInto(canvas, tree);
         }
 
         PlaceStructures(chunk, ox, oy, oz, reach);
@@ -1790,7 +1791,92 @@ public sealed class TerrainGenerator
     private static int FloorDiv(int a, int b) => a >= 0 ? a / b : -(((-a) + b - 1) / b);
 
     /// <summary>
-    /// Writes whatever parts of one tree land inside this chunk: trunk, branches, crown, vines.
+    /// Where a tree's cells land: one chunk while the world generates, or the live world when a
+    /// sapling grows (2026-08-22). The tree code is written once against this and never asks which.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ The chunk canvas answers "not air" for any cell outside its chunk, and drops the write —
+    /// exactly what the chunk-bound helpers below it did, so worldgen stays bit-identical to the
+    /// day before this existed. The five-seed census is what holds it to that.
+    /// </remarks>
+    private interface ITreeCanvas
+    {
+        bool IsAir(int wx, int wy, int wz);
+        void Set(int wx, int wy, int wz, BlockId id);
+    }
+
+    private sealed class ChunkCanvas(Chunk chunk, int ox, int oy, int oz) : ITreeCanvas
+    {
+        public bool IsAir(int wx, int wy, int wz)
+        {
+            var lx = wx - ox;
+            var ly = wy - oy;
+            var lz = wz - oz;
+            if ((uint)lx >= Chunk.Size || (uint)ly >= Chunk.Size || (uint)lz >= Chunk.Size) return false;
+            return chunk.Get(lx, ly, lz).IsAir;
+        }
+
+        public void Set(int wx, int wy, int wz, BlockId id)
+        {
+            var lx = wx - ox;
+            var ly = wy - oy;
+            var lz = wz - oz;
+            if ((uint)lx >= Chunk.Size || (uint)ly >= Chunk.Size || (uint)lz >= Chunk.Size) return;
+            chunk.Set(lx, ly, lz, id);
+        }
+    }
+
+    /// <summary>The live world, written through whatever door the caller owns — the streamer's edit
+    /// path in the game, so light and mesh follow; the world itself in a headless check.</summary>
+    private sealed class WorldCanvas(VoxelWorld world, Action<int, int, int, BlockId> write) : ITreeCanvas
+    {
+        public bool IsAir(int wx, int wy, int wz) => InWorld(wy) && world.GetBlock(wx, wy, wz).IsAir;
+        public void Set(int wx, int wy, int wz, BlockId id) { if (InWorld(wy)) write(wx, wy, wz, id); }
+    }
+
+    /// <summary>
+    /// Grows a whole tree out of a sapling cell in the live world, or refuses and says so.
+    /// </summary>
+    /// <param name="write">The door the cells go through — the streamer's edit path, so light and
+    /// mesh hear every leaf.</param>
+    /// <param name="shapeSeed">Decides the tree's proportions, the way a grid cell does for a wild
+    /// one; the grower draws it from its random so two saplings never make the same tree.</param>
+    /// <remarks>
+    /// <para>⛳ <b>The same tree the world grows</b>: the wild shape and this one share every line
+    /// of the canopy, branch and flare code through <see cref="ITreeCanvas"/>, so a planted wood
+    /// is indistinguishable from a found one. The only difference is the proportions' source —
+    /// a seed handed in rather than a grid cell — and the base, which is wherever the sapling is.</para>
+    /// <para>⛔ <b>Refuses rather than carves.</b> The trunk is the one part of a tree that writes
+    /// over whatever is there (a log must win its own column), so before anything is written every
+    /// trunk cell above the sapling has to be air. A sapling under a ceiling waits; it does not
+    /// punch a log through the floor above it. Leaves only ever go into air, as they always have.</para>
+    /// </remarks>
+    public bool GrowTree(VoxelWorld world, int x, int y, int z, bool cherry, int shapeSeed, Action<int, int, int, BlockId> write)
+    {
+        var trunk = 5 + (int)(Noise.Value2(shapeSeed, 1, _seedTree + 53) * 4f);
+
+        for (var i = 1; i < trunk; i++)
+            if (!world.GetBlock(x, y + i, z).IsAir) return false;
+
+        var spec = new TreeSpec(
+            X: x,
+            Z: z,
+            BaseY: y,
+            TrunkHeight: trunk,
+            CrownRadius: 2 + (int)(Noise.Value2(shapeSeed, 2, _seedTree + 103) * 2f),
+            CrownOffsetX: (int)(Noise.Value2(shapeSeed, 3, _seedTree + 109) * 3f) - 1,
+            CrownOffsetZ: (int)(Noise.Value2(shapeSeed, 4, _seedTree + 113) * 3f) - 1,
+            CrownDepth: 3 + (int)(Noise.Value2(shapeSeed, 5, _seedTree + 127) * 2f),
+            Branches: trunk >= 6 ? (int)(Noise.Value2(shapeSeed, 6, _seedTree + 131) * 3f) : 0,
+            Seed: Noise.Hash2(shapeSeed, 7, _seedTree),
+            Cherry: cherry);
+
+        PlantOakInto(new WorldCanvas(world, write), spec);
+        return true;
+    }
+
+    /// <summary>
+    /// Writes whatever parts of one tree land on the canvas: trunk, branches, crown, vines.
     /// </summary>
     /// <remarks>
     /// Crown before trunk, so a log always wins its own column. Branches before the crowns they
@@ -1800,16 +1886,16 @@ public sealed class TerrainGenerator
     /// carving the other — which is what makes a stand of trees read as woodland rather than as a
     /// row of separate lollipops. Trunks pass straight up through a neighbour's foliage.</para>
     /// </remarks>
-    private void PlantOakInto(Chunk chunk, int ox, int oy, int oz, in TreeSpec tree)
+    private void PlantOakInto(ITreeCanvas canvas, in TreeSpec tree)
     {
-        PlaceBranches(chunk, ox, oy, oz, tree);
+        PlaceBranches(canvas, tree);
         PlaceCrown(
-            chunk, ox, oy, oz, tree,
+            canvas, tree,
             tree.X + tree.CrownOffsetX, tree.TopY, tree.Z + tree.CrownOffsetZ,
             tree.CrownRadius, tree.CrownDepth);
 
         for (var i = 0; i < tree.TrunkHeight; i++)
-            Place(chunk, ox, oy, oz, tree.X, tree.BaseY + i, tree.Z, tree.LogOf(_ids));
+            canvas.Set(tree.X, tree.BaseY + i, tree.Z, tree.LogOf(_ids));
 
         // A flare of logs at the foot, so a trunk meets the ground instead of being planted in it.
         for (var face = 0; face < 4; face++)
@@ -1823,7 +1909,7 @@ public sealed class TerrainGenerator
                 2 => (0, 1),
                 _ => (0, -1),
             };
-            PlaceIntoAir(chunk, ox, oy, oz, tree.X + dx, tree.BaseY, tree.Z + dz, tree.LogOf(_ids));
+            PlaceIntoAir(canvas, tree.X + dx, tree.BaseY, tree.Z + dz, tree.LogOf(_ids));
         }
     }
 
@@ -1835,7 +1921,7 @@ public sealed class TerrainGenerator
     /// branch also breaks the crown's silhouette from below, which is the angle the player spends
     /// nearly all their time looking from.
     /// </remarks>
-    private void PlaceBranches(Chunk chunk, int ox, int oy, int oz, in TreeSpec tree)
+    private void PlaceBranches(ITreeCanvas canvas, in TreeSpec tree)
     {
         for (var b = 0; b < tree.Branches; b++)
         {
@@ -1863,10 +1949,10 @@ public sealed class TerrainGenerator
                 bx += dx;
                 bz += dz;
                 if (step == length) by++;   // limbs rise as they go out, they do not stick out flat
-                PlaceIntoAir(chunk, ox, oy, oz, bx, by, bz, tree.LogOf(_ids));
+                PlaceIntoAir(canvas, bx, by, bz, tree.LogOf(_ids));
             }
 
-            PlaceCrown(chunk, ox, oy, oz, tree, bx, by, bz, radius: 1, depth: 2);
+            PlaceCrown(canvas, tree, bx, by, bz, radius: 1, depth: 2);
         }
     }
 
@@ -1879,7 +1965,7 @@ public sealed class TerrainGenerator
     /// dapples on the ground underneath for free.
     /// </remarks>
     private void PlaceCrown(
-        Chunk chunk, int ox, int oy, int oz, in TreeSpec tree,
+        ITreeCanvas canvas, in TreeSpec tree,
         int cx, int topY, int cz, int radius, int depth)
     {
         for (var dy = -(depth - 1); dy <= 1; dy++)
@@ -1905,10 +1991,10 @@ public sealed class TerrainGenerator
                 var atCentre = dx == 0 && dz == 0;
                 if (!atCentre && Noise.Value3(lx, y, lz, tree.Seed + 29) > 0.88f) continue;
 
-                PlaceLeaf(chunk, ox, oy, oz, tree, lx, y, lz);
+                PlaceIntoAir(canvas, lx, y, lz, tree.LeavesOf(_ids));
 
                 // Vines hang off the underside only, which is the edge you see them against.
-                if (dy == -(depth - 1)) HangVine(chunk, ox, oy, oz, tree, lx, y, lz);
+                if (dy == -(depth - 1)) HangVine(canvas, tree, lx, y, lz);
             }
         }
     }
@@ -1922,7 +2008,7 @@ public sealed class TerrainGenerator
     /// <para>The length is rolled once, on the leaf, rather than per cell — otherwise a curtain
     /// flickers in and out down its own length instead of hanging.</para>
     /// </remarks>
-    private void HangVine(Chunk chunk, int ox, int oy, int oz, in TreeSpec tree, int wx, int wy, int wz)
+    private void HangVine(ITreeCanvas canvas, in TreeSpec tree, int wx, int wy, int wz)
     {
         // No vines through the blossom: green strands on pink read as damage, not dressing.
         if (tree.Cherry) return;
@@ -1931,20 +2017,27 @@ public sealed class TerrainGenerator
 
         var length = 1 + (int)(Noise.Value3(wx, wy, wz, tree.Seed + 41) * 4f);
         for (var d = 1; d <= length; d++)
-            PlaceIntoAir(chunk, ox, oy, oz, wx, wy - d, wz, _ids.Vine);
+            PlaceIntoAir(canvas, wx, wy - d, wz, _ids.Vine);
     }
 
-    /// <summary>Writes a block if it falls inside this chunk, and drops it otherwise.</summary>
-    private static void Place(Chunk chunk, int ox, int oy, int oz, int wx, int wy, int wz, BlockId id)
+    /// <summary>
+    /// Writes a block only into air, so nothing a tree grows eats terrain — or, reading the canvas
+    /// back mid-decoration, a neighbouring tree's trunk.
+    /// </summary>
+    /// <remarks>
+    /// Reading the chunk back is safe despite the order-independence rule: every chunk walks the
+    /// tree grid in the same cz-then-cx order, so any two trees resolve their overlap identically
+    /// no matter which chunk is asking or how many other trees are in range. Testing the heightmap
+    /// instead would be pure but wrong — it cannot see the trunk that another tree already placed,
+    /// and canopies start carving holes in their neighbours.
+    /// </remarks>
+    private static void PlaceIntoAir(ITreeCanvas canvas, int wx, int wy, int wz, BlockId id)
     {
-        var lx = wx - ox;
-        var ly = wy - oy;
-        var lz = wz - oz;
-        if ((uint)lx >= Chunk.Size || (uint)ly >= Chunk.Size || (uint)lz >= Chunk.Size) return;
-        chunk.Set(lx, ly, lz, id);
+        if (!canvas.IsAir(wx, wy, wz)) return;
+        canvas.Set(wx, wy, wz, id);
     }
 
-    /// <summary>Writes a block only into air, so nothing a tree grows eats terrain.</summary>
+    /// <summary>Writes a block only into air, so nothing a decorator grows eats terrain.</summary>
     private static void PlaceIntoAir(Chunk chunk, int ox, int oy, int oz, int wx, int wy, int wz, BlockId id)
     {
         var lx = wx - ox;
@@ -1967,25 +2060,5 @@ public sealed class TerrainGenerator
         if ((uint)lx >= Chunk.Size || (uint)ly >= Chunk.Size || (uint)lz >= Chunk.Size) return;
         if (chunk.Get(lx, ly, lz).Value != _ids.Water.Value) return;
         chunk.Set(lx, ly, lz, id);
-    }
-
-    /// <summary>
-    /// Writes a leaf only into air, so a canopy never eats terrain or a neighbouring tree's trunk.
-    /// </summary>
-    /// <remarks>
-    /// Reading the chunk back mid-decoration is safe despite the order-independence rule: every
-    /// chunk walks the tree grid in the same cz-then-cx order, so any two trees resolve their
-    /// overlap identically no matter which chunk is asking or how many other trees are in range.
-    /// Testing the heightmap instead would be pure but wrong — it cannot see the trunk that another
-    /// tree already placed, and canopies start carving holes in their neighbours.
-    /// </remarks>
-    private void PlaceLeaf(Chunk chunk, int ox, int oy, int oz, in TreeSpec tree, int wx, int wy, int wz)
-    {
-        var lx = wx - ox;
-        var ly = wy - oy;
-        var lz = wz - oz;
-        if ((uint)lx >= Chunk.Size || (uint)ly >= Chunk.Size || (uint)lz >= Chunk.Size) return;
-        if (!chunk.Get(lx, ly, lz).IsAir) return;
-        chunk.Set(lx, ly, lz, tree.LeavesOf(_ids));
     }
 }
