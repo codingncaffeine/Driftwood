@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+using SDL3;
 
 namespace Driftwood.Client.Platform;
 
@@ -55,12 +56,19 @@ public sealed class NativeFilePicker
     /// True when this machine can show a chooser at all.
     /// </summary>
     /// <remarks>
-    /// ⚠ <b>Asked rather than assumed, because the box it replaces still has to be there.</b> The
-    /// shell chooser is Windows only; on anything else the typed path is not a fallback, it is the
-    /// only route, and the screen has to keep saying so rather than offering a button that does
-    /// nothing.
+    /// ⚠ <b>Asked rather than assumed, because the box it replaces still has to be there.</b> On
+    /// Windows it is the shell's chooser; elsewhere it is SDL's (see <see cref="StartSdlChooser"/>),
+    /// which needs the SDL library that ships for controllers. Where that will not load the typed
+    /// path is not a fallback, it is the only route, and the screen has to keep saying so rather
+    /// than offering a button that does nothing.
     /// </remarks>
-    public static bool Available => OperatingSystem.IsWindows();
+    public static bool Available => OperatingSystem.IsWindows() || SdlLoads.Value;
+
+    private static readonly Lazy<bool> SdlLoads = new(() =>
+    {
+        try { return SDL.GetVersion() > 0; }
+        catch (Exception error) when (error is DllNotFoundException or EntryPointNotFoundException) { return false; }
+    });
 
     /// <summary>
     /// Opens the chooser. False when one is already open or this machine has none.
@@ -78,18 +86,137 @@ public sealed class NativeFilePicker
     /// </remarks>
     public bool Ask(Want want, nint owner, string title, string filterLabel, string filterSpec)
     {
-        // ⚠ Written out here rather than behind Available, because the platform analyser follows a
-        // test and not a property: the whole of the Win32 half below is Windows-only, and this line
-        // is what tells the compiler so.
-        if (!OperatingSystem.IsWindows() || _state != Idle) return false;
+        if (_state != Idle || !Available) return false;
 
         _picked = null;
         _why = "";
         _state = Asking;
 
-        StartChooser(want, owner, title, filterLabel, filterSpec);
+        // ⚠ Written out here rather than behind Available, because the platform analyser follows a
+        // test and not a property: the whole of the Win32 half below is Windows-only, and this line
+        // is what tells the compiler so.
+        if (OperatingSystem.IsWindows()) StartChooser(want, owner, title, filterLabel, filterSpec);
+        else if (!StartSdlChooser(want, title, filterLabel, filterSpec)) _state = Idle;
+
+        return _state != Idle;
+    }
+
+    /// <summary>
+    /// Asks the desktop for a file or folder through SDL, which ships with the game for controllers.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ <b>Why SDL rather than our own.</b> The right chooser on Linux is the one the
+    /// desktop draws — KDE's on Plasma, GNOME's on GNOME — and the way to get it is the
+    /// xdg-desktop-portal FileChooser over D-Bus, which is also the only route that works from inside
+    /// a sandbox such as Flatpak. SDL speaks exactly that, falls back to zenity where no portal is
+    /// running, and is already loaded; writing a D-Bus client for one dialog would be a package this
+    /// project does not take, or a protocol implementation to own.</para>
+    /// <para>⚠ <b>Called on the game's thread and never blocks it.</b> SDL wants the call on the main
+    /// thread and answers later — from a helper thread for zenity, or from inside the event pump for
+    /// the portal, which is why <see cref="TryTake"/> pumps while a question is open. Either way the
+    /// answer lands through the same two fields the Windows thread uses.</para>
+    /// <para>⚠ <b>No owner window.</b> SDL can only parent the dialog to a window of its own, and the
+    /// game's window is GLFW's. The portal brings its dialog to the front regardless.</para>
+    /// </remarks>
+    private bool StartSdlChooser(Want want, string title, string filterLabel, string filterSpec)
+    {
+        // The portal's reply arrives through SDL's event pump, and the pump needs events up. Counted
+        // by SDL, so asking again is free; never released, like the controller subsystem.
+        if (!SDL.WasInit(SDL.InitFlags.Events).HasFlag(SDL.InitFlags.Events)
+            && !SDL.InitSubSystem(SDL.InitFlags.Events))
+        {
+            _why = $"the file chooser could not start: {SDL.GetError()}";
+            return false;
+        }
+
+        var props = SDL.CreateProperties();
+        SDL.SetStringProperty(props, SDL.Props.FileDialogTitleString, title);
+        SDL.SetBooleanProperty(props, SDL.Props.FileDialogManyBoolean, false);
+
+        if (want == Want.File)
+        {
+            // The same two lines the Windows chooser offers, for the same reason: the shelf's own
+            // list of what it accepts, and every file, because a pack saved with the wrong
+            // extension is a real thing. SDL wants "zip;mcpack" where Windows wants "*.zip;*.mcpack".
+            _filters = SdlFilters([(filterLabel, SdlPattern(filterSpec)), ("every file", "*")]);
+            SDL.SetPointerProperty(props, SDL.Props.FileDialogFiltersPointer, _filters.Table);
+            SDL.SetNumberProperty(props, SDL.Props.FileDialogNFiltersNumber, _filters.Count);
+        }
+
+        _props = props;
+        var self = GCHandle.Alloc(this);
+        SDL.ShowFileDialogWithProperties(
+            want == Want.Folder ? SDL.FileDialogType.OpenFolder : SDL.FileDialogType.OpenFile,
+            SdlAnswered, GCHandle.ToIntPtr(self), props);
         return true;
     }
+
+    /// <summary>
+    /// SDL's answer. Kept in a static field because the native side holds a pointer to it, and a
+    /// delegate the collector has moved or freed is a crash in the middle of somebody's import.
+    /// </summary>
+    private static readonly SDL.DialogFileCallback SdlAnswered = (userdata, files, _) =>
+    {
+        var self = GCHandle.FromIntPtr(userdata);
+        var picker = (NativeFilePicker)self.Target!;
+        self.Free();
+
+        string? path = null;
+        var why = "";
+
+        // Null is a failure, a pointer to null is a cancel — which, as on Windows, says nothing.
+        if (files == 0) why = $"the file chooser would not open: {SDL.GetError()}";
+        else if (Marshal.ReadIntPtr(files) is var first && first != 0) path = Marshal.PtrToStringUTF8(first);
+
+        picker.ReleaseSdlQuestion();
+
+        // The answer first, the flag second, exactly as the Windows thread does it.
+        picker._picked = path;
+        picker._why = why;
+        picker._state = Answered;
+    };
+
+    /// <summary>The filter table SDL reads until it answers, and the strings it points at.</summary>
+    private sealed record SdlFilterTable(nint Table, int Count, nint[] Strings);
+
+    private SdlFilterTable? _filters;
+    private uint _props;
+
+    private void ReleaseSdlQuestion()
+    {
+        if (_props != 0) SDL.DestroyProperties(_props);
+        _props = 0;
+
+        if (_filters is null) return;
+        foreach (var text in _filters.Strings) Marshal.FreeCoTaskMem(text);
+        Marshal.FreeHGlobal(_filters.Table);
+        _filters = null;
+    }
+
+    /// <summary>
+    /// Lays out SDL_DialogFileFilter[] by hand: two UTF-8 string pointers per row, which must
+    /// outlive the call — SDL reads them whenever the dialog gets round to it.
+    /// </summary>
+    private static SdlFilterTable SdlFilters(IReadOnlyList<(string Name, string Pattern)> rows)
+    {
+        var table = Marshal.AllocHGlobal(rows.Count * 2 * nint.Size);
+        var strings = new nint[rows.Count * 2];
+
+        for (var i = 0; i < rows.Count; i++)
+        {
+            strings[i * 2] = Marshal.StringToCoTaskMemUTF8(rows[i].Name);
+            strings[i * 2 + 1] = Marshal.StringToCoTaskMemUTF8(rows[i].Pattern);
+            Marshal.WriteIntPtr(table, i * 2 * nint.Size, strings[i * 2]);
+            Marshal.WriteIntPtr(table, (i * 2 + 1) * nint.Size, strings[i * 2 + 1]);
+        }
+
+        return new SdlFilterTable(table, rows.Count, strings);
+    }
+
+    /// <summary>Windows masks to SDL's form: <c>*.zip;*.mcpack</c> becomes <c>zip;mcpack</c>.</summary>
+    internal static string SdlPattern(string windowsSpec) => string.Join(';', windowsSpec
+        .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        .Select(mask => mask.StartsWith("*.", StringComparison.Ordinal) ? mask[2..] : mask));
 
     /// <summary>Puts the chooser on a thread of its own and leaves it there.</summary>
     [SupportedOSPlatform("windows")]
@@ -139,6 +266,10 @@ public sealed class NativeFilePicker
         path = null;
         why = "";
 
+        // ⚠ The portal's answer only arrives while SDL's events are pumped. The controller code
+        // pumps every frame when a pad subsystem is up, but a chooser must not depend on that.
+        if (_state == Asking && !OperatingSystem.IsWindows()) SDL.PumpEvents();
+
         if (_state != Answered) return false;
 
         path = _picked;
@@ -175,7 +306,7 @@ public sealed class NativeFilePicker
 
         if (!OperatingSystem.IsWindows())
         {
-            detail = "not Windows, so there is no chooser to build";
+            detail = SdlProbe(faults);
             return faults;
         }
 
@@ -187,6 +318,39 @@ public sealed class NativeFilePicker
 
         detail = RunProbe(faults);
         return faults;
+    }
+
+    /// <summary>
+    /// The SDL half's checks: the library the button relies on is the one that loads, it has the
+    /// entry point, and the shelf's masks come out in SDL's shape. Nothing is shown.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ A chooser cannot be opened here — it would wait for a person — so the check is everything
+    /// up to that call. The masks are checked by value, because a pattern SDL does not understand
+    /// is not an error anywhere: it is a dialog that shows no files.
+    /// </remarks>
+    private static string SdlProbe(List<string> faults)
+    {
+        if (!Available)
+        {
+            faults.Add("SDL3 did not load, so the browse buttons are hidden and only typed paths work");
+            return "";
+        }
+
+        if (!NativeLibrary.TryLoad("SDL3", typeof(SDL).Assembly, null, out var library)
+            || !NativeLibrary.TryGetExport(library, "SDL_ShowFileDialogWithProperties", out _))
+            faults.Add("the loaded SDL3 has no SDL_ShowFileDialogWithProperties");
+
+        foreach (var (spec, expected) in (ReadOnlySpan<(string, string)>)
+                 [("*.zip;*.mcpack", "zip;mcpack"), ("*.png", "png"), (" *.zip ; *.jar ", "zip;jar")])
+        {
+            var got = SdlPattern(spec);
+            if (got != expected) faults.Add($"the mask '{spec}' became '{got}' for SDL, not '{expected}'");
+        }
+
+        var version = SDL.GetVersion();
+        return $"SDL {version / 1000000}.{version / 1000 % 1000}.{version % 1000} dialogs "
+             + "(desktop portal, then zenity); masks converted";
     }
 
     /// <summary>Runs the probe on an apartment of its own — the same one the real chooser gets.</summary>
