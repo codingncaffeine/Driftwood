@@ -38,8 +38,9 @@ Download `Driftwood-v<version>-linux-x64.tar.gz` from the
 [releases page](https://github.com/codingncaffeine/Driftwood/releases), extract it anywhere, and run
 `./Driftwood` from the extracted folder. Run `./install.sh` once to add Driftwood to your application
 menu (`./install.sh --uninstall` removes it again). The build is self-contained: it does not need .NET,
-and it brings its own GLFW, OpenAL and SDL. Wayland and X11 both work, on any desktop. Worlds, packs
-and skins live in `~/.local/share/Driftwood`, settings in `~/.config/Driftwood`.
+and it brings its own GLFW, OpenAL and SDL. It runs on Ubuntu 22.04, Debian 12, Fedora, Arch, or
+anything newer with glibc 2.35, under Wayland or X11 on any desktop, and needs an OpenGL 3.3 driver.
+Worlds, packs and skins live in `~/.local/share/Driftwood`, settings in `~/.config/Driftwood`.
 
 ### Windows
 

@@ -3,7 +3,8 @@
 # packages the public tarball. The Linux counterpart of publish-release.bat, step for step.
 # Run once after the complete change batch, immediately before publishing it.
 #
-# Needs: the .NET 11 SDK, xvfb-run (Arch xorg-server-xvfb, Debian/Ubuntu xvfb), dbus-run-session.
+# Needs: the .NET 11 SDK, xvfb-run (Arch xorg-server-xvfb, Debian/Ubuntu xvfb), dbus-run-session,
+# objdump (binutils), and podman or docker the first time (tools/linux/build-sdl3.sh builds SDL).
 # Every instrument runs with private XDG folders and OpenAL's null device, so the gate never reads or
 # writes a real player's saves and never makes a sound; the interface check draws into a private X
 # server with a private session bus, so nothing reaches the desktop.
@@ -17,7 +18,7 @@ OUT=artifacts/Driftwood-$RID
 
 fail() { echo; echo "$1"; exit 1; }
 
-for tool in dotnet xvfb-run dbus-run-session tar sha256sum; do
+for tool in dotnet xvfb-run dbus-run-session tar sha256sum objdump; do
   command -v "$tool" >/dev/null 2>&1 || fail "MISSING TOOL - $tool is needed to build and gate a release."
 done
 
@@ -49,12 +50,27 @@ for twin in "$OUT"/libSDL3.so.*; do
   rm -f -- "$twin"
 done
 
+# ⛔ The package's SDL needs glibc 2.38 and so does not load on Ubuntu 22.04 or Debian 12, where the
+# rest of the release runs: no controllers, no file chooser. The same SDL release, built on a 22.04
+# baseline by tools/linux/build-sdl3.sh, replaces it.
+SDL=$(tools/linux/build-sdl3.sh) || fail "PUBLISH FAILED - SDL3 could not be built on its baseline."
+cp -f -- "$SDL" "$OUT/libSDL3.so"
+
 # Exactly the expected payload: a new native dependency is a reviewed decision, not a passenger.
 expected="Driftwood libSDL3.so libglfw.so.3 libopenal.so"
 actual=$(cd "$OUT" && ls -A | sort | tr '\n' ' ' | sed 's/ $//')
 [ "$actual" = "$(echo $expected | tr ' ' '\n' | sort | tr '\n' ' ' | sed 's/ $//')" ] \
   || fail "PUBLISH FAILED - the payload is [$actual], not [$expected]."
 file "$OUT/Driftwood" 2>/dev/null | grep -q 'ELF 64-bit LSB.*x86-64' || fail "PUBLISH FAILED - Driftwood is not an x86-64 ELF executable."
+
+# The oldest systems the release promises: Ubuntu 22.04 (glibc 2.35) and Debian 12 (2.36). One file
+# built against a newer glibc quietly drops them, so every shipped binary is read for it.
+for binary in "$OUT"/*; do
+  floor=$(objdump -T "$binary" 2>/dev/null | grep -oE 'GLIBC_[0-9.]+' | sort -Vu | tail -1)
+  case "$floor" in ""|GLIBC_2.3[0-5]|GLIBC_2.[12]*) ;;
+    *) fail "PUBLISH FAILED - $(basename "$binary") needs $floor; the release must run on glibc 2.35." ;;
+  esac
+done
 
 # Private homes for every instrument, inside artifacts/ and removed afterwards.
 GATE=$(mktemp -d "$ROOT/artifacts/.gate-XXXXXX")
