@@ -672,9 +672,8 @@ public sealed class ModrinthResourcePackProvider
     private static string SafeFileName(string value)
     {
         value = System.IO.Path.GetFileName(value);
-        var invalid = System.IO.Path.GetInvalidFileNameChars();
         var safe = new string(value.Where(character => !char.IsControl(character)
-            && !invalid.Contains(character)).Take(120).ToArray()).Trim();
+            && !Saves.PortableFileName.IsInvalid(character)).Take(120).ToArray()).Trim();
         if (!safe.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)) safe += ".zip";
         return safe.Length > 4 ? safe : "resource-pack.zip";
     }

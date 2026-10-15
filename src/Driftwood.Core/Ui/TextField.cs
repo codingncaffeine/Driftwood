@@ -73,9 +73,9 @@ public sealed class TextField(int maxLength = 64, TextAllows allows = TextAllows
         {
             TextAllows.Digits => c is >= '0' and <= '9',
 
-            // ⚠ Asked of the platform rather than written out. The set differs between them, and a
-            // list copied into here is a list that is right on the machine it was copied on.
-            TextAllows.FileSafe => !Path.GetInvalidFileNameChars().Contains(c),
+            // ⚠ The set every platform can hold, not this platform's: the sets differ, and a world
+            // named for Linux alone cannot be carried to Windows. See PortableFileName.
+            TextAllows.FileSafe => !Saves.PortableFileName.IsInvalid(c),
             _ => true,
         };
     }

@@ -1071,8 +1071,7 @@ public sealed class TexturePack : IDisposable
     {
         if (_root is not null)
         {
-            var full = Path.Combine(_root, relativePath.Replace('/', Path.DirectorySeparatorChar));
-            if (!File.Exists(full)) return null;
+            if (!FolderIndex.TryGetValue(relativePath, out var full)) return null;
             if (new FileInfo(full).Length > maximumBytes)
                 throw new InvalidDataException($"{relativePath} is larger than the {maximumBytes:N0}-byte read limit");
             return File.ReadAllBytes(full);
@@ -1093,6 +1092,33 @@ public sealed class TexturePack : IDisposable
             buffer.Write(chunk, 0, read);
         }
         return buffer.ToArray();
+    }
+
+    /// <summary>
+    /// An unpacked pack's files by their path inside it, matched without regard to case — as the
+    /// archive's entries are.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>Because the same pack must read the same whether it is zipped or not, on every
+    /// platform.</b> Entries in an archive were always looked up ignoring case; a folder was asked
+    /// the file system directly, which on Windows ignores case too and on Linux does not. So a pack
+    /// unpacked from <c>Textures/Blocks/Stone.png</c> — every pack made on Windows by hand is free
+    /// to spell it that way — kept its art on one machine and lost it on the other, with no error:
+    /// a missing tile is simply Driftwood's own. Built once, on the first read, from the same walk
+    /// the inventory uses; two files differing only in case keep the first found.
+    /// </remarks>
+    private Dictionary<string, string> FolderIndex => _folderIndex ??= BuildFolderIndex();
+    private Dictionary<string, string>? _folderIndex;
+
+    private Dictionary<string, string> BuildFolderIndex()
+    {
+        var index = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (_root is null || !Directory.Exists(_root)) return index;
+
+        foreach (var path in FolderFiles(_root))
+            index.TryAdd(Path.GetRelativePath(_root, path).Replace(Path.DirectorySeparatorChar, '/'), path);
+
+        return index;
     }
 
     private static IEnumerable<string> FolderFiles(string root) => Directory.EnumerateFiles(

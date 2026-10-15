@@ -201,9 +201,8 @@ public static class SkinLibrary
 
     private static string SafeName(string suggested)
     {
-        var invalid = Path.GetInvalidFileNameChars();
         var kept = new string((suggested ?? "skin").Trim()
-            .Where(c => !invalid.Contains(c) && c is not '\r' and not '\n').Take(72).ToArray());
+            .Where(c => !Saves.PortableFileName.IsInvalid(c)).Take(72).ToArray());
         kept = kept.Trim(' ', '.');
         return kept.Length == 0 ? "skin" : kept;
     }

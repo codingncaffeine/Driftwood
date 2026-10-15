@@ -274,7 +274,7 @@ public static class WorldSave
     /// </remarks>
     public static string Sanitised(string name)
     {
-        var clean = new string([.. name.Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c)]).Trim();
+        var clean = new string([.. name.Select(c => PortableFileName.IsInvalid(c) ? '_' : c)]).Trim();
         if (clean.Length == 0) clean = "world";
 
         string[] refused = ["CON", "PRN", "AUX", "NUL", "COM1", "COM2", "LPT1", "LPT2"];
