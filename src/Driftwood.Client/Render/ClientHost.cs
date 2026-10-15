@@ -7269,7 +7269,7 @@ public sealed class ClientHost : IDisposable
                     : progress is null ? "starting"
                     : $"{MathF.Floor(progress.Fraction * 100f):F0}%",
                 Note: SaidSound("Downloads the author's original ZIP directly from Modrinth, verifies its SHA-512, "
-                    + "checks its size and paths, stores it in AppData, then activates it immediately"),
+                    + "checks its size and paths, stores it with your sound packs, then activates it immediately"),
                 Progress: downloadingSelected ? progress?.Fraction ?? 0f : -1f));
         }
 

@@ -83,8 +83,7 @@ public static class PackCompatibility
     };
 
     public static string CacheFolder => System.IO.Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-        "Driftwood", "cache", "pack-compatibility");
+        Settings.UserFolders.Cache, "pack-compatibility");
 
     /// <summary>
     /// Walks the archive and the decoders for families Driftwood owns. A caller-provided verified

@@ -109,7 +109,7 @@ public static class WorldSave
 {
     /// <summary>Where worlds live.</summary>
     public static string Folder => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Driftwood", "saves");
+        Settings.UserFolders.Data, "saves");
 
     public static string PathFor(string name) => Path.Combine(Folder, $"{Sanitised(name)}.dws");
 

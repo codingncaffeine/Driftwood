@@ -162,8 +162,7 @@ public sealed class ModrinthResourcePackProvider
     {
         _transport = transport ?? new BoundedSoundPackTransport();
         _cacheFolder = System.IO.Path.GetFullPath(string.IsNullOrWhiteSpace(cacheFolder)
-            ? System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "Driftwood", "cache", "modrinth-resource-packs")
+            ? System.IO.Path.Combine(Settings.UserFolders.Cache, "modrinth-resource-packs")
             : cacheFolder);
     }
 

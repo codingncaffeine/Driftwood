@@ -48,7 +48,7 @@ public sealed class SoundPackLibrary
     };
 
     public static string DefaultFolder => System.IO.Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Driftwood", "sound-packs");
+        Settings.UserFolders.Data, "sound-packs");
 
     public string Folder { get; }
 

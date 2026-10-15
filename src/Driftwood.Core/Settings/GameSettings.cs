@@ -175,9 +175,7 @@ public sealed class GameSettings
     /// <summary>Where the file lives.</summary>
     public static string Path =>
         System.IO.Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            "Driftwood",
-            "settings.txt");
+            UserFolders.Config, "settings.txt");
 
     /// <summary>
     /// Reads the file, falling back to the defaults for anything missing or unreadable.

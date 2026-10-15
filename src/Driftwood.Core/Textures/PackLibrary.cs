@@ -109,7 +109,7 @@ public static class PackLibrary
     };
 
     public static string Folder => System.IO.Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Driftwood", "packs");
+        Settings.UserFolders.Data, "packs");
 
     /// <summary>Path of the disposable Driftwood metadata stored beside a pack.</summary>
     public static string MetadataPath(string packPath) => $"{packPath}.driftwood.json";

@@ -18,7 +18,7 @@ public static class SkinLibrary
         string Kind, string Source, string SourceUrl);
 
     public static string Folder => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Driftwood", "skins");
+        Settings.UserFolders.Data, "skins");
 
     public static string FilterLabel => "player skins (*.png)";
     public const string FilterSpec = "*.png";
