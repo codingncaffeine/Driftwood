@@ -2873,21 +2873,30 @@ public sealed class HudRenderer : IDisposable
     {
         if (toasts.Count == 0) return;
 
-        const float Width = 132f;
+        const float MinimumWidth = 132f;
+        const float MaximumWidth = 240f;
         const float Height = 30f;
-
-        var left = MathF.Round(w - Width - 8f);
 
         foreach (var toast in toasts)
         {
             var alpha = toast.Alpha;
             if (alpha <= 0f) continue;
 
+            // ⚠ Measured, not assumed. A fixed 132 fitted "you can now make / ladder" and nothing
+            // longer: "pressure plate and 1 more" ran out of its box and off the screen. A toast now
+            // grows to its words, keeps the old width as its least so the short ones look as they
+            // did, and past the most it ends in an ellipsis rather than painting over the edge.
+            var textOffset = toast.Icon >= 0 ? 30f : 6f;
+            var wanted = textOffset + MathF.Max(TextWidth(toast.Title, 7f), TextWidth(toast.Line, 8f)) + 6f;
+            var width = MathF.Round(Math.Clamp(wanted, MinimumWidth, MathF.Max(MinimumWidth, MathF.Min(MaximumWidth, w - 16f))));
+            var room = width - textOffset - 6f;
+            var left = MathF.Round(w - width - 8f);
+
             if (HasGui(GuiTextureSet.Layer.ToastBackground))
-                NineSlice(_guiOver, left, top, Width, Height, GuiTextureSet.Layer.ToastBackground,
+                NineSlice(_guiOver, left, top, width, Height, GuiTextureSet.Layer.ToastBackground,
                     160f, 32f, 5f, new Vector4(1f, 1f, 1f, alpha));
             else
-                Bevel(left, top, Width, Height, raised: true, PanelFill with { W = PanelFill.W * alpha });
+                Bevel(left, top, width, Height, raised: true, PanelFill with { W = PanelFill.W * alpha });
 
             var textLeft = left + 6f;
             if (toast.Icon >= 0)
@@ -2903,8 +2912,8 @@ public sealed class HudRenderer : IDisposable
                 textLeft = left + 30f;
             }
 
-            Text(toast.Title, textLeft, top + 5f, 7f, Highlight with { W = alpha });
-            Text(toast.Line, textLeft, top + 15f, 8f, new Vector4(1f, 1f, 1f, alpha));
+            Text(FitText(toast.Title, room, 7f), textLeft, top + 5f, 7f, Highlight with { W = alpha });
+            Text(FitText(toast.Line, room, 8f), textLeft, top + 15f, 8f, new Vector4(1f, 1f, 1f, alpha));
 
             top += Height + 4f;
         }
