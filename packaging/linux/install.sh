@@ -1,7 +1,7 @@
 #!/bin/sh
 # Adds Driftwood to your application menu, from wherever this folder was extracted to.
 #
-#   ./install.sh               add the menu entry, icons and a `driftwood` command for this copy
+#   ./install.sh               add the menu entry, icons and a `driftwood-game` command for this copy
 #   ./install.sh --uninstall   remove them again (your worlds and settings are not touched)
 #
 # Nothing here needs root: the entry and icons go under ~/.local/share and the command is a link in
@@ -27,15 +27,15 @@ if [ "${1:-}" = "--uninstall" ]; then
   rm -f "$APPS/$ID.desktop"
   for size in $SIZES; do rm -f "$ICONS/${size}x${size}/apps/$ID.png"; done
   # Only ever the link this script made: a real file of that name is somebody else's.
-  [ -L "$BIN/driftwood" ] && rm -f "$BIN/driftwood"
+  [ -L "$BIN/driftwood-game" ] && rm -f "$BIN/driftwood-game"
   refresh
   echo "Driftwood removed from the application menu."
   exit 0
 fi
 
 [ -x "$HERE/Driftwood" ] || { echo "install.sh: no Driftwood executable beside this script" >&2; exit 1; }
-if [ -e "$BIN/driftwood" ] && [ ! -L "$BIN/driftwood" ]; then
-  echo "install.sh: $BIN/driftwood exists and is not a link this script made; leaving it alone" >&2
+if [ -e "$BIN/driftwood-game" ] && [ ! -L "$BIN/driftwood-game" ]; then
+  echo "install.sh: $BIN/driftwood-game exists and is not a link this script made; leaving it alone" >&2
   exit 1
 fi
 
@@ -44,8 +44,8 @@ fi
 # path is one this script chose. The desktop-entry quoting is still applied, for an unusual $HOME:
 # ", `, $ and \ are escaped inside double quotes, the string escape then doubles every backslash.
 mkdir -p "$BIN"
-ln -sfn "$HERE/Driftwood" "$BIN/driftwood"
-exec_path=$(printf '%s' "$BIN/driftwood" | sed 's/[\\"`$]/\\&/g; s/\\/\\\\/g; s/%/%%/g')
+ln -sfn "$HERE/Driftwood" "$BIN/driftwood-game"
+exec_path=$(printf '%s' "$BIN/driftwood-game" | sed 's/[\\"`$]/\\&/g; s/\\/\\\\/g; s/%/%%/g')
 
 mkdir -p "$APPS"
 sed "s|^Exec=.*|Exec=\"$(printf '%s' "$exec_path" | sed 's/[|&\\]/\\&/g')\"|" "$HERE/$ID.desktop" > "$APPS/$ID.desktop.tmp"
@@ -58,4 +58,4 @@ done
 
 refresh
 echo "Driftwood added to the application menu (launching $HERE/Driftwood)."
-case ":$PATH:" in *":$BIN:"*) echo "Type 'driftwood' in a terminal to start it from there too." ;; esac
+case ":$PATH:" in *":$BIN:"*) echo "Type 'driftwood-game' in a terminal to start it from there too." ;; esac

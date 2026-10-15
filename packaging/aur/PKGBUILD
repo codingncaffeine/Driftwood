@@ -1,16 +1,16 @@
 # Maintainer: codingncaffeine <codingncaffeine@users.noreply.github.com>
 # AUR binary package for Driftwood — repackages the official GitHub release tarball.
-# Submit by pushing this (plus the generated .SRCINFO) to ssh://aur@aur.archlinux.org/driftwood-bin.git
+# Submit by pushing this (plus the generated .SRCINFO) to ssh://aur@aur.archlinux.org/driftwood-game-bin.git
 #   makepkg --printsrcinfo > .SRCINFO
-pkgname=driftwood-bin
+pkgname=driftwood-game-bin
 pkgver=0.4.0
 pkgrel=1
 pkgdesc="Open-world survival crafting game: gather, build, explore, fight, trade and learn magic"
 arch=('x86_64')
 url="https://github.com/codingncaffeine/Driftwood"
 license=('GPL-3.0-only')
-provides=('driftwood')
-conflicts=('driftwood')
+provides=('driftwood-game')
+conflicts=('driftwood-game')
 # The release brings .NET, GLFW, OpenAL Soft and SDL3 with it; GLFW and SDL open the window-system
 # and input libraries below at run time, and .NET needs ICU, OpenSSL (pack downloads) and zlib.
 depends=('glibc' 'gcc-libs' 'zlib' 'icu' 'openssl'
@@ -28,13 +28,13 @@ package() {
     local id=io.github.codingncaffeine.Driftwood
     local src="$srcdir/Driftwood-v$pkgver-linux-x64"
 
-    install -dm755 "$pkgdir/usr/lib/driftwood" "$pkgdir/usr/bin"
-    install -m755 "$src/Driftwood" "$pkgdir/usr/lib/driftwood/Driftwood"
-    install -m644 "$src"/lib*.so* "$pkgdir/usr/lib/driftwood/"
-    ln -s /usr/lib/driftwood/Driftwood "$pkgdir/usr/bin/driftwood"
+    install -dm755 "$pkgdir/usr/lib/driftwood-game" "$pkgdir/usr/bin"
+    install -m755 "$src/Driftwood" "$pkgdir/usr/lib/driftwood-game/Driftwood"
+    install -m644 "$src"/lib*.so* "$pkgdir/usr/lib/driftwood-game/"
+    ln -s /usr/lib/driftwood-game/Driftwood "$pkgdir/usr/bin/driftwood-game"
 
     # The tarball carries these for a player who unpacks it by hand and runs install.sh; here they
-    # go where a package puts them. The entry already says Exec=driftwood.
+    # go where a package puts them. The entry already says Exec=driftwood-game.
     install -Dm644 "$src/$id.desktop" "$pkgdir/usr/share/applications/$id.desktop"
     install -Dm644 "$src/$id.metainfo.xml" "$pkgdir/usr/share/metainfo/$id.metainfo.xml"
     for size in 16 24 32 48 64 128 256; do

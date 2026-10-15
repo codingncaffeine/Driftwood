@@ -27,7 +27,7 @@
   <url type="bugtracker">https://github.com/codingncaffeine/Driftwood/issues</url>
   <url type="help">https://github.com/codingncaffeine/Driftwood/wiki</url>
   <provides>
-    <binary>driftwood</binary>
+    <binary>driftwood-game</binary>
   </provides>
   <categories>
     <category>Game</category>
