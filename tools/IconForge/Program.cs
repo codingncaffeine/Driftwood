@@ -43,6 +43,7 @@ public static class Program
     public static int Main(string[] args)
     {
         if (args.Length > 0 && args[0] == "--spell-icons") return BuildSpellIcons(args);
+        if (args.Length > 0 && args[0] == "--hicolor") return BuildHicolor(args);
 
         var root = args.Length > 0 ? args[0] : FindRepositoryRoot();
         var assets = Path.Combine(root, "assets");
@@ -95,6 +96,79 @@ public static class Program
                         + $"{new FileInfo(bannerPath).Length / 1024:N0} KiB from {new FileInfo(bannerSource).Length / 1024:N0} KiB");
 
         return Verify(icoPath, Sizes) ? 0 : 1;
+    }
+
+    /// <summary>
+    /// Writes the Linux icon theme folders from the committed Windows icon.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ <b>Read back out of the .ico rather than drawn again</b>, because the source artwork
+    /// is not in the repository and every frame the desktop needs is already in that file at the
+    /// exact size, resampled once by <see cref="Resample"/>. So a release can be packaged on a
+    /// machine that has never seen the original art, and the Linux icon can never drift from the
+    /// Windows one: they are the same pixels.</para>
+    /// <para>⚠ The layout is the freedesktop icon theme's, <c>hicolor/&lt;n&gt;x&lt;n&gt;/apps/&lt;id&gt;.png</c>,
+    /// and the name is the desktop id the window announces (see the client's DesktopIdentity) —
+    /// a different name here is a window with no icon.</para>
+    /// </remarks>
+    private static int BuildHicolor(string[] args)
+    {
+        if (args.Length != 4)
+        {
+            Console.Error.WriteLine("iconforge: --hicolor needs <driftwood.ico> <output dir> <app id>");
+            return 1;
+        }
+
+        var (icoPath, output, appId) = (args[1], args[2], args[3]);
+        var bytes = File.ReadAllBytes(icoPath);
+        var count = BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(4));
+        var written = 0;
+
+        for (var i = 0; i < count; i++)
+        {
+            var entry = 6 + i * 16;
+            var length = (int)BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(entry + 8));
+            var offset = (int)BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(entry + 12));
+            var image = ReadFrame(bytes.AsSpan(offset, length));
+
+            var folder = Path.Combine(output, "hicolor", $"{image.Width}x{image.Height}", "apps");
+            Directory.CreateDirectory(folder);
+            var path = Path.Combine(folder, appId + ".png");
+            File.WriteAllBytes(path, Png.Encode(image));
+            Console.WriteLine($"wrote {path}");
+            written++;
+        }
+
+        return written == count && count > 0 ? 0 : 1;
+    }
+
+    /// <summary>The inverse of <see cref="BuildFrame"/>: a 32-bit bottom-up BGRA DIB back to RGBA rows.</summary>
+    private static Image ReadFrame(ReadOnlySpan<byte> frame)
+    {
+        var header = BinaryPrimitives.ReadInt32LittleEndian(frame);
+        var width = BinaryPrimitives.ReadInt32LittleEndian(frame[4..]);
+        var height = BinaryPrimitives.ReadInt32LittleEndian(frame[8..]) / 2;   // colour plus mask rows
+        var bits = BinaryPrimitives.ReadUInt16LittleEndian(frame[14..]);
+        var compression = BinaryPrimitives.ReadInt32LittleEndian(frame[16..]);
+
+        if (header != 40 || bits != 32 || compression != 0 || width <= 0 || height <= 0
+            || frame.Length < header + width * height * 4)
+            throw new InvalidDataException("an icon frame is not the uncompressed 32-bit DIB this tool writes");
+
+        var pixels = new byte[width * height * 4];
+        var colour = frame[header..];
+        for (var y = 0; y < height; y++)
+        for (var x = 0; x < width; x++)
+        {
+            var from = ((height - 1 - y) * width + x) * 4;
+            var to = (y * width + x) * 4;
+            pixels[to] = colour[from + 2];
+            pixels[to + 1] = colour[from + 1];
+            pixels[to + 2] = colour[from];
+            pixels[to + 3] = colour[from + 3];
+        }
+
+        return new Image(width, height, pixels);
     }
 
     private static string FindRepositoryRoot()

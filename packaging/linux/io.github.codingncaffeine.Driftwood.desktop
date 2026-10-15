@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Driftwood
+GenericName=Survival Crafting Game
+Comment=Gather, build, explore, fight, trade and learn magic in a persistent open world
+Exec=driftwood
+Icon=io.github.codingncaffeine.Driftwood
+Terminal=false
+Categories=Game;AdventureGame;
+Keywords=survival;crafting;voxel;sandbox;open world;
+StartupWMClass=Driftwood
+PrefersNonDefaultGPU=true
+SingleMainWindow=true

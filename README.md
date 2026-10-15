@@ -24,16 +24,30 @@ magic, command companions, and return to the same persistent procedurally genera
   radial hotbar selection, target assist, rumble, and controller navigation throughout the UI.
 - Local and Modrinth-backed shelves for texture and sound packs, plus local and online player skins.
 
-Driftwood v0.3.0 is a playable single-player Windows x64 release. Multiplayer is planned but is not
-included yet. Exact current content and control counts are generated from the game registries in the
+Driftwood is a playable single-player game for Linux and Windows on x64. v0.3.0 shipped for Windows;
+Linux release builds start with the next release, and the source builds and runs on Linux today.
+Multiplayer is planned but is not included yet. Exact current content and control counts are
+generated from the game registries in the
 [live reference](https://github.com/codingncaffeine/Driftwood/wiki/Live-Registry-Reference).
 
 ## Play
 
+### Linux
+
+Download `Driftwood-v<version>-linux-x64.tar.gz` from the
+[releases page](https://github.com/codingncaffeine/Driftwood/releases), extract it anywhere, and run
+`./Driftwood` from the extracted folder. Run `./install.sh` once to add Driftwood to your application
+menu (`./install.sh --uninstall` removes it again). The build is self-contained: it does not need .NET,
+and it brings its own GLFW, OpenAL and SDL. Wayland and X11 both work, on any desktop. Worlds, packs
+and skins live in `~/.local/share/Driftwood`, settings in `~/.config/Driftwood`.
+
+### Windows
+
 Download `Driftwood-v0.3.0-win-x64.zip` from the
 [release page](https://github.com/codingncaffeine/Driftwood/releases/tag/v0.3.0), extract it, and run
 `Driftwood.exe`. The build is portable and self-contained; playing does not require .NET or an
-installer. The executable is not code-signed, so Windows may show an unfamiliar-app warning.
+installer. The executable is not code-signed, so Windows may show an unfamiliar-app warning. Worlds,
+packs, skins and settings live in `%APPDATA%\Driftwood`.
 
 On a first day:
 
@@ -87,15 +101,17 @@ documentation, organized by subject:
 
 ## Build from source
 
-The source build requires the .NET 11 SDK:
+The source build requires the .NET 11 SDK. On Linux:
 
 ```text
-build-release.bat
+./build-release.sh
 ```
 
-Or run `dotnet build Driftwood.sln -c Release`. The client output lands under
-`src/Driftwood.Client/bin/Release/net11.0`. Release packaging, audits, visual checks, command-line
-tools, and the source layout are documented in
+On Windows, `build-release.bat`. Either runs `dotnet build Driftwood.sln -c Release`, and the client
+lands under `src/Driftwood.Client/bin/Release/net11.0`. `./publish-release.sh` (Linux) and
+`publish-release.bat` (Windows) build, gate and package a release; the Linux gate also needs
+`xvfb-run` and `dbus-run-session`. Release packaging, audits, visual checks, command-line tools, and
+the source layout are documented in
 [Developer Tools and Architecture](https://github.com/codingncaffeine/Driftwood/wiki/Developer-Tools-and-Architecture).
 
-Driftwood's code is free and open-source under GPL-3.0-only.
+Driftwood's code is free and open-source under [GPL-3.0-only](LICENSE).

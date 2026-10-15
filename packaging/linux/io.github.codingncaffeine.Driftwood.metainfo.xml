@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.codingncaffeine.Driftwood</id>
+  <name>Driftwood</name>
+  <summary>Open-world survival crafting game</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-only</project_license>
+  <developer id="io.github.codingncaffeine">
+    <name>codingncaffeine</name>
+  </developer>
+  <description>
+    <p>
+      Start with empty hands, gather materials, make tools and workstations, build, explore,
+      fight, trade, learn magic, command companions, and return to the same persistent
+      procedurally generated world later.
+    </p>
+    <ul>
+      <li>Seeded worlds with biomes, caves, ruins, settlements, weather, and flowing water and lava</li>
+      <li>Destructible terrain, building, crafting, smelting, farming, rails and signals</li>
+      <li>Classless progression to level 20, nineteen spells and four commanded companions</li>
+      <li>Keyboard, mouse and controller play, with every control rebindable</li>
+      <li>Texture packs, sound packs and player skins</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">io.github.codingncaffeine.Driftwood.desktop</launchable>
+  <url type="homepage">https://github.com/codingncaffeine/Driftwood</url>
+  <url type="bugtracker">https://github.com/codingncaffeine/Driftwood/issues</url>
+  <url type="help">https://github.com/codingncaffeine/Driftwood/wiki</url>
+  <provides>
+    <binary>driftwood</binary>
+  </provides>
+  <categories>
+    <category>Game</category>
+    <category>AdventureGame</category>
+  </categories>
+  <recommends>
+    <control>keyboard</control>
+    <control>pointing</control>
+    <control>gamepad</control>
+  </recommends>
+  <content_rating type="oars-1.1">
+    <content_attribute id="violence-fantasy">mild</content_attribute>
+  </content_rating>
+  <releases>
+    <release version="0.3.0" date="2026-08-11">
+      <url type="details">https://github.com/codingncaffeine/Driftwood/releases/tag/v0.3.0</url>
+    </release>
+  </releases>
+</component>
