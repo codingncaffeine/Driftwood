@@ -3,7 +3,7 @@
 # Submit by pushing this (plus the generated .SRCINFO) to ssh://aur@aur.archlinux.org/driftwood-bin.git
 #   makepkg --printsrcinfo > .SRCINFO
 pkgname=driftwood-bin
-pkgver=0.3.1
+pkgver=0.4.0
 pkgrel=1
 pkgdesc="Open-world survival crafting game: gather, build, explore, fight, trade and learn magic"
 arch=('x86_64')
