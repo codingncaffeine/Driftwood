@@ -26,6 +26,7 @@ public static class Program
     public static int Main(string[] args)
     {
         var commandLine = ProcessConsole.Prepare(args);
+        NativeLibraries.Prepare();
 
         if (args.Contains("--help") || args.Contains("-h"))
         {

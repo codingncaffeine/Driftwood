@@ -33,14 +33,24 @@ internal static class ProcessConsole
         if (commandLine || !OperatingSystem.IsWindows())
         {
             Console.Error.WriteLine($"driftwood: {error.Message}");
+            if (commandLine) return;
+        }
+
+        var text = $"Driftwood could not start.\n\n{error.Message}";
+
+        if (OperatingSystem.IsWindows())
+        {
+            _ = MessageBox(IntPtr.Zero, text, "Driftwood", ErrorIcon);
             return;
         }
 
-        _ = MessageBox(
-            IntPtr.Zero,
-            $"Driftwood could not start.\n\n{error.Message}",
-            "Driftwood",
-            ErrorIcon);
+        // ⚠ Elsewhere the terminal line above is written AS WELL, because a launch from the
+        // application menu has no terminal: stderr goes to the journal, and a game that fails to
+        // start there simply never appears. SDL ships with the game for controllers and can put up
+        // a dialog without opening a window of its own — and on a machine where it cannot, the
+        // line in the journal is still the answer.
+        try { _ = SDL3.SDL.ShowSimpleMessageBox(SDL3.SDL.MessageBoxFlags.Error, "Driftwood", text, IntPtr.Zero); }
+        catch (Exception) { }
     }
 
     private static bool IsCommandLineMode(string argument) => argument switch

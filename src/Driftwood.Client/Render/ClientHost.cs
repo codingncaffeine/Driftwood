@@ -849,6 +849,10 @@ public sealed class ClientHost : IDisposable
     /// </remarks>
     public int Run()
     {
+        // Hints, so before the window exists: Initialize is where Silk.NET creates it. The preflight
+        // first, because it resets the hints it borrows.
+        GraphicsPreflight.RequireOpenGl(3, 3);
+        DesktopIdentity.NameNextWindow();
         _window.Initialize();
 
         if (!KeepUiCheckOffDesktop())
@@ -865,7 +869,9 @@ public sealed class ClientHost : IDisposable
         // number was wrong. The rate was being averaged across world loading, and once that was taken
         // out the limit reads exactly 175 either way. Kept because waiting on a coarse timer is a real
         // hazard on a slower machine, not because anything here proved it.
-        var timerRaised = TimeBeginPeriod(1) == 0;
+        // ⚠ Windows only, and not merely because winmm.dll is: Linux and macOS sleep on
+        // high-resolution timers already, so there is no coarse tick to raise and nothing to ask for.
+        var timerRaised = OperatingSystem.IsWindows() && TimeBeginPeriod(1) == 0;
 
         var due = Stopwatch.GetTimestamp();
 
@@ -1032,6 +1038,36 @@ public sealed class ClientHost : IDisposable
         return ceiling;
     }
 
+    /// <summary>
+    /// Says which graphics card the game is drawing on, and through what.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>Because the answer is not always the one in the machine's spec sheet.</b> A laptop with
+    /// two GPUs starts a program on the integrated one unless something asks otherwise, and a
+    /// desktop whose compositor sits on one card can hand a nested or remote session the other —
+    /// found 2026-10-15, when a Linux bench ran at 50 fps on a Radeon 610M in a machine with an
+    /// RTX 5080 in it, and nothing in the output said so. Every frame-rate number after this line is
+    /// a number about the device named on it. A software rasteriser gets a warning of its own:
+    /// it means no GPU driver was found at all, and no setting will make that playable.
+    /// </remarks>
+    private void ReportGraphicsDevice()
+    {
+        var renderer = _gl.GetStringS(StringName.Renderer) ?? "unknown renderer";
+        var vendor = _gl.GetStringS(StringName.Vendor) ?? "unknown vendor";
+        var version = _gl.GetStringS(StringName.Version) ?? "unknown version";
+        var through = _window.Native?.Wayland is not null ? "Wayland"
+            : _window.Native?.X11 is not null ? "X11"
+            : _window.Native?.Win32 is not null ? "Win32"
+            : "an unknown window system";
+
+        Console.WriteLine($"gpu         {renderer} — {vendor}, OpenGL {version}, through {through}");
+
+        if (renderer.Contains("llvmpipe", StringComparison.OrdinalIgnoreCase)
+            || renderer.Contains("softpipe", StringComparison.OrdinalIgnoreCase)
+            || renderer.Contains("Software Rasterizer", StringComparison.OrdinalIgnoreCase))
+            Console.WriteLine("gpu         ⚠ software rendering: no graphics driver was found for this window");
+    }
+
     private void ApplyWindowIcon()
     {
         var icons = new List<RawImage>(2);
@@ -1060,6 +1096,7 @@ public sealed class ClientHost : IDisposable
 
         _gl = GL.GetApi(_window);
         ApplyWindowIcon();
+        ReportGraphicsDevice();
 
         // Whatever the player changed last time, before anything reads a key or a field of view.
         // A bad file costs the setting it names and nothing else — see GameSettings.Load.
