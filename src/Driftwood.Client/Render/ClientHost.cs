@@ -2440,9 +2440,10 @@ public sealed class ClientHost : IDisposable
             if (_platesDown.Contains(cell)) continue;
 
             var id = _streamer.World.GetBlock(cell.X, cell.Y, cell.Z).Value;
-            if (_registry[id].Name != "pressure_plate") continue;
+            var plate = _registry[id].Name;
+            if (Array.IndexOf(StarterBlocks.Plates, plate) < 0) continue;
 
-            _streamer.EditBlock(cell.X, cell.Y, cell.Z, _registry.ByName("pressure_plate_on").Id);
+            _streamer.EditBlock(cell.X, cell.Y, cell.Z, _registry.ByName(plate + "_on").Id);
             PlaySound(
                 _registry[id], SoundEvent.Place,
                 new Vector3(cell.X + 0.5f, cell.Y + 0.5f, cell.Z + 0.5f), 0.5f);
@@ -2453,13 +2454,13 @@ public sealed class ClientHost : IDisposable
             if (_platesNow.Contains(cell)) return false;
 
             var id = _streamer.World.GetBlock(cell.X, cell.Y, cell.Z).Value;
-            if (_registry[id].Name == "pressure_plate_on")
-                _streamer.EditBlock(cell.X, cell.Y, cell.Z, _registry.ByName("pressure_plate").Id);
+            if (PressedPlate(_registry[id].Name) is { } rest)
+                _streamer.EditBlock(cell.X, cell.Y, cell.Z, _registry.ByName(rest).Id);
             return true;
         });
 
         foreach (var cell in _platesNow)
-            if (_registry[_streamer.World.GetBlock(cell.X, cell.Y, cell.Z)].Name == "pressure_plate_on")
+            if (PressedPlate(_registry[_streamer.World.GetBlock(cell.X, cell.Y, cell.Z)].Name) is not null)
                 _platesDown.Add(cell);
 
         // What the wiring switched on its own — a door swung by a wire — gets its voice here.
@@ -10052,6 +10053,9 @@ public sealed class ClientHost : IDisposable
 
         if (fromOffhand) SpendOffhand();
         else _inventory.SpendHeld();
+
+        // The bowl comes back, as the reference's does: a stew is a meal in a dish, not a dish eaten.
+        if (food.Remains is { } remains) Spill(_items.Stack(remains, 1));
 
         _audio?.Play(Pick(CreatureSounds.Meals), _viewPosition, 0.45f, Wobble());
 
@@ -19314,6 +19318,11 @@ public sealed class ClientHost : IDisposable
         _gl.Viewport(size);
         _visuals?.ResetHistory();
     }
+
+    /// <summary>The resting plate a pressed plate's name goes back to, or null when it is not one.</summary>
+    private static string? PressedPlate(string name) =>
+        name.EndsWith("_on", StringComparison.Ordinal)
+        && Array.IndexOf(StarterBlocks.Plates, name[..^3]) >= 0 ? name[..^3] : null;
 
     private void Shutdown()
     {

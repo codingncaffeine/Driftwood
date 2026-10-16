@@ -199,6 +199,18 @@ public static class StarterItems
 
         items.Register(new ItemType
         {
+            Name = StarterBlocks.PlateWood, Label = "wooden pressure plate", IconLayer = StarterBlocks.LayerPlanks,
+            DrawsAsBlock = true, BurnSeconds = 15f,
+            Places = new Placeable
+            {
+                Label = "wooden pressure plate",
+                Kind = PlacementKind.Standing,
+                Variants = [blocks.ByName(StarterBlocks.PlateWood).Id],
+            },
+        });
+
+        items.Register(new ItemType
+        {
             Name = "pressure_plate", Label = "pressure plate", IconLayer = StarterBlocks.LayerSmoothStone,
             DrawsAsBlock = true,
             Places = new Placeable
@@ -662,6 +674,23 @@ public static class StarterItems
         // shut inside it is the meadow's own lantern. The carve itself is an act on the world, not
         // a recipe — the shears do it where the pumpkin stands.
         Block(items, blocks, "pumpkin", "pumpkin", StarterBlocks.LayerPumpkinSide);
+        Block(items, blocks, "bookshelf", "bookshelf", StarterBlocks.LayerBookshelf, burn: 15f);
+
+        // ⛳ The reference's everyday makes, 2026-10-16. A bowl is a dish and burns like a stick; the
+        // stew in it is a full meal and gives the bowl back; sugar comes off the reed and sweetens a
+        // pie that is the best thing the farm makes; a book is paper bound in leather.
+        Loose(items, "bowl", "bowl", StarterBlocks.LayerBowl, burn: 5f);
+        items.Register(new ItemType
+        {
+            Name = "mushroom_stew", Label = "mushroom stew", IconLayer = StarterBlocks.LayerMushroomStew,
+            Feeds = 6, MaxStack = 1, Remains = "bowl",
+        });
+        Loose(items, "sugar", "sugar", StarterBlocks.LayerSugar);
+        items.Register(new ItemType
+        {
+            Name = "pumpkin_pie", Label = "pumpkin pie", IconLayer = StarterBlocks.LayerPumpkinPie, Feeds = 8,
+        });
+        Loose(items, "book", "book", StarterBlocks.LayerBook);
 
         foreach (var (name, label, icon, lit) in ((string, string, ushort, bool)[])
                  [
@@ -1228,6 +1257,7 @@ public static class StarterItems
         // Dry wood off a dry land: the one place sticks grow unforested. The bush itself is not
         // carried — a dead thing comes apart in the hand.
         new BlockDrops.Rule("dead_bush", "stick", 2),
+        new BlockDrops.Rule("bookshelf", "book", 3),
 
         // ⚠ Grass still leaves nothing and the flowers no longer do. The difference is that one of
         // them is now a material: every colour in the game starts as something picked out of a

@@ -161,6 +161,11 @@ public sealed class ItemType
     /// </remarks>
     public int Feeds { get; init; }
 
+    /// <summary>
+    /// What eating this leaves in the hand, by item name, or null for nothing — a stew's bowl.
+    /// </summary>
+    public string? Remains { get; init; }
+
     /// <summary>True when this can be eaten.</summary>
     public bool IsFood => Feeds > 0;
 

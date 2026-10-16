@@ -9037,10 +9037,15 @@ public static class WorldAudit
         (StarterBlocks.LayerFirstSpellIcon, "spell_holy_might"),
         (StarterBlocks.LayerLastSpellIcon, "spell_earth_elemental"),
 
-        // The tree's renewal (2026-08-22) went on after the spell sheet; the apple is the true end.
+        // The tree's renewal (2026-08-22) went on after the spell sheet.
         (StarterBlocks.LayerDriftoakSapling, "driftoak_sapling"),
         (StarterBlocks.LayerCherrySapling, "cherry_sapling"),
-        ((ushort)(StarterBlocks.LayerCount - 1), "apple"),
+        (StarterBlocks.LayerApple, "apple"),
+
+        // The everyday makes (2026-10-16) after the apple; the iron bars are the true end.
+        (StarterBlocks.LayerBowl, "bowl"),
+        (StarterBlocks.LayerBook, "book"),
+        ((ushort)(StarterBlocks.LayerCount - 1), "iron_bars"),
     ];
 
     /// <summary>
@@ -11588,11 +11593,12 @@ public static class WorldAudit
 
         // 79 as a literal: 32 door forms, 16 trapdoors, their 16 wet twins, the lamp pair, the
         // twelve booster forms — and the blastcask, whose LIT form is deliberately not counted:
-        // a fuse does not go out when the lever drops, so only the cold cask is a sink.
+        // a fuse does not go out when the lever drops, so only the cold cask is a sink. Twelve
+        // live sources since the wooden plate's pressed form joined the stone one's (2026-10-16).
         var (wires, sources, gates, sinks) = table.Census();
-        if (wires != 16 || sources != 11 || gates != 20 || sinks != 79)
+        if (wires != 16 || sources != 12 || gates != 20 || sinks != 79)
             faults.Add($"the table reads {wires} wire strengths, {sources} live sources, {gates} "
-                     + $"lit gates and {sinks} sinks — wanted 16, 11, 20, 79");
+                     + $"lit gates and {sinks} sinks — wanted 16, 12, 20, 79");
 
         var leverOff = registry.ByName("lever_floor").Id;
         var leverOn = registry.ByName("lever_floor_on").Id;
@@ -12087,11 +12093,11 @@ public static class WorldAudit
         var seagrass = registry.ByName("seagrass").Id;
 
         // ── The pairing table is populated and points both ways ──────────────────────────────────
-        // 564 written as a literal on purpose: 140 shaped + 400 connected + 16 trapdoors + 4
-        // ladders + 4 chests — cherry's slabs, stairs and fence joined at #94. A clone loop
-        // that quietly skipped a family reads fewer.
-        if (wet.Pairs != 564)
-            faults.Add($"the waterlogging table pairs {wet.Pairs} forms, not the 564 registered");
+        // 580 written as a literal on purpose: 140 shaped + 416 connected + 16 trapdoors + 4
+        // ladders + 4 chests — cherry's slabs, stairs and fence joined at #94, iron bars' sixteen
+        // on 2026-10-16. A clone loop that quietly skipped a family reads fewer.
+        if (wet.Pairs != 580)
+            faults.Add($"the waterlogging table pairs {wet.Pairs} forms, not the 580 registered");
         if (!wet.TryWet(fenceDry, out var wetOfFence) || wetOfFence != fenceWet)
             faults.Add("the fence's wet form is not its dry form's partner");
         if (wet.DryOf(fenceWet) != fenceDry)

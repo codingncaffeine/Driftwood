@@ -683,7 +683,20 @@ public static class StarterBlocks
     public const ushort LayerCherrySapling = LayerLastSpellIcon + 2;
     public const ushort LayerApple = LayerLastSpellIcon + 3;
 
-    public const int LayerCount = LayerApple + 1;
+    /// <summary>
+    /// The reference's everyday makes that were missing, 2026-10-16 (the user: "we're still missing
+    /// important recipes"): a bowl and the stew it holds, sugar and the pie it sweetens, a book,
+    /// the shelf of them, and iron bars. Appended after the apple, as everything is.
+    /// </summary>
+    public const ushort LayerBowl = LayerApple + 1;
+    public const ushort LayerMushroomStew = LayerApple + 2;
+    public const ushort LayerSugar = LayerApple + 3;
+    public const ushort LayerPumpkinPie = LayerApple + 4;
+    public const ushort LayerBook = LayerApple + 5;
+    public const ushort LayerBookshelf = LayerApple + 6;
+    public const ushort LayerIronBars = LayerApple + 7;
+
+    public const int LayerCount = LayerIronBars + 1;
 
     /// <summary>One anvil's name, by how worn it is and which way it lies.</summary>
     /// <remarks>
@@ -1249,6 +1262,14 @@ public static class StarterBlocks
 
         // ⛳ The pumpkin, found whole in the meadows' wild patches and worth carrying home for what
         // a pair of shears turns it into. Wood to the ear and to the axe.
+        // A shelf of books: planks top and bottom, spines on the four sides, as the reference has it.
+        registry.Register(new BlockType
+        {
+            Name = "bookshelf", Hardness = 1.5f, Crafted = true, Sounds = SoundMaterial.Wood,
+            HarvestClass = ToolClass.Axe,
+            TopLayer = LayerPlanks, SideLayer = LayerBookshelf, BottomLayer = LayerPlanks,
+        });
+
         var pumpkin = registry.Register(new BlockType
         {
             Name = "pumpkin", Hardness = 1.0f, Sounds = SoundMaterial.Wood,
@@ -2077,6 +2098,18 @@ public static class StarterBlocks
                 SupportFace = Faces.NegY,
                 Model = BlockModel.Layer(LayerSmoothStone, LayerSmoothStone, LayerSmoothStone, on ? 0.5f : 1f),
             });
+
+            // The wooden plate: the same switch in planks. ⚠ Named off "pressure_plate" so the
+            // wiring, which knows a plate by that prefix and its "_on", reads it with no new rule.
+            registry.Register(new BlockType
+            {
+                Name = PlateWood + (on ? "_on" : ""),
+                Hardness = 0.5f, Solid = false, Opaque = false, Crafted = true,
+                Derived = on,
+                Sounds = SoundMaterial.Wood, HarvestClass = ToolClass.Axe,
+                SupportFace = Faces.NegY,
+                Model = BlockModel.Layer(LayerPlanks, LayerPlanks, LayerPlanks, on ? 0.5f : 1f),
+            });
         }
 
         // The lamp that answers: dark until fed, and the stormglass lamp's own light when lit.
@@ -2871,6 +2904,12 @@ public static class StarterBlocks
         get { foreach (var cut in CutStones) yield return cut.Name; }
     }
 
+    /// <summary>The wooden pressure plate's block name; its pressed form adds "_on".</summary>
+    public const string PlateWood = "pressure_plate_wood";
+
+    /// <summary>Every pressure plate at rest, each of which has a pressed form named with "_on".</summary>
+    public static readonly string[] Plates = ["pressure_plate", PlateWood];
+
     /// <summary>Facing names in <see cref="Placeable.Facings"/> order: +x, -x, +z, -z.</summary>
     private static readonly string[] FacingNames = ["east", "west", "south", "north"];
 
@@ -2917,6 +2956,10 @@ public static class StarterBlocks
         new("glass_pane", LayerGlass, SoundMaterial.Glass, ToolClass.None, 0,
             1f, 1f, [(0f, 16f)], 0f),
         new("smokeglass_pane", LayerSmokeglass, SoundMaterial.Glass, ToolClass.None, 0,
+            1f, 1f, [(0f, 16f)], 0f),
+
+        // A pane's frame in iron: the same thin join-up, mined with a pickaxe rather than by hand.
+        new("iron_bars", LayerIronBars, SoundMaterial.Metal, ToolClass.Pickaxe, 1,
             1f, 1f, [(0f, 16f)], 0f),
 
         // ⛳ Sixteen more panes, appended off the colour table rather than written out — which is the

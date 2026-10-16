@@ -303,6 +303,18 @@ public static class StarterRecipes
         // one-stone bench recipe would collide with every worked stone the cutter already offers.
         Cut("button", "stone", "button");
         Shaped("pressure plate", "pressure_plate", 1, ["OO"], station: CraftStation.Bench);
+        Shaped("wooden pressure plate", StarterBlocks.PlateWood, 1, ["PP"], station: CraftStation.Bench);
+
+        // ⛳ The reference's everyday makes, 2026-10-16, in its own shapes and counts.
+        Shaped("sandstone", "sandstone", 1, ["EE", "EE"], station: CraftStation.Bench);
+        Shaped("bowl", "bowl", 4, ["P P", " P "], station: CraftStation.Bench);
+        LooseAt("mushroom stew", "mushroom_stew", 1, CraftStation.Bench, "mushroom_brown", "mushroom_red", "bowl");
+        LooseAt("sugar", "sugar", 1, CraftStation.Bench, "marsh_reed");
+        LooseAt("pumpkin pie", "pumpkin_pie", 1, CraftStation.Bench, "pumpkin", "sugar", "egg");
+        // Three papers and a leather — four parts, so a square rather than a row no bench holds.
+        Shaped("book", "book", 1, ["MM", "MQ"], "paper", station: CraftStation.Bench);
+        Shaped("bookshelf", "bookshelf", 1, ["PPP", "KKK", "PPP"], station: CraftStation.Bench);
+        Shaped("iron bars", "iron_bars", 16, ["III", "III"], station: CraftStation.Bench);
         LooseAt("tidelamp", "tidelamp", 1, CraftStation.Bench,
             "stormglass_lamp", "tidewire", "tidewire");
         Shaped("and gate", "gate_and", 1, ["D D", "OOO"], station: CraftStation.Bench);
@@ -686,6 +698,8 @@ public static class StarterRecipes
         'Y' => "gold_ingot",
         'E' => "sand",
         'J' => "string",
+        'K' => "book",
+        'Q' => "leather",
         'H' => "feather",
         _ => throw new InvalidOperationException($"recipe '{recipe}' uses unknown key '{key}'"),
     };

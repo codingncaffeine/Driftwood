@@ -1045,6 +1045,160 @@ public static class TileGen
     }
 
     /// <summary>
+    /// A wooden bowl seen from a little above: a dark rim's mouth over a rounded body — or, with
+    /// <paramref name="stew"/>, filled with a brown stew flecked with mushroom.
+    /// </summary>
+    public static byte[] IconBowl(int seed, bool stew)
+    {
+        var t = new byte[BytesPerTile];
+
+        for (var y = 5; y < 14; y++)
+        for (var x = 1; x < 15; x++)
+        {
+            var dx = (x - 7.5f) / 6.6f;
+            var light = (int)((Noise(x, y, seed) * 2f - 1f) * 9f) + (8 - x) * 2;
+
+            // The mouth: a flat ellipse across the top third.
+            var my = (y - 6.6f) / 1.9f;
+            var mouth = dx * dx + my * my;
+            if (mouth <= 1f)
+            {
+                if (mouth > 0.62f)
+                    Put(t, x, y, Clamp(170 + light), Clamp(122 + light), Clamp(74 + light), 255);
+                else if (stew)
+                {
+                    // A rich red-brown broth with pieces of both mushrooms in it — cream and red —
+                    // so the full bowl reads apart from the empty one at a glance.
+                    var piece = Noise(x + 3, y + 5, seed);
+                    var (r, g, b) = piece > 0.8f ? (236, 214, 170) : piece < 0.16f ? (204, 52, 40) : (156, 74, 38);
+                    Put(t, x, y, Clamp(r + light), Clamp(g + light), Clamp(b + light / 2), 255);
+                }
+                else Put(t, x, y, Clamp(84 + light), Clamp(54 + light), Clamp(32 + light), 255);
+                continue;
+            }
+
+            // The body: a half-ellipse hanging under the mouth, darker toward its foot.
+            if (y < 7) continue;
+            var by = (y - 7f) / 6.4f;
+            if (dx * dx + by * by > 1f) continue;
+            var shade = (int)(by * -34f);
+            Put(t, x, y, Clamp(150 + light + shade), Clamp(104 + light + shade), Clamp(60 + light + shade), 255);
+        }
+
+        return t;
+    }
+
+    /// <summary>
+    /// Sugar: a heap like any powder, but whiter and lit with crisp single-texel sparkles, which is
+    /// what tells a pinch of crystals from bone meal's chalky grey at a glance.
+    /// </summary>
+    public static byte[] IconSugar(int seed)
+    {
+        var t = IconPile(seed, 244, 242, 236);
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var at = (y * Size + x) * 4;
+            if (t[at + 3] == 0) continue;
+            if (Noise(x, y, seed + 31) > 0.84f) Put(t, x, y, 255, 255, 255, 255);
+            else if (Noise(x, y, seed + 57) > 0.9f) Put(t, x, y, 196, 204, 222, 255);
+        }
+
+        return t;
+    }
+
+    /// <summary>A wedge of pie: a golden crust round an orange filling, lit on its upper left.</summary>
+    public static byte[] IconPie(int seed)
+    {
+        var t = new byte[BytesPerTile];
+
+        for (var y = 4; y < 14; y++)
+        for (var x = 1; x < 15; x++)
+        {
+            // A wide slice: its point on the left, its curved back on the right.
+            var across = (x - 1) / 13f;
+            var half = 1.2f + across * 4.4f;
+            var dy = MathF.Abs(y - 9f);
+            if (dy > half) continue;
+            var back = x >= 13 - (int)(dy * dy / 8f);
+
+            var light = (int)((Noise(x, y, seed) * 2f - 1f) * 10f) + (8 - y) * 3;
+            var crust = back || dy > half - 1.3f || y <= 9 - half + 1.5f;
+            if (crust)
+                Put(t, x, y, Clamp(222 + light), Clamp(170 + light), Clamp(86 + light), 255);
+            else
+                Put(t, x, y, Clamp(224 + light), Clamp(120 + light), Clamp(34 + light / 2), 255);
+        }
+
+        return t;
+    }
+
+    /// <summary>
+    /// The side of a bookshelf: a plank frame round two shelves of spines in a run of colours.
+    /// </summary>
+    public static byte[] Bookshelf(int seed)
+    {
+        var t = Planks(seed, 179, 143, 87);
+        (int R, int G, int B)[] covers =
+        [
+            (128, 46, 40), (52, 74, 120), (60, 104, 58), (150, 118, 52), (98, 62, 106), (120, 84, 54),
+        ];
+
+        foreach (var (top, bottom) in (ReadOnlySpan<(int, int)>)[(1, 6), (9, 14)])
+        {
+            var x = 1;
+            var book = 0;
+            while (x < 15)
+            {
+                var width = 1 + (int)(Noise(book, top, seed) * 2.2f);
+                var height = (int)(Noise(book, top + 40, seed) * 2.5f);
+                var (r, g, b) = covers[(int)(Noise(book, top + 80, seed) * covers.Length) % covers.Length];
+
+                for (var bx = x; bx < Math.Min(15, x + width); bx++)
+                for (var by = top + height; by <= bottom; by++)
+                {
+                    var light = (int)((Noise(bx, by, seed + 9) * 2f - 1f) * 8f) - (bx == x ? 18 : 0);
+                    var band = by == top + height + 1 ? 40 : 0;
+                    Put(t, bx, by, Clamp(r + light + band), Clamp(g + light + band), Clamp(b + light + band / 2), 255);
+                }
+
+                x += width;
+                book++;
+            }
+
+            // The shelf's own shadow along the top of each row.
+            for (var sx = 1; sx < 15; sx++)
+            {
+                var at = (top * Size + sx) * 4;
+                if (t[at] > 40) Put(t, sx, top, Clamp(t[at] - 40), Clamp(t[at + 1] - 40), Clamp(t[at + 2] - 40), 255);
+            }
+        }
+
+        return t;
+    }
+
+    /// <summary>
+    /// Iron bars: four upright rods and two cross straps, clear between — a cut-out like a pane.
+    /// </summary>
+    public static byte[] IronBars(int seed)
+    {
+        var t = new byte[BytesPerTile];
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var rod = x % 4 == 1 || x % 4 == 2;
+            var strap = y is 1 or 2 or 13 or 14;
+            if (!rod && !strap) continue;
+
+            var light = (int)((Noise(x, y, seed) * 2f - 1f) * 10f) + (x % 4 == 1 ? 22 : -8);
+            Put(t, x, y, Clamp(150 + light), Clamp(152 + light), Clamp(156 + light), 255);
+        }
+
+        return t;
+    }
+
+    /// <summary>
     /// A scatter of grains: seed corn, or a pinch of meal.
     /// </summary>
     /// <remarks>
@@ -1590,7 +1744,10 @@ public static class TileGen
     /// placeholder — which reads as a hole in a texture pack and sends somebody looking in the
     /// wrong place entirely.
     /// </remarks>
-    public static byte[] IconBook(int seed)
+    public static byte[] IconBook(int seed) => IconBook(seed, 138, 88, 54);
+
+    /// <summary>A closed book in a cover of the given colour, spine darker, page edges on the right.</summary>
+    public static byte[] IconBook(int seed, byte cr, byte cg, byte cb)
     {
         var t = new byte[BytesPerTile];
 
@@ -1612,9 +1769,9 @@ public static class TileGen
             // The spine is darker than the board, which is what makes it read as a book edge-on
             // rather than as a brown card.
             var spine = x <= Left + 1;
-            var r = spine ? 96 : 138;
-            var g = spine ? 58 : 88;
-            var b = spine ? 36 : 54;
+            var r = spine ? cr * 7 / 10 : cr;
+            var g = spine ? cg * 2 / 3 : cg;
+            var b = spine ? cb * 2 / 3 : cb;
 
             if (y == Top || y == Bottom) { r -= 26; g -= 18; b -= 12; }
 

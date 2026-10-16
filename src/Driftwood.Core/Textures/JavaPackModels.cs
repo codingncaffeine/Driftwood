@@ -488,6 +488,7 @@ public sealed class JavaPackModels
             "mossy_rubble" => "mossy_cobblestone",
             "bench" => "crafting_table",
             "pressure_plate" => "stone_pressure_plate",
+            "pressure_plate_wood" => "oak_pressure_plate",
             "door" => "oak_door",
             "trapdoor" => "oak_trapdoor",
             "torch_wall" => "wall_torch",

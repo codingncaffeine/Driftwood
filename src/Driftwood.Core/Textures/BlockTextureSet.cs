@@ -459,7 +459,9 @@ public static class BlockTextureSet
 
         // ⛳ Chrome rather than a block, and a layer anyway so a pack reskins the button with the
         // same machinery it reskins the world. The pack's own is the item they put in a lectern.
-        new("recipe_book", "textures/item/book.png",              true),
+        // ⚠ The reference's knowledge book — its own recipe-teaching item — since 2026-10-16, when the
+        // plain book became an item of ours and took its own file back.
+        new("recipe_book", "textures/item/knowledge_book.png",    true),
 
         // The three metals packed away. Their names are the genre's own, so the mapping is direct.
         .. MetalBlockRows(),
@@ -690,6 +692,16 @@ public static class BlockTextureSet
         new("driftoak_sapling", "textures/block/oak_sapling.png", true, "textures/blocks/sapling_oak.png"),
         new("cherry_sapling", "textures/block/cherry_sapling.png", true, "textures/blocks/cherry_sapling.png"),
         new("apple", "textures/item/apple.png", true, "textures/items/apple.png"),
+
+        // The everyday makes, 2026-10-16, in StarterBlocks' order: five icons, the shelf's face
+        // (solid — it is a block side), and the bars (a cut-out, like the pane they are built as).
+        new("bowl", "textures/item/bowl.png", true, "textures/items/bowl.png"),
+        new("mushroom_stew", "textures/item/mushroom_stew.png", true, "textures/items/mushroom_stew.png"),
+        new("sugar", "textures/item/sugar.png", true, "textures/items/sugar.png"),
+        new("pumpkin_pie", "textures/item/pumpkin_pie.png", true, "textures/items/pumpkin_pie.png"),
+        new("book", "textures/item/book.png", true, "textures/items/book_normal.png"),
+        new("bookshelf", "textures/block/bookshelf.png", false, "textures/blocks/bookshelf.png"),
+        new("iron_bars", "textures/block/iron_bars.png", true, "textures/blocks/iron_bars.png"),
     ];
 
     /// <summary>
@@ -1690,6 +1702,13 @@ public static class BlockTextureSet
             StarterBlocks.LayerDriftoakSapling => TileGen.Sapling(1367, cherry: false),
             StarterBlocks.LayerCherrySapling => TileGen.Sapling(1368, cherry: true),
             StarterBlocks.LayerApple => TileGen.IconApple(1369),
+            StarterBlocks.LayerBowl => TileGen.IconBowl(1370, stew: false),
+            StarterBlocks.LayerMushroomStew => TileGen.IconBowl(1371, stew: true),
+            StarterBlocks.LayerSugar => TileGen.IconSugar(1372),
+            StarterBlocks.LayerPumpkinPie => TileGen.IconPie(1373),
+            StarterBlocks.LayerBook => TileGen.IconBook(1374, 128, 46, 40),
+            StarterBlocks.LayerBookshelf => TileGen.Bookshelf(1375),
+            StarterBlocks.LayerIronBars => TileGen.IronBars(1376),
 
             StarterBlocks.LayerGlowcap => TileGen.Glowcap(1364),
             StarterBlocks.LayerMarshReed => TileGen.MarshReed(1365),
