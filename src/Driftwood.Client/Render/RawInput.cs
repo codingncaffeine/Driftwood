@@ -129,6 +129,13 @@ public sealed unsafe class RawInput : IDisposable
         Position = new Vector2((float)startX, (float)startY);
     }
 
+    /// <summary>True while the mouse button is down, asked of the window like a key.</summary>
+    public bool IsMouseButtonPressed(Silk.NET.Input.MouseButton button)
+    {
+        if (_handle is null || (int)button < 0 || (int)button > 7) return false;
+        return _glfw.GetMouseButton(_handle, (int)button) == (int)InputAction.Press;
+    }
+
     /// <summary>True while the key is down, asked of the window rather than tracked here.</summary>
     public bool IsKeyPressed(Key key)
     {

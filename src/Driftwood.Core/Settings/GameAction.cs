@@ -21,6 +21,12 @@ public enum GameAction
     Sneak,
     Sprint,
 
+    /// <summary>Mine a block, or strike what is in front — left mouse by default.</summary>
+    BreakOrAttack,
+
+    /// <summary>Use what is aimed at, or place or use what is held — right mouse by default.</summary>
+    UseOrPlace,
+
     /// <summary>
     /// Held: puts the shield in the other hand up, if there is one there.
     /// </summary>
@@ -98,6 +104,9 @@ public static class GameActions
     /// <summary>The headings the controls screen breaks the list up under.</summary>
     public static string GroupOf(GameAction action) => action switch
     {
+        // ⛳ The two hands (2026-10-16, the user: interacting "is tied to right-click only … with
+        // no way to change it"). Named before the ranges, which would otherwise file them as screens.
+        GameAction.BreakOrAttack or GameAction.UseOrPlace => "hands",
         <= GameAction.Sprint => "moving",
         // ⚠ Named, not a range. The rows either side of these two are ordered by what they do and
         // these are not adjacent to the rest of "fighting" — a `<=` here would file swapping hands
@@ -119,6 +128,8 @@ public static class GameActions
         GameAction.Jump => "jump",
         GameAction.Sneak => "sneak",
         GameAction.Sprint => "sprint",
+        GameAction.BreakOrAttack => "break or attack",
+        GameAction.UseOrPlace => "use or place",
         GameAction.RaiseShield => "raise shield",
         GameAction.SwapHands => "swap hands",
         GameAction.OpenInventory => "inventory",

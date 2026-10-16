@@ -7012,6 +7012,9 @@ public static class WorldAudit
 
         written.Keys.Bind(GameAction.Jump, "Y");
         written.Keys.Bind(GameAction.MoveForward, "I");
+        // ⛳ The hands move (2026-10-16): use onto a key, and a mouse button onto something else.
+        written.Keys.Bind(GameAction.UseOrPlace, "Q");
+        written.Keys.Bind(GameAction.SwapHands, Bindings.Mouse4);
         written.Pad.Bind(ControllerAction.Jump, ControllerControl.RightShoulder);
         written.Pad.Bind(ControllerAction.ToggleView, ControllerControl.None);
 
@@ -7027,6 +7030,25 @@ public static class WorldAudit
         finally
         {
             try { File.Delete(path); } catch (IOException) { }
+        }
+
+        if (read.Keys.Primary(GameAction.UseOrPlace) != "Q" || read.Keys.Primary(GameAction.SwapHands) != Bindings.Mouse4)
+            faults.Add("a hand moved onto a key, or a mouse button onto another action, did not survive");
+
+        // A file written before the hands could be bound has no line for them: they come back on
+        // the mouse, as they always were.
+        var olderPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "driftwood-settings-older.txt");
+        try
+        {
+            File.WriteAllText(olderPath, "video.fov=80\nbind.jump=Space\n");
+            var older = GameSettings.Load(olderPath);
+            if (older.Keys.Primary(GameAction.BreakOrAttack) != Bindings.MouseLeft
+                || older.Keys.Primary(GameAction.UseOrPlace) != Bindings.MouseRight)
+                faults.Add("an older settings file left the hands off the mouse");
+        }
+        finally
+        {
+            try { File.Delete(olderPath); } catch (IOException) { }
         }
 
         if (read.ViewDistance != 14) faults.Add($"view distance came back {read.ViewDistance}, not 14");

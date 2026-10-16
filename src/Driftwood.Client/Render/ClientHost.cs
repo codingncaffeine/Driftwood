@@ -2849,6 +2849,14 @@ public sealed class ClientHost : IDisposable
     {
         switch (action)
         {
+            // The two hands, from wherever they are bound — only while playing, never through a
+            // screen, and never into a window that has let the pointer go.
+            case GameAction.BreakOrAttack or GameAction.UseOrPlace:
+                if (_hudScreen.IsOpen || _bench is not null || !_mouseCaptured) break;
+                if (action == GameAction.BreakOrAttack) PressBreak();
+                else PressPlace();
+                break;
+
             // What this character is carrying and can make. The bench a player always has is two by
             // two, in their own hands; anything wider needs a real one, and the screen says so by
             // simply not listing it.
@@ -5040,7 +5048,7 @@ public sealed class ClientHost : IDisposable
                     var listening = _rebinding == action;
                     _hudScreen.Rows.Add(new MenuRow(
                         GameActions.Label(action),
-                        listening ? "press a key" : _settings.Keys.Describe(action)));
+                        listening ? "press a key or button" : _settings.Keys.Describe(action)));
                 }
                 break;
 
@@ -10379,6 +10387,16 @@ public sealed class ClientHost : IDisposable
         _lastInputWasController = false;
         if (_bench is not null) return;
 
+        // The controls tab is listening: a mouse button binds like a key. The click that started
+        // the listening has already landed, so this is the next press — the one being chosen.
+        if (_rebinding is { } waiting && InputMap.NameOf(button) is { Length: > 0 } buttonName)
+        {
+            _rebinding = null;
+            _settings.Keys.Bind(waiting, buttonName);
+            AfterRebind();
+            return;
+        }
+
         if (HandleMagicWindowMouseDown(button)) return;
 
         if (_spellCursorOpen)
@@ -10445,22 +10463,28 @@ public sealed class ClientHost : IDisposable
             return;
         }
 
-        switch (button)
-        {
-            case MouseButton.Left:
-                _mouseBreakHeld = true;
-                _holdingBreak = true;
-                _lastStrikeWasBreak = true;
-                _animator.Strike();
-                break;
+        // ⛳ In the world a button means whatever it is bound to (2026-10-16): the two hands by
+        // default, and anything else the player put on it. Screens above still read the pointer's
+        // own left and right, which is what a pointer is for.
+        if (_keys.ActionFor(button) is { } action) RunAction(action);
+    }
 
-            case MouseButton.Right:
-                _mousePlaceHeld = true;
-                _holdingPlace = true;
-                _lastStrikeWasBreak = false;
-                _animator.Strike();
-                break;
-        }
+    /// <summary>The breaking hand goes down: mining or a blow, from a mouse button or a key.</summary>
+    private void PressBreak()
+    {
+        _mouseBreakHeld = true;
+        _holdingBreak = true;
+        _lastStrikeWasBreak = true;
+        _animator.Strike();
+    }
+
+    /// <summary>The using hand goes down: a use, a placing or the held thing's own use.</summary>
+    private void PressPlace()
+    {
+        _mousePlaceHeld = true;
+        _holdingPlace = true;
+        _lastStrikeWasBreak = false;
+        _animator.Strike();
     }
 
     /// <summary>
@@ -10610,8 +10634,6 @@ public sealed class ClientHost : IDisposable
         switch (button)
         {
             case MouseButton.Left:
-                _mouseBreakHeld = false;
-                _holdingBreak = _controllerBreakHeld;
                 _draggingScrollbar = false;
                 if (_draggingMap && !_mapDragMoved) SetMapWaypoint(_mapDragOrigin);
                 _draggingMap = false;
@@ -10619,10 +10641,6 @@ public sealed class ClientHost : IDisposable
                 _draggingFigure = false;
                 if (_draggingMagicWindow is not null) SaveMagicWindowSettings();
                 _draggingMagicWindow = null;
-                break;
-            case MouseButton.Right:
-                _mousePlaceHeld = false;
-                _holdingPlace = _controllerPlaceHeld;
                 break;
         }
     }
@@ -10772,6 +10790,12 @@ public sealed class ClientHost : IDisposable
     /// <summary>Polls one provider and turns its frame into either screen or world intent.</summary>
     private void StepController(float dt)
     {
+        // The two hands are read off their bindings every frame — a key or any mouse button — so
+        // letting go of whichever it is lets go of the hand, and one released outside the window
+        // cannot leave it digging.
+        _mouseBreakHeld = _mouseCaptured && !_hudScreen.IsOpen && _keys.Held(_input, GameAction.BreakOrAttack);
+        _mousePlaceHeld = _mouseCaptured && !_hudScreen.IsOpen && _keys.Held(_input, GameAction.UseOrPlace);
+
         // Native discovery is not part of the startup critical path, nor of a benchmark or visual
         // instrument. A normal run pays for it once, on the main thread, after the first frame.
         if (!_controller.Started && _firstFrameDrawn && _settings.ControllerEnabled

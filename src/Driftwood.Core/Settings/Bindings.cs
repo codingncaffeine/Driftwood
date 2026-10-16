@@ -41,6 +41,9 @@ public sealed class Bindings
         bindings.Set(GameAction.Jump, "Space");
         bindings.Set(GameAction.Sneak, "ControlLeft");
         bindings.Set(GameAction.Sprint, "ShiftLeft");
+        // The genre's two hands on the two mouse buttons; either can move to any key or button.
+        bindings.Set(GameAction.BreakOrAttack, MouseLeft);
+        bindings.Set(GameAction.UseOrPlace, MouseRight);
 
         // ⚠ Two, and the pair is the point again: V falls under a left hand on WASD, right control
         // under a right hand on the arrows. This project's own player uses the arrows, and a shield
@@ -88,9 +91,18 @@ public sealed class Bindings
         return $"{first} or {second}";
     }
 
+    /// <summary>The names the mouse's buttons are bound by, beside the keys' own.</summary>
+    public const string MouseLeft = "MouseLeft", MouseRight = "MouseRight", MouseMiddle = "MouseMiddle",
+        Mouse4 = "Mouse4", Mouse5 = "Mouse5";
+
     private static string DisplayName(string key) => key switch
     {
         "GraveAccent" => "Tilde",
+        MouseLeft => "left mouse",
+        MouseRight => "right mouse",
+        MouseMiddle => "middle mouse",
+        Mouse4 => "mouse 4",
+        Mouse5 => "mouse 5",
         _ => key,
     };
 
