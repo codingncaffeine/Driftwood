@@ -949,9 +949,9 @@ public sealed class HudRenderer : IDisposable
             DeveloperPanel(screen, w);
         }
 
-        // The settings and start screens fill the corner toasts stack in; they wait until the menu
-        // closes rather than covering it.
-        if (screen.Kind is not (HudScreenKind.Game or HudScreenKind.Start))
+        // Toasts wait while any menu is open rather than covering it; the corner they stack in is
+        // part of every reworked screen.
+        if (!screen.IsOpen)
             Toasts(toasts, w, screen.DeveloperMode && !screen.IsOpen ? 79f : 8f);
 
         // A right-click menu belongs over the panel it controls and over every row inside it.
@@ -1680,6 +1680,14 @@ public sealed class HudRenderer : IDisposable
         if (screen.Kind == HudScreenKind.Trade)
         {
             TradeScreen(catalogue, inventory, screen, layout, w, h);
+            Footer(screen, w, h);
+            return;
+        }
+
+        if (screen.Kind == HudScreenKind.Player
+            && screen.Tab is (int)PlayerTab.Character or (int)PlayerTab.Spells or (int)PlayerTab.Progress or (int)PlayerTab.Handbook
+            && JournalScreen(catalogue, inventory, equipment, screen, layout, w, h))
+        {
             Footer(screen, w, h);
             return;
         }
@@ -2642,18 +2650,23 @@ public sealed class HudRenderer : IDisposable
     private const float MenuGlyph = 8f;
 
     /// <summary>The settings screen as a sidebar of categories beside one roomy pane.</summary>
-    private bool SettingsScreen(HudScreen screen, ScreenLayout layout, float w, float h)
+    /// <summary>
+    /// The reworked frame: a sidebar of the screen's tabs beside one roomy pane with a header. False
+    /// on a window too narrow for it, where the caller falls back to the compact layout.
+    /// </summary>
+    private bool MenuFrame(
+        HudScreen screen, ScreenLayout layout, float w, float h, float wanted, string subtitle,
+        out float x, out float top, out float content, out float bottom)
     {
-        // Packs and skins are pictures and get the room for them; settings stay a readable width.
-        var gallery = screen.Tab == (int)GameTab.Packs || screen.Tab == (int)GameTab.Skins;
-        var content = MathF.Min(gallery ? 620f : 480f, w - MenuSideWidth - 40f);
+        content = MathF.Min(wanted, w - MenuSideWidth - 40f);
+        x = top = bottom = 0f;
         if (content < 300f || screen.TabNames.Length == 0) return false;
         screen.SmoothScroll = true;
 
         var total = MenuSideWidth + 10f + content;
         var left = MathF.Round((w - total) / 2f);
-        var top = 24f;
-        var bottom = h - 54f;
+        top = 24f;
+        bottom = h - 54f;
         var tall = bottom - top;
 
         // The categories.
@@ -2661,7 +2674,7 @@ public sealed class HudRenderer : IDisposable
             Rect(_plain, left, top, MenuSideWidth, tall, MenuSide);
         Rect(_plain, left + MenuSideWidth - 1f, top, 1f, tall, MenuEdge);
         Text("DRIFTWOOD", left + 12f, top + 12f, MenuGlyph, MenuAmber);
-        Text(screen.Kind == HudScreenKind.Game ? "settings" : "", left + 12f, top + 24f, MenuGlyph, InkFaint);
+        Text(subtitle, left + 12f, top + 24f, MenuGlyph, InkFaint);
 
         for (var i = 0; i < screen.TabNames.Length; i++)
         {
@@ -2678,7 +2691,7 @@ public sealed class HudRenderer : IDisposable
         }
 
         // The pane.
-        var x = left + MenuSideWidth + 10f;
+        x = left + MenuSideWidth + 10f;
         if (!ThemedPanel(x, top, content, tall, GuiTextureSet.Layer.MenuListBackground))
             Rect(_plain, x, top, content, tall, MenuGlass);
         Rect(_plain, x, top, content, 1f, MenuEdge);
@@ -2686,6 +2699,17 @@ public sealed class HudRenderer : IDisposable
             ? Capitalised(screen.TabNames[screen.Tab]) : "";
         Text(FitText(title, content - 32f, 16f), x + 16f, top + 12f, 16f, Vector4.One);
         Rect(_plain, x + 16f, top + 36f, content - 32f, 1f, MenuEdge);
+        return true;
+    }
+
+    /// <summary>The settings screen as a sidebar of categories beside one roomy pane.</summary>
+    private bool SettingsScreen(HudScreen screen, ScreenLayout layout, float w, float h)
+    {
+        // Packs and skins are pictures and get the room for them; settings stay a readable width.
+        var gallery = screen.Tab == (int)GameTab.Packs || screen.Tab == (int)GameTab.Skins;
+        if (!MenuFrame(screen, layout, w, h, gallery ? 620f : 480f, "settings",
+                out var x, out var top, out var content, out var bottom))
+            return false;
 
         var noteTop = bottom - 40f;
         if (screen.Kind == HudScreenKind.Game && screen.Tab == (int)GameTab.Skins)
@@ -2694,6 +2718,44 @@ public sealed class HudRenderer : IDisposable
             PackGallery(screen, layout, x + 8f, top + 44f, content - 16f, noteTop - 4f);
         else
             MenuRows(screen, layout, x + 8f, top + 44f, content - 16f, noteTop - 4f, h, buttons: false);
+        MenuNote(screen, x + 16f, noteTop, content - 32f, bottom);
+        return true;
+    }
+
+    /// <summary>
+    /// The character's own tabs — character, spells, progress, handbook — in the same frame. The
+    /// compact layout squeezed six tabs into a panel two hundred and thirty units wide, so they
+    /// read "it…", "chara…", "sp…"; here they are a column of whole words.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ The spellbook here is the pane, not a window: inside a frame that fills the screen there is
+    /// nowhere useful to drag it. The spell bar and companion window outside the menu still move.
+    /// </remarks>
+    private bool JournalScreen(
+        ItemRegistry catalogue, Inventory inventory, Equipment equipment,
+        HudScreen screen, ScreenLayout layout, float w, float h)
+    {
+        var character = screen.Tab == (int)PlayerTab.Character;
+        if (!MenuFrame(screen, layout, w, h, character ? 560f : 480f, "journal",
+                out var x, out var top, out var content, out var bottom))
+            return false;
+
+        var noteTop = bottom - 40f;
+        if (character)
+        {
+            // The rows beside the worn figure, as on the inventory, which turns the same way.
+            const float figureWide = 150f;
+            var rowsWide = content - 16f - figureWide - 12f;
+            MenuRows(screen, layout, x + 8f, top + 44f, rowsWide, noteTop - 4f, h, buttons: false);
+            var px = x + 8f + rowsWide + 12f;
+            var ph = noteTop - 4f - (top + 44f);
+            FigureAt(screen, catalogue, equipment, inventory.Held, layout,
+                px, top + 44f, figureWide, ph, iconScale: 1f, frame: true);
+            TextCentred(PreviewFacing(screen.FigureYaw), px + figureWide * 0.5f, top + 44f + ph - 12f, MenuGlyph, InkDim);
+        }
+        else
+            MenuRows(screen, layout, x + 8f, top + 44f, content - 16f, noteTop - 4f, h, buttons: false);
+
         MenuNote(screen, x + 16f, noteTop, content - 32f, bottom);
         return true;
     }
