@@ -71,6 +71,9 @@ public sealed record WorldState(
     /// <summary>Where a slept-in bed stands, or null when none ever was (#99).</summary>
     public Vector3? BedSpawn { get; set; }
 
+    /// <summary>What is written on the world's signs.</summary>
+    public SignBank Signs { get; set; } = new();
+
     /// <summary>The animals standing in the world, both ways through a save.</summary>
     /// <remarks>
     /// ⛳ A list rather than the herd itself, because the herd does not exist until the world has
@@ -449,6 +452,22 @@ public static class WorldSave
                 // fields are positional and sections carry their length, so a build from before
                 // cargo skips the holds and still reads every cart as a plain one.
                 SaveSection.Write(into, "CRGO", cargo);
+
+                // ⛳ The signs' words (2026-10-16), by cell. A build from before signs skips the
+                // section by its length, as it skips anything it does not know.
+                SaveSection.Write(into, "SIGN", Bytes(signs =>
+                {
+                    signs.Write(1); // payload version
+                    signs.Write(state.Signs.Count);
+                    foreach (var ((x, y, z), lines) in state.Signs.All
+                                 .OrderBy(sign => sign.Key.X).ThenBy(sign => sign.Key.Y).ThenBy(sign => sign.Key.Z))
+                    {
+                        signs.Write(x);
+                        signs.Write(y);
+                        signs.Write(z);
+                        foreach (var line in lines) signs.Write(line);
+                    }
+                }));
             }
 
             File.Move(temporary, path, overwrite: true);
@@ -460,6 +479,7 @@ public static class WorldSave
             state.Unlocks.Settled();
             state.Progress.Settled();
             state.Map.Settled();
+            state.Signs.Settled();
             state.Exploration.Settled();
             state.Inhabitants.Settled();
             state.Character.Settled();
@@ -582,6 +602,7 @@ public static class WorldSave
             byte[]? furnaces = null;
             byte[]? chests = null;
             byte[]? cargo = null;
+            byte[]? signText = null;
             byte[]? player = null;
             byte[]? unlocks = null;
             byte[]? stats = null;
@@ -634,6 +655,7 @@ public static class WorldSave
 
                     // The holds wait for the item palette, exactly as the chests do.
                     case "CRGO": cargo = payload; break;
+                    case "SIGN": signText = payload; break;
 
                     // Written by a newer build than this one. Skipped, and deliberately not an
                     // error: the length said how far, which is the whole reason sections carry one.
@@ -650,6 +672,26 @@ public static class WorldSave
             if (furnaces is not null) ReadFurnaces(Reader(furnaces), into.Furnaces, toItem);
             if (chests is not null) ReadChests(Reader(chests), into.Chests, toItem);
             if (cargo is not null) ReadCargo(Reader(cargo), into, toItem);
+
+            into.Signs.Clear();
+            if (signText is not null)
+            {
+                using var saved = Reader(signText);
+                var version = saved.ReadInt32();
+                if (version != 1) return $"this world's signs use unknown version {version}";
+                var count = saved.ReadInt32();
+                if (count is < 0 or > 1_000_000) return $"this world claims {count} signs";
+                for (var i = 0; i < count; i++)
+                {
+                    var (x, y, z) = (saved.ReadInt32(), saved.ReadInt32(), saved.ReadInt32());
+                    var lines = new string[SignBank.Lines];
+                    for (var line = 0; line < lines.Length; line++) lines[line] = saved.ReadString();
+                    into.Signs.Set(x, y, z, lines);
+                }
+            }
+
+            // What was just read is what is on disk; a load must not count as a change.
+            into.Signs.Settled();
 
             // Read the character ceiling before health, so a progressed save can restore more than
             // the legacy ten-heart default without being clamped on the way through PLYR.

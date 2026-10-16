@@ -696,7 +696,10 @@ public static class StarterBlocks
     public const ushort LayerBookshelf = LayerApple + 6;
     public const ushort LayerIronBars = LayerApple + 7;
 
-    public const int LayerCount = LayerIronBars + 1;
+    /// <summary>The sign's own icon (2026-10-16); the board itself is drawn in planks.</summary>
+    public const ushort LayerSign = LayerApple + 8;
+
+    public const int LayerCount = LayerSign + 1;
 
     /// <summary>One anvil's name, by how worn it is and which way it lies.</summary>
     /// <remarks>
@@ -1262,6 +1265,22 @@ public static class StarterBlocks
 
         // ⛳ The pumpkin, found whole in the meadows' wild patches and worth carrying home for what
         // a pair of shears turns it into. Wood to the ear and to the axe.
+        // ⛳ Signs (2026-10-16): four standing on a post, turned to face whoever placed them, and
+        // four flat on a wall. Every one of them opens its words on a right click.
+        for (var i = 0; i < Placeable.Facings.Length; i++)
+        foreach (var wall in (bool[])[false, true])
+        {
+            var facing = Placeable.Facings[i];
+            registry.Register(new BlockType
+            {
+                Name = SignForms[(wall ? 4 : 0) + i],
+                Hardness = 1.0f, Solid = false, Opaque = false, Crafted = true,
+                Sounds = SoundMaterial.Wood, HarvestClass = ToolClass.Axe, Use = BlockUse.Sign,
+                SupportFace = wall ? Placeable.Opposite(facing) : Faces.NegY,
+                Model = BlockModel.Sign(LayerPlanks, facing, wall),
+            });
+        }
+
         // A shelf of books: planks top and bottom, spines on the four sides, as the reference has it.
         registry.Register(new BlockType
         {
@@ -2902,6 +2921,23 @@ public static class StarterBlocks
     public static IEnumerable<string> CutStoneNames
     {
         get { foreach (var cut in CutStones) yield return cut.Name; }
+    }
+
+    /// <summary>
+    /// The eight sign forms in <see cref="PlacementKind.Sign"/> order: standing then on a wall,
+    /// each in <see cref="Placeable.Facings"/> order and named for the way its writing faces.
+    /// </summary>
+    public static readonly string[] SignForms =
+    [
+        "sign_east", "sign_west", "sign_south", "sign_north",
+        "sign_wall_east", "sign_wall_west", "sign_wall_south", "sign_wall_north",
+    ];
+
+    /// <summary>Which way a sign form's writing faces, and whether it hangs on a wall; null when it is not a sign.</summary>
+    public static (int Facing, bool Wall)? SignOf(string name)
+    {
+        var at = Array.IndexOf(SignForms, name);
+        return at < 0 ? null : (Placeable.Facings[at % 4], at >= 4);
     }
 
     /// <summary>The wooden pressure plate's block name; its pressed form adds "_on".</summary>

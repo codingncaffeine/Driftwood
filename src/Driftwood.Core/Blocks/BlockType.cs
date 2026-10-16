@@ -85,6 +85,9 @@ public enum BlockUse
     /// The rules are <see cref="Foraging"/>'s, in Core.
     /// </remarks>
     Berries,
+
+    /// <summary>Opens the sign's words for editing, as the reference does on a right click.</summary>
+    Sign,
 }
 
 /// <summary>Which fluid a block is, when it is one.</summary>

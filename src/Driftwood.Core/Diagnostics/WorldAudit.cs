@@ -4854,6 +4854,11 @@ public static class WorldAudit
         state.Carts.Add((5, 65, 5, 0.5f, 0f, null));
         state.Carts.Add((6, 65, 5, 0.25f, -2f, [items.Stack("brick", 19), items.Stack("paper", 3)]));
 
+        // Two signs, one with a blank line in the middle and one at a negative cell, so SIGN proves
+        // the lines come back in order and to the right board.
+        state.Signs.Set(3, 65, 3, ["north road", "", "to the sea", ">"]);
+        state.Signs.Set(-7, 70, -2, ["home"]);
+
         var path = Path.Combine(Path.GetTempPath(), $"driftwood-audit-{Environment.ProcessId}.dws");
 
         try
@@ -4928,6 +4933,11 @@ public static class WorldAudit
                 faults.Add($"{back.PendingEdits} edits are waiting for a chunk of {world.Edits.Count}");
 
             if (back.Changed) faults.Add("a world is marked changed the instant it is loaded, so every load autosaves");
+
+            if (into.Signs.Count != 2
+                || !into.Signs.Get(3, 65, 3).SequenceEqual(["north road", "", "to the sea", ">"])
+                || into.Signs.Get(-7, 70, -2)[0] != "home")
+                faults.Add($"{into.Signs.Count} signs came back, not the two written with their words in order");
 
             if (into.BedSpawn is not { } wake || Vector3.Distance(wake, new Vector3(3.5f, 65.6f, 1.5f)) > 0.01f)
                 faults.Add("the bed spawn did not come back where it was");
@@ -8569,6 +8579,38 @@ public static class WorldAudit
                     continue;
                 }
 
+                // A sign stands on a floor facing the player, or lies flat on the wall that was struck,
+                // and never hangs from a ceiling. Each placed form is asked where it is held, and its
+                // board is asked whether it is really there.
+                if (entry.Kind == PlacementKind.Sign)
+                {
+                    if (face == Faces.NegY)
+                    {
+                        if (placed) faults.Add($"{where}: hung a sign from a ceiling");
+                        continue;
+                    }
+
+                    if (!placed)
+                    {
+                        faults.Add($"{where}: refused to place at all");
+                        continue;
+                    }
+
+                    var onWall = Array.IndexOf(Placeable.Facings, face) >= 0;
+                    var held = onWall ? Placeable.Opposite(face) : Faces.NegY;
+                    if (registry[id].SupportFace != held)
+                        faults.Add($"{where}: says it is held on face {registry[id].SupportFace}, wanted {held}");
+
+                    var sign = StarterBlocks.SignOf(registry[id].Name);
+                    var writes = onWall ? face : Placeable.Opposite(wantFacing);
+                    if (sign is not { } form || form.Wall != onWall || form.Facing != writes)
+                        faults.Add($"{where}: {registry[id].Name} writes the wrong way, wanted face {writes}");
+                    else if (onWall && LeanOf(registry[id].Model, held) < 0.05f)
+                        faults.Add($"{where}: a wall sign that is not against its wall");
+
+                    continue;
+                }
+
                 if (entry.Kind == PlacementKind.Door && face == Faces.NegY)
                 {
                     if (placed) faults.Add($"{where}: hung a door from a ceiling");
@@ -9042,10 +9084,11 @@ public static class WorldAudit
         (StarterBlocks.LayerCherrySapling, "cherry_sapling"),
         (StarterBlocks.LayerApple, "apple"),
 
-        // The everyday makes (2026-10-16) after the apple; the iron bars are the true end.
+        // The everyday makes (2026-10-16) after the apple, then the sign, which is the true end.
         (StarterBlocks.LayerBowl, "bowl"),
         (StarterBlocks.LayerBook, "book"),
-        ((ushort)(StarterBlocks.LayerCount - 1), "iron_bars"),
+        (StarterBlocks.LayerIronBars, "iron_bars"),
+        ((ushort)(StarterBlocks.LayerCount - 1), "sign"),
     ];
 
     /// <summary>
@@ -10084,6 +10127,7 @@ public static class WorldAudit
         ("ladder", "a cut-out on one sheet, with nothing behind it to shade"),
         ("rail", "a film on the floor with no solid in it; its tile is the picture"),
         ("powered_rail", "the same film as the rail, with a third rail drawn in"),
+        ("sign", "eight forms of a thin board; the reference holds it as its own flat picture too"),
     ];
 
     /// <summary>

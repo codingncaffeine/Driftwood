@@ -52,6 +52,9 @@ public enum HudScreenKind
 
     /// <summary>A settlement resident's profession-owned offers.</summary>
     Trade,
+
+    /// <summary>A sign's four lines, being written.</summary>
+    Sign,
 }
 
 /// <summary>
@@ -405,6 +408,9 @@ public sealed class HudScreen
     /// only keys the screen still hears are escape and enter, which are how somebody gets out.
     /// </remarks>
     public TextField? Typing;
+
+    /// <summary>The sign being written: its four lines, and which one has the keyboard.</summary>
+    public TextField[] SignFields = [];
 
     /// <summary>Seconds the screen has been up, for a caret that blinks.</summary>
     public float Clock;
@@ -1689,6 +1695,12 @@ public sealed class HudRenderer : IDisposable
             else
                 MapScreen(screen, layout, w, h);
             Footer(screen, w, h);
+            return;
+        }
+
+        if (screen.Kind == HudScreenKind.Sign)
+        {
+            SignScreen(screen, w, h);
             return;
         }
 
@@ -3633,6 +3645,43 @@ public sealed class HudRenderer : IDisposable
     /// carets in them is two places to believe a letter is about to land.</para>
     /// </remarks>
     /// <returns>How wide it came out, so the row can give it a zone of its own.</returns>
+    /// <summary>
+    /// A sign being written: the board itself, large, with its four lines centred on it as they
+    /// will stand in the world, and the caret on the line that has the keyboard.
+    /// </summary>
+    private void SignScreen(HudScreen screen, float w, float h)
+    {
+        const float Glyph = 10f, Line = 18f, Width = 196f, Height = 96f;
+
+        Rect(_plain, 0f, 0f, w, h, new Vector4(0f, 0f, 0f, 0.45f));
+
+        var left = MathF.Round((w - Width) * 0.5f);
+        var top = MathF.Round((h - Height) * 0.5f) - 20f;
+        Rect(_plain, left - 3f, top - 3f, Width + 6f, Height + 6f, new Vector4(0.36f, 0.25f, 0.13f, 1f));
+        Rect(_plain, left, top, Width, Height, new Vector4(0.71f, 0.56f, 0.35f, 1f));
+        Rect(_plain, left + Width * 0.5f - 6f, top + Height + 3f, 12f, 40f, new Vector4(0.36f, 0.25f, 0.13f, 1f));
+
+        var ink = new Vector4(0.08f, 0.06f, 0.04f, 1f);
+        for (var i = 0; i < screen.SignFields.Length; i++)
+        {
+            var field = screen.SignFields[i];
+            var text = field.Text.AsSpan();
+            var width = TextWidth(text, Glyph);
+            var x = MathF.Round(left + (Width - width) * 0.5f);
+            var y = top + 12f + i * Line;
+            Text(text, x, y, Glyph, ink, shadow: false);
+
+            if (ReferenceEquals(screen.Typing, field) && screen.Clock % 1f < 0.5f)
+            {
+                var at = x + TextWidth(text[..field.Caret], Glyph);
+                Rect(_plain, at, y - 1f, 1f, Glyph + 2f, ink);
+            }
+        }
+
+        var hint = "enter next line   up/down move   esc done";
+        Text(hint, MathF.Round((w - TextWidth(hint, NoteGlyph)) * 0.5f), top + Height + 52f, NoteGlyph, Ink);
+    }
+
     private float Box(HudScreen screen, TextField field, float left, float y, float panel)
     {
         const float Glyph = 8f;
@@ -5183,6 +5232,16 @@ public sealed class HudRenderer : IDisposable
     /// marks to deliberate ASCII shapes instead of the old question-mark boxes; pack fonts then
     /// replace the same safe layers without changing string or input semantics.
     /// </summary>
+    /// <summary>The font in use — the pack's when it has one — for writing in the world.</summary>
+    public BlockTextureArray FontTiles => _font;
+
+    /// <summary>One character's font layer and its advance in sixteenths of a glyph cell.</summary>
+    public (int Layer, int Advance) Glyph(char c)
+    {
+        var glyph = DisplayGlyphOf(c);
+        return (glyph, _advance[glyph]);
+    }
+
     private static int DisplayGlyphOf(char c)
     {
         var shown = c switch

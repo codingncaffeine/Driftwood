@@ -400,6 +400,7 @@ public sealed class ClientHost : IDisposable
 
     private PlayerBody _player = null!;
     private BlockOutline _outline = null!;
+    private SignRenderer _signText = null!;
     private GatewayRiftRenderer _gatewayRenderer = null!;
     private BlockTextureArray _blockTextures = null!;
     private BlockTextureArray _normalTextures = null!;
@@ -493,6 +494,12 @@ public sealed class ClientHost : IDisposable
     private Handbook _handbook = null!;
     private FurnaceBank _furnaces = null!;
     private ChestBank _chests = null!;
+
+    /// <summary>What is written on this world's signs.</summary>
+    private readonly SignBank _signs = new();
+
+    /// <summary>The sign whose words are open for writing.</summary>
+    private (int X, int Y, int Z)? _signAt;
 
     /// <summary>Which screen is over the world, and everything it is showing.</summary>
     private readonly HudScreen _hudScreen = new();
@@ -1246,6 +1253,7 @@ public sealed class ClientHost : IDisposable
         _visuals = new VisualPipeline(_gl);
         _shadows = new CascadedShadowMap(_gl);
         _outline = new BlockOutline(_gl);
+        _signText = new SignRenderer(_gl);
         _gatewayRenderer = new GatewayRiftRenderer(_gl);
 
         _particleRenderer = new ParticleRenderer(_gl);
@@ -2205,6 +2213,7 @@ public sealed class ClientHost : IDisposable
             Played = _playedBefore + _elapsed,
             DayTime = _clock.TimeOfDay,
             BedSpawn = _bedSpawn,
+            Signs = _signs,
             Progress = _progress,
             Map = _map,
             Exploration = _exploration,
@@ -2237,6 +2246,13 @@ public sealed class ClientHost : IDisposable
         if (_worldName.Length == 0 || _streamer is null || _items is null) return false;
 
         _sinceSave = 0;
+
+        // Words whose sign is gone — mined, shed, burnt — are not written. ⚠ Only judged where the
+        // chunk is loaded: a cell in an unloaded chunk reads as air, and its sign is still there.
+        var world = _streamer.World;
+        _signs.Prune((x, y, z) =>
+            !world.TryGetChunk(ChunkPos.FromWorld(x, y, z), out _)
+            || StarterBlocks.SignOf(_registry[world.GetBlock(x, y, z)].Name) is not null);
 
         // The step before this one, kept. Reported and never fatal: a world that will not write
         // because its backup would not is worse than a world with no backup.
@@ -2537,7 +2553,7 @@ public sealed class ClientHost : IDisposable
         if (_sinceSave < AutosaveSeconds) return;
         if (!_streamer.World.Changed && !_unlocks.Dirty && !_progress.Dirty && !_map.Dirty
             && !_exploration.Dirty && !_inhabitants.Dirty && !_character.Dirty
-            && !_companions.Dirty) return;
+            && !_companions.Dirty && !_signs.Dirty) return;
 
         _autosaves++;
         SaveWorld("automatically");
@@ -3076,6 +3092,7 @@ public sealed class ClientHost : IDisposable
     private bool ScreenKey(Key key)
     {
         // Before anything else. While a box has the keyboard it has all of it.
+        if (_hudScreen.Kind == HudScreenKind.Sign && _hudScreen.Typing is { } line) return SignKey(line, key);
         if (_hudScreen.Typing is { } typing) return TypingKey(typing, key);
 
         var many = _input.IsKeyPressed(Key.ShiftLeft) || _input.IsKeyPressed(Key.ShiftRight);
@@ -4517,6 +4534,15 @@ public sealed class ClientHost : IDisposable
 
         _rebinding = null;
         _padRebinding = null;
+        // The sign's words go into the world as the editor shuts, however it was shut.
+        if (_hudScreen.Kind == HudScreenKind.Sign)
+        {
+            KeepSign();
+            _hudScreen.Typing = null;
+            _typingDone = null;
+            _hudScreen.SignFields = [];
+        }
+
         _hudScreen.Kind = HudScreenKind.None;
         _hudScreen.Grid = null;
         _laidOut = null;
@@ -13640,6 +13666,10 @@ public sealed class ClientHost : IDisposable
                 OpenFurnace(hit.X, hit.Y, hit.Z);
                 return true;
 
+            case BlockUse.Sign:
+                OpenSign(hit.X, hit.Y, hit.Z);
+                return true;
+
             case BlockUse.Toggle when _toggle.TryGetValue(struck.Id.Value, out var other):
                 _streamer.EditBlock(hit.X, hit.Y, hit.Z, other);
 
@@ -13837,7 +13867,70 @@ public sealed class ClientHost : IDisposable
         PlaySound(_registry[block], SoundEvent.Place, new Vector3(x + 0.5f, y + 0.5f, z + 0.5f), 0.85f);
         InteractionParticleEffects.BlockPlaced(
             _particles, _registry[block], new Vector3(x + 0.5f, y + 1.01f, z + 0.5f));
+
+        // A new sign starts blank — whatever an old one in this cell said went with it — and is
+        // written straight away, as the reference opens its editor the moment one goes up.
+        if (StarterBlocks.SignOf(_registry[block].Name) is not null)
+        {
+            _signs.Remove(x, y, z);
+            OpenSign(x, y, z);
+        }
+
         return true;
+    }
+
+    /// <summary>Opens a sign's four lines for writing, the first one taking the keyboard.</summary>
+    private void OpenSign(int x, int y, int z)
+    {
+        var lines = _signs.Get(x, y, z);
+        _hudScreen.SignFields = [.. lines.Select(line => new TextField(SignBank.MaxChars) { Text = line })];
+        _hudScreen.Kind = HudScreenKind.Sign;
+        _hudScreen.TabNames = [];
+        _hudScreen.Grid = null;
+        _laidOut = null;
+        _signAt = (x, y, z);
+        StopHands();
+        TakeThePointer();
+        StartTyping(_hudScreen.SignFields[0]);
+    }
+
+    /// <summary>
+    /// The sign editor's own keys: enter moves down a line and leaves from the last, the arrows
+    /// move between lines, and escape keeps what was written — the reference's "done".
+    /// </summary>
+    private bool SignKey(TextField field, Key key)
+    {
+        var line = Array.IndexOf(_hudScreen.SignFields, field);
+        switch (key)
+        {
+            case Key.Escape:
+                CloseScreen();
+                return true;
+
+            case Key.Enter or Key.KeypadEnter when line >= SignBank.Lines - 1:
+                CloseScreen();
+                return true;
+
+            case Key.Enter or Key.KeypadEnter or Key.Down:
+                StartTyping(_hudScreen.SignFields[Math.Min(line + 1, SignBank.Lines - 1)]);
+                return true;
+
+            case Key.Up:
+                StartTyping(_hudScreen.SignFields[Math.Max(line - 1, 0)]);
+                return true;
+        }
+
+        return TypingKey(field, key);
+    }
+
+    /// <summary>Writes the open sign's lines into the world, when the cell still holds a sign.</summary>
+    private void KeepSign()
+    {
+        if (_signAt is not var (x, y, z)) return;
+        _signAt = null;
+
+        if (StarterBlocks.SignOf(_registry[_streamer.World.GetBlock(x, y, z)].Name) is null) return;
+        _signs.Set(x, y, z, [.. _hudScreen.SignFields.Select(field => field.Text)]);
     }
 
     /// <summary>Takes one off what is in the other hand, emptying the slot when it runs out.</summary>
@@ -14279,6 +14372,9 @@ public sealed class ClientHost : IDisposable
             _cracks.Draw(viewProj, new Vector3(cell.X, cell.Y, cell.Z), min, max, _mining.Stage);
         }
 
+        // Signs' words, while depth still describes the world so a wall hides them.
+        if (!_wireframe) _signText.Draw(_signs, _streamer.World, _registry, _hud, viewProj, _viewPosition);
+
         // Debris and dropped stacks while depth still describes the world, so a chip is hidden by
         // the hill it flew behind. The texture array is re-bound because the cracking pass owns
         // unit zero by now.
@@ -14383,7 +14479,8 @@ public sealed class ClientHost : IDisposable
     /// </param>
     private readonly record struct Shot(
         int Frame, string Name, string Item, ViewMode View, bool Strike, ShotScreen Screen = ShotScreen.None,
-        bool Creature = false, string Wears = "", string Offhand = "", bool Guard = false);
+        bool Creature = false, string Wears = "", string Offhand = "", bool Guard = false,
+        bool Signs = false);
 
     /// <summary>Which interface, if any, is up when the picture is taken.</summary>
     private enum ShotScreen
@@ -14394,6 +14491,7 @@ public sealed class ClientHost : IDisposable
         Bench,
         Furnace,
         Chest,
+        Sign,
     }
 
     /// <summary>
@@ -14469,6 +14567,10 @@ public sealed class ClientHost : IDisposable
         new(420, "24-guard-behind", "iron_sword", ViewMode.ThirdBehind, false, Wears: "iron", Guard: true),
         new(460, "25-guard-facing", "iron_sword", ViewMode.ThirdFacing, false, Wears: "iron", Guard: true),
         new(500, "26-first-guard", "iron_sword", ViewMode.First, false, Offhand: "shield", Guard: true),
+
+        // ⛳ Signs (2026-10-16): one standing and one on a wall, written on, then the editor open.
+        new(560, "27-signs", "stick", ViewMode.First, false, Signs: true),
+        new(600, "28-sign-editor", "stick", ViewMode.First, false, ShotScreen.Sign),
     ];
 
     /// <summary>
@@ -14611,6 +14713,7 @@ public sealed class ClientHost : IDisposable
             // all — which came out as a photograph of animals standing in an empty blue sky with one
             // stone block in the corner. The creatures were right; the ground had not arrived.
             if (shot.Creature && _shotFrame == shot.Frame - CreatureLead) StandBesideACreature();
+            if (shot.Signs && _shotFrame == shot.Frame - CreatureLead) PutUpSigns();
 
             if (_shotFrame == shot.Frame) WriteShot(size, shot.Name);
         }
@@ -14698,7 +14801,46 @@ public sealed class ClientHost : IDisposable
                 _chests.Open(at.Item1, at.Item2, at.Item3);
                 OpenChest(at.Item1, at.Item2, at.Item3);
                 break;
+
+            case ShotScreen.Sign when _shotSign is var (sx, sy, sz):
+                OpenSign(sx, sy, sz);
+                break;
         }
+    }
+
+    /// <summary>The standing sign the sign shots put up, for the editor shot to open.</summary>
+    private (int X, int Y, int Z)? _shotSign;
+
+    /// <summary>
+    /// Puts a written standing sign two blocks ahead, and a plank with a written sign on its face
+    /// one block further and one to the side — through the same edit and the same bank a player's
+    /// own signs go through, so what is photographed is what a player would see.
+    /// </summary>
+    private void PutUpSigns()
+    {
+        StandInTheOpen();
+        var ahead = Placeable.Cardinal(_camera.Forward);
+        var toward = Placeable.Opposite(ahead);
+        var (fx, _, fz) = Faces.Normals[ahead];
+        var (rx, rz) = (-fz, fx);
+        var floor = (int)MathF.Floor(_player.Position.Y);
+        var (px, pz) = ((int)MathF.Floor(_player.Position.X), (int)MathF.Floor(_player.Position.Z));
+
+        var standing = (X: px + fx * 2, Y: floor, Z: pz + fz * 2);
+        var plank = (X: px + fx * 4 + rx * 2, Y: floor, Z: pz + fz * 4 + rz * 2);
+        var (tx, _, tz) = Faces.Normals[toward];
+        var onWall = (X: plank.X + tx, Y: floor, Z: plank.Z + tz);
+        var form = Array.IndexOf(Placeable.Facings, toward);
+
+        _streamer.EditBlock(standing.X, standing.Y, standing.Z, _registry.ByName(StarterBlocks.SignForms[form]).Id);
+        _streamer.EditBlock(plank.X, plank.Y, plank.Z, _registry.ByName("driftoak_planks").Id);
+        _streamer.EditBlock(onWall.X, onWall.Y, onWall.Z, _registry.ByName(StarterBlocks.SignForms[4 + form]).Id);
+        _signs.Set(standing.X, standing.Y, standing.Z, ["Welcome to", "Driftwood", "", "-> the sea"]);
+        _signs.Set(onWall.X, onWall.Y, onWall.Z, ["Home", "sweet home"]);
+        _shotSign = standing;
+
+        _camera.Pitch = -14f;
+        Console.WriteLine($"shots       signs at {standing} (standing) and {onWall} (on a wall), facing face {toward}");
     }
 
     /// <summary>
@@ -19354,6 +19496,7 @@ public sealed class ClientHost : IDisposable
         _meshes.Clear();
         _chunkShader?.Dispose();
         _outline?.Dispose();
+        _signText?.Dispose();
         _gatewayRenderer?.Dispose();
         _sky?.Dispose();
         _clouds?.Dispose();

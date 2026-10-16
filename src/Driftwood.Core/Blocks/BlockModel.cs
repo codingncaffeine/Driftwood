@@ -381,6 +381,56 @@ public sealed class BlockModel
         ]);
     }
 
+    /// <summary>
+    /// A sign: a board half a block tall with its writing toward <paramref name="facing"/> — on a
+    /// post in the middle of the cell, or, with <paramref name="wall"/>, flat against the wall
+    /// behind it.
+    /// </summary>
+    /// <remarks>
+    /// The board's front face is where <see cref="SignFace"/> says the words go; the two are kept
+    /// beside each other because the renderer has to land its letters exactly on this board.
+    /// </remarks>
+    public static BlockModel Sign(ushort planks, int facing, bool wall)
+    {
+        var (centre, normal, _) = SignFace(facing, wall);
+        var right = Vector3.Cross(Vector3.UnitY, normal);
+        var across = new Vector3(MathF.Abs(right.X), 0f, MathF.Abs(right.Z)) * 8f;
+        var through = new Vector3(MathF.Abs(normal.X), 0f, MathF.Abs(normal.Z)) * (SignThickness / 2f);
+        var middle = centre * 16f - normal * (SignThickness / 2f);
+        var half = across + through + new Vector3(0f, 4f, 0f);
+
+        var board = Box(middle - half, middle + half, planks, planks, planks);
+        if (wall) return new BlockModel([board]);
+
+        var post = Box(new Vector3(7.25f, 0f, 7.25f), new Vector3(8.75f, middle.Y - 4f, 8.75f), planks, planks, planks);
+        return new BlockModel([board, post]);
+    }
+
+    /// <summary>How thick a sign's board is, in sixteenths.</summary>
+    public const float SignThickness = 1.5f;
+
+    /// <summary>
+    /// Where a sign's writing goes, in block units within its cell: the middle of the board's front
+    /// face, the way that face looks, and its height.
+    /// </summary>
+    public static (Vector3 Centre, Vector3 Normal, float Height) SignFace(int facing, bool wall)
+    {
+        var normal = facing switch
+        {
+            Blocks.Faces.PosX => Vector3.UnitX,
+            Blocks.Faces.NegX => -Vector3.UnitX,
+            Blocks.Faces.PosZ => Vector3.UnitZ,
+            _ => -Vector3.UnitZ,
+        };
+
+        // Standing: the board's middle sits over the cell's middle, its front a half-thickness out.
+        // On a wall: its back flat on the wall behind, so its front is a thickness out from there.
+        var outFromMiddle = wall ? -0.5f + SignThickness / 16f : SignThickness / 32f;
+        var height = wall ? 8.5f / 16f : 12f / 16f;
+        var centre = new Vector3(0.5f, height, 0.5f) + normal * outFromMiddle;
+        return (centre, normal, 0.5f);
+    }
+
     /// <summary>A cube with one side different from the other three — a machine with a face.</summary>
     /// <remarks>
     /// Still a full cube, so it still merges: the greedy pass keys on the block id and every facing

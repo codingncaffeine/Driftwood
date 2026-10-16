@@ -315,6 +315,7 @@ public static class StarterRecipes
         Shaped("book", "book", 1, ["MM", "MQ"], "paper", station: CraftStation.Bench);
         Shaped("bookshelf", "bookshelf", 1, ["PPP", "KKK", "PPP"], station: CraftStation.Bench);
         Shaped("iron bars", "iron_bars", 16, ["III", "III"], station: CraftStation.Bench);
+        Shaped("sign", "sign", 3, ["PPP", "PPP", " S "], station: CraftStation.Bench);
         LooseAt("tidelamp", "tidelamp", 1, CraftStation.Bench,
             "stormglass_lamp", "tidewire", "tidewire");
         Shaped("and gate", "gate_and", 1, ["D D", "OOO"], station: CraftStation.Bench);

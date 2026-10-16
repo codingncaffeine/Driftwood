@@ -86,6 +86,17 @@ public enum PlacementKind
     /// class knows only about the ones it was handed.
     /// </remarks>
     Door,
+
+    /// <summary>
+    /// Eight forms: standing on a floor turned to face the player, or flat against any of the four
+    /// walls — a sign.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="Variants"/> is the four standing forms in <see cref="Facings"/> order, each named
+    /// for the way its writing faces, then the four wall forms in the same order, each named for
+    /// the way it faces out of the wall that was struck. A ceiling holds neither.
+    /// </remarks>
+    Sign,
 }
 
 /// <summary>
@@ -203,6 +214,20 @@ public sealed class Placeable
                 return wall >= 0;
             }
 
+            case PlacementKind.Sign:
+            {
+                var wall = Array.IndexOf(Facings, hitFace);
+                if (wall >= 0)
+                {
+                    id = Variants[4 + wall];
+                    return true;
+                }
+
+                // On a floor the writing turns back toward whoever put it there, as a furnace does.
+                id = Variants[Array.IndexOf(Facings, Cardinal(-forward))];
+                return hitFace == Faces.PosY;
+            }
+
             case PlacementKind.Door:
             {
                 // Facing the player, like anything with a front. The hinge goes on the side they
@@ -268,7 +293,7 @@ public sealed class Placeable
     /// for where zero points and which way it turns, and getting that wrong puts every shape in the
     /// world a quarter turn out in a way that looks like a modelling bug.
     /// </remarks>
-    private static int Cardinal(Vector3 direction) =>
+    public static int Cardinal(Vector3 direction) =>
         MathF.Abs(direction.X) >= MathF.Abs(direction.Z)
             ? direction.X >= 0f ? Faces.PosX : Faces.NegX
             : direction.Z >= 0f ? Faces.PosZ : Faces.NegZ;

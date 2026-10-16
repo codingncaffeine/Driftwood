@@ -702,6 +702,7 @@ public static class BlockTextureSet
         new("book", "textures/item/book.png", true, "textures/items/book_normal.png"),
         new("bookshelf", "textures/block/bookshelf.png", false, "textures/blocks/bookshelf.png"),
         new("iron_bars", "textures/block/iron_bars.png", true, "textures/blocks/iron_bars.png"),
+        new("sign", "textures/item/oak_sign.png", true, "textures/items/sign.png"),
     ];
 
     /// <summary>
@@ -1709,6 +1710,7 @@ public static class BlockTextureSet
             StarterBlocks.LayerBook => TileGen.IconBook(1374, 112, 70, 42),
             StarterBlocks.LayerBookshelf => TileGen.Bookshelf(1375),
             StarterBlocks.LayerIronBars => TileGen.IronBars(1376),
+            StarterBlocks.LayerSign => TileGen.IconSign(1377),
 
             StarterBlocks.LayerGlowcap => TileGen.Glowcap(1364),
             StarterBlocks.LayerMarshReed => TileGen.MarshReed(1365),

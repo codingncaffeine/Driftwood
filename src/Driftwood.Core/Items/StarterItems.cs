@@ -676,6 +676,17 @@ public static class StarterItems
         Block(items, blocks, "pumpkin", "pumpkin", StarterBlocks.LayerPumpkinSide);
         Block(items, blocks, "bookshelf", "bookshelf", StarterBlocks.LayerBookshelf, burn: 15f);
 
+        items.Register(new ItemType
+        {
+            Name = "sign", Label = "sign", IconLayer = StarterBlocks.LayerSign, MaxStack = 16, BurnSeconds = 10f,
+            Places = new Placeable
+            {
+                Label = "sign",
+                Kind = PlacementKind.Sign,
+                Variants = [.. StarterBlocks.SignForms.Select(form => blocks.ByName(form).Id)],
+            },
+        });
+
         // ⛳ The reference's everyday makes, 2026-10-16. A bowl is a dish and burns like a stick; the
         // stew in it is a full meal and gives the bowl back; sugar comes off the reed and sweetens a
         // pie that is the best thing the farm makes; a book is paper bound in leather.

@@ -1205,6 +1205,35 @@ public static class TileGen
     }
 
     /// <summary>
+    /// A sign held up: a plank board edged a shade darker, two lines of writing scratched across it,
+    /// on a darker post — the reference's icon in our planks' colour.
+    /// </summary>
+    public static byte[] IconSign(int seed)
+    {
+        var t = new byte[BytesPerTile];
+
+        for (var y = 11; y < 16; y++)
+        for (var x = 7; x < 10; x++)
+        {
+            var light = (int)((Noise(x, y, seed) * 2f - 1f) * 8f) + (x == 7 ? 12 : 0);
+            Put(t, x, y, Clamp(112 + light), Clamp(82 + light), Clamp(48 + light), 255);
+        }
+
+        for (var y = 2; y < 11; y++)
+        for (var x = 2; x < 15; x++)
+        {
+            var light = (int)((Noise(x, y, seed + 3) * 2f - 1f) * 9f) + (8 - y) * 2;
+            var edge = x == 2 || x == 14 || y == 2 || y == 10;
+            var writing = (y is 4 or 5 or 7 or 8) && x is > 3 and < 13
+                          && Noise(x, y / 3, seed + 11) > 0.35f && !(y is 7 or 8 && x > 10);
+            var (r, g, b) = edge ? (150, 112, 64) : writing ? (104, 74, 42) : (190, 152, 96);
+            Put(t, x, y, Clamp(r + light), Clamp(g + light), Clamp(b + light), 255);
+        }
+
+        return t;
+    }
+
+    /// <summary>
     /// Iron bars: four upright rods and two cross straps, clear between — a cut-out like a pane.
     /// </summary>
     public static byte[] IronBars(int seed)
