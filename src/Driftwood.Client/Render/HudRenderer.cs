@@ -1674,7 +1674,7 @@ public sealed class HudRenderer : IDisposable
 
         if (screen.Kind == HudScreenKind.Player && screen.Tab == (int)PlayerTab.Map)
         {
-            if (MenuFrame(screen, layout, w, h, 560f, "journal", out var mx, out var mtop, out var mcontent, out var mbottom))
+            if (MenuFrame(screen, layout, w, h, 560f, "journal", true, out var mx, out var mtop, out var mcontent, out var mbottom))
                 MapScreen(screen, layout, w, h, new Vector4(mx + 16f, mtop + 44f, mcontent - 32f, mbottom - mtop - 50f));
             else
                 MapScreen(screen, layout, w, h);
@@ -2663,7 +2663,7 @@ public sealed class HudRenderer : IDisposable
     /// on a window too narrow for it, where the caller falls back to the compact layout.
     /// </summary>
     private bool MenuFrame(
-        HudScreen screen, ScreenLayout layout, float w, float h, float wanted, string subtitle,
+        HudScreen screen, ScreenLayout layout, float w, float h, float wanted, string subtitle, bool pane,
         out float x, out float top, out float content, out float bottom)
     {
         content = MathF.Min(wanted, w - MenuSideWidth - 40f);
@@ -2700,6 +2700,7 @@ public sealed class HudRenderer : IDisposable
 
         // The pane.
         x = left + MenuSideWidth + 10f;
+        if (!pane) return true;
         if (!ThemedPanel(x, top, content, tall, GuiTextureSet.Layer.MenuListBackground))
             Rect(_plain, x, top, content, tall, MenuGlass);
         Rect(_plain, x, top, content, 1f, MenuEdge);
@@ -2744,7 +2745,7 @@ public sealed class HudRenderer : IDisposable
     {
         // Packs and skins are pictures and get the room for them; settings stay a readable width.
         var gallery = screen.Tab == (int)GameTab.Packs || screen.Tab == (int)GameTab.Skins;
-        if (!MenuFrame(screen, layout, w, h, gallery ? 620f : 480f, "settings",
+        if (!MenuFrame(screen, layout, w, h, gallery ? 620f : 480f, "settings", pane: true,
                 out var x, out var top, out var content, out var bottom))
             return false;
 
@@ -2765,17 +2766,23 @@ public sealed class HudRenderer : IDisposable
     /// read "it…", "chara…", "sp…"; here they are a column of whole words.
     /// </summary>
     /// <remarks>
-    /// ⚠ The spellbook here is the pane, not a window: inside a frame that fills the screen there is
-    /// nowhere useful to drag it. The spell bar and companion window outside the menu still move.
+    /// ⚠ The spellbook stays a window: the sidebar is drawn without a pane and the book opens where
+    /// the pane would be, from where it can be dragged, locked and unlocked as it always could.
     /// </remarks>
     private bool JournalScreen(
         ItemRegistry catalogue, Inventory inventory, Equipment equipment,
         HudScreen screen, ScreenLayout layout, float w, float h)
     {
         var character = screen.Tab == (int)PlayerTab.Character;
-        if (!MenuFrame(screen, layout, w, h, character ? 560f : 480f, "journal",
+        if (!MenuFrame(screen, layout, w, h, character ? 560f : 480f, "journal", pane: screen.Tab != (int)PlayerTab.Spells,
                 out var x, out var top, out var content, out var bottom))
             return false;
+
+        if (screen.Tab == (int)PlayerTab.Spells)
+        {
+            SpellbookWindow(screen, layout, x, top, content, bottom - top, w, h);
+            return true;
+        }
 
         var noteTop = bottom - 40f;
         if (character)
@@ -2795,6 +2802,48 @@ public sealed class HudRenderer : IDisposable
 
         MenuNote(screen, x + 16f, noteTop, content - 32f, bottom);
         return true;
+    }
+
+    /// <summary>
+    /// The spellbook as the movable window it has always been, opened where the journal's pane would
+    /// be: the leather header and grip, the spine, the four school gems, the right-click lock — and
+    /// inside it the same smooth rows as every reworked list.
+    /// </summary>
+    private void SpellbookWindow(
+        HudScreen screen, ScreenLayout layout, float paneX, float paneY, float width, float height, float w, float h)
+    {
+        var left = Math.Clamp(paneX + screen.SpellbookWindowOffset.X, 0f, MathF.Max(0f, w - width));
+        var top = Math.Clamp(paneY + screen.SpellbookWindowOffset.Y, 0f, MathF.Max(0f, h - height - 46f));
+        screen.SpellbookPanelBounds = new Vector4(left, top, width, height);
+
+        MagicFrame(left, top, width, height, new Vector4(0.42f, 0.72f, 0.88f, 0.92f), screen);
+        Rect(_plain, left + 4f, top + 4f, width - 8f, 22f, new Vector4(0.075f, 0.07f, 0.09f, 0.98f));
+        Rect(_plain, left + 5f, top + 5f, 3f, height - 10f, new Vector4(0.24f, 0.28f, 0.31f, 0.95f));
+        Rect(_plain, left + 9f, top + 6f, 1f, height - 12f, new Vector4(0.54f, 0.76f, 0.84f, 0.42f));
+        Text("Spellbook", left + 16f, top + 7f, 16f, Highlight);
+        var state = screen.SpellbookWindowLocked ? "locked" : "unlocked · drag here";
+        var stateWidth = TextWidth(state, 7f);
+        Text(state, left + width - stateWidth - 10f, top + 12f, 7f,
+            screen.SpellbookWindowLocked ? InkFaint : Picked);
+        layout.Add(ZoneKind.MagicWindowTitle, (int)MagicWindowKind.Spellbook, left + 4f, top + 4f, width - 8f, 22f);
+
+        // One gem for each open spell line: accents, never selection states.
+        ReadOnlySpan<Vector4> schools =
+        [
+            new(0.96f, 0.86f, 0.50f, 0.94f),
+            new(0.56f, 0.38f, 0.72f, 0.94f),
+            new(0.36f, 0.68f, 0.62f, 0.94f),
+            new(0.40f, 0.62f, 0.92f, 0.94f),
+        ];
+        for (var i = 0; i < schools.Length; i++)
+        {
+            Rect(_plain, left + 16f + i * 10f, top + height - 7f, 6f, 2f, schools[i]);
+            screen.MagicWindowAccentsDrawn++;
+        }
+
+        var noteTop = top + height - 46f;
+        MenuRows(screen, layout, left + 14f, top + 32f, width - 24f, noteTop - 4f, h, buttons: false);
+        MenuNote(screen, left + 16f, noteTop, width - 32f, top + height - 10f);
     }
 
     /// <summary>

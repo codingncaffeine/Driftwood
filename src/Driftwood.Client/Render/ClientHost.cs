@@ -16567,7 +16567,6 @@ public sealed class ClientHost : IDisposable
     private bool _uiPetHealth;
     private bool _uiMagicBounds;
     private bool _uiSpellbookFrame;
-    private bool _uiSpellbookFramed;
     private bool _uiSpellbookContext;
     private bool _uiSpellbookDragged;
     private bool _uiPetFrame;
@@ -17049,8 +17048,6 @@ public sealed class ClientHost : IDisposable
         var logicalWidth = LayoutWidth;
         var logicalHeight = LayoutHeight;
         var box = _hudScreen.SpellbookPanelBounds;
-        var spellTabs = _layout.Zones.Where(zone => zone.Kind == ZoneKind.Tab).ToArray();
-        _uiSpellbookFramed = spellTabs.Length > 1 && spellTabs.All(zone => MathF.Abs(zone.X - spellTabs[0].X) < 0.1f);
         _uiSpellbookFrame = box.Z > 0f && box.W > 0f
                             && box.X >= 0f && box.Y >= 0f
                             && box.X + box.Z <= logicalWidth && box.Y + box.W <= logicalHeight
@@ -18132,9 +18129,7 @@ public sealed class ClientHost : IDisposable
         if (_uiSpellIcons != SpellCatalogue.All.Count + CharacterProgression.PreparedCapacity)
             faults.Add($"the dense spellbook drew {_uiSpellIcons} icon rows instead of "
                        + $"{SpellCatalogue.All.Count + CharacterProgression.PreparedCapacity}");
-        // In the reworked frame the spellbook is the pane, with no window to frame, lock or drag; on a
-        // window too narrow for the frame it is still the movable book and must still behave as one.
-        if (!_uiSpellbookFramed && (!_uiSpellbookFrame || !_uiSpellbookContext || !_uiSpellbookDragged))
+        if (!_uiSpellbookFrame || !_uiSpellbookContext || !_uiSpellbookDragged)
             faults.Add("the spellbook is missing its accented frame, right-click lock option, or unlocked drag path");
         if (_uiSpellSlots != CharacterProgression.PreparedCapacity
             || _uiSpellZones != CharacterProgression.PreparedCapacity)
