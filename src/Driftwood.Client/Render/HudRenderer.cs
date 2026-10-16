@@ -156,7 +156,7 @@ public readonly record struct MenuRow(
     string Label, string Value = "", bool Heading = false, string Note = "", TextField? Edits = null,
     float Progress = -1f, MenuPane Pane = MenuPane.List, bool Card = false, bool Action = false,
     int Icon = -1, bool NarrowOnly = false, MenuControl Control = MenuControl.Button,
-    float ControlAmount = 0f);
+    float ControlAmount = 0f, int Thumb = -1);
 
 /// <summary>One complete merchant listing, already phrased by the gameplay side.</summary>
 public readonly record struct TradeListing(
@@ -616,6 +616,8 @@ public sealed class HudRenderer : IDisposable
     private readonly List<float> _previewQuads = new(512);
 
     private readonly List<float> _packIconQuads = new(256);
+    private readonly List<float> _skinThumbQuads = new(128);
+    private BlockTextureArray? _skinThumbs;
     private readonly List<float> _packPreviewQuads = new(256);
 
     private readonly List<float> _armourQuads = new(256);
@@ -778,6 +780,7 @@ public sealed class HudRenderer : IDisposable
         _skinQuads.Clear();
         _previewQuads.Clear();
         _packIconQuads.Clear();
+        _skinThumbQuads.Clear();
         _packPreviewQuads.Clear();
         _armourQuads.Clear();
         _guiUnder.Clear();
@@ -888,7 +891,10 @@ public sealed class HudRenderer : IDisposable
             DeveloperPanel(screen, w);
         }
 
-        Toasts(toasts, w, screen.DeveloperMode && !screen.IsOpen ? 79f : 8f);
+        // The settings and start screens fill the corner toasts stack in; they wait until the menu
+        // closes rather than covering it.
+        if (screen.Kind is not (HudScreenKind.Game or HudScreenKind.Start))
+            Toasts(toasts, w, screen.DeveloperMode && !screen.IsOpen ? 79f : 8f);
 
         // A right-click menu belongs over the panel it controls and over every row inside it.
         // Drawing and zoning it here also gives it the final hit-test priority.
@@ -948,6 +954,7 @@ public sealed class HudRenderer : IDisposable
         Flush(_guiUnder, textured: true, _gui);
         Flush(_plain, textured: false, null);
         Flush(_packIconQuads, textured: true, _packIcons);
+        Flush(_skinThumbQuads, textured: true, _skinThumbs);
         Flush(_packPreviewQuads, textured: true, _packPreview);
         Flush(_skinQuads, textured: true, _skin);
         Flush(_previewQuads, textured: true, _previewSkin);
@@ -1632,14 +1639,27 @@ public sealed class HudRenderer : IDisposable
 
         if (screen.Kind == HudScreenKind.Game && screen.Tab == (int)GameTab.Skins)
         {
-            SkinScreen(screen, layout, w, h);
+            if (!SettingsScreen(screen, layout, w, h)) SkinScreen(screen, layout, w, h);
             Footer(screen, w, h);
             return;
         }
 
         if (screen.Kind == HudScreenKind.Game && screen.Tab == (int)GameTab.Packs)
         {
-            PackScreen(screen, layout, w, h);
+            if (!SettingsScreen(screen, layout, w, h)) PackScreen(screen, layout, w, h);
+            Footer(screen, w, h);
+            return;
+        }
+
+        if (screen.Kind == HudScreenKind.Game && SettingsScreen(screen, layout, w, h))
+        {
+            Footer(screen, w, h);
+            return;
+        }
+
+        if (screen.Kind == HudScreenKind.Start)
+        {
+            StartScreen(screen, layout, w, h);
             Footer(screen, w, h);
             return;
         }
@@ -2479,6 +2499,393 @@ public sealed class HudRenderer : IDisposable
     };
 
     /// <summary>A single joined tab rail, with the open section carried by the mint state colour.</summary>
+    // ⛳ THE REWORKED MENU (spike). The settings and start screens draw from the same rows and
+    // tabs as before, register the same zones, and show exactly ScreenLayout.MenuLines(h) rows, so
+    // the host's keyboard, controller, scrolling and click handling are untouched. What changes is
+    // the presentation: a sidebar of categories, a roomy pane with a header, real toggles and
+    // filled sliders, and a fixed description strip; on the start screen, large stacked buttons.
+    // ⚠ Drawn plain rather than from a pack's GUI layers, so a pack's interface theme does not
+    // reach these two screens in the spike.
+    private static readonly Vector4 MenuGlass = new(0.055f, 0.065f, 0.075f, 0.90f);
+    private static readonly Vector4 MenuSide = new(0.032f, 0.038f, 0.046f, 0.94f);
+    private static readonly Vector4 MenuEdge = new(1f, 1f, 1f, 0.08f);
+    private static readonly Vector4 MenuAmber = new(0.90f, 0.68f, 0.38f, 1f);
+    private static readonly Vector4 MenuHot = new(1f, 1f, 1f, 0.06f);
+    private static readonly Vector4 MenuLit = new(0.36f, 0.78f, 0.70f, 0.15f);
+    private static readonly Vector4 MenuTrack = new(0.17f, 0.19f, 0.21f, 1f);
+    private static readonly Vector4 MenuButton = new(0.075f, 0.085f, 0.095f, 0.92f);
+
+    private const float MenuSideWidth = 128f;
+    private const float MenuRowTall = 20f;
+    private const float MenuGlyph = 8f;
+
+    /// <summary>The settings screen as a sidebar of categories beside one roomy pane.</summary>
+    private bool SettingsScreen(HudScreen screen, ScreenLayout layout, float w, float h)
+    {
+        var content = MathF.Min(480f, w - MenuSideWidth - 40f);
+        if (content < 300f || screen.TabNames.Length == 0) return false;
+
+        var total = MenuSideWidth + 10f + content;
+        var left = MathF.Round((w - total) / 2f);
+        var top = 24f;
+        var bottom = h - 54f;
+        var tall = bottom - top;
+
+        // The categories.
+        Rect(_plain, left, top, MenuSideWidth, tall, MenuSide);
+        Rect(_plain, left + MenuSideWidth - 1f, top, 1f, tall, MenuEdge);
+        Text("DRIFTWOOD", left + 12f, top + 12f, MenuGlyph, MenuAmber);
+        Text(screen.Kind == HudScreenKind.Game ? "settings" : "", left + 12f, top + 24f, MenuGlyph, InkFaint);
+
+        for (var i = 0; i < screen.TabNames.Length; i++)
+        {
+            var y = top + 46f + i * 22f;
+            var open = screen.Tab == i;
+            var hot = screen.Hovered is { Kind: ZoneKind.Tab } over && over.Index == i;
+            if (open) Rect(_plain, left, y, MenuSideWidth - 1f, 20f, MenuLit);
+            else if (hot) Rect(_plain, left, y, MenuSideWidth - 1f, 20f, MenuHot);
+            if (open) Rect(_plain, left, y, 3f, 20f, Picked);
+            Text(FitText(Capitalised(screen.TabNames[i]), MenuSideWidth - 24f, MenuGlyph),
+                left + 14f, y + 6f, MenuGlyph, open ? Vector4.One : hot ? Ink : InkDim);
+            layout.Add(ZoneKind.Tab, i, left, y, MenuSideWidth - 1f, 20f);
+        }
+
+        // The pane.
+        var x = left + MenuSideWidth + 10f;
+        Rect(_plain, x, top, content, tall, MenuGlass);
+        Rect(_plain, x, top, content, 1f, MenuEdge);
+        var title = screen.Tab >= 0 && screen.Tab < screen.TabNames.Length
+            ? Capitalised(screen.TabNames[screen.Tab]) : "";
+        Text(FitText(title, content - 32f, 16f), x + 16f, top + 12f, 16f, Vector4.One);
+        Rect(_plain, x + 16f, top + 36f, content - 32f, 1f, MenuEdge);
+
+        var noteTop = bottom - 40f;
+        if (screen.Kind == HudScreenKind.Game && screen.Tab == (int)GameTab.Skins)
+            SkinGallery(screen, layout, x + 8f, top + 44f, content - 16f, noteTop - 4f, h);
+        else if (screen.Kind == HudScreenKind.Game && screen.Tab == (int)GameTab.Packs)
+            PackGallery(screen, layout, x + 8f, top + 44f, content - 16f, noteTop - 4f);
+        else
+            MenuRows(screen, layout, x + 8f, top + 44f, content - 16f, noteTop - 4f, h, buttons: false);
+        MenuNote(screen, x + 16f, noteTop, content - 32f, bottom);
+        return true;
+    }
+
+    /// <summary>
+    /// The packs tab as a gallery: every pack a card with its own icon, the details and its real
+    /// tiles beside them, and the shelf's search, sort and browse rows as ordinary rows.
+    /// </summary>
+    /// <remarks>
+    /// Walks the list pane from the host's own <c>PackListScroll</c>, which keeps the picked pack
+    /// within six positions of it; a grid always shows more than six, so the pick stays in view.
+    /// </remarks>
+    private void PackGallery(HudScreen screen, ScreenLayout layout, float left, float top, float width, float bottom)
+    {
+        const float detailWide = 176f;
+        const float cardWide = 74f;
+        const float cardTall = 62f;
+        const float cardGap = 6f;
+
+        screen.PackDetailImageBox = default;
+        var galleryWide = width - detailWide - 12f;
+        DrawPackDetails(screen, layout, left + galleryWide + 12f, top, detailWide, bottom - top, narrow: false);
+
+        var rows = screen.Rows.Select((row, index) => (row, index))
+            .Where(static pair => pair.row.Pane == MenuPane.List).ToArray();
+        if (rows.Length == 0) return;
+
+        var columns = Math.Max(1, (int)((galleryWide + cardGap) / (cardWide + cardGap)));
+        var first = Math.Clamp(screen.PackListScroll, 0, Math.Max(0, rows.Length - 1));
+        var pen = top;
+        var column = 0;
+
+        for (var at = first; at < rows.Length; at++)
+        {
+            var (row, global) = rows[at];
+            if (!row.Card)
+            {
+                if (column > 0) { pen += cardTall + cardGap; column = 0; }
+                if (pen + MenuRowTall > bottom) break;
+                MenuRowAt(screen, layout, global, left, pen, galleryWide, MenuRowTall, buttons: false);
+                pen += MenuRowTall;
+                continue;
+            }
+
+            if (pen + cardTall > bottom) break;
+
+            var cx = left + column * (cardWide + cardGap);
+            var lit = global == screen.Selected;
+            var hot = screen.Hovered is { Kind: ZoneKind.Row } over && over.Index == global;
+            Rect(_plain, cx, pen, cardWide, cardTall, lit ? new Vector4(0.10f, 0.13f, 0.14f, 0.96f) : MenuButton);
+            var edge = lit ? Picked : hot ? new Vector4(1f, 1f, 1f, 0.22f) : MenuEdge;
+            Rect(_plain, cx, pen, cardWide, 1f, edge);
+            Rect(_plain, cx, pen + cardTall - 1f, cardWide, 1f, edge);
+            Rect(_plain, cx, pen, 1f, cardTall, edge);
+            Rect(_plain, cx + cardWide - 1f, pen, 1f, cardTall, edge);
+
+            // The pack's own art at one screen pixel to one art pixel: a 64-pixel icon, 32 units.
+            if (_packIcons is not null && row.Icon >= 0 && row.Icon < _packIcons.LayerCount)
+                Rect(_packIconQuads, cx + (cardWide - 32f) * 0.5f, pen + 5f, 32f, 32f, Vector4.One, row.Icon);
+
+            var name = row.Label.Trim().Length > 0 ? row.Label : "unnamed pack";
+            TextCentred(FitText(name, cardWide - 6f, 7f), cx + cardWide * 0.5f, pen + 40f, 7f, lit ? Vector4.One : Ink);
+            if (row.Value.Length > 0)
+                TextCentred(FitText(row.Value, cardWide - 6f, 7f), cx + cardWide * 0.5f, pen + 50f, 7f,
+                    row.Value.Contains("WORN", StringComparison.Ordinal) ? MenuAmber : InkFaint);
+
+            layout.Add(ZoneKind.Row, global, cx, pen, cardWide, cardTall);
+
+            column++;
+            if (column >= columns) { column = 0; pen += cardTall + cardGap; }
+        }
+    }
+
+    /// <summary>
+    /// The skins tab as a gallery: every skin a card with its own figure on it, the big turning
+    /// preview beside them, and the tab's other rows (preview, import, community) as ordinary rows.
+    /// </summary>
+    /// <remarks>
+    /// The same window of rows the host scrolls by — cards and rows alike are drawn from
+    /// <c>first</c> for <see cref="ScreenLayout.MenuLines"/> rows — so selection, the keyboard and
+    /// the controller move through the gallery exactly as they moved down the list.
+    /// </remarks>
+    private void SkinGallery(HudScreen screen, ScreenLayout layout, float left, float top, float width, float bottom, float h)
+    {
+        const float previewWide = 140f;
+        const float cardWide = 62f;
+        const float cardTall = 84f;
+        const float cardGap = 6f;
+
+        var galleryWide = width - previewWide - 12f;
+
+        // The turning figure, on the right.
+        var px = left + galleryWide + 12f;
+        var ph = bottom - top;
+        Rect(_plain, px, top, previewWide, ph, new Vector4(0.03f, 0.035f, 0.04f, 0.95f));
+        layout.Add(ZoneKind.SkinPreview, 0, px, top, previewWide, ph);
+        screen.SkinPreviewBox = new Vector4(px, top, previewWide, ph);
+        DrawSkinPreview(screen, px, top, previewWide, ph);
+        TextCentred(PreviewFacing(screen.SkinPreviewYaw), px + previewWide * 0.5f, top + ph - 12f, MenuGlyph, InkDim);
+
+        var total = screen.Rows.Count;
+        var lines = ScreenLayout.MenuLines(h);
+        var first = Math.Clamp(screen.Scroll, 0, Math.Max(0, total - lines));
+        var columns = Math.Max(1, (int)((galleryWide + cardGap) / (cardWide + cardGap)));
+
+        var pen = top;
+        var column = 0;
+        for (var i = first; i < Math.Min(total, first + lines); i++)
+        {
+            var row = screen.Rows[i];
+            var card = row.Thumb >= 0;
+
+            if (!card)
+            {
+                if (column > 0) { pen += cardTall + cardGap; column = 0; }
+                if (pen + MenuRowTall > bottom) break;
+                MenuRowAt(screen, layout, i, left, pen, galleryWide, MenuRowTall, buttons: false);
+                pen += MenuRowTall;
+                continue;
+            }
+
+            if (pen + cardTall > bottom) break;
+
+            var cx = left + column * (cardWide + cardGap);
+            var lit = i == screen.Selected;
+            var hot = screen.Hovered is { Kind: ZoneKind.Row } over && over.Index == i;
+            Rect(_plain, cx, pen, cardWide, cardTall, lit ? new Vector4(0.10f, 0.13f, 0.14f, 0.96f) : MenuButton);
+            var edge = lit ? Picked : hot ? new Vector4(1f, 1f, 1f, 0.22f) : MenuEdge;
+            Rect(_plain, cx, pen, cardWide, 1f, edge);
+            Rect(_plain, cx, pen + cardTall - 1f, cardWide, 1f, edge);
+            Rect(_plain, cx, pen, 1f, cardTall, edge);
+            Rect(_plain, cx + cardWide - 1f, pen, 1f, cardTall, edge);
+
+            // The figure: a 32-square tile with the 16-by-32 figure in its middle, drawn at three
+            // screen pixels to one skin pixel so it stays sharp.
+            if (row.Thumb >= 0 && _skinThumbs is not null && row.Thumb < _skinThumbs.LayerCount)
+                Rect(_skinThumbQuads, cx + (cardWide - 48f) * 0.5f, pen + 6f, 48f, 48f, Vector4.One, row.Thumb);
+            else
+                TextCentred("?", cx + cardWide * 0.5f, pen + 26f, 16f, InkFaint);
+
+            var name = row.Label.Trim().Length > 0 ? row.Label : "unnamed";
+            TextCentred(FitText(name, cardWide - 6f, 7f), cx + cardWide * 0.5f, pen + 58f, 7f, lit ? Vector4.One : Ink);
+            if (row.Value.Length > 0)
+                TextCentred(FitText(row.Value, cardWide - 6f, 7f), cx + cardWide * 0.5f, pen + 70f, 7f,
+                    row.Value == "worn" ? MenuAmber : InkFaint);
+
+            layout.Add(ZoneKind.Row, i, cx, pen, cardWide, cardTall);
+
+            column++;
+            if (column >= columns) { column = 0; pen += cardTall + cardGap; }
+        }
+    }
+
+    /// <summary>The start screen: the title, then large stacked buttons.</summary>
+    private void StartScreen(HudScreen screen, ScreenLayout layout, float w, float h)
+    {
+        var cell = TitleCell(w);
+        var column = MathF.Min(280f, w - 40f);
+        var left = MathF.Round((w - column) / 2f);
+        var titleTop = MathF.Max(10f, h * 0.10f);
+        Title(screen, w * 0.5f, titleTop, cell, screen.Drift);
+
+        var top = titleTop + TitleArt.LetterHeight * cell + 22f;
+        var bottom = h - 70f;
+        MenuRows(screen, layout, left, top, column, bottom, h, buttons: true);
+        MenuNote(screen, left, MathF.Min(bottom + 6f, h - 60f), column, h - 46f);
+    }
+
+    /// <summary>
+    /// The rows of either screen. Shows exactly <see cref="ScreenLayout.MenuLines"/> of them — the
+    /// count the host scrolls by — and gives up height per row before it gives up a row.
+    /// </summary>
+    private void MenuRows(
+        HudScreen screen, ScreenLayout layout, float left, float top, float width, float bottom,
+        float h, bool buttons)
+    {
+        var total = screen.Rows.Count;
+        var lines = ScreenLayout.MenuLines(h);
+        var shown = Math.Min(lines, total);
+        var first = Math.Clamp(screen.Scroll, 0, Math.Max(0, total - lines));
+        var gap = buttons ? 4f : 0f;
+        var wanted = buttons ? 24f : MenuRowTall;
+        var line = MathF.Max(ScreenLayout.MenuLine, MathF.Min(wanted, (bottom - top) / Math.Max(1, shown) - gap));
+
+        var rowWidth = total > lines ? width - 12f : width;
+        if (total > lines)
+            Scrollbar(screen, layout, left + width - 7f, top, shown * (line + gap), first, lines, total);
+
+        for (var i = first; i < first + shown; i++)
+            MenuRowAt(screen, layout, i, left, top + (i - first) * (line + gap), rowWidth, line, buttons);
+    }
+
+    /// <summary>One row of the reworked menu: a heading, a setting, a field or a button.</summary>
+    private void MenuRowAt(
+        HudScreen screen, ScreenLayout layout, int i, float left, float y, float rowWidth, float line, bool buttons)
+    {
+        {
+            var row = screen.Rows[i];
+            var mid = y + MathF.Round((line - MenuGlyph) / 2f);
+
+            if (row.Heading)
+            {
+                var label = buttons ? row.Label : row.Label.ToUpperInvariant();
+                if (buttons)
+                {
+                    TextCentred(FitText(label, rowWidth, MenuGlyph), left + rowWidth / 2f, mid, MenuGlyph, InkFaint);
+                }
+                else
+                {
+                    var labelWidth = TextWidth(label, MenuGlyph);
+                    Text(label, left + 8f, mid + 2f, MenuGlyph, MenuAmber);
+                    Rect(_plain, left + 16f + labelWidth, mid + 6f, MathF.Max(0f, rowWidth - labelWidth - 24f), 1f, MenuEdge);
+                }
+                return;
+            }
+
+            var lit = i == screen.Selected;
+            var hot = screen.Hovered is { Kind: ZoneKind.Row } over && over.Index == i;
+
+            if (buttons)
+            {
+                Rect(_plain, left, y, rowWidth, line, lit ? new Vector4(0.10f, 0.13f, 0.14f, 0.96f) : MenuButton);
+                var edge = lit ? Picked : hot ? new Vector4(1f, 1f, 1f, 0.22f) : MenuEdge;
+                Rect(_plain, left, y, rowWidth, 1f, edge);
+                Rect(_plain, left, y + line - 1f, rowWidth, 1f, edge);
+                Rect(_plain, left, y, 1f, line, edge);
+                Rect(_plain, left + rowWidth - 1f, y, 1f, line, edge);
+            }
+            else
+            {
+                if (lit) Rect(_plain, left, y, rowWidth, line, MenuLit);
+                else if (hot) Rect(_plain, left, y, rowWidth, line, MenuHot);
+                if (lit) Rect(_plain, left, y, 2f, line, Picked);
+            }
+
+            if (row.Progress >= 0f)
+            {
+                var progress = Math.Clamp(row.Progress, 0f, 1f);
+                Rect(_plain, left + 8f, y + line - 4f, rowWidth - 16f, 2f, MenuTrack);
+                if (progress > 0f)
+                    Rect(_plain, left + 8f, y + line - 4f, (rowWidth - 16f) * progress, 2f, MenuAmber);
+            }
+
+            var right = left + rowWidth - 8f;
+            var reserved = 0f;
+
+            var boxWidth = 0f;
+            if (row.Edits is { } field)
+            {
+                boxWidth = Box(screen, field, left, mid, rowWidth - 6f);
+                reserved = boxWidth + 6f;
+            }
+            else if (row.Control == MenuControl.Checkbox && row.Value.Length > 0)
+            {
+                // A switch: the knob says which way it is, the colour says it is on.
+                var on = row.ControlAmount >= 0.5f;
+                var tx = right - 24f;
+                var ty = y + MathF.Round((line - 12f) / 2f);
+                Rect(_plain, tx, ty, 24f, 12f, on ? Picked with { W = 0.85f } : MenuTrack);
+                Rect(_plain, on ? tx + 13f : tx + 1f, ty + 1f, 10f, 10f, on ? Vector4.One : InkDim);
+                reserved = 32f;
+            }
+            else if (row.Control == MenuControl.Slider && row.Value.Length > 0)
+            {
+                var amount = Math.Clamp(row.ControlAmount, 0f, 1f);
+                var valueText = FitText(row.Value, 64f, MenuGlyph);
+                var valueWidth = TextWidth(valueText, MenuGlyph);
+                Text(valueText, right - valueWidth, mid, MenuGlyph, lit ? Vector4.One : Ink);
+                var track = MathF.Min(140f, rowWidth * 0.34f);
+                var tx = right - valueWidth - 10f - track;
+                var ty = y + MathF.Round(line / 2f) - 2f;
+                Rect(_plain, tx, ty, track, 4f, MenuTrack);
+                Rect(_plain, tx, ty, MathF.Round(track * amount), 4f, MenuAmber);
+                Rect(_plain, tx + MathF.Round((track - 6f) * amount), ty - 4f, 6f, 12f, lit || hot ? Vector4.One : Ink);
+                reserved = valueWidth + track + 18f;
+            }
+            else if (row.Value.Length > 0)
+            {
+                var valueText = FitText(row.Value, MathF.Min(170f, rowWidth * 0.45f), MenuGlyph);
+                var valueWidth = TextWidth(valueText, MenuGlyph);
+                Text(valueText, right - valueWidth, mid, MenuGlyph, buttons ? InkFaint : lit ? Ink : InkDim);
+                reserved = valueWidth + 10f;
+            }
+
+            var iconWidth = 0f;
+            if (row.Icon >= 0)
+            {
+                Rect(_blocks, left + 8f, y + MathF.Round((line - 14f) / 2f), 14f, 14f, Vector4.One, row.Icon);
+                iconWidth = 18f;
+            }
+
+            var room = MathF.Max(8f, rowWidth - reserved - 20f - iconWidth);
+            var text = FitText(row.Label, room, MenuGlyph);
+            var colour = lit ? Vector4.One : buttons ? Ink : InkDim;
+            if (buttons && reserved == 0f)
+                TextCentred(text, left + rowWidth / 2f, mid, MenuGlyph, colour);
+            else
+                Text(text, left + 10f + iconWidth, mid, MenuGlyph, colour);
+
+            layout.Add(ZoneKind.Row, i, left, y, rowWidth, line);
+            if (boxWidth > 0f)
+                layout.Add(ZoneKind.Field, i, left + rowWidth - 6f - boxWidth, mid - 2f, boxWidth, ScreenLayout.MenuLine);
+        }
+    }
+
+    /// <summary>The picked row's description, in one fixed strip so the eye learns where it is.</summary>
+    private void MenuNote(HudScreen screen, float left, float top, float width, float bottom)
+    {
+        if (screen.Selected < 0 || screen.Selected >= screen.Rows.Count) return;
+        if (screen.Rows[screen.Selected].Note is not { Length: > 0 } note) return;
+
+        var lines = Wrap(note, width, 7f);
+        var room = Math.Max(1, (int)((bottom - top) / 10f));
+        for (var i = 0; i < Math.Min(lines.Count, room); i++)
+            Text(lines[i], left, top + i * 10f, 7f, InkFaint);
+    }
+
+    private static string Capitalised(string name) =>
+        name.Length == 0 ? name : char.ToUpperInvariant(name[0]) + name[1..];
+
     private void Tabs(HudScreen screen, ScreenLayout layout, float left, float top, float panel)
     {
         var names = screen.TabNames;
@@ -3649,6 +4056,14 @@ public sealed class HudRenderer : IDisposable
     }
 
     /// <summary>Uploads installed pack icons once when the shelf changes.</summary>
+    /// <summary>Uploads the gallery's skin figures, one layer per card, in the order the rows name them.</summary>
+    public void SetSkinThumbs(IReadOnlyList<byte[]> figures)
+    {
+        _skinThumbs?.Dispose();
+        _skinThumbs = figures.Count == 0 ? null
+            : new BlockTextureArray(_gl, figures.ToArray(), Driftwood.Core.Textures.SkinThumbnail.Size);
+    }
+
     public void SetPackIcons(IReadOnlyList<byte[]?> icons)
     {
         _packIcons?.Dispose();
@@ -5229,6 +5644,7 @@ public sealed class HudRenderer : IDisposable
         _skin?.Dispose();
         _previewSkin?.Dispose();
         _packIcons?.Dispose();
+        _skinThumbs?.Dispose();
         _packPreview?.Dispose();
         _armour?.Dispose();
         _gui?.Dispose();

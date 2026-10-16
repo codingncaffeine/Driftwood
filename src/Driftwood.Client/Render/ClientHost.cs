@@ -7708,8 +7708,44 @@ public sealed class ClientHost : IDisposable
             StartSkinPage(_skinPageIndex);
     }
 
+    /// <summary>Gallery figures for the skins tab: layer 0 is the default, then one per readable skin.</summary>
+    /// <remarks>Rebuilt only when the shelf's list of files changes, so opening the tab again reads nothing.</remarks>
+    private void EnsureSkinThumbs()
+    {
+        var key = string.Join('\n', _skins.Select(skin => skin.Path));
+        if (key == _skinThumbKey && _skinThumbsBuilt) return;
+        _skinThumbKey = key;
+        _skinThumbsBuilt = true;
+        _skinThumbIndex.Clear();
+
+        var figures = new List<byte[]> { SkinThumbnail.FrontFigure(PlayerSkin.Paint(ArmStyle.Classic)) };
+        foreach (var skin in _skins)
+        {
+            if (!skin.Readable || _skinThumbIndex.ContainsKey(skin.Path)) continue;
+            try
+            {
+                figures.Add(SkinThumbnail.FrontFigure(PlayerSkin.Build(skin.Path, skin.Arms)));
+                _skinThumbIndex[skin.Path] = figures.Count - 1;
+            }
+            catch (Exception error) when (error is IOException or InvalidDataException or UnauthorizedAccessException)
+            {
+                // An unreadable file keeps a card without a figure; its row already says why.
+            }
+        }
+
+        _hud.SetSkinThumbs(figures);
+    }
+
+    private int SkinThumbFor(SkinLibrary.Entry skin) =>
+        _skinThumbIndex.TryGetValue(skin.Path, out var at) ? at : -1;
+
+    private string _skinThumbKey = "";
+    private bool _skinThumbsBuilt;
+    private readonly Dictionary<string, int> _skinThumbIndex = new(StringComparer.Ordinal);
+
     private void BuildSkinRows()
     {
+        EnsureSkinThumbs();
         _remoteSkinRows.Clear();
         var worn = _settings.PlayerSkin;
         var defaultWorn = _skinPath is null;
@@ -7717,7 +7753,7 @@ public sealed class ClientHost : IDisposable
         _hudScreen.Rows.Add(new MenuRow(
             $"MY SKINS — {_skins.Count} installed", Heading: true));
         _hudScreen.Rows.Add(new MenuRow(
-            "Driftwood's default", defaultWorn ? "worn" : "",
+            "Driftwood's default", defaultWorn ? "worn" : "", Thumb: 0,
             Note: _skinNote.Length > 0 && defaultWorn
                 ? _skinNote
                 : "Always available. Enter wears it and clears a missing or installed selection"));
@@ -7732,7 +7768,8 @@ public sealed class ClientHost : IDisposable
                     : "",
                 Note: skin.Readable
                     ? $"{skin.Kind}; {source}. Move here to preview; enter wears it now"
-                    : $"{skin.Kind}. Enter removes the unreadable file from the shelf"));
+                    : $"{skin.Kind}. Enter removes the unreadable file from the shelf",
+                Thumb: SkinThumbFor(skin)));
         }
 
         _hudScreen.Rows.Add(new MenuRow("PREVIEW", Heading: true));
