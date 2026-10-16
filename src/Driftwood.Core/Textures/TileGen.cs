@@ -5785,6 +5785,22 @@ public static class TileGen
     /// is the pair this size fails on first. The baseline is row six, so <c>g</c>, <c>j</c>,
     /// <c>p</c>, <c>q</c> and <c>y</c> have row seven to hang into.</para>
     /// </remarks>
+    /// <summary>
+    /// The four arrows (2026-10-16 — the user, marking a way through caves with signs), drawn after
+    /// the printable ASCII run in the same five-by-eight hand. A pack's font replaces the ASCII run
+    /// and never these: no vanilla sheet has them at a place this table could find.
+    /// </summary>
+    public static readonly string[] ArrowGlyphs =
+    [
+        "\u2190...../..#../.#.../#####/.#.../..#../...../.....",
+        "\u2191..#../.###./#.#.#/..#../..#../..#../..#../.....",
+        "\u2192...../..#../...#./#####/...#./..#../...../.....",
+        "\u2193..#../..#../..#../..#../#.#.#/.###./..#../.....",
+    ];
+
+    /// <summary>Every layer the font has: the printable ASCII run, then the arrows.</summary>
+    public const int FontLayers = GlyphCount + 4;
+
     private static readonly string[] Glyphs =
     [
         " ...../...../...../...../...../...../...../.....",
@@ -5894,10 +5910,14 @@ public static class TileGen
     /// </remarks>
     public static byte[][] Font()
     {
-        var tiles = new byte[GlyphCount][];
-        for (var i = 0; i < GlyphCount; i++) tiles[i] = DrawGlyph(i);
+        var tiles = new byte[FontLayers][];
+        for (var i = 0; i < FontLayers; i++) tiles[i] = DrawGlyph(i);
         return tiles;
     }
+
+    /// <summary>One glyph's pattern: the character, then eight rows of five.</summary>
+    private static string Pattern(int index) =>
+        index < GlyphCount ? Glyphs[index] : ArrowGlyphs[index - GlyphCount];
 
     /// <summary>
     /// How far the pen moves after each glyph, in tile pixels.
@@ -5908,11 +5928,11 @@ public static class TileGen
     /// </remarks>
     public static int[] FontAdvance()
     {
-        var advance = new int[GlyphCount];
+        var advance = new int[FontLayers];
 
-        for (var i = 0; i < GlyphCount; i++)
+        for (var i = 0; i < FontLayers; i++)
         {
-            var rows = Glyphs[i][1..].Split('/');
+            var rows = Pattern(i)[1..].Split('/');
             var widest = 0;
 
             for (var y = 0; y < rows.Length; y++)
@@ -5929,15 +5949,17 @@ public static class TileGen
 
     /// <summary>Which layer a character is on, or -1 for anything the font does not carry.</summary>
     public static int GlyphOf(char c) =>
-        c >= FirstGlyph && c < FirstGlyph + GlyphCount ? c - FirstGlyph : -1;
+        c >= FirstGlyph && c < FirstGlyph + GlyphCount ? c - FirstGlyph
+        : c is >= '\u2190' and <= '\u2193' ? GlyphCount + (c - '\u2190')
+        : -1;
 
     /// <summary>The character a layer draws, for the check that reads the table back.</summary>
-    public static char GlyphChar(int index) => Glyphs[index][0];
+    public static char GlyphChar(int index) => Pattern(index)[0];
 
     private static byte[] DrawGlyph(int index)
     {
         var tile = new byte[BytesPerTile];
-        var rows = Glyphs[index][1..].Split('/');
+        var rows = Pattern(index)[1..].Split('/');
 
         for (var y = 0; y < GlyphHeight && y < rows.Length; y++)
         for (var x = 0; x < GlyphWidth && x < rows[y].Length; x++)

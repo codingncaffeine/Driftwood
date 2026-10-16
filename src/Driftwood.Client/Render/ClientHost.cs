@@ -3380,6 +3380,11 @@ public sealed class ClientHost : IDisposable
             case ZoneKind.Button:
                 switch ((ScreenButton)at.Value.Index)
                 {
+                    case >= ScreenButton.SignArrowLeft and <= ScreenButton.SignArrowDown
+                        when _hudScreen.Kind == HudScreenKind.Sign && _hudScreen.Typing is { } line:
+                        line.Insert((char)('\u2190' + (at.Value.Index - (int)ScreenButton.SignArrowLeft)));
+                        break;
+
                     case ScreenButton.Book:
                         _hudScreen.BookOut = !_hudScreen.BookOut;
                         break;
@@ -14840,8 +14845,8 @@ public sealed class ClientHost : IDisposable
         _streamer.EditBlock(standing.X, standing.Y, standing.Z, _registry.ByName(StarterBlocks.SignForms[form]).Id);
         _streamer.EditBlock(plank.X, plank.Y, plank.Z, _registry.ByName("driftoak_planks").Id);
         _streamer.EditBlock(onWall.X, onWall.Y, onWall.Z, _registry.ByName(StarterBlocks.SignForms[4 + form]).Id);
-        _signs.Set(standing.X, standing.Y, standing.Z, ["Welcome to", "Driftwood", "", "-> the sea"]);
-        _signs.Set(onWall.X, onWall.Y, onWall.Z, ["Home", "sweet home"]);
+        _signs.Set(standing.X, standing.Y, standing.Z, ["Welcome to", "Driftwood", "", "\u2192 the sea"]);
+        _signs.Set(onWall.X, onWall.Y, onWall.Z, ["\u2191 home", "\u2190 mine \u2192", "", "\u2193 cave \u2193"]);
         _shotSign = standing;
 
         _camera.Pitch = -14f;

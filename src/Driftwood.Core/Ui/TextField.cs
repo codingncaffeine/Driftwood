@@ -67,6 +67,8 @@ public sealed class TextField(int maxLength = 64, TextAllows allows = TextAllows
     /// <summary>True when this character may be typed into this field.</summary>
     public bool Accepts(char c)
     {
+        // The four arrows the font draws after ASCII — a sign's way-marks — in any free-text box.
+        if (c is >= '\u2190' and <= '\u2193') return Allows == TextAllows.Anything;
         if (c is < FirstDrawable or > LastDrawable) return false;
 
         return Allows switch

@@ -1700,7 +1700,7 @@ public sealed class HudRenderer : IDisposable
 
         if (screen.Kind == HudScreenKind.Sign)
         {
-            SignScreen(screen, w, h);
+            SignScreen(screen, layout, w, h);
             return;
         }
 
@@ -3649,7 +3649,7 @@ public sealed class HudRenderer : IDisposable
     /// A sign being written: the board itself, large, with its four lines centred on it as they
     /// will stand in the world, and the caret on the line that has the keyboard.
     /// </summary>
-    private void SignScreen(HudScreen screen, float w, float h)
+    private void SignScreen(HudScreen screen, ScreenLayout layout, float w, float h)
     {
         const float Glyph = 10f, Line = 18f, Width = 196f, Height = 96f;
 
@@ -3678,8 +3678,26 @@ public sealed class HudRenderer : IDisposable
             }
         }
 
+        // ⛳ Four arrows to type, for marking a way through caves (the user, 2026-10-16): each puts
+        // its arrow on the line being written, at the caret.
+        const float Button = 26f, Gap = 6f;
+        var row = 4f * Button + 3f * Gap;
+        var buttonsTop = top + Height + 50f;
+        for (var i = 0; i < 4; i++)
+        {
+            var x = MathF.Round((w - row) * 0.5f) + i * (Button + Gap);
+            var index = (int)ScreenButton.SignArrowLeft + i;
+            var hot = screen.Hovered is { Kind: ZoneKind.Button } over && over.Index == index;
+            Bevel(x, buttonsTop, Button, Button, raised: true,
+                hot ? new Vector4(0.42f, 0.42f, 0.42f, 0.98f) : new Vector4(0.24f, 0.24f, 0.24f, 0.98f));
+            var arrow = (char)('\u2190' + i);
+            var glyph = TextWidth([arrow], 12f);
+            Text([arrow], MathF.Round(x + (Button - glyph) * 0.5f + 1f), buttonsTop + 7f, 12f, Vector4.One);
+            layout.Add(ZoneKind.Button, index, x, buttonsTop, Button, Button);
+        }
+
         var hint = "enter next line   up/down move   esc done";
-        Text(hint, MathF.Round((w - TextWidth(hint, NoteGlyph)) * 0.5f), top + Height + 52f, NoteGlyph, Ink);
+        Text(hint, MathF.Round((w - TextWidth(hint, NoteGlyph)) * 0.5f), buttonsTop + Button + 10f, NoteGlyph, Ink);
     }
 
     private float Box(HudScreen screen, TextField field, float left, float y, float panel)
@@ -5253,8 +5271,6 @@ public sealed class HudRenderer : IDisposable
             '\u201c' or '\u201d' or '\u2033' => '"',
             '\u2026' => '.',
             '\u00d7' => 'x',
-            '\u2190' => '<',
-            '\u2192' => '>',
             _ => c,
         };
 

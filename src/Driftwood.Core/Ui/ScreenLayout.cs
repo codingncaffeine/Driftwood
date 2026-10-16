@@ -151,6 +151,12 @@ public enum ScreenButton
 
     /// <summary>Shows every matching recipe, or only those craftable here and now.</summary>
     CraftableOnly,
+
+    /// <summary>A sign editor's four arrows, in ← ↑ → ↓ order, each typed into the line being written.</summary>
+    SignArrowLeft,
+    SignArrowUp,
+    SignArrowRight,
+    SignArrowDown,
 }
 
 /// <summary>

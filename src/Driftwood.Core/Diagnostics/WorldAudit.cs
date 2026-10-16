@@ -6548,8 +6548,8 @@ public static class WorldAudit
         var tiles = TileGen.Font();
         var advance = TileGen.FontAdvance();
 
-        if (tiles.Length != TileGen.GlyphCount)
-            faults.Add($"the font has {tiles.Length} glyphs, not the {TileGen.GlyphCount} it claims");
+        if (tiles.Length != TileGen.FontLayers)
+            faults.Add($"the font has {tiles.Length} glyphs, not the {TileGen.FontLayers} it claims");
 
         var inked = 0;
         var widest = 0;
@@ -6557,7 +6557,7 @@ public static class WorldAudit
 
         for (var i = 0; i < tiles.Length; i++)
         {
-            var wanted = (char)(TileGen.FirstGlyph + i);
+            var wanted = i < TileGen.GlyphCount ? (char)(TileGen.FirstGlyph + i) : (char)('\u2190' + i - TileGen.GlyphCount);
             if (TileGen.GlyphChar(i) != wanted)
                 faults.Add($"glyph {i} says it is '{TileGen.GlyphChar(i)}' where '{wanted}' belongs");
 
