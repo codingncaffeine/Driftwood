@@ -183,8 +183,18 @@ public static class Program
 
             if (args.Contains("--pack-report"))
             {
-                Console.WriteLine(
-                    BlockTextureSet.Build(options.PackPath, options.TextureSize, 4096).Report());
+                var built = BlockTextureSet.Build(options.PackPath, options.TextureSize, 4096);
+                Console.WriteLine(built.Report());
+
+                // ⛳ And the pictures, when asked: a name in the report says which file was taken,
+                // only the tile itself says whether the right part of it was. Sixteen to a row, in
+                // the report's order, each drawn at 32 pixels.
+                var sheetAt = Array.IndexOf(args, "--pack-sheet");
+                if (sheetAt >= 0 && sheetAt + 1 < args.Length)
+                {
+                    File.WriteAllBytes(args[sheetAt + 1], Png.Encode(ContactSheet(built.Tiles, built.Size)));
+                    Console.WriteLine($"sheet       {args[sheetAt + 1]}");
+                }
                 return 0;
             }
 
@@ -347,6 +357,36 @@ public static class Program
     /// reads this output is mine, once, to write the index table; the table is then in the code and
     /// this stays as the thing that checks it against the next pack somebody hands us.
     /// </remarks>
+    /// <summary>Every tile at 32 pixels, sixteen to a row with a dark gap, for looking at.</summary>
+    private static Image ContactSheet(byte[][] tiles, int size)
+    {
+        const int Cell = 32, Gap = 2, Across = 16;
+        var rows = (tiles.Length + Across - 1) / Across;
+        var width = Across * (Cell + Gap);
+        var height = rows * (Cell + Gap);
+        var pixels = new byte[width * height * 4];
+        for (var i = 3; i < pixels.Length; i += 4) pixels[i] = 255;
+
+        for (var t = 0; t < tiles.Length; t++)
+        {
+            var ox = t % Across * (Cell + Gap);
+            var oy = t / Across * (Cell + Gap);
+            for (var y = 0; y < Cell; y++)
+            for (var x = 0; x < Cell; x++)
+            {
+                var src = ((y * size / Cell) * size + x * size / Cell) * 4;
+                var dst = ((oy + y) * width + ox + x) * 4;
+                // Clear texels show as magenta, so a hole cannot pass for a dark texel.
+                var clear = tiles[t][src + 3] < 128;
+                pixels[dst] = clear ? (byte)255 : tiles[t][src];
+                pixels[dst + 1] = clear ? (byte)0 : tiles[t][src + 1];
+                pixels[dst + 2] = clear ? (byte)255 : tiles[t][src + 2];
+            }
+        }
+
+        return new Image(width, height, pixels);
+    }
+
     private static int Atlas(string packPath)
     {
         using var pack = TexturePack.Open(packPath);
@@ -748,6 +788,11 @@ public static class Program
                 case "--pack-coverage":
                 case "--pack-report":
                 case "--packs":
+                    break;
+                // Takes a path, so the parser has to step over it as well as allow it.
+                case "--pack-sheet":
+                    i++;
+                    break;
                 case "--atlas":
                 case "--recipes":
                     break;   // handled in Main; listed here so they are not unknown arguments

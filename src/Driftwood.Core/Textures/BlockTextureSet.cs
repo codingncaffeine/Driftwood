@@ -65,6 +65,55 @@ public static class BlockTextureSet
     /// namespace, omit <c>textures/</c>, and omit <c>.png</c>; the mapping table remains the single
     /// authority for which foreign picture corresponds to which Driftwood layer.
     /// </summary>
+    /// <summary>
+    /// Which block, in which state, wears one of the reference's texture files, and on which face.
+    /// </summary>
+    /// <remarks>
+    /// The reference names its textures after the block and the face: <c>furnace_front_on</c> is
+    /// the north face of a lit furnace, <c>oak_log_top</c> the end of a log. Read backwards, the
+    /// name is the question to put to the pack's model. A side is asked of the east face, because
+    /// an orientable block's north is its front; a plain name is asked of the north, which is
+    /// the front where there is one and the same picture where there is not. The few whose block is
+    /// not in their name are listed.
+    /// </remarks>
+    public static (JavaPackModels.BlockRequest Request, int Direction)? ModelFaceFor(string packPath)
+    {
+        const string Prefix = "textures/block/";
+        if (!packPath.StartsWith(Prefix, StringComparison.Ordinal)
+            || !packPath.EndsWith(".png", StringComparison.Ordinal)) return null;
+        var name = packPath[Prefix.Length..^4];
+        if (name.Contains('/')) return null;
+
+        static (JavaPackModels.BlockRequest, int) Ask(string block, int face, params (string, string)[] state) =>
+            (new JavaPackModels.BlockRequest(block, state.ToDictionary(p => p.Item1, p => p.Item2)), face);
+
+        switch (name)
+        {
+            case "snow": return Ask("snow_block", Faces.NegZ);
+            case "farmland": return Ask("farmland", Faces.PosY, ("moisture", "0"));
+            case "farmland_moist": return Ask("farmland", Faces.PosY, ("moisture", "7"));
+        }
+
+        var lit = false;
+        if (name.EndsWith("_on", StringComparison.Ordinal))
+        {
+            lit = true;
+            name = name[..^3];
+        }
+
+        var face = Faces.NegZ;
+        foreach (var (suffix, direction) in (ReadOnlySpan<(string, int)>)
+                 [("_top", Faces.PosY), ("_bottom", Faces.NegY), ("_side", Faces.PosX), ("_front", Faces.NegZ)])
+        {
+            if (!name.EndsWith(suffix, StringComparison.Ordinal)) continue;
+            name = name[..^suffix.Length];
+            face = direction;
+            break;
+        }
+
+        return lit ? Ask(name, face, ("lit", "true")) : Ask(name, face);
+    }
+
     public static bool TryLayerForResource(string resource, out ushort layer)
     {
         layer = 0;
@@ -963,6 +1012,8 @@ public static class BlockTextureSet
         var borrowed = 0;
         var outcomes = new List<LayerOutcome>(Layers.Length);
         var moving = OwnAnimations(tiles, size);
+        var models = pack.Dialect == PackDialect.Java ? new JavaPackModels(pack) : null;
+        var byModel = 0;
 
         for (var i = 0; i < Layers.Length; i++)
         {
@@ -985,6 +1036,21 @@ public static class BlockTextureSet
 
             if (replacement is null && Layers[i].PackPathAlt.Length > 0)
                 replacement = pack.TryLoadTile(Layers[i].PackPathAlt, size, out from);
+
+            // ⛳ Then the way the reference itself finds it: the block's state, its model, the face.
+            // Only for a whole solid face — a cut-out's picture may be a sheet of parts and a tinted
+            // one is grey on purpose, and neither can be told apart from a mistake by looking.
+            if (replacement is null && models is not null && !Layers[i].Cutout && !Layers[i].Tinted
+                && ModelFaceFor(Layers[i].PackPath) is var (request, direction)
+                && models.FaceTexture(request, direction) is { } face)
+            {
+                replacement = pack.TryLoadFace(face.Texture, face.Uv, face.Rotation, size, out var faceFrom);
+                if (replacement is not null)
+                {
+                    from = $"{faceFrom} via {face.Source}";
+                    byModel++;
+                }
+            }
 
             // ⛳ LAST, AND ONLY WHEN THE MATERIAL'S OWN PICTURE IS NOT THERE. A pack that has copper
             // tools gives us copper tools; one written before the reference had any lends us the
@@ -1060,6 +1126,7 @@ public static class BlockTextureSet
                     + (pack.Namespaces.Count > 1 ? $", {pack.Namespaces.Count} namespaces" : "")
                     + (neutralised > 0 ? $", {neutralised} tinted layers flattened" : "")
                     + (borrowed > 0 ? $", {borrowed} borrowed from another material and recoloured" : "")
+                    + (byModel > 0 ? $", {byModel} found through the pack's block models" : "")
                     + (pack.Faults.Count > 0 ? $", {pack.Faults.Count} unreadable: {pack.Faults[0]}" : "");
 
         return new Result(tiles, size, summary, grass, foliage, outcomes, moving);

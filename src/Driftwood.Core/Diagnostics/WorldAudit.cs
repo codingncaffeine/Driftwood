@@ -976,6 +976,12 @@ public static class WorldAudit
         Check("a block texture comes from the pack's minecraft folder, never a mod's", spaceFaults.Count == 0,
             spaceFaults.Count == 0 ? spaceDetail : $"{spaceFaults.Count} faults: {spaceFaults[0]}");
 
+        // ⛳ And a pack that keeps its stone where its model says (2026-10-16): Alacrity's art is all
+        // at paths like block/stone/stone/side_1, reached through blockstate and model, never by name.
+        var faceFaults = ModelTextureSelfTest(out var faceDetail);
+        Check("a block texture is found through the pack's own models", faceFaults.Count == 0,
+            faceFaults.Count == 0 ? faceDetail : $"{faceFaults.Count} faults: {faceFaults[0]}");
+
         var layoutFaults = ScreenLayoutSelfTest(out var layoutDetail);
         Check("a click lands on the square it is over", layoutFaults.Count == 0,
             layoutFaults.Count == 0 ? layoutDetail : $"{layoutFaults.Count} faults: {layoutFaults[0]}");
@@ -3548,6 +3554,82 @@ public static class WorldAudit
                 faults.Add($"deepstone was taken from {deep.From}, a mod's texture of the same name");
 
             detail = "a minecraft stone is taken; a waystones deepslate beside it is not";
+        }
+        finally
+        {
+            try { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); }
+            catch (IOException) { }
+        }
+
+        return faults;
+    }
+
+    /// <summary>
+    /// A stone reached only through blockstate, model and parent must be taken; a face painted in
+    /// two layers, and a hollow block's inside floor, must not.
+    /// </summary>
+    private static List<string> ModelTextureSelfTest(out string detail)
+    {
+        var faults = new List<string>();
+        var root = Path.Combine(Path.GetTempPath(), "driftwood-model-texture-" + Guid.NewGuid().ToString("N"));
+        detail = "";
+
+        try
+        {
+            string At(string relative)
+            {
+                var full = Path.Combine(root, "assets", "minecraft", relative);
+                Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+                return full;
+            }
+
+            Directory.CreateDirectory(root);
+            File.WriteAllText(Path.Combine(root, "pack.mcmeta"),
+                """{ "pack": { "pack_format": 34, "description": "model texture check" } }""");
+
+            var solid = Enumerable.Repeat((byte)130, 16 * 16 * 4).ToArray();
+            foreach (var name in (string[])["rock/face", "rock/under", "rock/over"])
+                File.WriteAllBytes(At($"textures/block/{name}.png"), Png.Encode(new Image(16, 16, solid)));
+
+            // Stone: one weighted variant, a model whose parent is the reference's cube_all.
+            File.WriteAllText(At("blockstates/stone.json"),
+                """{ "variants": { "": [ { "model": "minecraft:block/rock/one" } ] } }""");
+            File.WriteAllText(At("models/block/rock/one.json"),
+                """{ "parent": "minecraft:block/cube_all", "textures": { "all": "minecraft:block/rock/face" } }""");
+
+            // Deepslate: its north face in two skins, one just outside the other — a stack.
+            File.WriteAllText(At("blockstates/deepslate.json"),
+                """{ "variants": { "": { "model": "minecraft:block/rock/layered" } } }""");
+            File.WriteAllText(At("models/block/rock/layered.json"), """
+                { "textures": { "a": "block/rock/under", "b": "block/rock/over" },
+                  "elements": [
+                    { "from": [0, 0, 0], "to": [16, 16, 16], "faces": { "north": { "texture": "#a" } } },
+                    { "from": [-0.1, -0.1, -0.1], "to": [16.1, 16.1, 16.1], "faces": { "north": { "texture": "#b" } } } ] }
+                """);
+
+            // Sand: hollow, its only upward face a floor halfway down.
+            File.WriteAllText(At("blockstates/sand.json"),
+                """{ "variants": { "": { "model": "minecraft:block/rock/hollow" } } }""");
+            File.WriteAllText(At("models/block/rock/hollow.json"), """
+                { "textures": { "a": "block/rock/under" },
+                  "elements": [ { "from": [0, 0, 0], "to": [16, 8, 16], "faces": { "north": { "texture": "#a" }, "up": { "texture": "#a" } } } ] }
+                """);
+
+            var built = BlockTextureSet.Build(root, 16);
+            BlockTextureSet.LayerOutcome Of(string name) => built.Outcomes.First(o => o.Name == name);
+            int LayerOf(string name) => built.Outcomes.ToList().FindIndex(o => o.Name == name);
+
+            var stone = Of("stone");
+            if (!stone.Replaced || !stone.From.Contains("rock/face", StringComparison.Ordinal))
+                faults.Add($"stone was not taken through its model (came from '{stone.From}')");
+            else if (built.Tiles[LayerOf("stone")][0] != 130 || built.Tiles[LayerOf("stone")][3] != 255)
+                faults.Add("stone was taken through its model but its tile is not the pack's picture");
+            if (Of("deepstone").Replaced)
+                faults.Add($"a face painted in two layers was taken as one: {Of("deepstone").From}");
+            if (Of("sand").Replaced)
+                faults.Add($"a hollow block's inside floor was taken as its face: {Of("sand").From}");
+
+            detail = "stone through blockstate, model and cube_all; a layered face and a hollow floor keep ours";
         }
         finally
         {

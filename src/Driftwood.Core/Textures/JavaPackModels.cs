@@ -142,14 +142,144 @@ public sealed class JavaPackModels
     public Resolution ResolveBlock(BlockRequest request)
     {
         var issuesAt = Faults.Count;
-        var source = $"blockstates/{request.Name}.json";
+        var specs = CollectSpecs(request, out var source, out var claimed);
+        if (specs is null) return Empty(claimed, source, issuesAt);
+
+        var elements = new List<ModelElement>();
+        IReadOnlyDictionary<string, DisplayTransform> display =
+            new Dictionary<string, DisplayTransform>(StringComparer.OrdinalIgnoreCase);
+        foreach (var spec in specs)
+        {
+            var data = ResolveModel(spec.Model, new HashSet<string>(StringComparer.OrdinalIgnoreCase), 0);
+            if (data is null) continue;
+            display = data.Display;
+            var baked = Bake(data, source);
+            elements.AddRange(Rotate(baked, spec.X, spec.Y, spec.UvLock));
+        }
+
+        var model = elements.Count > 0 ? BlockModel.FromElements([.. elements]) : null;
+        return new Resolution(true, model, null, source, display,
+            Faults.Skip(issuesAt).ToArray());
+    }
+
+    /// <summary>
+    /// The picture a block's model puts on one face, and where on that picture it reads.
+    /// </summary>
+    /// <param name="Texture">The resolved texture id, such as <c>minecraft:block/stone/side_1</c>.</param>
+    /// <param name="Uv">The face's rectangle on it, in the model's sixteenths; flipped when reversed.</param>
+    /// <param name="Rotation">Quarter turns the face's picture is rotated by.</param>
+    public sealed record FacePicture(string Texture, Vector4 Uv, int Rotation, string Source);
+
+    /// <summary>
+    /// Follows a block's state definition to its model and says what that model paints on the
+    /// widest face looking in <paramref name="direction"/> — in the model's own frame, before the
+    /// blockstate turns it, which is the frame a texture's name is written in.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>For the texture table, 2026-10-16.</b> A modern pack keeps its stone at whatever path its
+    /// model says — Alacrity's is <c>block/stone/stone/side_1</c> — and the only way from "stone" to
+    /// that file is the one the reference takes: blockstate, model, parent chain, face variable.
+    /// <see cref="Bake"/> drops such a face, since no layer is named after it; this hands it to the
+    /// texture loader instead, so the picture comes onto the layer the block already draws.
+    /// An element turned on its own axis is skipped: what it shows is not a face of the block.
+    /// </remarks>
+    public FacePicture? FaceTexture(BlockRequest request, int direction)
+    {
+        var specs = CollectSpecs(request, out var source, out _);
+        if (specs is not { Count: > 0 }) return null;
+
+        var model = ResolveModel(specs[0].Model, new HashSet<string>(StringComparer.OrdinalIgnoreCase), 0);
+        if (model is null) return null;
+
+        RawFace? best = null;
+        RawElement? owner = null;
+        var widest = 0f;
+        foreach (var element in model.Elements)
+        {
+            if (element.RotationAngle != 0) continue;
+            foreach (var face in element.Faces)
+            {
+                if (face.Direction != direction) continue;
+                var area = FaceArea(element, direction);
+                if (area <= widest) continue;
+                widest = area;
+                best = face;
+                owner = element;
+            }
+        }
+
+        // ⚠ And it has to be the OUTSIDE of the block, covering most of it. Alacrity's smoker is
+        // hollow: its widest upward face is the floor inside, and its real top a frame of strips.
+        if (best is null || owner is null || widest < 128 || !OnSurface(owner, direction)) return null;
+
+        // ⚠ A face painted in layers is not one picture. Alacrity's carved pumpkin is a plain
+        // pumpkin with its face on a second skin just outside it, and its lit furnace a front with
+        // the fire on another; taking the widest alone gave a pumpkin with no face. Any second face
+        // looking the same way at half the area or more means the look is a stack — keep ours.
+        foreach (var element in model.Elements)
+        {
+            if (ReferenceEquals(element, owner) || element.RotationAngle != 0) continue;
+            if (element.Faces.Any(face => face.Direction == direction)
+                && FaceArea(element, direction) * 2 >= widest) return null;
+        }
+
+        var texture = ResolveTexture(best.Texture, model.Textures, source);
+        if (string.IsNullOrWhiteSpace(texture) || texture.StartsWith('#')) return null;
+        return new FacePicture(texture, best.Uv ?? DefaultUv(owner, direction), best.Rotation, source);
+    }
+
+    /// <summary>True when the element's face in that direction lies within a sixteenth of the cell's own.</summary>
+    private static bool OnSurface(RawElement element, int direction) => direction switch
+    {
+        Faces.PosX => element.To.X >= 15,
+        Faces.NegX => element.From.X <= 1,
+        Faces.PosY => element.To.Y >= 15,
+        Faces.NegY => element.From.Y <= 1,
+        Faces.PosZ => element.To.Z >= 15,
+        _ => element.From.Z <= 1,
+    };
+
+    private static float FaceArea(RawElement element, int direction)
+    {
+        var size = element.To - element.From;
+        return direction switch
+        {
+            Faces.PosX or Faces.NegX => size.Z * size.Y,
+            Faces.PosY or Faces.NegY => size.X * size.Z,
+            _ => size.X * size.Y,
+        };
+    }
+
+    /// <summary>The reference's uv for a face that names none: the element's own footprint on it.</summary>
+    private static Vector4 DefaultUv(RawElement element, int direction)
+    {
+        var (a, b) = (element.From, element.To);
+        return direction switch
+        {
+            Faces.NegY => new Vector4(a.X, 16 - b.Z, b.X, 16 - a.Z),
+            Faces.PosY => new Vector4(a.X, a.Z, b.X, b.Z),
+            Faces.NegZ => new Vector4(16 - b.X, 16 - b.Y, 16 - a.X, 16 - a.Y),
+            Faces.PosZ => new Vector4(a.X, 16 - b.Y, b.X, 16 - a.Y),
+            Faces.NegX => new Vector4(a.Z, 16 - b.Y, b.Z, 16 - a.Y),
+            _ => new Vector4(16 - b.Z, 16 - b.Y, 16 - a.Z, 16 - a.Y),
+        };
+    }
+
+    /// <summary>
+    /// The models a block's state definition picks for the owned state, or null with
+    /// <paramref name="claimed"/> saying whether the pack made any claim on the block at all.
+    /// </summary>
+    private List<ModelSpec>? CollectSpecs(BlockRequest request, out string source, out bool claimed)
+    {
+        claimed = true;
+        source = $"blockstates/{request.Name}.json";
         byte[]? bytes;
         string from;
         try { bytes = ReadJson(request.Name, "blockstates", out from); }
         catch (InvalidDataException error)
         {
             Report(error.Message);
-            return Empty(true, source, issuesAt);
+            return null;
         }
         var specs = new List<ModelSpec>();
 
@@ -158,7 +288,10 @@ public sealed class JavaPackModels
             // A model override without a blockstate is useful and common in sparse packs. Conversely
             // a pack that supplies neither should make no claim on the built-in shape.
             if (!ModelExists($"block/{request.Name}"))
-                return Empty(false, source, issuesAt);
+            {
+                claimed = false;
+                return null;
+            }
             specs.Add(new ModelSpec($"minecraft:block/{request.Name}"));
             source = $"models/block/{request.Name}.json";
         }
@@ -213,24 +346,10 @@ public sealed class JavaPackModels
         if (specs.Count == 0)
         {
             Report($"{source}: no variant or multipart entry matches Driftwood's owned state");
-            return Empty(true, source, issuesAt);
+            return null;
         }
 
-        var elements = new List<ModelElement>();
-        IReadOnlyDictionary<string, DisplayTransform> display =
-            new Dictionary<string, DisplayTransform>(StringComparer.OrdinalIgnoreCase);
-        foreach (var spec in specs)
-        {
-            var data = ResolveModel(spec.Model, new HashSet<string>(StringComparer.OrdinalIgnoreCase), 0);
-            if (data is null) continue;
-            display = data.Display;
-            var baked = Bake(data, source);
-            elements.AddRange(Rotate(baked, spec.X, spec.Y, spec.UvLock));
-        }
-
-        var model = elements.Count > 0 ? BlockModel.FromElements([.. elements]) : null;
-        return new Resolution(true, model, null, source, display,
-            Faults.Skip(issuesAt).ToArray());
+        return specs;
     }
 
     /// <summary>

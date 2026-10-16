@@ -750,6 +750,71 @@ public sealed class TexturePack : IDisposable
         return Resample(image, size);
     }
 
+    /// <summary>
+    /// Cuts one model face out of the picture it names and squares it into a tile, or null when the
+    /// result would not be a whole solid face.
+    /// </summary>
+    /// <param name="texture">A namespaced texture id from a model, such as <c>minecraft:block/x</c>.</param>
+    /// <param name="uv">The face's rectangle in sixteenths of the picture; reversed means mirrored.</param>
+    /// <param name="quarters">Clockwise quarter turns, as the model's face rotation gives them.</param>
+    /// <remarks>
+    /// ⛔ <b>Refuses rather than guesses</b>, because the failure it exists to prevent is the one the
+    /// user just reported: a sheet taken whole for a face, with holes in it. A rectangle narrower
+    /// than eight texels is a trim strip, one far from square is a slab's side, and any clear texel
+    /// on what is meant to be solid stone is a hole the player can see through — each keeps ours.
+    /// </remarks>
+    public byte[]? TryLoadFace(string texture, System.Numerics.Vector4 uv, int quarters, int size, out string from)
+    {
+        var id = texture.EndsWith(".png", StringComparison.OrdinalIgnoreCase) ? texture : texture + ".png";
+        byte[]? raw;
+        try { raw = TryReadResourceBytes(id, "textures", out from); }
+        catch (InvalidDataException) { from = id; return null; }
+        if (raw is null || !Png.TryDecode(raw, out var image, out _)) return null;
+
+        // An animated strip is addressed by its first frame, as the reference's uv is.
+        var frame = image.Height > image.Width && image.Height % image.Width == 0 ? image.Width : image.Height;
+        float u0 = Math.Min(uv.X, uv.Z), u1 = Math.Max(uv.X, uv.Z);
+        float v0 = Math.Min(uv.Y, uv.W), v1 = Math.Max(uv.Y, uv.W);
+        var left = (int)MathF.Round(Math.Clamp(u0, 0, 16) / 16f * image.Width);
+        var right = (int)MathF.Round(Math.Clamp(u1, 0, 16) / 16f * image.Width);
+        var top = (int)MathF.Round(Math.Clamp(v0, 0, 16) / 16f * frame);
+        var bottom = (int)MathF.Round(Math.Clamp(v1, 0, 16) / 16f * frame);
+        int width = right - left, height = bottom - top;
+        if (width < 8 || height < 8) return null;
+        if (width > height * 4 / 3 || height > width * 4 / 3) return null;
+
+        var mirrorX = uv.X > uv.Z;
+        var mirrorY = uv.Y > uv.W;
+        var tile = new byte[size * size * 4];
+        for (var y = 0; y < size; y++)
+        for (var x = 0; x < size; x++)
+        {
+            // Undo the turn first: the tile's (x, y) came from the unrotated face's (fx, fy).
+            var (fx, fy) = (quarters & 3) switch
+            {
+                1 => (y, size - 1 - x),
+                2 => (size - 1 - x, size - 1 - y),
+                3 => (size - 1 - y, x),
+                _ => (x, y),
+            };
+            if (mirrorX) fx = size - 1 - fx;
+            if (mirrorY) fy = size - 1 - fy;
+
+            var sx = left + Math.Min(fx * width / size, width - 1);
+            var sy = top + Math.Min(fy * height / size, height - 1);
+            var src = (sy * image.Width + sx) * 4;
+            var dst = (y * size + x) * 4;
+            if (image.Pixels[src + 3] < 128) return null;
+            tile[dst] = image.Pixels[src];
+            tile[dst + 1] = image.Pixels[src + 1];
+            tile[dst + 2] = image.Pixels[src + 2];
+            tile[dst + 3] = 255;
+        }
+
+        Loaded++;
+        return tile;
+    }
+
     /// <summary>Loads one texture without caring which of the layouts it came out of.</summary>
     public byte[]? TryLoadTile(string assetPath, int size) => TryLoadTile(assetPath, size, out _);
 
