@@ -784,6 +784,18 @@ public static class StarterItems
             Use = ItemUse.BowAmmunition,
         });
 
+        // ⛳ Fishing (2026-10-16): the reference's rod, worn by a catch, and its two fish — raw
+        // worth a mouthful, cooked a meal, on the same scale as the meats.
+        items.Register(new ItemType
+        {
+            Name = "fishing_rod", Label = "fishing rod", IconLayer = StarterBlocks.LayerFishingRod,
+            MaxStack = 1, Durability = 64, Use = ItemUse.FishingRod, BurnSeconds = 15f,
+        });
+        items.Register(new ItemType { Name = "raw_cod", Label = "raw cod", IconLayer = StarterBlocks.LayerRawCod, Feeds = 1 });
+        items.Register(new ItemType { Name = "cooked_cod", Label = "cooked cod", IconLayer = StarterBlocks.LayerCookedCod, Feeds = 5 });
+        items.Register(new ItemType { Name = "raw_salmon", Label = "raw salmon", IconLayer = StarterBlocks.LayerRawSalmon, Feeds = 2 });
+        items.Register(new ItemType { Name = "cooked_salmon", Label = "cooked salmon", IconLayer = StarterBlocks.LayerCookedSalmon, Feeds = 6 });
+
         // Nine pack away into the slime block (#97) — the metals' own gesture, and the block is
         // the point: the first floor that returns a landing.
         Loose(items, "slimeball", "slimeball", StarterBlocks.LayerSlimeball);

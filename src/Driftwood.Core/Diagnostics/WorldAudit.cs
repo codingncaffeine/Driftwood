@@ -978,6 +978,12 @@ public static class WorldAudit
 
         // ⛳ And a pack that keeps its stone where its model says (2026-10-16): Alacrity's art is all
         // at paths like block/stone/stone/side_1, reached through blockstate and model, never by name.
+        // ⛳ Fishing (2026-10-16), driven start to finish with no window: cast, land, wait, bite,
+        // reel; the misses; and the reference's split of what comes up.
+        var fishingFaults = FishingSelfTest(items, out var fishingDetail);
+        Check("a cast line floats, a fish bites, and reeling lands it", fishingFaults.Count == 0,
+            fishingFaults.Count == 0 ? fishingDetail : $"{fishingFaults.Count} faults: {fishingFaults[0]}");
+
         var faceFaults = ModelTextureSelfTest(out var faceDetail);
         Check("a block texture is found through the pack's own models", faceFaults.Count == 0,
             faceFaults.Count == 0 ? faceDetail : $"{faceFaults.Count} faults: {faceFaults[0]}");
@@ -3324,6 +3330,12 @@ public static class WorldAudit
                 changed |= Gain(items.ByName(filled).Id);
             }
 
+            // ⛳ FISH (2026-10-16). Water in the world and a rod in hand, and the whole catch table
+            // is in reach — fish, junk and treasure alike, since each comes up from the same cast.
+            if (counts[registry.ByName("water").Id.Value] > 0 && Held(items.ByName("fishing_rod").Id))
+                foreach (var (name, _) in FishingLoot.Fish.Concat(FishingLoot.Junk).Concat(FishingLoot.Treasure))
+                    changed |= Gain(items.ByName(name).Id);
+
             // ⛳ GROW. The SIXTH source, and the walk called wheat unobtainable without it — which was
             // true of every source it knew: wheat is not dug, not dropped by anything, not crafted
             // and not smelted. It is planted and waited for.
@@ -3637,6 +3649,83 @@ public static class WorldAudit
             catch (IOException) { }
         }
 
+        return faults;
+    }
+
+    private static List<string> FishingSelfTest(ItemRegistry items, out string detail)
+    {
+        var faults = new List<string>();
+
+        // A sea below y 62 everywhere, and a stone shelf at x < 0 to land on.
+        static bool Water(int x, int y, int z) => x >= 0 && y < 62 && y >= 50;
+        static bool Stone(int x, int y, int z) => x < 0 && y < 64;
+
+        var line = new FishingLine(new Random(7));
+        var tip = new Vector3(4.5f, 65f, 0.5f);
+        line.Cast(tip, new Vector3(0f, -0.2f, 1f));
+
+        var bites = 0;
+        var landedAt = -1f;
+        var elapsed = 0f;
+        for (var step = 0; step < 60 * 40 && line.State != FishingState.Biting; step++)
+        {
+            line.Step(tip, 1f / 60f, Water, Stone);
+            elapsed += 1f / 60f;
+            if (line.JustLanded) landedAt = elapsed;
+            if (line.JustBit) bites++;
+        }
+
+        if (landedAt < 0f) faults.Add("a cast out over the sea never came down on it");
+        else if (MathF.Abs(line.Position.Y - (61 + FishingLine.Waterline)) > FishingLine.BiteDip + 0.05f)
+            faults.Add($"the float rides at {line.Position.Y:F2}, not on the water's surface");
+        if (bites != 1 || line.State != FishingState.Biting)
+            faults.Add($"no fish took the float within forty seconds ({bites} bites)");
+        else if (elapsed - landedAt is < FishingLine.WaitShortest - 0.1f or > FishingLine.WaitLongest + 0.1f)
+            faults.Add($"the fish came {elapsed - landedAt:F1}s after the float landed, outside 5-30s");
+
+        var caught = line.Reel();
+        if (caught is not { } landed) faults.Add("reeling in a bite brought nothing up");
+        else if (!items.TryByName(landed.Item, out _)) faults.Add($"a catch of '{landed.Item}', which is no item");
+        if (line.IsOut) faults.Add("the line is still out after reeling in");
+
+        // Reeled too early: the float comes back with nothing.
+        var early = new FishingLine(new Random(3));
+        early.SettleForCheck(new Vector3(4.5f, 0f, 8.5f), 61 + FishingLine.Waterline, 10f);
+        early.Step(tip, 0.1f, Water, Stone);
+        if (early.Reel() is not null) faults.Add("reeling before a bite landed a fish");
+
+        // A cast at the shelf rests on it, and a line walked away from snaps.
+        var shore = new FishingLine(new Random(5));
+        shore.Cast(new Vector3(0.5f, 65f, 0.5f), new Vector3(-1f, -0.4f, 0f));
+        for (var step = 0; step < 120 && shore.State == FishingState.Flying; step++)
+            shore.Step(new Vector3(0.5f, 65f, 0.5f), 1f / 60f, Water, Stone);
+        if (shore.State != FishingState.Resting) faults.Add($"a cast onto stone ended {shore.State}, not resting");
+        if (shore.Step(new Vector3(60f, 65f, 0.5f), 1f / 60f, Water, Stone) || shore.IsOut)
+            faults.Add("a line stretched past its length did not break");
+
+        // The reference's split, in bands, and every row a real item.
+        var random = new Random(11);
+        int fish = 0, junk = 0, treasure = 0;
+        const int Rolls = 20_000;
+        for (var i = 0; i < Rolls; i++)
+        {
+            var roll = FishingLoot.Roll(random.NextDouble(), random.NextDouble());
+            switch (roll.Kind)
+            {
+                case "fish": fish++; break;
+                case "junk": junk++; break;
+                default: treasure++; break;
+            }
+        }
+
+        if (fish is < (int)(Rolls * 0.83) or > (int)(Rolls * 0.87)) faults.Add($"{fish} fish in {Rolls}, outside 83-87%");
+        if (junk is < (int)(Rolls * 0.085) or > (int)(Rolls * 0.115)) faults.Add($"{junk} junk in {Rolls}, outside 8.5-11.5%");
+        if (treasure is < (int)(Rolls * 0.04) or > (int)(Rolls * 0.06)) faults.Add($"{treasure} treasure in {Rolls}, outside 4-6%");
+        foreach (var (item, _) in FishingLoot.Fish.Concat(FishingLoot.Junk).Concat(FishingLoot.Treasure))
+            if (!items.TryByName(item, out _)) faults.Add($"the catch table names '{item}', which is no item");
+
+        detail = $"landed {landedAt:F2}s after the cast, bit {elapsed - landedAt:F1}s later, reeled {caught?.Item ?? "nothing"}; "
+               + $"{fish * 100f / Rolls:0.0}% fish, {junk * 100f / Rolls:0.0}% junk, {treasure * 100f / Rolls:0.0}% treasure";
         return faults;
     }
 
@@ -9088,7 +9177,11 @@ public static class WorldAudit
         (StarterBlocks.LayerBowl, "bowl"),
         (StarterBlocks.LayerBook, "book"),
         (StarterBlocks.LayerIronBars, "iron_bars"),
-        ((ushort)(StarterBlocks.LayerCount - 1), "sign"),
+        (StarterBlocks.LayerSign, "sign"),
+
+        // Fishing (2026-10-16) after the sign; cooked salmon is the true end.
+        (StarterBlocks.LayerFishingRod, "fishing_rod"),
+        ((ushort)(StarterBlocks.LayerCount - 1), "cooked_salmon"),
     ];
 
     /// <summary>

@@ -58,6 +58,9 @@ public enum ItemUse
 {
     None,
     Bow,
+
+    /// <summary>Casts a float onto water, and reels it in — with a fish, if one has it.</summary>
+    FishingRod,
     BowAmmunition,
     ThrownFarstep,
     Brush,

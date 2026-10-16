@@ -317,6 +317,7 @@ public static class StarterRecipes
         Shaped("bookshelf", "bookshelf", 1, ["PPP", "KKK", "PPP"], station: CraftStation.Bench);
         Shaped("iron bars", "iron_bars", 16, ["III", "III"], station: CraftStation.Bench);
         Shaped("sign", "sign", 3, ["PPP", "PPP", " S "], station: CraftStation.Bench);
+        Shaped("fishing rod", "fishing_rod", 1, ["  S", " SJ", "S J"], station: CraftStation.Bench);
         LooseAt("tidelamp", "tidelamp", 1, CraftStation.Bench,
             "stormglass_lamp", "tidewire", "tidewire");
         Shaped("and gate", "gate_and", 1, ["D D", "OOO"], station: CraftStation.Bench);
@@ -600,6 +601,8 @@ public static class StarterRecipes
         // The egg's one consumer (#97): the hen keeps laying whether or not anybody wants an
         // omelette, so the surplus needed somewhere honest to go.
         Smelt("egg", "fried_egg", work: SmeltWork.Food);
+        Smelt("raw_cod", "cooked_cod", work: SmeltWork.Food);
+        Smelt("raw_salmon", "cooked_salmon", work: SmeltWork.Food);
 
         // The desert's dye: a cactus cooks down to green, the second door into a colour that
         // otherwise only comes out of mixing. The genre's own recipe, worth keeping real.

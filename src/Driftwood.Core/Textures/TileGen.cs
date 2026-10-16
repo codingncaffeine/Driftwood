@@ -4496,6 +4496,86 @@ public static class TileGen
         return t;
     }
 
+    /// <summary>
+    /// A fishing rod as the reference holds it: a dark rod from the foot at lower left to the tip at
+    /// upper right, a grey reel by the hand, and the line hanging from the tip to a pale hook.
+    /// </summary>
+    public static byte[] IconRod(int seed)
+    {
+        var t = new byte[BytesPerTile];
+
+        for (var i = 0; i < 12; i++)
+        {
+            var (x, y) = (2 + i, 13 - i);
+            for (var w = 0; w < 2; w++)
+            {
+                var d = (int)((Noise(x, y + w, seed) * 2f - 1f) * 12f) - w * 20 + (i > 9 ? -18 : 0);
+                Put(t, x, y + w, Clamp(112 + d), Clamp(76 + d), Clamp(44 + d), 255);
+            }
+        }
+
+        // The reel, a grey knot on the rod by the hand.
+        foreach (var (x, y) in (ReadOnlySpan<(int, int)>)[(5, 12), (6, 12), (5, 13), (6, 13), (4, 13)])
+            Put(t, x, y, 128, 128, 132, 255);
+
+        // The line, straight down from the tip, and the hook curled at its end.
+        for (var y = 2; y <= 10; y++) Put(t, 14, y, 168, 168, 172, 255);
+        foreach (var (x, y) in (ReadOnlySpan<(int, int)>)[(14, 11), (13, 12), (12, 11)])
+            Put(t, x, y, 236, 236, 236, 255);
+
+        return t;
+    }
+
+    /// <summary>
+    /// A fish lying corner to corner, head at lower left and tail fanned at upper right — the
+    /// reference's pose — in the colours given: outline, body, belly, head, tail, eye.
+    /// </summary>
+    public static byte[] IconFish(
+        int seed, (int R, int G, int B) outline, (int R, int G, int B) body, (int R, int G, int B) belly,
+        (int R, int G, int B) head, (int R, int G, int B) tail, (int R, int G, int B) eye)
+    {
+        string[] rows =
+        [
+            "................",
+            "...........tt...",
+            "..........tttt..",
+            "..........ottt..",
+            ".........obbo...",
+            "........obbbo...",
+            ".......obbbbo...",
+            "......obbbblo...",
+            ".....obbbbllo...",
+            "....hhbbbblo....",
+            "...hhhbbblo.....",
+            "..hehhbblo......",
+            "..hhhhhoo.......",
+            "...hhho.........",
+            "................",
+            "................",
+        ];
+
+        var t = new byte[BytesPerTile];
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var (r, g, b) = rows[y][x] switch
+            {
+                'o' => outline,
+                'b' => body,
+                'l' => belly,
+                'h' => head,
+                't' => tail,
+                'e' => eye,
+                _ => (-1, 0, 0),
+            };
+            if (r < 0) continue;
+            var lift = (int)((Noise(x, y, seed) * 2f - 1f) * 8f) + (8 - y + x - 8) / 2;
+            Put(t, x, y, Clamp(r + lift), Clamp(g + lift), Clamp(b + lift), 255);
+        }
+
+        return t;
+    }
+
     /// <summary>A stone point, timber shaft and feathered tail, pointing up in item space.</summary>
     public static byte[] IconArrow(int seed)
     {

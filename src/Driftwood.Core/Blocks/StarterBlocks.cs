@@ -699,7 +699,14 @@ public static class StarterBlocks
     /// <summary>The sign's own icon (2026-10-16); the board itself is drawn in planks.</summary>
     public const ushort LayerSign = LayerApple + 8;
 
-    public const int LayerCount = LayerSign + 1;
+    /// <summary>Fishing (2026-10-16): the rod, and cod and salmon raw and cooked.</summary>
+    public const ushort LayerFishingRod = LayerApple + 9;
+    public const ushort LayerRawCod = LayerApple + 10;
+    public const ushort LayerCookedCod = LayerApple + 11;
+    public const ushort LayerRawSalmon = LayerApple + 12;
+    public const ushort LayerCookedSalmon = LayerApple + 13;
+
+    public const int LayerCount = LayerCookedSalmon + 1;
 
     /// <summary>One anvil's name, by how worn it is and which way it lies.</summary>
     /// <remarks>

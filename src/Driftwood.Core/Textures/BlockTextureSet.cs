@@ -703,6 +703,11 @@ public static class BlockTextureSet
         new("bookshelf", "textures/block/bookshelf.png", false, "textures/blocks/bookshelf.png"),
         new("iron_bars", "textures/block/iron_bars.png", true, "textures/blocks/iron_bars.png"),
         new("sign", "textures/item/oak_sign.png", true, "textures/items/sign.png"),
+        new("fishing_rod", "textures/item/fishing_rod.png", true, "textures/items/fishing_rod_uncast.png"),
+        new("raw_cod", "textures/item/cod.png", true, "textures/items/fish_cod_raw.png"),
+        new("cooked_cod", "textures/item/cooked_cod.png", true, "textures/items/fish_cod_cooked.png"),
+        new("raw_salmon", "textures/item/salmon.png", true, "textures/items/fish_salmon_raw.png"),
+        new("cooked_salmon", "textures/item/cooked_salmon.png", true, "textures/items/fish_salmon_cooked.png"),
     ];
 
     /// <summary>
@@ -1711,6 +1716,15 @@ public static class BlockTextureSet
             StarterBlocks.LayerBookshelf => TileGen.Bookshelf(1375),
             StarterBlocks.LayerIronBars => TileGen.IronBars(1376),
             StarterBlocks.LayerSign => TileGen.IconSign(1377),
+            StarterBlocks.LayerFishingRod => TileGen.IconRod(1378),
+            StarterBlocks.LayerRawCod => TileGen.IconFish(1379,
+                (118, 88, 56), (196, 160, 112), (228, 204, 164), (178, 138, 96), (166, 128, 88), (28, 22, 18)),
+            StarterBlocks.LayerCookedCod => TileGen.IconFish(1380,
+                (150, 118, 84), (232, 212, 176), (246, 236, 214), (212, 186, 146), (204, 174, 134), (64, 48, 36)),
+            StarterBlocks.LayerRawSalmon => TileGen.IconFish(1381,
+                (108, 38, 34), (190, 62, 54), (222, 112, 98), (112, 126, 112), (220, 140, 150), (20, 20, 20)),
+            StarterBlocks.LayerCookedSalmon => TileGen.IconFish(1382,
+                (128, 68, 38), (212, 110, 58), (232, 150, 94), (150, 118, 88), (222, 150, 110), (40, 30, 24)),
 
             StarterBlocks.LayerGlowcap => TileGen.Glowcap(1364),
             StarterBlocks.LayerMarshReed => TileGen.MarshReed(1365),

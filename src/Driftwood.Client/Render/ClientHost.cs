@@ -401,6 +401,16 @@ public sealed class ClientHost : IDisposable
     private PlayerBody _player = null!;
     private BlockOutline _outline = null!;
     private SignRenderer _signText = null!;
+    private FishingRenderer _fishingRenderer = null!;
+
+    /// <summary>The player's line, when one is cast.</summary>
+    private readonly FishingLine _fishing = new();
+
+    /// <summary>Fish landed this session, for each catch's own experience receipt.</summary>
+    private int _catches;
+
+    /// <summary>The rod already acted on this press; holding the button must not cast and reel in turn.</summary>
+    private bool _rodUsedThisPress;
     private GatewayRiftRenderer _gatewayRenderer = null!;
     private BlockTextureArray _blockTextures = null!;
     private BlockTextureArray _normalTextures = null!;
@@ -1254,6 +1264,7 @@ public sealed class ClientHost : IDisposable
         _shadows = new CascadedShadowMap(_gl);
         _outline = new BlockOutline(_gl);
         _signText = new SignRenderer(_gl);
+        _fishingRenderer = new FishingRenderer(_gl);
         _gatewayRenderer = new GatewayRiftRenderer(_gl);
 
         _particleRenderer = new ParticleRenderer(_gl);
@@ -9749,6 +9760,7 @@ public sealed class ClientHost : IDisposable
         }
 
         _projectiles.Update(_streamer.World, _herd, dt);
+        StepFishing(dt);
 
         foreach (ref readonly var impact in _projectiles.Impacts)
         {
@@ -12786,6 +12798,10 @@ public sealed class ClientHost : IDisposable
                 return true;
             }
 
+            case ItemUse.FishingRod:
+                UseRod(held);
+                return true;
+
             case ItemUse.ThrownFarstep:
                 if (!_projectiles.ThrowFarpearl(origin, _camera.Forward))
                 {
@@ -14387,6 +14403,10 @@ public sealed class ClientHost : IDisposable
         _itemRenderer.Draw(_drops, _registry, _items, viewProj, at => ParticleLight(at));
         _itemRenderer.DrawProjectiles(
             _projectiles, _registry, _items, viewProj, at => ParticleLight(at));
+        if (_fishing.IsOut)
+            _fishingRenderer.Draw(
+                viewProj, _viewPosition, RodTip(), _fishing.Position,
+                slack: _fishing.State != FishingState.Flying, ParticleLight(_fishing.Position));
         DrawCookingFood(viewProj);
         _particleRenderer.Draw(
             _particles, viewProj, _viewPosition, _viewForward,
@@ -14485,7 +14505,7 @@ public sealed class ClientHost : IDisposable
     private readonly record struct Shot(
         int Frame, string Name, string Item, ViewMode View, bool Strike, ShotScreen Screen = ShotScreen.None,
         bool Creature = false, string Wears = "", string Offhand = "", bool Guard = false,
-        bool Signs = false, bool Gates = false);
+        bool Signs = false, bool Gates = false, bool Fishing = false);
 
     /// <summary>Which interface, if any, is up when the picture is taken.</summary>
     private enum ShotScreen
@@ -14577,6 +14597,8 @@ public sealed class ClientHost : IDisposable
         new(640, "27-signs", "stick", ViewMode.First, false, Signs: true),
         new(680, "28-sign-editor", "stick", ViewMode.First, false, ShotScreen.Sign),
         new(840, "29-fence-gates", "stick", ViewMode.First, false, Gates: true),
+        new(1000, "30-fishing", "fishing_rod", ViewMode.First, false, Fishing: true),
+        new(1040, "31-fishing-third", "fishing_rod", ViewMode.ThirdBehind, false),
     ];
 
     /// <summary>
@@ -14726,6 +14748,7 @@ public sealed class ClientHost : IDisposable
             // and a spot in a canopy took longer than thirty frames — the words floated on nothing.
             if (shot.Signs && _shotFrame == shot.Frame - SignLead) PutUpSigns();
             if (shot.Gates && _shotFrame == shot.Frame - SignLead) PutUpFences();
+            if (shot.Fishing && _shotFrame == shot.Frame - SignLead) DigAPondAndCast();
 
             if (_shotFrame == shot.Frame) WriteShot(size, shot.Name);
         }
@@ -14850,6 +14873,145 @@ public sealed class ClientHost : IDisposable
 
         _camera.Pitch = -20f;
         Console.WriteLine($"shots       a fence 3 ahead with a shut gate and an open one, facing face {Placeable.Facings[toward]}");
+    }
+
+    /// <summary>
+    /// Where the line leaves the rod: out in front and to the right of the eye, where the held rod's
+    /// tip is drawn.
+    /// </summary>
+    private Vector3 RodTip()
+    {
+        // First person: where the held rod's tip is drawn — low and right of the crosshair, in the
+        // camera's own frame so it stays on the rod as the view tilts. Measured off the shot of the
+        // held rod at the shipped field of view.
+        if (_view == ViewMode.First)
+        {
+            var up = Vector3.Cross(_camera.Right, _camera.Forward);
+            return _camera.Position + _camera.Forward * 0.9f + _camera.Right * 0.66f - up * 0.24f;
+        }
+
+        // From outside: out in front of the right hand, where the body holds it.
+        var flat = Vector3.Normalize(new Vector3(_camera.Forward.X, 0f, _camera.Forward.Z));
+        var right = Vector3.Normalize(Vector3.Cross(flat, Vector3.UnitY));
+        return _player.Position + Vector3.UnitY * 1.55f + right * 0.4f + flat * 0.75f;
+    }
+
+    /// <summary>
+    /// A right click with the rod: casts when nothing is out, and otherwise reels in — landing
+    /// whatever has the float, if anything does.
+    /// </summary>
+    private void UseRod(ItemType rod)
+    {
+        if (_rodUsedThisPress) return;
+        _rodUsedThisPress = true;
+
+        if (!_fishing.IsOut)
+        {
+            _fishing.Cast(RodTip(), _camera.Forward);
+            _audio?.Play(Pick(ActionSounds.BowShoot), RodTip(), 0.3f, 1.5f);
+            return;
+        }
+
+        var bob = _fishing.Position;
+        if (_fishing.Reel() is not { } caught)
+        {
+            _audio?.Play(Pick(ActionSounds.SwimStroke), bob, 0.25f, 1.3f);
+            return;
+        }
+
+        // The catch comes to hand, or to the floor at the player's feet when the pockets are full.
+        Spill(_items.Stack(caught.Item, caught.Count));
+        InteractionParticleEffects.WaterSplash(_particles, bob, 8);
+        _audio?.Play(Pick(ActionSounds.Pickup), _viewPosition, 0.5f, Wobble());
+        Notice(caught.Kind == "treasure" ? "a treasure on the line" : "caught", _items.ByName(caught.Item));
+
+        // A little experience a fish, as the reference gives — each catch its own receipt.
+        var level = _character.AwardExperience(
+            $"fishing-{Environment.TickCount64}-{++_catches}", 1 + Random.Shared.Next(3), XpSource.Survival);
+        if (level.ExperienceGranted > 0) PlayMagicUi(MagicSounds.XpGain, 0.3f);
+        if (level.LevelsGained > 0) PlayMagicUi(MagicSounds.LevelUp, 0.65f);
+
+        if (WearHeld())
+            _audio?.Play(Pick(ActionSounds.ToolBreaks), _viewPosition, 0.7f, Wobble());
+    }
+
+    /// <summary>
+    /// Moves the line on: the float flies, settles, waits, and is taken. The line goes when the rod
+    /// leaves the hand, and breaks when it is stretched past its length.
+    /// </summary>
+    private void StepFishing(float dt)
+    {
+        if (!_holdingPlace) _rodUsedThisPress = false;
+        if (!_fishing.IsOut) return;
+
+        if (_inventory.HeldType is not { Use: ItemUse.FishingRod })
+        {
+            _fishing.Drop();
+            return;
+        }
+
+        var world = _streamer.World;
+        var kept = _fishing.Step(
+            RodTip(), dt,
+            (x, y, z) => _fluidTable.KindOf(world.GetBlock(x, y, z).Value) == FluidKind.Water,
+            (x, y, z) => world.GetBlock(x, y, z) is var id && !id.IsAir && _registry[id].Solid
+                         && _fluidTable.KindOf(id.Value) == FluidKind.None);
+
+        if (!kept)
+        {
+            Notice("the line snapped", _inventory.HeldType);
+            return;
+        }
+
+        if (_fishing.JustLanded)
+        {
+            InteractionParticleEffects.WaterSplash(_particles, _fishing.Position, 4);
+            _audio?.Play(Pick(ActionSounds.SwimStroke), _fishing.Position, 0.3f, 1.2f);
+        }
+
+        if (_fishing.JustBit)
+        {
+            InteractionParticleEffects.WaterSplash(_particles, _fishing.Position, 12);
+            _audio?.Play(Pick(ActionSounds.Submerge), _fishing.Position, 0.55f, 1.15f);
+            Rumble(0.12f, 0.18f, 60);
+        }
+    }
+
+    /// <summary>
+    /// A pond three to six blocks ahead, a rod in hand, and a real cast at it — through the same
+    /// cast and the same float physics a player's own rod uses, so the picture is of the line as it
+    /// actually lands.
+    /// </summary>
+    private void DigAPondAndCast()
+    {
+        StandInTheOpen();
+        foreach (var (x, y, z) in _shotSignCells) _streamer.EditBlock(x, y, z, BlockId.Air);
+
+        var ahead = Placeable.Cardinal(_camera.Forward);
+        var (fx, _, fz) = Faces.Normals[ahead];
+        var (rx, rz) = (-fz, fx);
+        var floor = (int)MathF.Floor(_player.Position.Y);
+        var (px, pz) = ((int)MathF.Floor(_player.Position.X), (int)MathF.Floor(_player.Position.Z));
+        var water = _registry.ByName("water").Id;
+
+        // Clear air from the feet to the far bank, so a canopy spot does not catch the cast, and
+        // water from three blocks out.
+        for (var d = 1; d <= 6; d++)
+        for (var side = -2; side <= 2; side++)
+        {
+            var (x, z) = (px + fx * d + rx * side, pz + fz * d + rz * side);
+            for (var y = floor; y <= floor + 4; y++) _streamer.EditBlock(x, y, z, BlockId.Air);
+            if (d < 3) continue;
+            _streamer.EditBlock(x, floor - 1, z, water);
+            _streamer.EditBlock(x, floor - 2, z, water);
+        }
+
+        _inventory.Clear();
+        _inventory.Add(new ItemStack(_items.ByName("fishing_rod").Id, 1));
+        _inventory.Select(0);
+        _camera.Pitch = -24f;
+        _fishing.Cast(RodTip(), Vector3.Normalize(_camera.Forward + new Vector3(0f, 0.15f, 0f)));
+        Console.WriteLine($"shots       a pond 3-6 ahead, line cast from {RodTip()}");
     }
 
     /// <summary>The standing sign the sign shots put up, for the editor shot to open.</summary>
@@ -19545,6 +19707,7 @@ public sealed class ClientHost : IDisposable
         _chunkShader?.Dispose();
         _outline?.Dispose();
         _signText?.Dispose();
+        _fishingRenderer?.Dispose();
         _gatewayRenderer?.Dispose();
         _sky?.Dispose();
         _clouds?.Dispose();
