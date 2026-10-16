@@ -1706,7 +1706,7 @@ public static class BlockTextureSet
             StarterBlocks.LayerMushroomStew => TileGen.IconBowl(1371, stew: true),
             StarterBlocks.LayerSugar => TileGen.IconSugar(1372),
             StarterBlocks.LayerPumpkinPie => TileGen.IconPie(1373),
-            StarterBlocks.LayerBook => TileGen.IconBook(1374, 128, 46, 40),
+            StarterBlocks.LayerBook => TileGen.IconBook(1374, 112, 70, 42),
             StarterBlocks.LayerBookshelf => TileGen.Bookshelf(1375),
             StarterBlocks.LayerIronBars => TileGen.IronBars(1376),
 

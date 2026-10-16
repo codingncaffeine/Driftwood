@@ -1067,11 +1067,10 @@ public static class TileGen
                     Put(t, x, y, Clamp(170 + light), Clamp(122 + light), Clamp(74 + light), 255);
                 else if (stew)
                 {
-                    // A rich red-brown broth with pieces of both mushrooms in it — cream and red —
-                    // so the full bowl reads apart from the empty one at a glance.
-                    var piece = Noise(x + 3, y + 5, seed);
-                    var (r, g, b) = piece > 0.8f ? (236, 214, 170) : piece < 0.16f ? (204, 52, 40) : (156, 74, 38);
-                    Put(t, x, y, Clamp(r + light), Clamp(g + light), Clamp(b + light / 2), 255);
+                    // A smooth, creamy tan surface — the reference's stew — lighter than the
+                    // bowl's dark inside, which is what tells a full bowl from an empty one.
+                    var swirl = (int)((Noise(x + 3, y + 5, seed) * 2f - 1f) * 6f);
+                    Put(t, x, y, Clamp(204 + swirl), Clamp(146 + swirl), Clamp(112 + swirl), 255);
                 }
                 else Put(t, x, y, Clamp(84 + light), Clamp(54 + light), Clamp(32 + light), 255);
                 continue;
@@ -1094,40 +1093,68 @@ public static class TileGen
     /// </summary>
     public static byte[] IconSugar(int seed)
     {
-        var t = IconPile(seed, 244, 242, 236);
-        for (var y = 0; y < Size; y++)
-        for (var x = 0; x < Size; x++)
+        var t = new byte[BytesPerTile];
+
+        // A cone of grains on a flat foot, as the reference heaps it: narrow at the peak, widest at
+        // the base, lit on its left flank and shadowed on its right.
+        for (var y = 3; y < 14; y++)
         {
-            var at = (y * Size + x) * 4;
-            if (t[at + 3] == 0) continue;
-            if (Noise(x, y, seed + 31) > 0.84f) Put(t, x, y, 255, 255, 255, 255);
-            else if (Noise(x, y, seed + 57) > 0.9f) Put(t, x, y, 196, 204, 222, 255);
+            var half = (y - 2.6f) * 0.62f;
+            for (var x = 0; x < Size; x++)
+            {
+                var dx = x - 7.5f;
+                if (MathF.Abs(dx) > half) continue;
+
+                var side = dx / Math.Max(half, 0.5f);
+                var light = (int)(-side * 26f) + (int)((Noise(x, y, seed) * 2f - 1f) * 10f);
+                if (Noise(x, y, seed + 31) > 0.86f) { Put(t, x, y, 255, 255, 255, 255); continue; }
+                Put(t, x, y, Clamp(226 + light), Clamp(228 + light), Clamp(234 + light), 255);
+            }
         }
 
         return t;
     }
 
-    /// <summary>A wedge of pie: a golden crust round an orange filling, lit on its upper left.</summary>
+    /// <summary>
+    /// A whole pumpkin pie seen from a little above, a slice gone from its front: a golden crust
+    /// round a pale orange filling, with the crust's depth showing below the rim, as the reference
+    /// draws it.
+    /// </summary>
     public static byte[] IconPie(int seed)
     {
         var t = new byte[BytesPerTile];
 
-        for (var y = 4; y < 14; y++)
-        for (var x = 1; x < 15; x++)
+        for (var y = 2; y < 15; y++)
+        for (var x = 0; x < Size; x++)
         {
-            // A wide slice: its point on the left, its curved back on the right.
-            var across = (x - 1) / 13f;
-            var half = 1.2f + across * 4.4f;
-            var dy = MathF.Abs(y - 9f);
-            if (dy > half) continue;
-            var back = x >= 13 - (int)(dy * dy / 8f);
+            var dx = (x - 7.5f) / 7.2f;
+            var top = (y - 7f) / 4.6f;
+            var onTop = dx * dx + top * top <= 1f;
+            var below = (y - 9.4f) / 4.6f;
+            var onSide = !onTop && dx * dx + below * below <= 1f && y > 7;
+            if (!onTop && !onSide) continue;
 
-            var light = (int)((Noise(x, y, seed) * 2f - 1f) * 10f) + (8 - y) * 3;
-            var crust = back || dy > half - 1.3f || y <= 9 - half + 1.5f;
-            if (crust)
-                Put(t, x, y, Clamp(222 + light), Clamp(170 + light), Clamp(86 + light), 255);
-            else
-                Put(t, x, y, Clamp(224 + light), Clamp(120 + light), Clamp(34 + light / 2), 255);
+            // The slice taken: a wedge out of the front right of the top, its cut face showing.
+            var angle = MathF.Atan2(top, dx);
+            var cut = angle > 0.15f && angle < 1.15f;
+
+            var light = (int)((Noise(x, y, seed) * 2f - 1f) * 8f) + (8 - x);
+            if (onSide)
+            {
+                Put(t, x, y, Clamp(186 + light), Clamp(116 + light), Clamp(44 + light / 2), 255);
+                continue;
+            }
+
+            var rim = dx * dx + top * top > 0.62f;
+            if (cut)
+            {
+                if (rim) continue;
+                Put(t, x, y, Clamp(214 + light), Clamp(132 + light), Clamp(62 + light / 2), 255);
+                continue;
+            }
+
+            if (rim) Put(t, x, y, Clamp(232 + light), Clamp(172 + light), Clamp(82 + light / 2), 255);
+            else Put(t, x, y, Clamp(238 + light), Clamp(176 + light), Clamp(112 + light / 2), 255);
         }
 
         return t;
