@@ -5894,7 +5894,7 @@ public sealed class ClientHost : IDisposable
     private CancellationTokenSource? _packSearchCancel;
     private readonly Dictionary<string, byte[]> _remotePackIcons = new(StringComparer.Ordinal);
     private readonly Dictionary<string, int> _remotePackIconLayers = new(StringComparer.Ordinal);
-    private Task<Dictionary<string, byte[]>>? _packIconsTask;
+    private Task<PackImages>? _packIconsTask;
     private CancellationTokenSource? _packIconsCancel;
     private int _packPageOffset;
     private RemoteResourcePack? _selectedRemotePack;
@@ -5906,7 +5906,23 @@ public sealed class ClientHost : IDisposable
         RemoteResourcePack Project,
         IReadOnlyList<RemoteResourcePackVersion> Versions,
         byte[] Preview,
-        bool PreviewIsGallery);
+        bool PreviewIsGallery,
+        byte[]? Hero = null);
+
+    /// <summary>A page's icons as fetched, and its gallery cards already prepared off the game thread.</summary>
+    private sealed record PackImages(Dictionary<string, byte[]> Icons, Dictionary<string, byte[]> Cards);
+
+    /// <summary>Prepared 16:9 card pictures for search results, by project.</summary>
+    private readonly Dictionary<string, byte[]> _remotePackCards = new(StringComparer.Ordinal);
+
+    /// <summary>Prepared card pictures for installed packs, by path, so a refresh resamples nothing.</summary>
+    private readonly Dictionary<string, byte[]?> _installedPackCards = new(StringComparer.Ordinal);
+
+    /// <summary>The selected pack's large picture, prepared off the game thread.</summary>
+    private byte[]? _selectedPackHero;
+
+    private const int PackCardArt = 256;
+    private const int PackHeroArt = 768;
     private Task<RemotePackDetails>? _packVersionsTask;
     private CancellationTokenSource? _packVersionsCancel;
     private int _selectedPackVersion;
@@ -6809,8 +6825,10 @@ public sealed class ClientHost : IDisposable
             catch (ResourcePackProviderException) { }
         }
 
+        // Prepared here, on the worker, because shrinking a full screenshot is too much to do
+        // between two frames.
         return new RemotePackDetails(project, await versionWork.ConfigureAwait(false),
-            preview, previewIsGallery);
+            preview, previewIsGallery, PackArt.Card(preview, PackHeroArt));
     }
 
     private static bool UsablePackPreview(byte[] encoded) =>
@@ -6824,7 +6842,7 @@ public sealed class ClientHost : IDisposable
         _packIconsTask = LoadPackIcons(page.Packs, page.Cached, _packIconsCancel.Token);
     }
 
-    private async Task<Dictionary<string, byte[]>> LoadPackIcons(
+    private async Task<PackImages> LoadPackIcons(
         IReadOnlyList<RemoteResourcePack> packs,
         bool offlineOnly,
         CancellationToken cancellationToken)
@@ -6841,7 +6859,41 @@ public sealed class ClientHost : IDisposable
             }
             catch (ResourcePackProviderException) { }
         }
-        return found;
+
+        // ⛳ Each card shows the pack's featured screenshot. Search results carry their gallery
+        // only as re-encoded web images we cannot decode, so the whole page's details come in one
+        // request for the originals, and the first one that is a PNG becomes the card. A pack with
+        // no usable screenshot falls back to its icon, framed.
+        var cards = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+        IReadOnlyList<RemoteResourcePack> details = [];
+        try
+        {
+            details = await _modrinthPacks.ProjectsAsync(packs.Select(static pack => pack.Id).ToList(),
+                offlineOnly, cancellationToken).ConfigureAwait(false);
+        }
+        catch (ResourcePackProviderException) { }
+
+        foreach (var project in details)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            for (var index = 0; index < project.GalleryImages.Count; index++)
+            {
+                if (!project.GalleryImages[index].AbsolutePath.EndsWith(".png", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                try
+                {
+                    var image = await _modrinthPacks.GalleryImageAsync(project, index, offlineOnly, cancellationToken)
+                        .ConfigureAwait(false);
+                    if (PackArt.Card(image, PackCardArt) is { } card) { cards[project.Id] = card; break; }
+                }
+                catch (ResourcePackProviderException) { }
+            }
+        }
+
+        foreach (var (id, icon) in found)
+            if (!cards.ContainsKey(id) && PackArt.Card(icon, PackCardArt) is { } card) cards[id] = card;
+
+        return new PackImages(found, cards);
     }
 
     private void RefreshPackIconAtlas()
@@ -6865,6 +6917,23 @@ public sealed class ClientHost : IDisposable
             icons.Add(preview);
         }
         _hud.SetPackIcons(icons);
+
+        // The gallery's wide pictures, in the same order as the icons so a row's Icon finds both.
+        // An installed pack's icon is framed once and kept; search results arrive prepared.
+        var cards = new List<byte[]?> { null };
+        foreach (var pack in _packs)
+        {
+            if (!_installedPackCards.TryGetValue(pack.Path, out var card))
+                _installedPackCards[pack.Path] = card = PackArt.Card(pack.Icon, PackCardArt);
+            cards.Add(card);
+        }
+        if (_packPage is { } shown)
+            foreach (var pack in shown.Packs)
+                if (_remotePackIconLayers.ContainsKey(pack.Id))
+                    cards.Add(_remotePackCards.GetValueOrDefault(pack.Id));
+        if (_selectedPackPreviewLayer >= 0) cards.Add(null);
+        _hud.SetPackCards(cards, PackCardArt);
+        _hud.SetPackHero(_selectedRemotePack is not null ? _selectedPackHero : null, PackHeroArt);
     }
 
     private void CyclePackVersion(int by = 1)
@@ -7078,6 +7147,7 @@ public sealed class ClientHost : IDisposable
                 _selectedPackVersions = details.Versions;
                 _selectedPackPreview = details.Preview;
                 _selectedPackPreviewIsGallery = details.PreviewIsGallery;
+                _selectedPackHero = details.Hero;
                 RefreshPackIconAtlas();
                 var preferred = ModrinthResourcePackProvider.ChooseDefault(_selectedPackVersions,
                     _packVersionBox.Empty ? null : _packVersionBox.Text);
@@ -7097,8 +7167,11 @@ public sealed class ClientHost : IDisposable
             _packIconsTask = null;
             try
             {
-                foreach (var (id, bytes) in iconWork.GetAwaiter().GetResult())
+                var images = iconWork.GetAwaiter().GetResult();
+                foreach (var (id, bytes) in images.Icons)
                     _remotePackIcons[id] = bytes;
+                foreach (var (id, card) in images.Cards)
+                    _remotePackCards[id] = card;
                 RefreshPackIconAtlas();
             }
             catch (OperationCanceledException) { }
@@ -10080,8 +10153,9 @@ public sealed class ClientHost : IDisposable
             {
                 if (position < _hudScreen.PackListScroll)
                     _hudScreen.PackListScroll = position;
-                else if (position >= _hudScreen.PackListScroll + 6)
-                    _hudScreen.PackListScroll = Math.Max(0, position - 5);
+                // Four, not six: the gallery's wide cards show two rows of two at a time.
+                else if (position >= _hudScreen.PackListScroll + 4)
+                    _hudScreen.PackListScroll = Math.Max(0, position - 3);
             }
             else
             {

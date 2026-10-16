@@ -618,6 +618,11 @@ public sealed class HudRenderer : IDisposable
     private readonly List<float> _packIconQuads = new(256);
     private readonly List<float> _skinThumbQuads = new(128);
     private BlockTextureArray? _skinThumbs;
+    private readonly List<float> _packCardQuads = new(128);
+    private BlockTextureArray? _packCards;
+    private bool[] _packCardPresent = [];
+    private readonly List<float> _packHeroQuads = new(8);
+    private BlockTextureArray? _packHero;
     private readonly List<float> _packPreviewQuads = new(256);
 
     private readonly List<float> _armourQuads = new(256);
@@ -781,6 +786,8 @@ public sealed class HudRenderer : IDisposable
         _previewQuads.Clear();
         _packIconQuads.Clear();
         _skinThumbQuads.Clear();
+        _packCardQuads.Clear();
+        _packHeroQuads.Clear();
         _packPreviewQuads.Clear();
         _armourQuads.Clear();
         _guiUnder.Clear();
@@ -955,6 +962,8 @@ public sealed class HudRenderer : IDisposable
         Flush(_plain, textured: false, null);
         Flush(_packIconQuads, textured: true, _packIcons);
         Flush(_skinThumbQuads, textured: true, _skinThumbs);
+        Flush(_packCardQuads, textured: true, _packCards);
+        Flush(_packHeroQuads, textured: true, _packHero);
         Flush(_packPreviewQuads, textured: true, _packPreview);
         Flush(_skinQuads, textured: true, _skin);
         Flush(_previewQuads, textured: true, _previewSkin);
@@ -2522,7 +2531,9 @@ public sealed class HudRenderer : IDisposable
     /// <summary>The settings screen as a sidebar of categories beside one roomy pane.</summary>
     private bool SettingsScreen(HudScreen screen, ScreenLayout layout, float w, float h)
     {
-        var content = MathF.Min(480f, w - MenuSideWidth - 40f);
+        // Packs and skins are pictures and get the room for them; settings stay a readable width.
+        var gallery = screen.Tab == (int)GameTab.Packs || screen.Tab == (int)GameTab.Skins;
+        var content = MathF.Min(gallery ? 620f : 480f, w - MenuSideWidth - 40f);
         if (content < 300f || screen.TabNames.Length == 0) return false;
 
         var total = MenuSideWidth + 10f + content;
@@ -2580,20 +2591,34 @@ public sealed class HudRenderer : IDisposable
     /// </remarks>
     private void PackGallery(HudScreen screen, ScreenLayout layout, float left, float top, float width, float bottom)
     {
-        const float detailWide = 176f;
-        const float cardWide = 74f;
-        const float cardTall = 62f;
-        const float cardGap = 6f;
+        const float detailWide = 236f;
+        const float cardGap = 8f;
+        const float cardWide = 160f;
 
         screen.PackDetailImageBox = default;
-        var galleryWide = width - detailWide - 12f;
-        DrawPackDetails(screen, layout, left + galleryWide + 12f, top, detailWide, bottom - top, narrow: false);
+        var galleryWide = width - detailWide - 14f;
+        var columns = Math.Max(1, (int)((galleryWide + cardGap) / (cardWide + cardGap)));
+        var wide = MathF.Floor((galleryWide - (columns - 1) * cardGap) / columns);
+        var imageTall = MathF.Round(wide * 9f / 16f);
+        var cardTall = imageTall + 30f;
+
+        // The picked pack, large: its screenshot (or its card, or its icon) over the details.
+        var dx = left + galleryWide + 14f;
+        var heroTall = MathF.Round(detailWide * 9f / 16f);
+        Rect(_plain, dx, top, detailWide, heroTall, new Vector4(0.02f, 0.025f, 0.03f, 1f));
+        var picked = screen.Selected >= 0 && screen.Selected < screen.Rows.Count ? screen.Rows[screen.Selected] : default;
+        if (_packHero is not null)
+            Rect(_packHeroQuads, dx, top, detailWide, heroTall, Vector4.One, 0);
+        else if (picked.Card && HasPackCard(picked.Icon))
+            Rect(_packCardQuads, dx, top, detailWide, heroTall, Vector4.One, picked.Icon);
+        else if (picked.Card && _packIcons is not null && picked.Icon >= 0 && picked.Icon < _packIcons.LayerCount)
+            Rect(_packIconQuads, dx + (detailWide - 64f) * 0.5f, top + (heroTall - 64f) * 0.5f, 64f, 64f, Vector4.One, picked.Icon);
+        DrawPackDetails(screen, layout, dx, top + heroTall + 6f, detailWide, bottom - top - heroTall - 6f, narrow: false);
 
         var rows = screen.Rows.Select((row, index) => (row, index))
             .Where(static pair => pair.row.Pane == MenuPane.List).ToArray();
         if (rows.Length == 0) return;
 
-        var columns = Math.Max(1, (int)((galleryWide + cardGap) / (cardWide + cardGap)));
         var first = Math.Clamp(screen.PackListScroll, 0, Math.Max(0, rows.Length - 1));
         var pen = top;
         var column = 0;
@@ -2612,32 +2637,45 @@ public sealed class HudRenderer : IDisposable
 
             if (pen + cardTall > bottom) break;
 
-            var cx = left + column * (cardWide + cardGap);
+            var cx = left + column * (wide + cardGap);
             var lit = global == screen.Selected;
             var hot = screen.Hovered is { Kind: ZoneKind.Row } over && over.Index == global;
-            Rect(_plain, cx, pen, cardWide, cardTall, lit ? new Vector4(0.10f, 0.13f, 0.14f, 0.96f) : MenuButton);
-            var edge = lit ? Picked : hot ? new Vector4(1f, 1f, 1f, 0.22f) : MenuEdge;
-            Rect(_plain, cx, pen, cardWide, 1f, edge);
-            Rect(_plain, cx, pen + cardTall - 1f, cardWide, 1f, edge);
-            Rect(_plain, cx, pen, 1f, cardTall, edge);
-            Rect(_plain, cx + cardWide - 1f, pen, 1f, cardTall, edge);
+            Rect(_plain, cx, pen, wide, cardTall, lit ? new Vector4(0.10f, 0.13f, 0.14f, 0.96f) : MenuButton);
 
-            // The pack's own art at one screen pixel to one art pixel: a 64-pixel icon, 32 units.
-            if (_packIcons is not null && row.Icon >= 0 && row.Icon < _packIcons.LayerCount)
-                Rect(_packIconQuads, cx + (cardWide - 32f) * 0.5f, pen + 5f, 32f, 32f, Vector4.One, row.Icon);
+            // The picture, edge to edge across the top of the card.
+            Rect(_plain, cx, pen, wide, imageTall, new Vector4(0.02f, 0.025f, 0.03f, 1f));
+            if (HasPackCard(row.Icon))
+                Rect(_packCardQuads, cx, pen, wide, imageTall, Vector4.One, row.Icon);
+            else if (_packIcons is not null && row.Icon >= 0 && row.Icon < _packIcons.LayerCount)
+                Rect(_packIconQuads, cx + (wide - 32f) * 0.5f, pen + (imageTall - 32f) * 0.5f, 32f, 32f, Vector4.One, row.Icon);
 
             var name = row.Label.Trim().Length > 0 ? row.Label : "unnamed pack";
-            TextCentred(FitText(name, cardWide - 6f, 7f), cx + cardWide * 0.5f, pen + 40f, 7f, lit ? Vector4.One : Ink);
+            Text(FitText(name, wide - 12f, MenuGlyph), cx + 6f, pen + imageTall + 6f, MenuGlyph, lit ? Vector4.One : Ink);
             if (row.Value.Length > 0)
-                TextCentred(FitText(row.Value, cardWide - 6f, 7f), cx + cardWide * 0.5f, pen + 50f, 7f,
+                Text(FitText(row.Value, wide - 12f, 7f), cx + 6f, pen + imageTall + 18f, 7f,
                     row.Value.Contains("WORN", StringComparison.Ordinal) ? MenuAmber : InkFaint);
 
-            layout.Add(ZoneKind.Row, global, cx, pen, cardWide, cardTall);
+            if (row.Progress >= 0f)
+            {
+                Rect(_plain, cx, pen + imageTall - 3f, wide, 3f, MenuTrack);
+                Rect(_plain, cx, pen + imageTall - 3f, wide * Math.Clamp(row.Progress, 0f, 1f), 3f, MenuAmber);
+            }
+
+            var edge = lit ? Picked : hot ? new Vector4(1f, 1f, 1f, 0.30f) : MenuEdge;
+            Rect(_plain, cx, pen, wide, 1f, edge);
+            Rect(_plain, cx, pen + cardTall - 1f, wide, 1f, edge);
+            Rect(_plain, cx, pen, 1f, cardTall, edge);
+            Rect(_plain, cx + wide - 1f, pen, 1f, cardTall, edge);
+
+            layout.Add(ZoneKind.Row, global, cx, pen, wide, cardTall);
 
             column++;
             if (column >= columns) { column = 0; pen += cardTall + cardGap; }
         }
     }
+
+    private bool HasPackCard(int layer) =>
+        _packCards is not null && layer >= 0 && layer < _packCardPresent.Length && _packCardPresent[layer];
 
     /// <summary>
     /// The skins tab as a gallery: every skin a card with its own figure on it, the big turning
@@ -4056,6 +4094,23 @@ public sealed class HudRenderer : IDisposable
     }
 
     /// <summary>Uploads installed pack icons once when the shelf changes.</summary>
+    /// <summary>Uploads the packs gallery's wide pictures, already prepared; a null keeps its card's icon.</summary>
+    public void SetPackCards(IReadOnlyList<byte[]?> layers, int size)
+    {
+        _packCards?.Dispose();
+        _packCardPresent = layers.Select(static layer => layer is not null).ToArray();
+        var blank = new byte[size * size * 4];
+        _packCards = layers.Count == 0 ? null
+            : new BlockTextureArray(_gl, layers.Select(layer => layer ?? blank).ToArray(), size);
+    }
+
+    /// <summary>Uploads the selected pack's large picture, or clears it.</summary>
+    public void SetPackHero(byte[]? layer, int size)
+    {
+        _packHero?.Dispose();
+        _packHero = layer is null ? null : new BlockTextureArray(_gl, [layer], size);
+    }
+
     /// <summary>Uploads the gallery's skin figures, one layer per card, in the order the rows name them.</summary>
     public void SetSkinThumbs(IReadOnlyList<byte[]> figures)
     {
@@ -5645,6 +5700,8 @@ public sealed class HudRenderer : IDisposable
         _previewSkin?.Dispose();
         _packIcons?.Dispose();
         _skinThumbs?.Dispose();
+        _packCards?.Dispose();
+        _packHero?.Dispose();
         _packPreview?.Dispose();
         _armour?.Dispose();
         _gui?.Dispose();

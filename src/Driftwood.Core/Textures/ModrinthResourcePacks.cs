@@ -217,6 +217,23 @@ public sealed class ModrinthResourcePackProvider
             .ConfigureAwait(false)).Value;
     }
 
+    /// <summary>
+    /// Fetches the details of every pack on a page in one request — what the gallery cards need for
+    /// their featured screenshots, which the search results do not carry in a form we can decode.
+    /// </summary>
+    public async Task<IReadOnlyList<RemoteResourcePack>> ProjectsAsync(
+        IReadOnlyList<string> projectIds,
+        bool offlineOnly = false,
+        CancellationToken cancellationToken = default)
+    {
+        if (projectIds.Count == 0) return [];
+        foreach (var id in projectIds) RequireId(id);
+        var list = "[" + string.Join(',', projectIds.Select(static id => "\"" + id + "\"")) + "]";
+        var uri = new Uri(Api, "projects?ids=" + Uri.EscapeDataString(list));
+        return (await Fetch(uri, MaximumProjectBytes * 4, ParseProjects, offlineOnly, cancellationToken)
+            .ConfigureAwait(false)).Value;
+    }
+
     public async Task<IReadOnlyList<RemoteResourcePackVersion>> VersionsAsync(
         string projectId,
         bool offlineOnly = false,
@@ -451,18 +468,43 @@ public sealed class ModrinthResourcePackProvider
     internal static RemoteResourcePack ParseProject(byte[] json)
     {
         using var document = JsonDocument.Parse(json, new JsonDocumentOptions { MaxDepth = 32 });
-        var root = document.RootElement;
+        return ProjectFrom(document.RootElement);
+    }
+
+    /// <summary>Several projects from one bulk request; one malformed entry is skipped, not fatal.</summary>
+    internal static IReadOnlyList<RemoteResourcePack> ParseProjects(byte[] json)
+    {
+        using var document = JsonDocument.Parse(json, new JsonDocumentOptions { MaxDepth = 32 });
+        if (document.RootElement.ValueKind != JsonValueKind.Array)
+            throw new InvalidDataException("projects are not an array");
+
+        var found = new List<RemoteResourcePack>();
+        foreach (var element in document.RootElement.EnumerateArray())
+        {
+            try { found.Add(ProjectFrom(element)); }
+            catch (InvalidDataException) { }
+        }
+        return found;
+    }
+
+    private static RemoteResourcePack ProjectFrom(JsonElement root)
+    {
         if (root.ValueKind != JsonValueKind.Object) throw new InvalidDataException("project is not an object");
         var id = String(root, "id");
         var slug = String(root, "slug");
         if (!ValidId(id) || !SafeSlug(slug)) throw new InvalidDataException("project identity is invalid");
 
-        var gallery = new List<Uri>();
+        // The author's featured image first, then their own order: the first is what a card shows.
+        var images = new List<(bool Featured, long Order, Uri Uri)>();
         if (root.TryGetProperty("gallery", out var galleryArray) && galleryArray.ValueKind == JsonValueKind.Array)
             foreach (var image in galleryArray.EnumerateArray())
                 if (Uri.TryCreate(String(image, "raw_url") is { Length: > 0 } raw
                         ? raw : String(image, "url"), UriKind.Absolute, out var uri)
-                    && AllowedCdn(uri)) gallery.Add(uri);
+                    && AllowedCdn(uri))
+                    images.Add((image.TryGetProperty("featured", out var featured)
+                        && featured.ValueKind == JsonValueKind.True, Long(image, "ordering", 0), uri));
+        var gallery = images.OrderByDescending(static image => image.Featured)
+            .ThenBy(static image => image.Order).Select(static image => image.Uri).ToList();
 
         var license = root.TryGetProperty("license", out var licenseObject)
             ? SafeText(String(licenseObject, "id"), "not supplied", 80) : "not supplied";
