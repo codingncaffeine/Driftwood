@@ -2689,12 +2689,13 @@ public sealed class HudRenderer : IDisposable
             var y = top + 46f + i * 22f;
             var open = screen.Tab == i;
             var hot = screen.Hovered is { Kind: ZoneKind.Tab } over && over.Index == i;
-            if (ThemedButton(left + 4f, y, MenuSideWidth - 9f, 20f, open || hot)) { }
+            var tabThemed = ThemedButton(left + 4f, y, MenuSideWidth - 9f, 20f, open || hot);
+            if (tabThemed) { }
             else if (open) Rect(_plain, left, y, MenuSideWidth - 1f, 20f, MenuLit);
             else if (hot) Rect(_plain, left, y, MenuSideWidth - 1f, 20f, MenuHot);
             if (open) Rect(_plain, left, y, 3f, 20f, Picked);
-            Text(FitText(Capitalised(screen.TabNames[i]), MenuSideWidth - 24f, MenuGlyph),
-                left + 14f, y + 6f, MenuGlyph, open ? Vector4.One : hot ? Ink : InkDim);
+            ShadowText(FitText(Capitalised(screen.TabNames[i]), MenuSideWidth - 24f, MenuGlyph),
+                left + 14f, y + 6f, open ? Vector4.One : hot ? Ink : InkDim, tabThemed);
             layout.Add(ZoneKind.Tab, i, left, y, MenuSideWidth - 1f, 20f);
         }
 
@@ -2728,14 +2729,15 @@ public sealed class HudRenderer : IDisposable
             var y = top + 32f + i * 22f;
             var open = screen.Tab == i;
             var hot = screen.Hovered is { Kind: ZoneKind.Tab } over && over.Index == i;
-            if (!ThemedButton(left, y, JournalColumn, 20f, open || hot))
+            var tabThemed = ThemedButton(left, y, JournalColumn, 20f, open || hot);
+            if (!tabThemed)
             {
                 Rect(_plain, left, y, JournalColumn, 20f,
                     open ? MenuLit with { W = 0.85f } : hot ? MenuHot : MenuSide with { W = 0.75f });
                 if (open) Rect(_plain, left, y, 3f, 20f, Picked);
             }
-            Text(FitText(Capitalised(screen.TabNames[i]), JournalColumn - 24f, MenuGlyph),
-                left + 14f, y + 6f, MenuGlyph, open ? Vector4.One : hot ? Ink : InkDim);
+            ShadowText(FitText(Capitalised(screen.TabNames[i]), JournalColumn - 24f, MenuGlyph),
+                left + 14f, y + 6f, open ? Vector4.One : hot ? Ink : InkDim, tabThemed);
             layout.Add(ZoneKind.Tab, i, left, y, JournalColumn, 20f);
         }
     }
@@ -3163,7 +3165,8 @@ public sealed class HudRenderer : IDisposable
             var lit = i == screen.Selected;
             var hot = screen.Hovered is { Kind: ZoneKind.Row } over && over.Index == i;
 
-            if (ThemedButton(left, y, rowWidth, buttons ? line : line - 1f, lit || hot))
+            var themed = ThemedButton(left, y, rowWidth, buttons ? line : line - 1f, lit || hot);
+            if (themed)
             {
                 // The pack's own button is the row; its highlighted state is the pick.
             }
@@ -3235,7 +3238,7 @@ public sealed class HudRenderer : IDisposable
                 {
                     PackSlice(tx, ty - 4f, track, 12f,
                         lit || hot ? GuiTextureSet.Layer.SliderHighlighted : GuiTextureSet.Layer.Slider);
-                    Rect(_guiOver, tx + MathF.Round((track - 6f) * amount), ty - 5f, 6f, 14f, Vector4.One,
+                    Rect(_guiOver, tx + MathF.Round((track - 8f) * amount), ty - 7f, 8f, 18f, Vector4.One,
                         (int)(lit || hot ? GuiTextureSet.Layer.SliderHandleHighlighted : GuiTextureSet.Layer.SliderHandle));
                 }
                 else
@@ -3265,9 +3268,9 @@ public sealed class HudRenderer : IDisposable
             var text = FitText(row.Label, room, MenuGlyph);
             var colour = lit ? Vector4.One : buttons ? Ink : InkDim;
             if (buttons && reserved == 0f)
-                TextCentred(text, left + rowWidth / 2f, mid, MenuGlyph, colour);
+                ShadowText(text, left + rowWidth / 2f - TextWidth(text, MenuGlyph) / 2f, mid, colour, themed);
             else
-                Text(text, left + 10f + iconWidth, mid, MenuGlyph, colour);
+                ShadowText(text, left + 10f + iconWidth, mid, colour, themed);
 
             ClippedZone(layout, ZoneKind.Row, i, left, y, rowWidth, line);
             if (boxWidth > 0f)
@@ -3337,8 +3340,18 @@ public sealed class HudRenderer : IDisposable
         var thumb = MathF.Max(16f, h * h / contentHeight);
         var travel = h - thumb;
         var at = Math.Clamp(state.Offset / MathF.Max(1f, contentHeight - h), 0f, 1f);
-        Rect(_plain, x + w - 3f, y, 2f, h, MenuEdge);
-        Rect(_plain, x + w - 3f, y + travel * at, 2f, thumb, new Vector4(1f, 1f, 1f, 0.35f));
+        if (Themed(GuiTextureSet.Layer.Scroller))
+        {
+            // The pack's scroller: its own track behind, its own handle on it, six units wide.
+            if (Themed(GuiTextureSet.Layer.ScrollerBackground))
+                PackSlice(x + w - 6f, y, 6f, h, GuiTextureSet.Layer.ScrollerBackground);
+            PackSlice(x + w - 6f, y + travel * at, 6f, thumb, GuiTextureSet.Layer.Scroller);
+        }
+        else
+        {
+            Rect(_plain, x + w - 3f, y, 2f, h, MenuEdge);
+            Rect(_plain, x + w - 3f, y + travel * at, 2f, thumb, new Vector4(1f, 1f, 1f, 0.35f));
+        }
     }
 
     /// <summary>The picked row's description, in one fixed strip so the eye learns where it is.</summary>
@@ -3349,8 +3362,27 @@ public sealed class HudRenderer : IDisposable
 
         var lines = Wrap(note, width, 7f);
         var room = Math.Max(1, (int)((bottom - top) / 10f));
-        for (var i = 0; i < Math.Min(lines.Count, room); i++)
-            Text(lines[i], left, top + i * 10f, 7f, InkFaint);
+        var shown = Math.Min(lines.Count, room);
+
+        // A pack that draws tooltips gets its tooltip behind the description, as vanilla shows one.
+        var themed = Themed(GuiTextureSet.Layer.TooltipBackground);
+        if (themed) PackSlice(left - 6f, top - 4f, width + 12f, shown * 10f + 6f, GuiTextureSet.Layer.TooltipBackground);
+
+        for (var i = 0; i < shown; i++)
+            Text(lines[i], left, top + i * 10f, 7f, themed ? Ink : InkFaint);
+    }
+
+    /// <summary>
+    /// Text as the reworked menus draw it: plain, or — on a pack's own button — with the dark copy
+    /// one unit down and right that vanilla puts under all interface text, which pack art is
+    /// painted to expect and without which light pack buttons swallow the letters.
+    /// </summary>
+    private void ShadowText(string text, float x, float y, Vector4 colour, bool shadow)
+    {
+        x = MathF.Round(x);
+        if (shadow)
+            Text(text, x + 1f, y + 1f, MenuGlyph, new Vector4(colour.X * 0.25f, colour.Y * 0.25f, colour.Z * 0.25f, colour.W));
+        Text(text, x, y, MenuGlyph, colour);
     }
 
     private static string Capitalised(string name) =>
