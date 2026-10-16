@@ -970,6 +970,12 @@ public static class WorldAudit
         Check("a pack of either kind is read as itself", dialectFaults.Count == 0,
             dialectFaults.Count == 0 ? dialectDetail : $"{dialectFaults.Count} faults: {dialectFaults[0]}");
 
+        // ⛳ A mod's file of the same name is not the block (2026-10-16): a waystone UV sheet under
+        // assets/waystones/ became our deepstone and left a quarter of every face see-through.
+        var spaceFaults = ModNamespaceSelfTest(out var spaceDetail);
+        Check("a block texture comes from the pack's minecraft folder, never a mod's", spaceFaults.Count == 0,
+            spaceFaults.Count == 0 ? spaceDetail : $"{spaceFaults.Count} faults: {spaceFaults[0]}");
+
         var layoutFaults = ScreenLayoutSelfTest(out var layoutDetail);
         Check("a click lands on the square it is over", layoutFaults.Count == 0,
             layoutFaults.Count == 0 ? layoutDetail : $"{layoutFaults.Count} faults: {layoutFaults[0]}");
@@ -3501,6 +3507,57 @@ public static class WorldAudit
     /// "we looked in the right place" from "we looked in the wrong one" without needing an encoder.
     /// </para>
     /// </remarks>
+    /// <summary>
+    /// Builds the block set from a pack whose only deepslate is a mod's, and holds deepstone to ours.
+    /// </summary>
+    /// <remarks>
+    /// The control is the stone beside it in the same pack, under <c>minecraft</c>, which must still
+    /// be taken — a build that simply read nothing would otherwise pass.
+    /// </remarks>
+    private static List<string> ModNamespaceSelfTest(out string detail)
+    {
+        var faults = new List<string>();
+        var root = Path.Combine(Path.GetTempPath(), "driftwood-mod-namespace-" + Guid.NewGuid().ToString("N"));
+        detail = "";
+
+        try
+        {
+            var vanilla = Path.Combine(root, "assets", "minecraft", "textures", "block");
+            var mod = Path.Combine(root, "assets", "waystones", "textures", "block");
+            Directory.CreateDirectory(vanilla);
+            Directory.CreateDirectory(mod);
+            File.WriteAllText(Path.Combine(root, "pack.mcmeta"),
+                """{ "pack": { "pack_format": 34, "description": "mod namespace check" } }""");
+
+            var solid = Enumerable.Repeat((byte)140, 16 * 16 * 4).ToArray();
+            File.WriteAllBytes(Path.Combine(vanilla, "stone.png"), Png.Encode(new Image(16, 16, solid)));
+
+            // The waystone's sheet in miniature: a full face with its lower-right quarter empty.
+            var sheet = Enumerable.Repeat((byte)90, 16 * 16 * 4).ToArray();
+            for (var y = 8; y < 16; y++)
+            for (var x = 8; x < 16; x++)
+                sheet[(y * 16 + x) * 4 + 3] = 0;
+            File.WriteAllBytes(Path.Combine(mod, "deepslate.png"), Png.Encode(new Image(16, 16, sheet)));
+
+            var built = BlockTextureSet.Build(root, 16);
+            BlockTextureSet.LayerOutcome? Of(string name) =>
+                built.Outcomes.FirstOrDefault(o => o.Name == name) is { Name: not null } o ? o : null;
+
+            if (Of("stone") is not { Replaced: true }) faults.Add("the control failed: the pack's minecraft stone was not taken");
+            if (Of("deepstone") is { Replaced: true } deep)
+                faults.Add($"deepstone was taken from {deep.From}, a mod's texture of the same name");
+
+            detail = "a minecraft stone is taken; a waystones deepslate beside it is not";
+        }
+        finally
+        {
+            try { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); }
+            catch (IOException) { }
+        }
+
+        return faults;
+    }
+
     private static List<string> PackDialectSelfTest(out string detail)
     {
         var faults = new List<string>();

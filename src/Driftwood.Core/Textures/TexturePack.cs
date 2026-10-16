@@ -959,6 +959,8 @@ public sealed class TexturePack : IDisposable
     /// </remarks>
     private IEnumerable<string> Candidates(string assetPath)
     {
+        var spaces = SpacesFor(assetPath);
+
         // ⛳ The 2012 era's own paths for the handful of files that were never on the grid. The
         // colormaps are the ones worth having: they are the same two 256×256 images the modern
         // layout keeps under textures/colormap/, at a different name in a different folder, and
@@ -969,24 +971,42 @@ public sealed class TexturePack : IDisposable
         {
             // No assets/, no namespace, and the old names.
             foreach (var legacy in PackLayouts.Legacy(assetPath)) yield return $"{_prefix}{legacy}";
-            foreach (var space in _namespaces) yield return $"{_prefix}assets/{space}/{assetPath}";
+            foreach (var space in spaces) yield return $"{_prefix}assets/{space}/{assetPath}";
             yield break;
         }
 
         if (Dialect != PackDialect.JavaLegacy)
-            foreach (var space in _namespaces) yield return $"{_prefix}assets/{space}/{assetPath}";
+            foreach (var space in spaces) yield return $"{_prefix}assets/{space}/{assetPath}";
 
         // Pre-flattening Java: the same shape, folders plural, and the names Bedrock still uses.
         foreach (var legacy in PackLayouts.Legacy(assetPath))
-        foreach (var space in _namespaces)
+        foreach (var space in spaces)
             yield return $"{_prefix}assets/{space}/{legacy}";
 
         if (Dialect == PackDialect.JavaLegacy)
-            foreach (var space in _namespaces) yield return $"{_prefix}assets/{space}/{assetPath}";
+            foreach (var space in spaces) yield return $"{_prefix}assets/{space}/{assetPath}";
 
         // And the rootward one, for a pack with no assets/ that carries no manifest either.
         foreach (var legacy in PackLayouts.Legacy(assetPath)) yield return $"{_prefix}{legacy}";
     }
+
+    /// <summary>
+    /// Which namespaces may answer for one of the reference's own files.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>A texture comes from <c>minecraft</c> only</b> (2026-10-16, the user's report: blocks
+    /// they stood next to were partly see-through). Alacrity ships a mod's art beside its own, and
+    /// <c>assets/waystones/textures/block/deepslate.png</c> is not deepslate: it is the waystone's
+    /// UV sheet, a quarter of it empty. With no <c>minecraft</c> deepslate in the pack the lookup fell
+    /// through to it, and deepstone, driftstone and sandstone each lost a corner to the cutout
+    /// discard. The reference resolves <c>minecraft:block/deepslate</c> in its own namespace and
+    /// nowhere else; a file of the same name under a mod's is that mod's block, whatever it is
+    /// called. Every other kind of asset still tries them all.
+    /// </remarks>
+    private IReadOnlyList<string> SpacesFor(string assetPath) =>
+        assetPath.StartsWith("textures/", StringComparison.OrdinalIgnoreCase) ? MinecraftOnly : _namespaces;
+
+    private static readonly string[] MinecraftOnly = ["minecraft"];
 
     /// <summary>
     /// Where a 2012 pack keeps the few things that were never on the grid.
