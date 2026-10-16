@@ -241,6 +241,7 @@ public sealed class CreatureRenderer : IDisposable
         _shader.SetVec3("uSkyAmbient", sky.SkyAmbient);
         _shader.SetVec3("uGroundAmbient", sky.GroundAmbient);
         _shader.SetVec3("uNightFloor", sky.NightFloor);
+        _shader.SetFloat("uBrightness", sky.Brightness);
         _shader.SetVec3("uFogColor", sky.FogColor);
         _shader.SetFloat("uFogStart", sky.FogStart);
         _shader.SetFloat("uFogEnd", sky.FogEnd);

@@ -21,7 +21,8 @@ public readonly record struct SkyParams(
     Vector3 FogColor,
     float FogStart,
     float FogEnd,
-    float Flicker = 0f);
+    float Flicker = 0f,
+    float Brightness = 0.5f);
 
 /// <summary>Baked light in the cell a model is standing in.</summary>
 public readonly record struct EntityLight(float Sky, Vector3 Block);
@@ -204,6 +205,7 @@ public sealed class PlayerRenderer : IDisposable
         _shader.SetVec3("uSkyAmbient", sky.SkyAmbient);
         _shader.SetVec3("uGroundAmbient", sky.GroundAmbient);
         _shader.SetVec3("uNightFloor", sky.NightFloor);
+        _shader.SetFloat("uBrightness", sky.Brightness);
         _shader.SetVec3("uFogColor", sky.FogColor);
         _shader.SetFloat("uTime", sky.Flicker);
         _shader.SetInt("uSkin", 0);

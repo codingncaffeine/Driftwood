@@ -20,6 +20,8 @@ namespace Driftwood.Core.Settings;
 public sealed class GameSettings
 {
     public const int DefaultHdrIntensity = 65;
+    public const int DefaultBrightness = 50;
+    public const int DefaultGamma = 100;
 
     /// <summary>How far the world is kept loaded, in chunks. Applies when the game is next opened.</summary>
     public int ViewDistance { get; set; } = 8;
@@ -55,6 +57,16 @@ public sealed class GameSettings
     /// Strength of the photographic exposure, colour intensity and bloom contribution, 0 to 100.
     /// </summary>
     public int HdrIntensity { get; set; } = DefaultHdrIntensity;
+
+    /// <summary>
+    /// How much dark places are lifted, 0 (moody: light as it falls) to 100 (bright). It raises the
+    /// light reaching a surface, not the surface's colour, so caves get easier to see without the
+    /// daylit world turning grey.
+    /// </summary>
+    public int Brightness { get; set; } = DefaultBrightness;
+
+    /// <summary>The display curve applied last, in hundredths: 100 leaves the picture as drawn.</summary>
+    public int Gamma { get; set; } = DefaultGamma;
 
     /// <summary>Temporal anti-aliasing with a reprojected, clamped history buffer.</summary>
     public bool TemporalAntialiasing { get; set; } = true;
@@ -245,6 +257,12 @@ public sealed class GameSettings
                 case "video.weather": settings.Weather = Bool(value, settings.Weather); break;
                 case "video.godrays": settings.GodRays = Bool(value, settings.GodRays); break;
                 case "video.bloom": settings.Bloom = Bool(value, settings.Bloom); break;
+                case "video.brightness":
+                    settings.Brightness = Int(value, 0, 100, settings.Brightness);
+                    break;
+                case "video.gamma":
+                    settings.Gamma = Int(value, 50, 200, settings.Gamma);
+                    break;
                 case "video.hdrintensity":
                     settings.HdrIntensity = Int(value, 0, 100, settings.HdrIntensity);
                     break;
@@ -377,6 +395,8 @@ public sealed class GameSettings
         text.AppendLine($"video.weather={Text(Weather)}");
         text.AppendLine($"video.godrays={Text(GodRays)}");
         text.AppendLine($"video.bloom={Text(Bloom)}");
+        text.AppendLine($"video.brightness={Brightness}");
+        text.AppendLine($"video.gamma={Gamma}");
         text.AppendLine($"video.hdrintensity={HdrIntensity}");
         text.AppendLine($"video.taa={Text(TemporalAntialiasing)}");
         text.AppendLine();

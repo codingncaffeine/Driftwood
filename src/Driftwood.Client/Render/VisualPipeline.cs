@@ -75,6 +75,7 @@ public sealed class VisualPipeline : IDisposable
         uniform float uNear;
         uniform float uFar;
         uniform float uHdrIntensity;
+        uniform float uGamma;
         uniform int uSsao;
         uniform int uBloomEnabled;
         uniform int uGodRays;
@@ -89,17 +90,38 @@ public sealed class VisualPipeline : IDisposable
             return (2.0 * uNear * uFar) / max(uFar + uNear - z * (uFar - uNear), 0.0001);
         }
 
+        // ⛔ The scene is lit in display space, as the genre has always lit it: a texture's colour
+        // times the light falling on it is the colour on the screen. It is NOT linear light, and it
+        // must not be gamma-encoded again on the way out — the textures are sRGB already. Encoding
+        // it a second time lifted every shadow and mid-tone towards grey and was the whole of the
+        // washed-out picture. What stays is a shoulder: one-to-one up to the knee, so a lit face
+        // shows its texture exactly, then a smooth roll-off for what goes past white (bloom, sun
+        // glints, emissives) instead of a hard clip.
+        vec3 shoulder(vec3 x)
+        {
+            const float knee = 0.8;
+            vec3 over = max(x - vec3(knee), vec3(0.0));
+            vec3 rolled = vec3(knee) + (1.0 - knee) * (vec3(1.0) - exp(-over / (1.0 - knee)));
+            return mix(x, rolled, step(vec3(knee), x));
+        }
+
         vec3 mapped(vec3 hdr)
         {
+            vec3 display;
             if (uBloomEnabled == 0)
-                return pow(clamp(hdr, vec3(0.0), vec3(1.0)), vec3(1.0 / 2.2));
-            // Full intensity is P9's original curve. Lower values calmly reduce exposure, chroma
-            // and bloom together rather than making a player balance three expert controls.
-            float exposure = mix(0.86, 1.12, uHdrIntensity);
-            vec3 exposed = vec3(1.0) - exp(-hdr * exposure);
-            vec3 display = pow(max(exposed, vec3(0.0)), vec3(1.0 / 2.2));
-            float luminance = dot(display, vec3(0.2126, 0.7152, 0.0722));
-            return mix(vec3(luminance), display, mix(0.82, 1.0, uHdrIntensity));
+            {
+                display = clamp(hdr, vec3(0.0), vec3(1.0));
+            }
+            else
+            {
+                // Lower intensity calms colour and bloom together (bloomScale) rather than making a
+                // player balance expert controls; exposure itself no longer moves with it.
+                display = shoulder(max(hdr, vec3(0.0)));
+                float luminance = dot(display, vec3(0.2126, 0.7152, 0.0722));
+                display = mix(vec3(luminance), display, mix(0.85, 1.0, uHdrIntensity));
+            }
+            // The player's display curve, last of all: 1.0 leaves the picture as drawn.
+            return pow(display, vec3(1.0 / uGamma));
         }
 
         float bloomScale() { return mix(0.16, 0.42, uHdrIntensity); }
@@ -355,6 +377,7 @@ public sealed class VisualPipeline : IDisposable
         _composite.SetFloat("uNear", nearPlane);
         _composite.SetFloat("uFar", farPlane);
         _composite.SetFloat("uHdrIntensity", settings.HdrIntensity / 100f);
+        _composite.SetFloat("uGamma", Math.Clamp(settings.Gamma, 50, 200) / 100f);
         _composite.SetInt("uSsao", settings.AmbientOcclusion ? 1 : 0);
         _composite.SetInt("uBloomEnabled", settings.Bloom ? 1 : 0);
         _composite.SetInt("uGodRays", settings.GodRays ? 1 : 0);

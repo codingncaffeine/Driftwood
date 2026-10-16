@@ -86,34 +86,34 @@ public sealed class SkyClock
         // Four keys down the sun's elevation rather than across the clock. Sunrise and sunset are
         // the same event seen twice, and keying on elevation means they are the same entry.
         var zenith = Ramp(elevation,
-            new Vector3(0.030f, 0.038f, 0.085f),   // night
-            new Vector3(0.150f, 0.170f, 0.330f),   // the sun just under
-            new Vector3(0.300f, 0.420f, 0.700f),   // low and golden
-            new Vector3(0.290f, 0.500f, 0.900f));  // full day
+            new Vector3(0.020f, 0.026f, 0.065f),   // night
+            new Vector3(0.180f, 0.200f, 0.360f),   // the sun just under
+            new Vector3(0.360f, 0.480f, 0.800f),   // low and golden
+            new Vector3(0.470f, 0.650f, 1.000f));  // full day
 
         var horizon = Ramp(elevation,
-            new Vector3(0.055f, 0.070f, 0.140f),
-            new Vector3(0.360f, 0.260f, 0.330f),
+            new Vector3(0.040f, 0.050f, 0.100f),
+            new Vector3(0.380f, 0.280f, 0.360f),
             new Vector3(0.960f, 0.600f, 0.330f),
-            new Vector3(0.640f, 0.780f, 0.930f));
+            new Vector3(0.750f, 0.850f, 1.000f));
 
         var sunColor = Ramp(elevation,
             Vector3.Zero,
             new Vector3(0.060f, 0.050f, 0.070f),
             new Vector3(0.780f, 0.480f, 0.260f),
-            new Vector3(0.980f, 0.940f, 0.840f) * 0.62f);
+            new Vector3(1.000f, 0.970f, 0.900f) * 0.32f);
 
         var skyAmbient = Ramp(elevation,
-            new Vector3(0.055f, 0.062f, 0.095f),
-            new Vector3(0.110f, 0.120f, 0.180f),
-            new Vector3(0.290f, 0.300f, 0.400f),
-            new Vector3(0.440f, 0.500f, 0.620f));
+            new Vector3(0.080f, 0.090f, 0.140f),
+            new Vector3(0.170f, 0.180f, 0.250f),
+            new Vector3(0.420f, 0.400f, 0.460f),
+            new Vector3(0.740f, 0.750f, 0.780f));
 
         var groundAmbient = Ramp(elevation,
-            new Vector3(0.026f, 0.028f, 0.040f),
-            new Vector3(0.050f, 0.050f, 0.070f),
-            new Vector3(0.150f, 0.130f, 0.120f),
-            new Vector3(0.220f, 0.200f, 0.170f));
+            new Vector3(0.040f, 0.045f, 0.060f),
+            new Vector3(0.090f, 0.090f, 0.120f),
+            new Vector3(0.280f, 0.250f, 0.240f),
+            new Vector3(0.560f, 0.540f, 0.500f));
 
         // Stars come out once the sun is properly down, and are gone before it is properly up.
         var stars = 1f - Smoothstep(-0.10f, 0.06f, elevation);

@@ -26,6 +26,17 @@ public static class ChunkShaders
         uniform vec3 uSkyAmbient;     // ambient arriving from above
         uniform vec3 uGroundAmbient;  // bounce arriving from below
         uniform vec3 uNightFloor;     // what a cell with no light at all is allowed to keep
+        uniform float uBrightness;    // the player's brightness setting, 0 (moody) to 1 (bright)
+
+        // Lifts dark light and leaves daylight alone: the lift falls with the cube of what is
+        // already there, so a lit face at 0.6 gains about a percent and an unlit cave several
+        // tenths. Applied to the LIGHT, never to the colour, so it brightens a cave without
+        // greying the textures — the same thing the genre's brightness slider has always done.
+        vec3 BrightnessLift(vec3 light, float brightness)
+        {
+            vec3 dark = vec3(1.0) - clamp(light, vec3(0.0), vec3(1.0));
+            return dark * dark * dark * (0.35 * brightness);
+        }
         uniform vec3 uTint[64];       // this chunk's climate colours; entry 0 is white
         uniform float uFogStart;
         uniform float uFogEnd;
@@ -48,7 +59,7 @@ public static class ChunkShaders
             vec3( 0.0, 1.0, 0.0), vec3( 0.0, 1.0, 0.0));
 
         // Ambient occlusion ramp, 0 = fully enclosed corner.
-        const float kAo[4] = float[4](0.42, 0.64, 0.84, 1.00);
+        const float kAo[4] = float[4](0.50, 0.68, 0.86, 1.00);
 
         const float kPositionScale = 1.0 / 64.0;   // steps per block, matching ChunkVertex
         const float kPositionBias  = 64.0;
@@ -116,7 +127,9 @@ public static class ChunkShaders
             // Climate colour folds into the light term rather than being sent on separately: both
             // end up multiplying the texel, and doing it here costs one lookup a vertex instead of
             // one a fragment.
-            vLight = max(light, uNightFloor) * kAo[ao] * uTint[tint];
+            light = max(light, uNightFloor);
+            light += BrightnessLift(light, uBrightness);
+            vLight = light * kAo[ao] * uTint[tint];
             vSun = uSunColor * sky * kAo[ao] * uTint[tint];
 
             // And the same two factors alone, for the carried light the fragment shader adds —

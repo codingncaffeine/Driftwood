@@ -1119,6 +1119,8 @@ public sealed class ClientHost : IDisposable
             _settings.GodRays = true;
             _settings.Bloom = true;
             _settings.HdrIntensity = GameSettings.DefaultHdrIntensity;
+            _settings.Brightness = GameSettings.DefaultBrightness;
+            _settings.Gamma = GameSettings.DefaultGamma;
             _settings.TemporalAntialiasing = true;
         }
         _keys = new InputMap(_settings.Keys);
@@ -1834,7 +1836,7 @@ public sealed class ClientHost : IDisposable
 
         var reach = viewRadius * Chunk.Size;
         _fogEnd = MathF.Min(reach * 0.90f, 700f);
-        _fogStart = _fogEnd * 0.55f;
+        _fogStart = _fogEnd * 0.70f;
         _camera.FarPlane = _fogEnd + 200f;
 
         _player = new PlayerBody(registry);
@@ -5013,6 +5015,14 @@ public sealed class ClientHost : IDisposable
                     Note: _environment.Summary,
                     Control: MenuControl.Checkbox, ControlAmount: _settings.Weather ? 1f : 0f));
 
+                _hudScreen.Rows.Add(new MenuRow("picture", Heading: true));
+                _hudScreen.Rows.Add(new MenuRow("brightness", BrightnessName(_settings.Brightness),
+                    Note: "lifts caves and night without greying the daylit world",
+                    Control: MenuControl.Slider, ControlAmount: _settings.Brightness / 100f));
+                _hudScreen.Rows.Add(new MenuRow("gamma", $"{_settings.Gamma / 100f:0.00}",
+                    Note: "the display curve: raise it if shadows crush on your screen, 1.00 leaves it as drawn",
+                    Control: MenuControl.Slider, ControlAmount: (_settings.Gamma - 50f) / 150f));
+
                 _hudScreen.Rows.Add(new MenuRow("camera effects", Heading: true));
                 _hudScreen.Rows.Add(new MenuRow("sun shafts", OnOff(_settings.GodRays),
                     Note: "depth-tested rays at terrain and canopy edges",
@@ -5362,6 +5372,14 @@ public sealed class ClientHost : IDisposable
 
     private static string OnOff(bool value) => value ? "on" : "off";
 
+    /// <summary>The brightness slider's value in words, as the genre names its two ends.</summary>
+    private static string BrightnessName(int brightness) => brightness switch
+    {
+        0 => "moody",
+        100 => "bright",
+        _ => $"{brightness}%",
+    };
+
     /// <summary>
     /// Nudges whatever is selected. Left is -1 and right is +1.
     /// </summary>
@@ -5566,6 +5584,14 @@ public sealed class ClientHost : IDisposable
                         break;
                     case "HDR intensity":
                         _settings.HdrIntensity = Nudge(_settings.HdrIntensity, by * 5, 0, 100);
+                        _visuals.ResetHistory();
+                        break;
+                    case "brightness":
+                        _settings.Brightness = Nudge(_settings.Brightness, by * 5, 0, 100);
+                        _visuals.ResetHistory();
+                        break;
+                    case "gamma":
+                        _settings.Gamma = Nudge(_settings.Gamma, by * 5, 50, 200);
                         _visuals.ResetHistory();
                         break;
                     case "temporal antialiasing":
@@ -13935,6 +13961,7 @@ public sealed class ClientHost : IDisposable
         _chunkShader.SetVec3("uSkyAmbient", _skyState.SkyAmbient);
         _chunkShader.SetVec3("uGroundAmbient", _skyState.GroundAmbient);
         _chunkShader.SetVec3("uNightFloor", NightFloor);
+        _chunkShader.SetFloat("uBrightness", _settings.Brightness / 100f);
         _chunkShader.SetInt("uBlocks", 0);
         _blockTextures.Bind();
         _chunkShader.SetInt("uNormals", 1);
@@ -18778,7 +18805,7 @@ public sealed class ClientHost : IDisposable
 
         var sky = new SkyParams(
             _skyState.SunDirection, _skyState.SunColor, _skyState.SkyAmbient, _skyState.GroundAmbient,
-            NightFloor, _skyState.Horizon, _fogStart, _fogEnd, FlickerClock);
+            NightFloor, _skyState.Horizon, _fogStart, _fogEnd, FlickerClock, _settings.Brightness / 100f);
 
         var light = SampleLight(_camera.Position);
 

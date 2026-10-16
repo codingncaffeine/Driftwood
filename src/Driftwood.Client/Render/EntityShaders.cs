@@ -30,6 +30,17 @@ public static class EntityShaders
         uniform vec3 uSkyAmbient;
         uniform vec3 uGroundAmbient;
         uniform vec3 uNightFloor;
+        uniform float uBrightness;    // the player's brightness setting, 0 (moody) to 1 (bright)
+
+        // Lifts dark light and leaves daylight alone: the lift falls with the cube of what is
+        // already there, so a lit face at 0.6 gains about a percent and an unlit cave several
+        // tenths. Applied to the LIGHT, never to the colour, so it brightens a cave without
+        // greying the textures — the same thing the genre's brightness slider has always done.
+        vec3 BrightnessLift(vec3 light, float brightness)
+        {
+            vec3 dark = vec3(1.0) - clamp(light, vec3(0.0), vec3(1.0));
+            return dark * dark * dark * (0.35 * brightness);
+        }
         uniform float uSky;          // baked sunlight in the cell the model stands in, 0..1
         uniform vec3 uBlockLight;    // and its coloured block light
         uniform float uFogStart;
@@ -59,7 +70,8 @@ public static class EntityShaders
                        + sin(uTime * 7.1 + world.y * 2.9 - world.x * 1.1);
             vec3 block = uBlockLight * (0.95 + 0.025 * sway);
 
-            vLight = max(max(daylight, block), uNightFloor);
+            vec3 lit = max(max(daylight, block), uNightFloor);
+            vLight = lit + BrightnessLift(lit, uBrightness);
             vUv = aUv;
 
             float d = length(world - uCameraPos);
