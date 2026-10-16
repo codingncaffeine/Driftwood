@@ -15349,9 +15349,11 @@ public sealed class ClientHost : IDisposable
                 _hudScreen.RadialSlot = -1;
                 OpenGame(GameTab.Controls);
                 break;
-            case 240: SampleUi(size, "game"); ProbeRows("top"); SampleTitle(size); break;
+            case 240: SampleUi(size, "game"); ProbeRows("top"); break;
 
-            case 241: ScrollRows(int.MaxValue); break;
+            // To the end the way a player gets there: the pick on the last row, which a smooth list
+            // follows, and the row index at its end, which the compact list scrolls by.
+            case 241: _hudScreen.Selected = _hudScreen.Rows.Count - 1; ScrollRows(int.MaxValue); break;
             case 250: ProbeRows("bottom"); break;
 
             // The list of worlds, with two in it.
@@ -15392,7 +15394,7 @@ public sealed class ClientHost : IDisposable
                 ShowStartMenu();
                 break;
 
-            case 300: SampleUi(size, "start"); ProbeRows("start"); break;
+            case 300: SampleUi(size, "start"); ProbeRows("start"); SampleTitle(size); break;
 
             case 301: _startListing = true; RefreshScreen(); break;
             case 310:
@@ -16565,6 +16567,7 @@ public sealed class ClientHost : IDisposable
     private bool _uiPetHealth;
     private bool _uiMagicBounds;
     private bool _uiSpellbookFrame;
+    private bool _uiSpellbookFramed;
     private bool _uiSpellbookContext;
     private bool _uiSpellbookDragged;
     private bool _uiPetFrame;
@@ -16759,7 +16762,15 @@ public sealed class ClientHost : IDisposable
         if (tab.W <= 0f || _hudScreen.TabNames.Length == 0 || _hudScreen.TabNames[0].Length == 0)
             return;
 
-        var glyphLayer = TileGen.GlyphOf(_hudScreen.TabNames[0][0]);
+        // A sidebar of categories (every tab at one x) draws its labels capitalised, fourteen units
+        // in and six down; the compact rail centres them four down.
+        var tabZones = _layout.Zones.Where(zone => zone.Kind == ZoneKind.Tab).ToArray();
+        var sidebar = tabZones.Length > 1 && tabZones.All(zone => MathF.Abs(zone.X - tab.X) < 0.1f);
+        var label = sidebar
+            ? char.ToUpperInvariant(_hudScreen.TabNames[0][0]) + _hudScreen.TabNames[0][1..]
+            : _hudScreen.TabNames[0];
+
+        var glyphLayer = TileGen.GlyphOf(label[0]);
         if (glyphLayer < 0) return;
 
         // Font cells are authored 5x8 and doubled into the 16px tile. Find a whole 2x2 ink cell so
@@ -16807,9 +16818,10 @@ public sealed class ClientHost : IDisposable
 
         // Text() rounds its origin before emitting the quad. Work in physical pixels from here so
         // both the glyph cell and cursor texel begin on the same exact framebuffer pixel.
-        var tabText = _hudScreen.TabNames[0];
-        var textX = (int)(MathF.Round(tab.CentreX - _hud.TextWidth(tabText, 8f) * 0.5f) * scale);
-        var textY = (int)(MathF.Round(tab.Y + 4f) * scale);
+        var textX = sidebar
+            ? (int)(MathF.Round(tab.X + 14f) * scale)
+            : (int)(MathF.Round(tab.CentreX - _hud.TextWidth(label, 8f) * 0.5f) * scale);
+        var textY = (int)(MathF.Round(tab.Y + (sidebar ? 6f : 4f)) * scale);
         var targetX = textX + glyphCellX * scale;
         var targetY = textY + glyphCellY * scale;
         var pointerX = targetX - cursorX * cursorCell;
@@ -17037,6 +17049,8 @@ public sealed class ClientHost : IDisposable
         var logicalWidth = LayoutWidth;
         var logicalHeight = LayoutHeight;
         var box = _hudScreen.SpellbookPanelBounds;
+        var spellTabs = _layout.Zones.Where(zone => zone.Kind == ZoneKind.Tab).ToArray();
+        _uiSpellbookFramed = spellTabs.Length > 1 && spellTabs.All(zone => MathF.Abs(zone.X - spellTabs[0].X) < 0.1f);
         _uiSpellbookFrame = box.Z > 0f && box.W > 0f
                             && box.X >= 0f && box.Y >= 0f
                             && box.X + box.Z <= logicalWidth && box.Y + box.W <= logicalHeight
@@ -17546,6 +17560,27 @@ public sealed class ClientHost : IDisposable
         if (tabs.Length != Enum.GetValues<GameTab>().Length)
         {
             Fault($"drew {tabs.Length} tabs");
+            return;
+        }
+
+        // ⛳ The reworked frame: the categories are one column of whole words down the left, and
+        // every row and field sits in the pane to its right, inside the window. The rail below is
+        // what a window too narrow for the frame still falls back to.
+        if (tabs.All(zone => MathF.Abs(zone.X - tabs[0].X) < 0.1f))
+        {
+            var column = tabs.OrderBy(zone => zone.Y).ToArray();
+            for (var i = 0; i < column.Length; i++)
+            {
+                if (MathF.Abs(column[i].W - column[0].W) > 0.1f)
+                    Fault($"category {i} is {column[i].W:F1} units wide, not {column[0].W:F1}");
+                if (column[i].W < 80f) Fault($"category {i} is only {column[i].W:F1} units wide for a whole word");
+                if (i > 0 && column[i].Y < column[i - 1].Y + column[i - 1].H - 0.1f)
+                    Fault($"categories {i - 1} and {i} overlap");
+            }
+
+            var paneLeft = column[0].X + column[0].W;
+            if (rows.Any(row => row.X < paneLeft || row.X + row.W > logicalWidth + 0.1f))
+                Fault("a row or text field leaves the pane beside the categories");
             return;
         }
 
@@ -18097,7 +18132,9 @@ public sealed class ClientHost : IDisposable
         if (_uiSpellIcons != SpellCatalogue.All.Count + CharacterProgression.PreparedCapacity)
             faults.Add($"the dense spellbook drew {_uiSpellIcons} icon rows instead of "
                        + $"{SpellCatalogue.All.Count + CharacterProgression.PreparedCapacity}");
-        if (!_uiSpellbookFrame || !_uiSpellbookContext || !_uiSpellbookDragged)
+        // In the reworked frame the spellbook is the pane, with no window to frame, lock or drag; on a
+        // window too narrow for the frame it is still the movable book and must still behave as one.
+        if (!_uiSpellbookFramed && (!_uiSpellbookFrame || !_uiSpellbookContext || !_uiSpellbookDragged))
             faults.Add("the spellbook is missing its accented frame, right-click lock option, or unlocked drag path");
         if (_uiSpellSlots != CharacterProgression.PreparedCapacity
             || _uiSpellZones != CharacterProgression.PreparedCapacity)
@@ -18380,10 +18417,13 @@ public sealed class ClientHost : IDisposable
         // cannot be reached is the whole reason a cap needs a scrollbar rather than just a cap.
         var lines = ScreenLayout.MenuLines(LayoutHeight);
 
+        // A smooth list shows as many rows as its pane holds; the compact one, its window of lines.
+        // Either way, no more than the window can physically hold at one row height.
+        var seenLimit = Math.Max(lines, (int)(LayoutHeight / 20f) + 1);
         if (_uiRows.TryGetValue("top", out var atTop))
         {
             if (atTop.Total <= lines) faults.Add($"the controls tab is only {atTop.Total} rows, so nothing here was tested");
-            if (atTop.Seen > lines) faults.Add($"{atTop.Seen} rows are on screen where {lines} fit");
+            if (atTop.Seen > seenLimit) faults.Add($"{atTop.Seen} rows are on screen where {seenLimit} fit");
             if (atTop.Lowest > 1) faults.Add($"the list opens at row {atTop.Lowest} rather than the top");
         }
         else
@@ -18395,7 +18435,7 @@ public sealed class ClientHost : IDisposable
         {
             if (atEnd.Highest < atEnd.Total - 1)
                 faults.Add($"scrolled to the end the list stops at row {atEnd.Highest} of {atEnd.Total - 1}");
-            if (atEnd.Seen > lines) faults.Add($"{atEnd.Seen} rows are on screen at the end where {lines} fit");
+            if (atEnd.Seen > seenLimit) faults.Add($"{atEnd.Seen} rows are on screen at the end where {seenLimit} fit");
         }
         else
         {

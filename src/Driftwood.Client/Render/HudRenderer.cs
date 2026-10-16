@@ -821,6 +821,8 @@ public sealed class HudRenderer : IDisposable
         int screenWidth,
         int screenHeight)
     {
+        // Every frame starts unclipped: nothing a menu set may reach the next frame's HUD.
+        _clip = NoClip;
         _backdrop.Clear();
         _plain.Clear();
         _blocks.Clear();
@@ -2731,8 +2733,8 @@ public sealed class HudRenderer : IDisposable
                     open ? MenuLit with { W = 0.85f } : hot ? MenuHot : MenuSide with { W = 0.75f });
                 if (open) Rect(_plain, left, y, 3f, 20f, Picked);
             }
-            Text(FitText(Capitalised(screen.TabNames[i]), JournalColumn - 20f, MenuGlyph),
-                left + 10f, y + 6f, MenuGlyph, open ? Vector4.One : hot ? Ink : InkDim);
+            Text(FitText(Capitalised(screen.TabNames[i]), JournalColumn - 24f, MenuGlyph),
+                left + 14f, y + 6f, MenuGlyph, open ? Vector4.One : hot ? Ink : InkDim);
             layout.Add(ZoneKind.Tab, i, left, y, JournalColumn, 20f);
         }
     }
@@ -3248,7 +3250,8 @@ public sealed class HudRenderer : IDisposable
         var dt = state.Clock < 0f ? 1f : Math.Clamp(screen.Clock - state.Clock, 0f, 0.1f);
         state.Clock = screen.Clock;
         state.Offset += (state.Target - state.Offset) * (1f - MathF.Exp(-dt * 18f));
-        if (MathF.Abs(state.Target - state.Offset) < 0.3f) state.Offset = state.Target;
+        // A clock that is not moving (a paused frame, an instrument) snaps rather than never arriving.
+        if (dt <= 0f || MathF.Abs(state.Target - state.Offset) < 0.3f) state.Offset = state.Target;
 
         _clip = new Vector4(x, y, x + w, y + h);
         return state;
@@ -4001,10 +4004,15 @@ public sealed class HudRenderer : IDisposable
             _ => PanelKind.Player,
         };
 
+        // The journal's tab column only where it costs the panel nothing: in a window where reserving
+        // it would drop the inventory a zoom step, the compact strip above the panel is used instead.
+        var column = screen.TabNames.Length > 1
+            && ScreenLayout.ZoomFor(w - JournalColumn - 16f, h) >= ScreenLayout.ZoomFor(w, h);
+
         layout.BuildPanel(
             kind, screen.Grid?.Width ?? 0, w, h,
             screen.BookOut, screen.BookPage, screen.Recipes.Count,
-            reserveLeft: screen.TabNames.Length > 1 ? JournalColumn + 16f : 0f);
+            reserveLeft: column ? JournalColumn + 16f : 0f);
 
         var z = layout.Zoom;
 
@@ -4034,10 +4042,12 @@ public sealed class HudRenderer : IDisposable
         else
             PanelBevel(layout, 0f, 0f, ScreenLayout.PanelWidth, ScreenLayout.PanelHeight, raised: true, PanelFill);
 
-        // The player screen's tabs are a column at the left of the screen, as in every reworked menu;
-        // a station has none — a furnace is not a place you look up what you have unlocked.
-        if (screen.TabNames.Length > 1 && !layout.BookOut)
+        // The player screen's tabs are a column at the left where it fits (see above), else the compact
+        // strip over the panel; a station has none — a furnace is not where you look up your progress.
+        if (column && !layout.BookOut)
             JournalTabs(screen, layout, 12f, layout.OriginY);
+        else if (screen.TabNames.Length > 1)
+            Tabs(screen, layout, layout.X(0f), layout.Y(0f) - 18f, layout.Size(ScreenLayout.PanelWidth));
 
         // The button that folds the book out, on whichever panel has one.
         foreach (var zone in layout.Zones)
