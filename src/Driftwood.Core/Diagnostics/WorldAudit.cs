@@ -6734,6 +6734,9 @@ public static class WorldAudit
             ViewDistance = 14,
             FieldOfView = 96,
             Fullscreen = true,
+            WindowWidth = 1234,
+            WindowHeight = 765,
+            WindowMaximized = true,
             VSync = true,
             Shadows = false,
             AmbientOcclusion = false,
@@ -6791,6 +6794,9 @@ public static class WorldAudit
         if (read.ViewDistance != 14) faults.Add($"view distance came back {read.ViewDistance}, not 14");
         if (read.FieldOfView != 96) faults.Add($"field of view came back {read.FieldOfView}, not 96");
         if (!read.Fullscreen) faults.Add("fullscreen came back off");
+        if (read.WindowWidth != 1234 || read.WindowHeight != 765)
+            faults.Add($"window size came back {read.WindowWidth}x{read.WindowHeight}, not 1234x765");
+        if (!read.WindowMaximized) faults.Add("window maximized came back off");
         if (!read.VSync) faults.Add("vsync came back off");
         if (read.Shadows) faults.Add("shadows came back on");
         if (read.AmbientOcclusion) faults.Add("ambient occlusion came back on");

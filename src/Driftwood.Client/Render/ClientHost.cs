@@ -104,6 +104,12 @@ public sealed record ClientOptions
     public int Width { get; init; } = 1600;
     public int Height { get; init; } = 900;
 
+    /// <summary>
+    /// True when <c>--width</c> or <c>--height</c> was given, which beats the size the window was
+    /// last left at — and, being a run-local choice, is not written back as the player's.
+    /// </summary>
+    public bool SizeGiven { get; init; }
+
     /// <summary>A texture pack folder or .zip to import block textures from, or null for our own.</summary>
     public string? PackPath { get; init; }
 
@@ -816,9 +822,23 @@ public sealed class ClientHost : IDisposable
         _options = options;
         _maxUploadsPerFrame = Math.Max(1, options.MaxUploadsPerFrame);
 
+        // ⛳ The size the player last left the window at (2026-10-16, the user: "have the game
+        // remember the last window size you resized it to"). Read here, before the window exists,
+        // so it opens at that size instead of opening at the default and jumping.
+        var size = new Vector2D<int>(options.Width, options.Height);
+        var maximized = false;
+        if (RemembersWindow)
+        {
+            var remembered = GameSettings.Load();
+            if (remembered.WindowWidth > 0 && remembered.WindowHeight > 0)
+                size = new Vector2D<int>(remembered.WindowWidth, remembered.WindowHeight);
+            maximized = remembered.WindowMaximized && !remembered.Fullscreen;
+        }
+
         var windowOptions = WindowOptions.Default with
         {
-            Size = new Vector2D<int>(options.Width, options.Height),
+            Size = size,
+            WindowState = maximized ? WindowState.Maximized : WindowState.Normal,
             Title = $"Driftwood v{ProductVersion}",
             VSync = options.VSync,
             // The UI audit still needs a real OpenGL context and framebuffer, but it never needs
@@ -837,6 +857,55 @@ public sealed class ClientHost : IDisposable
         _window.Update += OnUpdate;
         _window.Render += OnRender;
         _window.FramebufferResize += OnResize;
+        if (RemembersWindow)
+        {
+            _window.Resize += OnWindowResize;
+            _window.StateChanged += OnWindowStateChanged;
+        }
+    }
+
+    /// <summary>
+    /// True when this run's window size is the player's to keep: not fixed on the command line,
+    /// and not an instrument, whose window is a fixed size on purpose and nobody's preference.
+    /// </summary>
+    private bool RemembersWindow =>
+        !_options.SizeGiven && !_options.UiCheck && _options.ShotPath is null && _options.BenchSeconds <= 0;
+
+    /// <summary>A plain-window size reported by the last resize, waiting one update to be kept.</summary>
+    private Vector2D<int>? _pendingWindowSize;
+
+    /// <summary>The remembered window size or state changed and the file has not been told.</summary>
+    private bool _windowLayoutDirty;
+
+    /// <remarks>
+    /// ⚠ Held for one update rather than kept at once: maximizing reports the new size and the new
+    /// state as two events in no promised order, and a size kept before the state arrived would
+    /// remember the whole screen as the plain window's size.
+    /// </remarks>
+    private void OnWindowResize(Vector2D<int> size)
+    {
+        if (size.X > 0 && size.Y > 0) _pendingWindowSize = size;
+    }
+
+    private void OnWindowStateChanged(WindowState state)
+    {
+        if (state == WindowState.Fullscreen || state == WindowState.Minimized || _settings is null) return;
+        var maximized = state == WindowState.Maximized;
+        if (_settings.WindowMaximized == maximized) return;
+        _settings.WindowMaximized = maximized;
+        _windowLayoutDirty = true;
+    }
+
+    /// <summary>Keeps the last resize once the window has settled into a plain state.</summary>
+    private void KeepWindowSize()
+    {
+        if (_pendingWindowSize is not { } size || _settings is null) return;
+        _pendingWindowSize = null;
+        if (_window.WindowState != WindowState.Normal) return;
+        if (_settings.WindowWidth == size.X && _settings.WindowHeight == size.Y) return;
+        _settings.WindowWidth = size.X;
+        _settings.WindowHeight = size.Y;
+        _windowLayoutDirty = true;
     }
 
     /// <summary>Runs until the window closes or the benchmark finishes. Returns a process exit
@@ -8844,8 +8913,16 @@ public sealed class ClientHost : IDisposable
         // nothing whatever — measured at 12,571 fps against a limit of 175. It is enforced in
         // PaceFrame, which is inside the loop that actually exists.
 
-        var wanted = _settings.Fullscreen ? WindowState.Fullscreen : WindowState.Normal;
-        if (_window.WindowState != wanted) _window.WindowState = wanted;
+        // ⚠ Leaving fullscreen goes back to how the window was — maximized if it was — and a
+        // window that is not fullscreen is left exactly as the player arranged it.
+        if (_settings.Fullscreen)
+        {
+            if (_window.WindowState != WindowState.Fullscreen) _window.WindowState = WindowState.Fullscreen;
+        }
+        else if (_window.WindowState == WindowState.Fullscreen)
+        {
+            _window.WindowState = _settings.WindowMaximized ? WindowState.Maximized : WindowState.Normal;
+        }
 
         if (_audio is not null)
             _audio.MasterVolume = _settings.Mute ? 0f : _settings.Volume / 100f;
@@ -10990,6 +11067,7 @@ public sealed class ClientHost : IDisposable
         // anything that could be called playing. The benchmark is unaffected: it measures with
         // Stopwatch timestamps and its own clock, never with this.
         dt = Math.Min(dt, MaxStep);
+        KeepWindowSize();
 
         // ⚠ Held still for the check, which reads a moving title off the framebuffer and would
         // otherwise sample a different frame of it every run.
@@ -19250,6 +19328,11 @@ public sealed class ClientHost : IDisposable
         // fills them with whatever it is photographing — none of which is anybody's game, and all of
         // which would be written into a world file with a name in the list on the menu.
         if (!_atStartScreen && _options.ShotPath is null) SaveWorld("on quit");
+
+        // The window's size, which is written once here rather than on every step of a drag.
+        KeepWindowSize();
+        if (_windowLayoutDirty && _settings is not null && !_settings.Save())
+            Console.Error.WriteLine("driftwood: could not write the settings file");
 
         // Stop the workers before tearing down GL state, or a mesh can land in the queue after
         // the context it was destined for is gone.

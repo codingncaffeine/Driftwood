@@ -659,10 +659,10 @@ public static class Program
                     options = options with { OceanCoverage = ParseInt(Next(args, ref i, "--ocean"), 0, 90) / 100f };
                     break;
                 case "--width":
-                    options = options with { Width = ParseInt(Next(args, ref i, "--width"), 320, 7680) };
+                    options = options with { Width = ParseInt(Next(args, ref i, "--width"), 320, 7680), SizeGiven = true };
                     break;
                 case "--height":
-                    options = options with { Height = ParseInt(Next(args, ref i, "--height"), 240, 4320) };
+                    options = options with { Height = ParseInt(Next(args, ref i, "--height"), 240, 4320), SizeGiven = true };
                     break;
                 case "--vsync":
                     options = options with { VSync = true };

@@ -30,6 +30,22 @@ public sealed class GameSettings
 
     public bool Fullscreen { get; set; }
 
+    /// <summary>
+    /// The window's size the last time it was a plain window, in screen units, or zero for the
+    /// shipped default. Restored at the next launch.
+    /// </summary>
+    /// <remarks>
+    /// Only the size, never the position: on Wayland a client cannot place its own window, so a
+    /// remembered position would be a promise kept on one desktop and broken on the next.
+    /// </remarks>
+    public int WindowWidth { get; set; }
+
+    /// <inheritdoc cref="WindowWidth"/>
+    public int WindowHeight { get; set; }
+
+    /// <summary>The window was maximized when the game was last closed.</summary>
+    public bool WindowMaximized { get; set; }
+
     public bool VSync { get; set; }
 
     /// <summary>Three-cascade sun shadows over the voxel world.</summary>
@@ -249,6 +265,9 @@ public sealed class GameSettings
                 case "video.viewdistance": settings.ViewDistance = Int(value, 2, 32, settings.ViewDistance); break;
                 case "video.fov": settings.FieldOfView = Int(value, 50, 110, settings.FieldOfView); break;
                 case "video.fullscreen": settings.Fullscreen = Bool(value, settings.Fullscreen); break;
+                case "video.windowwidth": settings.WindowWidth = WindowSide(value, 320, 7680); break;
+                case "video.windowheight": settings.WindowHeight = WindowSide(value, 240, 4320); break;
+                case "video.windowmaximized": settings.WindowMaximized = Bool(value, settings.WindowMaximized); break;
                 case "video.vsync": settings.VSync = Bool(value, settings.VSync); break;
                 case "video.shadows": settings.Shadows = Bool(value, settings.Shadows); break;
                 case "video.ambientocclusion": settings.AmbientOcclusion = Bool(value, settings.AmbientOcclusion); break;
@@ -377,6 +396,10 @@ public sealed class GameSettings
         }
     }
 
+    /// <summary>A remembered window side: clamped into range, or zero (the default) when unreadable.</summary>
+    private static int WindowSide(string value, int min, int max) =>
+        int.TryParse(value, out var side) && side > 0 ? Math.Clamp(side, min, max) : 0;
+
     /// <summary>The file's contents, for saving and for the round-trip check.</summary>
     public string Write()
     {
@@ -387,6 +410,12 @@ public sealed class GameSettings
         text.AppendLine($"video.framecap={FrameCap}");
         text.AppendLine($"video.fov={FieldOfView}");
         text.AppendLine($"video.fullscreen={Text(Fullscreen)}");
+        if (WindowWidth > 0 && WindowHeight > 0)
+        {
+            text.AppendLine($"video.windowwidth={WindowWidth}");
+            text.AppendLine($"video.windowheight={WindowHeight}");
+        }
+        text.AppendLine($"video.windowmaximized={Text(WindowMaximized)}");
         text.AppendLine($"video.vsync={Text(VSync)}");
         text.AppendLine($"video.shadows={Text(Shadows)}");
         text.AppendLine($"video.ambientocclusion={Text(AmbientOcclusion)}");
