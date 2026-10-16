@@ -14569,8 +14569,8 @@ public sealed class ClientHost : IDisposable
         new(500, "26-first-guard", "iron_sword", ViewMode.First, false, Offhand: "shield", Guard: true),
 
         // ⛳ Signs (2026-10-16): one standing and one on a wall, written on, then the editor open.
-        new(560, "27-signs", "stick", ViewMode.First, false, Signs: true),
-        new(600, "28-sign-editor", "stick", ViewMode.First, false, ShotScreen.Sign),
+        new(640, "27-signs", "stick", ViewMode.First, false, Signs: true),
+        new(680, "28-sign-editor", "stick", ViewMode.First, false, ShotScreen.Sign),
     ];
 
     /// <summary>
@@ -14616,6 +14616,9 @@ public sealed class ClientHost : IDisposable
     /// new spot has to be generated, meshed and uploaded before there is anything under the animal.
     /// </remarks>
     private const int CreatureLead = 30;
+
+    /// <summary>Frames between putting the signs up and photographing them, for the remesh.</summary>
+    private const int SignLead = 120;
 
     /// <summary>
     /// Puts a whole set of one material on, and a shield up, or takes everything off.
@@ -14713,7 +14716,9 @@ public sealed class ClientHost : IDisposable
             // all — which came out as a photograph of animals standing in an empty blue sky with one
             // stone block in the corner. The creatures were right; the ground had not arrived.
             if (shot.Creature && _shotFrame == shot.Frame - CreatureLead) StandBesideACreature();
-            if (shot.Signs && _shotFrame == shot.Frame - CreatureLead) PutUpSigns();
+            // ⚠ A longer lead than the creature's: the edits have to be meshed before the picture,
+            // and a spot in a canopy took longer than thirty frames — the words floated on nothing.
+            if (shot.Signs && _shotFrame == shot.Frame - SignLead) PutUpSigns();
 
             if (_shotFrame == shot.Frame) WriteShot(size, shot.Name);
         }

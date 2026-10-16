@@ -390,7 +390,7 @@ public sealed class BlockModel
     /// The board's front face is where <see cref="SignFace"/> says the words go; the two are kept
     /// beside each other because the renderer has to land its letters exactly on this board.
     /// </remarks>
-    public static BlockModel Sign(ushort planks, int facing, bool wall)
+    public static BlockModel Sign(ushort planks, ushort bark, int facing, bool wall)
     {
         var (centre, normal, _) = SignFace(facing, wall);
         var right = Vector3.Cross(Vector3.UnitY, normal);
@@ -402,7 +402,8 @@ public sealed class BlockModel
         var board = Box(middle - half, middle + half, planks, planks, planks);
         if (wall) return new BlockModel([board]);
 
-        var post = Box(new Vector3(7.25f, 0f, 7.25f), new Vector3(8.75f, middle.Y - 4f, 8.75f), planks, planks, planks);
+        // The post is bark, not planks — the reference's own sign sheet paints it as a log's side.
+        var post = Box(new Vector3(7.25f, 0f, 7.25f), new Vector3(8.75f, middle.Y - 4f, 8.75f), bark, bark, bark);
         return new BlockModel([board, post]);
     }
 

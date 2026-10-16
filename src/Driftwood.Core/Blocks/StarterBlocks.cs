@@ -1277,7 +1277,7 @@ public static class StarterBlocks
                 Hardness = 1.0f, Solid = false, Opaque = false, Crafted = true,
                 Sounds = SoundMaterial.Wood, HarvestClass = ToolClass.Axe, Use = BlockUse.Sign,
                 SupportFace = wall ? Placeable.Opposite(facing) : Faces.NegY,
-                Model = BlockModel.Sign(LayerPlanks, facing, wall),
+                Model = BlockModel.Sign(LayerPlanks, LayerLogSide, facing, wall),
             });
         }
 
