@@ -131,7 +131,18 @@ public static class GuiTextureSet
         new(Layer.ScrollerBackground, "textures/gui/sprites/widget/scroller_background.png"),
     ];
 
-    public sealed record Result(byte[][] Tiles, bool[] Present, bool[] FromPack, int Loaded, int Defaults)
+    /// <summary>
+    /// How a pack asks for one of its interface textures to be stretched, from the texture's own
+    /// <c>.mcmeta</c>: nine-sliced at a declared size with fixed borders, or not at all.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ The borders are the pack's, not a guess. A button is drawn at any width by keeping its
+    /// corners and edges at their authored size and stretching only the middle; a guessed border
+    /// squashes whatever ornament the author put at the ends.
+    /// </remarks>
+    public readonly record struct Slice(float Width, float Height, float Left, float Top, float Right, float Bottom);
+
+    public sealed record Result(byte[][] Tiles, bool[] Present, bool[] FromPack, int Loaded, int Defaults, Slice?[]? Slices = null)
     {
         public string Summary => Loaded == 0
             ? $"Driftwood's {Defaults}-layer graphite pixel theme"
@@ -146,6 +157,7 @@ public static class GuiTextureSet
         var present = (bool[])defaults.Present.Clone();
         var fromPack = new bool[count];
         var loaded = 0;
+        var slices = new Slice?[count];
 
         if (pack is null) return new Result(tiles, present, fromPack, 0, defaults.Painted);
 
@@ -160,9 +172,61 @@ public static class GuiTextureSet
             tiles[layer] = tile;
             present[layer] = true;
             fromPack[layer] = true;
+            slices[layer] = ReadSlice(pack, entry.Path)
+                ?? (entry.Alternate.Length > 0 ? ReadSlice(pack, entry.Alternate) : null);
             loaded++;
         }
 
-        return new Result(tiles, present, fromPack, loaded, defaults.Painted);
+        return new Result(tiles, present, fromPack, loaded, defaults.Painted, slices);
+    }
+
+    /// <summary>
+    /// Reads a texture's <c>gui.scaling</c> from its <c>.mcmeta</c>. Only nine-slicing changes how
+    /// it is drawn; "stretch", "tile", no file and an unreadable file all leave the default.
+    /// </summary>
+    private static Slice? ReadSlice(TexturePack pack, string path)
+    {
+        var bytes = pack.TryReadAssetBytes(path + ".mcmeta", 64 * 1024, out _);
+        if (bytes is null) return null;
+
+        try
+        {
+            using var document = System.Text.Json.JsonDocument.Parse(bytes);
+            if (!document.RootElement.TryGetProperty("gui", out var gui)
+                || !gui.TryGetProperty("scaling", out var scaling)
+                || !scaling.TryGetProperty("type", out var type) || type.GetString() != "nine_slice")
+                return null;
+
+            var width = Number(scaling, "width", 0f);
+            var height = Number(scaling, "height", 0f);
+            if (width <= 0f || height <= 0f) return null;
+
+            // A border is one number for all four sides, or one per side.
+            float left, top, right, bottom;
+            if (!scaling.TryGetProperty("border", out var border)) return null;
+            if (border.ValueKind == System.Text.Json.JsonValueKind.Number)
+                left = top = right = bottom = border.GetSingle();
+            else
+            {
+                left = Number(border, "left", 0f);
+                top = Number(border, "top", 0f);
+                right = Number(border, "right", 0f);
+                bottom = Number(border, "bottom", 0f);
+            }
+
+            left = Math.Clamp(left, 0f, width / 2f);
+            right = Math.Clamp(right, 0f, width / 2f);
+            top = Math.Clamp(top, 0f, height / 2f);
+            bottom = Math.Clamp(bottom, 0f, height / 2f);
+            return new Slice(width, height, left, top, right, bottom);
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return null;
+        }
+
+        static float Number(System.Text.Json.JsonElement element, string name, float otherwise) =>
+            element.TryGetProperty(name, out var value) && value.ValueKind == System.Text.Json.JsonValueKind.Number
+                ? value.GetSingle() : otherwise;
     }
 }

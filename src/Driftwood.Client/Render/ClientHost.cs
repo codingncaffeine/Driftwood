@@ -5015,7 +5015,7 @@ public sealed class ClientHost : IDisposable
                     Note: _environment.Summary,
                     Control: MenuControl.Checkbox, ControlAmount: _settings.Weather ? 1f : 0f));
 
-                _hudScreen.Rows.Add(new MenuRow("picture", Heading: true));
+                _hudScreen.Rows.Add(new MenuRow("display", Heading: true));
                 _hudScreen.Rows.Add(new MenuRow("brightness", BrightnessName(_settings.Brightness),
                     Note: "lifts caves and night without greying the daylit world",
                     Control: MenuControl.Slider, ControlAmount: _settings.Brightness / 100f));

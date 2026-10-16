@@ -678,6 +678,18 @@ public sealed class HudRenderer : IDisposable
     private BlockTextureArray? _gui;
     private bool[] _guiPresent = [];
 
+    /// <summary>Which interface layers the worn pack supplied itself, rather than our own theme.</summary>
+    private bool[] _guiFromPack = [];
+
+    /// <summary>The worn pack's own nine-slice borders, per interface layer, where it declared them.</summary>
+    private GuiTextureSet.Slice?[] _guiSlices = [];
+
+    /// <summary>
+    /// Pack widgets on the reworked screens. After the plain panels, so a pane does not cover its own
+    /// buttons, and before the pictures, so a button does not cover the screenshot on its card.
+    /// </summary>
+    private readonly List<float> _guiWidgets = new(512);
+
     /// <summary>
     /// Every armour sheet in one array, material-major, two layers each.
     /// </summary>
@@ -819,6 +831,7 @@ public sealed class HudRenderer : IDisposable
         _previewQuads.Clear();
         _packIconQuads.Clear();
         _skinThumbQuads.Clear();
+        _guiWidgets.Clear();
         _packCardQuads.Clear();
         _packHeroQuads.Clear();
         _packPreviewQuads.Clear();
@@ -998,6 +1011,7 @@ public sealed class HudRenderer : IDisposable
         Flush(_backdrop, textured: false, null);
         Flush(_guiUnder, textured: true, _gui);
         Flush(_plain, textured: false, null);
+        Flush(_guiWidgets, textured: true, _gui);
         Flush(_packIconQuads, textured: true, _packIcons);
         Flush(_skinThumbQuads, textured: true, _skinThumbs);
         Flush(_packCardQuads, textured: true, _packCards);
@@ -2569,6 +2583,60 @@ public sealed class HudRenderer : IDisposable
     private static readonly Vector4 MenuTrack = new(0.17f, 0.19f, 0.21f, 1f);
     private static readonly Vector4 MenuButton = new(0.075f, 0.085f, 0.095f, 0.92f);
 
+
+    // ⛳ THEMES. A pack that dresses the interface supplies textures, not a layout: the layout is
+    // ours, the look is the pack's. So each piece of the reworked screens asks whether the WORN PACK
+    // supplied its texture — never our own built-in theme, which would quietly bring the old look
+    // back — and draws the pack's when it did, the plain look when it did not.
+
+    /// <summary>True when the worn pack supplied this interface layer itself.</summary>
+    private bool Themed(GuiTextureSet.Layer layer) =>
+        (int)layer < _guiFromPack.Length && _guiFromPack[(int)layer];
+
+    /// <summary>The pack's button, nine-sliced to any size. False when the pack has none.</summary>
+    private bool ThemedButton(float x, float y, float w, float h, bool lit)
+    {
+        if (!Themed(GuiTextureSet.Layer.WidgetButton)) return false;
+        var layer = lit && Themed(GuiTextureSet.Layer.WidgetButtonHighlighted)
+            ? GuiTextureSet.Layer.WidgetButtonHighlighted : GuiTextureSet.Layer.WidgetButton;
+        PackSlice(x, y, w, h, layer);
+        return true;
+    }
+
+    /// <summary>
+    /// Draws a pack widget into the widget batch, nine-sliced with the borders the pack declared in
+    /// its <c>.mcmeta</c>, at the size it declared them for; vanilla's 200 by 20 with small borders
+    /// for a pack that says nothing. One declared pixel is one layout unit: a vanilla button is
+    /// 200 by 20 and a row here is 20 tall, so the ornament lands at the size it was drawn.
+    /// </summary>
+    private void PackSlice(float x, float y, float w, float h, GuiTextureSet.Layer layer)
+    {
+        var slice = (int)layer < _guiSlices.Length && _guiSlices[(int)layer] is { } declared
+            ? declared : new GuiTextureSet.Slice(200f, 20f, 3f, 3f, 3f, 3f);
+
+        // Borders shrink together when the widget is smaller than they are, so corners never cross.
+        var fit = MathF.Min(1f, MathF.Min(w / MathF.Max(1f, slice.Left + slice.Right),
+                                          h / MathF.Max(1f, slice.Top + slice.Bottom)));
+        var xs = new[] { x, x + slice.Left * fit, x + w - slice.Right * fit, x + w };
+        var ys = new[] { y, y + slice.Top * fit, y + h - slice.Bottom * fit, y + h };
+        var us = new[] { 0f, slice.Left / slice.Width, 1f - slice.Right / slice.Width, 1f };
+        var vs = new[] { 0f, slice.Top / slice.Height, 1f - slice.Bottom / slice.Height, 1f };
+
+        for (var row = 0; row < 3; row++)
+        for (var column = 0; column < 3; column++)
+            RectUv(_guiWidgets,
+                xs[column], ys[row], xs[column + 1] - xs[column], ys[row + 1] - ys[row],
+                us[column], vs[row], us[column + 1], vs[row + 1], Vector4.One, (int)layer);
+    }
+
+    /// <summary>The pack's panel surface, tiled. False when the pack has none.</summary>
+    private bool ThemedPanel(float x, float y, float w, float h, GuiTextureSet.Layer layer)
+    {
+        if (!Themed(layer)) return false;
+        SurfaceFrame(x, y, w, h, layer);
+        return true;
+    }
+
     private const float MenuSideWidth = 128f;
     private const float MenuRowTall = 20f;
     private const float MenuGlyph = 8f;
@@ -2589,7 +2657,8 @@ public sealed class HudRenderer : IDisposable
         var tall = bottom - top;
 
         // The categories.
-        Rect(_plain, left, top, MenuSideWidth, tall, MenuSide);
+        if (!ThemedPanel(left, top, MenuSideWidth, tall, GuiTextureSet.Layer.MenuBackground))
+            Rect(_plain, left, top, MenuSideWidth, tall, MenuSide);
         Rect(_plain, left + MenuSideWidth - 1f, top, 1f, tall, MenuEdge);
         Text("DRIFTWOOD", left + 12f, top + 12f, MenuGlyph, MenuAmber);
         Text(screen.Kind == HudScreenKind.Game ? "settings" : "", left + 12f, top + 24f, MenuGlyph, InkFaint);
@@ -2599,7 +2668,8 @@ public sealed class HudRenderer : IDisposable
             var y = top + 46f + i * 22f;
             var open = screen.Tab == i;
             var hot = screen.Hovered is { Kind: ZoneKind.Tab } over && over.Index == i;
-            if (open) Rect(_plain, left, y, MenuSideWidth - 1f, 20f, MenuLit);
+            if (ThemedButton(left + 4f, y, MenuSideWidth - 9f, 20f, open || hot)) { }
+            else if (open) Rect(_plain, left, y, MenuSideWidth - 1f, 20f, MenuLit);
             else if (hot) Rect(_plain, left, y, MenuSideWidth - 1f, 20f, MenuHot);
             if (open) Rect(_plain, left, y, 3f, 20f, Picked);
             Text(FitText(Capitalised(screen.TabNames[i]), MenuSideWidth - 24f, MenuGlyph),
@@ -2609,7 +2679,8 @@ public sealed class HudRenderer : IDisposable
 
         // The pane.
         var x = left + MenuSideWidth + 10f;
-        Rect(_plain, x, top, content, tall, MenuGlass);
+        if (!ThemedPanel(x, top, content, tall, GuiTextureSet.Layer.MenuListBackground))
+            Rect(_plain, x, top, content, tall, MenuGlass);
         Rect(_plain, x, top, content, 1f, MenuEdge);
         var title = screen.Tab >= 0 && screen.Tab < screen.TabNames.Length
             ? Capitalised(screen.TabNames[screen.Tab]) : "";
@@ -2731,7 +2802,8 @@ public sealed class HudRenderer : IDisposable
             {
                 var lit = global == screen.Selected;
                 var hot = screen.Hovered is { Kind: ZoneKind.Row } over && over.Index == global;
-                Rect(_plain, cx, cy, wide, cardTall, lit ? new Vector4(0.10f, 0.13f, 0.14f, 0.96f) : MenuButton);
+                if (!ThemedButton(cx, cy, wide, cardTall, lit || hot))
+                    Rect(_plain, cx, cy, wide, cardTall, lit ? new Vector4(0.10f, 0.13f, 0.14f, 0.96f) : MenuButton);
 
                 // The picture, edge to edge across the top of the card.
                 Rect(_plain, cx, cy, wide, imageTall, new Vector4(0.02f, 0.025f, 0.03f, 1f));
@@ -2827,7 +2899,8 @@ public sealed class HudRenderer : IDisposable
             {
                 var lit = i == screen.Selected;
                 var hot = screen.Hovered is { Kind: ZoneKind.Row } over && over.Index == i;
-                Rect(_plain, cx, cy, cardWide, cardTall, lit ? new Vector4(0.10f, 0.13f, 0.14f, 0.96f) : MenuButton);
+                if (!ThemedButton(cx, cy, cardWide, cardTall, lit || hot))
+                    Rect(_plain, cx, cy, cardWide, cardTall, lit ? new Vector4(0.10f, 0.13f, 0.14f, 0.96f) : MenuButton);
                 var edge = lit ? Picked : hot ? new Vector4(1f, 1f, 1f, 0.22f) : MenuEdge;
                 Rect(_plain, cx, cy, cardWide, 1f, edge);
                 Rect(_plain, cx, cy + cardTall - 1f, cardWide, 1f, edge);
@@ -2942,7 +3015,11 @@ public sealed class HudRenderer : IDisposable
             var lit = i == screen.Selected;
             var hot = screen.Hovered is { Kind: ZoneKind.Row } over && over.Index == i;
 
-            if (buttons)
+            if (ThemedButton(left, y, rowWidth, buttons ? line : line - 1f, lit || hot))
+            {
+                // The pack's own button is the row; its highlighted state is the pick.
+            }
+            else if (buttons)
             {
                 Rect(_plain, left, y, rowWidth, line, lit ? new Vector4(0.10f, 0.13f, 0.14f, 0.96f) : MenuButton);
                 var edge = lit ? Picked : hot ? new Vector4(1f, 1f, 1f, 0.22f) : MenuEdge;
@@ -2981,9 +3058,21 @@ public sealed class HudRenderer : IDisposable
                 var on = row.ControlAmount >= 0.5f;
                 var tx = right - 24f;
                 var ty = y + MathF.Round((line - 12f) / 2f);
-                Rect(_plain, tx, ty, 24f, 12f, on ? Picked with { W = 0.85f } : MenuTrack);
-                Rect(_plain, on ? tx + 13f : tx + 1f, ty + 1f, 10f, 10f, on ? Vector4.One : InkDim);
-                reserved = 32f;
+                if (Themed(GuiTextureSet.Layer.Checkbox))
+                {
+                    // A pack that draws a checkbox gets its checkbox, in all four of its states.
+                    var box = on
+                        ? lit || hot ? GuiTextureSet.Layer.CheckboxSelectedHighlighted : GuiTextureSet.Layer.CheckboxSelected
+                        : lit || hot ? GuiTextureSet.Layer.CheckboxHighlighted : GuiTextureSet.Layer.Checkbox;
+                    Rect(_guiOver, right - 14f, y + MathF.Round((line - 14f) / 2f), 14f, 14f, Vector4.One, (int)box);
+                    reserved = 22f;
+                }
+                else
+                {
+                    Rect(_plain, tx, ty, 24f, 12f, on ? Picked with { W = 0.85f } : MenuTrack);
+                    Rect(_plain, on ? tx + 13f : tx + 1f, ty + 1f, 10f, 10f, on ? Vector4.One : InkDim);
+                    reserved = 32f;
+                }
             }
             else if (row.Control == MenuControl.Slider && row.Value.Length > 0)
             {
@@ -2994,9 +3083,19 @@ public sealed class HudRenderer : IDisposable
                 var track = MathF.Min(140f, rowWidth * 0.34f);
                 var tx = right - valueWidth - 10f - track;
                 var ty = y + MathF.Round(line / 2f) - 2f;
-                Rect(_plain, tx, ty, track, 4f, MenuTrack);
-                Rect(_plain, tx, ty, MathF.Round(track * amount), 4f, MenuAmber);
-                Rect(_plain, tx + MathF.Round((track - 6f) * amount), ty - 4f, 6f, 12f, lit || hot ? Vector4.One : Ink);
+                if (Themed(GuiTextureSet.Layer.Slider))
+                {
+                    PackSlice(tx, ty - 4f, track, 12f,
+                        lit || hot ? GuiTextureSet.Layer.SliderHighlighted : GuiTextureSet.Layer.Slider);
+                    Rect(_guiOver, tx + MathF.Round((track - 6f) * amount), ty - 5f, 6f, 14f, Vector4.One,
+                        (int)(lit || hot ? GuiTextureSet.Layer.SliderHandleHighlighted : GuiTextureSet.Layer.SliderHandle));
+                }
+                else
+                {
+                    Rect(_plain, tx, ty, track, 4f, MenuTrack);
+                    Rect(_plain, tx, ty, MathF.Round(track * amount), 4f, MenuAmber);
+                    Rect(_plain, tx + MathF.Round((track - 6f) * amount), ty - 4f, 6f, 12f, lit || hot ? Vector4.One : Ink);
+                }
                 reserved = valueWidth + track + 18f;
             }
             else if (row.Value.Length > 0)
@@ -4361,10 +4460,14 @@ public sealed class HudRenderer : IDisposable
         _gui?.Dispose();
         _gui = null;
         _guiPresent = [];
+        _guiFromPack = [];
+        _guiSlices = [];
 
         var gui = GuiTextureSet.Load(pack);
         _gui = new BlockTextureArray(_gl, gui.Tiles, GuiTextureSet.Size);
         _guiPresent = gui.Present;
+        _guiFromPack = gui.FromPack;
+        _guiSlices = gui.Slices ?? [];
         Console.WriteLine($"interface   {gui.Summary}");
     }
 
