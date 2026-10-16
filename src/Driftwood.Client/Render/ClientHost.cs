@@ -1827,6 +1827,9 @@ public sealed class ClientHost : IDisposable
                 Console.WriteLine($"models      {applied.BlocksApplied} blocks, {applied.ItemsApplied} items, "
                                   + $"{applied.FilesRead} definitions"
                                   + (applied.Issues.Count > 0 ? $", {applied.Issues.Count} omissions" : ""));
+                if (applied.BlockNames.Count > 0)
+                    Console.WriteLine($"  model      shapes from the pack: {string.Join(", ", applied.BlockNames.Take(12))}"
+                                      + (applied.BlockNames.Count > 12 ? ", …" : ""));
                 foreach (var issue in applied.Issues.Take(4)) Console.WriteLine($"  model      {issue}");
             }
         }

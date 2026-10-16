@@ -34,6 +34,7 @@ public sealed class JavaPackModels
         IReadOnlyList<string> Issues);
 
     public sealed record Application(
+        IReadOnlyList<string> BlockNames,
         int BlocksApplied,
         int ItemsApplied,
         int FilesRead,
@@ -86,6 +87,7 @@ public sealed class JavaPackModels
     {
         var startFault = Faults.Count;
         var blockCount = 0;
+        var names = new List<string>();
         foreach (var block in blocks.All)
         {
             if (block.Id.IsAir) continue;
@@ -101,6 +103,7 @@ public sealed class JavaPackModels
             }
 
             block.Model = model.WithCollisionFrom(block.Model);
+            names.Add(block.Name);
             blockCount++;
         }
 
@@ -134,7 +137,7 @@ public sealed class JavaPackModels
             }
         }
 
-        return new Application(blockCount, itemCount, _filesRead, _weightedChoices,
+        return new Application(names, blockCount, itemCount, _filesRead, _weightedChoices,
             Faults.Skip(startFault).ToArray());
     }
 
