@@ -22,17 +22,17 @@ public static class Colormap
 
     /// <summary>Grass colours: dry-cold, dry-hot, wet-cold, wet-hot.</summary>
     public static byte[] Grass() => Build(
-        coldDry: (0x8A, 0xB6, 0x8A),
+        coldDry: (0x80, 0xB4, 0x97),
         hotDry: (0xBF, 0xB7, 0x55),
-        coldWet: (0x6D, 0xA3, 0x6D),
-        hotWet: (0x59, 0xC9, 0x3C));
+        coldWet: (0x80, 0xB4, 0x97),
+        hotWet: (0x47, 0xCD, 0x33));
 
     /// <summary>Foliage runs darker than grass, the way a canopy does against a field.</summary>
     public static byte[] Foliage() => Build(
-        coldDry: (0x6B, 0x94, 0x6B),
-        hotDry: (0xA0, 0x99, 0x40),
-        coldWet: (0x4E, 0x7E, 0x4E),
-        hotWet: (0x3E, 0xA6, 0x28));
+        coldDry: (0x60, 0xA1, 0x7B),
+        hotDry: (0xAE, 0xA4, 0x2A),
+        coldWet: (0x60, 0xA1, 0x7B),
+        hotWet: (0x1A, 0xBF, 0x00));
 
     private static byte[] Build(
         (int R, int G, int B) coldDry,
