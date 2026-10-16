@@ -3373,6 +3373,19 @@ public sealed class ClientHost : IDisposable
     /// <summary>Puts the pointer's share of the track on screen.</summary>
     private void DragScrollbar(Zone track)
     {
+        // A smooth column's bar (index from 1000) scrolls by the pointer's share of its track; the
+        // column itself turns that into a position, since only it knows how tall its content is.
+        if (track.Index >= 1000)
+        {
+            var bar = track.Index - 1000;
+            if (bar < _hudScreen.ScrollBars.Count)
+            {
+                _hudScreen.ScrollGrabKey = _hudScreen.ScrollBars[bar];
+                _hudScreen.ScrollGrabAt = Math.Clamp((_hudScreen.Pointer.Y - track.Y) / MathF.Max(1f, track.H), 0f, 1f);
+            }
+            return;
+        }
+
         var lines = _hudScreen.Kind == HudScreenKind.Trade
             ? Math.Max(1, _hudScreen.TradeVisibleOffers)
             : ScreenLayout.MenuLines(LayoutHeight);
@@ -15354,7 +15367,20 @@ public sealed class ClientHost : IDisposable
             // To the end the way a player gets there: the pick on the last row, which a smooth list
             // follows, and the row index at its end, which the compact list scrolls by.
             case 241: _hudScreen.Selected = _hudScreen.Rows.Count - 1; ScrollRows(int.MaxValue); break;
-            case 250: ProbeRows("bottom"); break;
+            case 250:
+                ProbeRows("bottom");
+                _uiSmoothList = _hudScreen.SmoothScroll;
+
+                // The smooth list's own scroll bar, grabbed at the very top of its track: the list must
+                // come back to its first row. This is the drag a player does with the mouse.
+                if (_layout.Zones.FirstOrDefault(zone => zone.Kind == ZoneKind.Scrollbar && zone.Index >= 1000) is { W: > 0f } bar)
+                {
+                    _hudScreen.Pointer = new Vector2(bar.CentreX, bar.Y);
+                    DragScrollbar(bar);
+                    _uiScrollbarGrabbed = true;
+                }
+                break;
+            case 251: ProbeRows("dragged"); break;
 
             // The list of worlds, with two in it.
             //
@@ -15363,7 +15389,7 @@ public sealed class ClientHost : IDisposable
             // — and a check reading the real folder would say something different on every machine,
             // including nothing at all on one that has never been played. It would also be a check
             // whose subject a player could delete.
-            case 251:
+            case 252:
                 CloseScreen();
                 OpenGame(GameTab.Saves);
                 _saved =
@@ -16567,6 +16593,8 @@ public sealed class ClientHost : IDisposable
     private bool _uiPetHealth;
     private bool _uiMagicBounds;
     private bool _uiSpellbookFrame;
+    private bool _uiScrollbarGrabbed;
+    private bool _uiSmoothList;
     private bool _uiSpellbookContext;
     private bool _uiSpellbookDragged;
     private bool _uiPetFrame;
@@ -18425,6 +18453,11 @@ public sealed class ClientHost : IDisposable
         {
             faults.Add("the controls tab was never measured at the top");
         }
+
+        if (_uiSmoothList && !_uiScrollbarGrabbed)
+            faults.Add("the controls tab drew no smooth scroll bar to drag");
+        else if (_uiSmoothList && (!_uiRows.TryGetValue("dragged", out var dragged) || dragged.Lowest > 1))
+            faults.Add("dragging the scroll bar to the top of its track did not bring the list back to its first row");
 
         if (_uiRows.TryGetValue("bottom", out var atEnd))
         {

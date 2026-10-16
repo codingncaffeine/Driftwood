@@ -186,6 +186,7 @@ public sealed class ScrollState
     public float Content;
     public float Clock = -1f;
     public int Selected = -1;
+    public string Key = "";
 }
 
 public sealed class HudScreen
@@ -441,6 +442,13 @@ public sealed class HudScreen
 
     /// <summary>Each scrolled column's position, by name, kept between frames.</summary>
     public readonly Dictionary<string, ScrollState> ScrollStates = new(StringComparer.Ordinal);
+
+    /// <summary>This frame's smooth scroll bars, by the index their zones carry (offset by 1000).</summary>
+    public readonly List<string> ScrollBars = [];
+
+    /// <summary>A scroll bar being dragged: which column, and where along its track (0 to 1).</summary>
+    public string? ScrollGrabKey;
+    public float ScrollGrabAt;
 
     /// <summary>Where the code-authored cursor landed this frame, in layout units.</summary>
     /// <remarks>
@@ -822,6 +830,7 @@ public sealed class HudRenderer : IDisposable
         int screenHeight)
     {
         // Every frame starts unclipped: nothing a menu set may reach the next frame's HUD.
+        screen.ScrollBars.Clear();
         _clip = NoClip;
         _backdrop.Clear();
         _plain.Clear();
@@ -2987,7 +2996,7 @@ public sealed class HudRenderer : IDisposable
             if (column >= columns) { column = 0; pen += cardTall + cardGap; }
         }
         if (column > 0) pen += cardTall;
-        EndScroll(state, left, viewTop, galleryWide, view, pen);
+        EndScroll(screen, layout, state, left, viewTop, galleryWide, view, pen);
     }
 
     private bool HasPackCard(int layer) =>
@@ -3077,7 +3086,7 @@ public sealed class HudRenderer : IDisposable
             if (column >= columns) { column = 0; pen += cardTall + cardGap; }
         }
         if (column > 0) pen += cardTall;
-        EndScroll(state, left, top, galleryWide, view, pen);
+        EndScroll(screen, layout, state, left, top, galleryWide, view, pen);
     }
 
     /// <summary>The start screen: the title, then large stacked buttons.</summary>
@@ -3119,7 +3128,7 @@ public sealed class HudRenderer : IDisposable
                 ScrollToPick(screen, state, i, pen, pen + MenuRowTall, view);
                 pen += MenuRowTall;
             }
-            EndScroll(state, left, top, width, view, pen);
+            EndScroll(screen, layout, state, left, top, width, view, pen);
             return;
         }
 
@@ -3289,7 +3298,7 @@ public sealed class HudRenderer : IDisposable
     private ScrollState BeginScroll(HudScreen screen, string key, float x, float y, float w, float h)
     {
         if (!screen.ScrollStates.TryGetValue(key, out var state))
-            screen.ScrollStates[key] = state = new ScrollState();
+            screen.ScrollStates[key] = state = new ScrollState { Key = key };
 
         if (screen.Wheel != 0f && screen.Pointer.X >= x && screen.Pointer.X < x + w
             && screen.Pointer.Y >= y && screen.Pointer.Y < y + h)
@@ -3304,6 +3313,15 @@ public sealed class HudRenderer : IDisposable
         state.Offset += (state.Target - state.Offset) * (1f - MathF.Exp(-dt * 18f));
         // A clock that is not moving (a paused frame, an instrument) snaps rather than never arriving.
         if (dt <= 0f || MathF.Abs(state.Target - state.Offset) < 0.3f) state.Offset = state.Target;
+
+        // A dragged scroll bar puts the column where the pointer is on the track, exactly and at once.
+        if (screen.ScrollGrabKey == key && state.Content > h)
+        {
+            var thumb = MathF.Max(16f, h * h / state.Content);
+            var along = Math.Clamp((screen.ScrollGrabAt * h - thumb * 0.5f) / MathF.Max(1f, h - thumb), 0f, 1f);
+            state.Target = state.Offset = along * (state.Content - h);
+            screen.ScrollGrabKey = null;
+        }
 
         _clip = new Vector4(x, y, x + w, y + h);
         return state;
@@ -3331,11 +3349,15 @@ public sealed class HudRenderer : IDisposable
     }
 
     /// <summary>Ends a column: records how tall it was and draws a thin bar when there is more.</summary>
-    private void EndScroll(ScrollState state, float x, float y, float w, float h, float contentHeight)
+    private void EndScroll(HudScreen screen, ScreenLayout layout, ScrollState state, float x, float y, float w, float h, float contentHeight)
     {
         _clip = NoClip;
         state.Content = contentHeight;
         if (contentHeight <= h + 0.5f) return;
+
+        // The track is a zone of its own so its thumb can be dragged; the index names the column.
+        screen.ScrollBars.Add(state.Key);
+        layout.Add(ZoneKind.Scrollbar, 1000 + screen.ScrollBars.Count - 1, x + w - 8f, y, 8f, h);
 
         var thumb = MathF.Max(16f, h * h / contentHeight);
         var travel = h - thumb;
