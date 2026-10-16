@@ -1672,7 +1672,10 @@ public sealed class HudRenderer : IDisposable
 
         if (screen.Kind == HudScreenKind.Player && screen.Tab == (int)PlayerTab.Map)
         {
-            MapScreen(screen, layout, w, h);
+            if (MenuFrame(screen, layout, w, h, 560f, "journal", out var mx, out var mtop, out var mcontent, out var mbottom))
+                MapScreen(screen, layout, w, h, new Vector4(mx + 16f, mtop + 44f, mcontent - 32f, mbottom - mtop - 50f));
+            else
+                MapScreen(screen, layout, w, h);
             Footer(screen, w, h);
             return;
         }
@@ -2441,15 +2444,18 @@ public sealed class HudRenderer : IDisposable
     }
 
     /// <summary>The visited surface, centred on the player unless it has been panned away.</summary>
-    private void MapScreen(HudScreen screen, ScreenLayout layout, float w, float h)
+    private void MapScreen(HudScreen screen, ScreenLayout layout, float w, float h, Vector4? region = null)
     {
         // Leave two honest metadata lines above the shared footer. The old h-105 canvas put both
         // map captions on one baseline and the footer immediately through them at short windows.
-        var size = MathF.Floor(MathF.Min(300f, MathF.Min(w - 36f, h - 128f)));
-        var left = MathF.Round((w - size) * 0.5f);
-        var top = MathF.Round((h - size) * 0.44f);
+        // In the reworked frame the map fills the pane instead, square, with its captions under it.
+        var size = region is { } pane
+            ? MathF.Floor(MathF.Min(pane.Z, pane.W - 26f))
+            : MathF.Floor(MathF.Min(300f, MathF.Min(w - 36f, h - 128f)));
+        var left = region is { } inPane ? MathF.Round(inPane.X + (inPane.Z - size) * 0.5f) : MathF.Round((w - size) * 0.5f);
+        var top = region is { } atPane ? atPane.Y : MathF.Round((h - size) * 0.44f);
 
-        Tabs(screen, layout, left, top - 22f, size);
+        if (region is null) Tabs(screen, layout, left, top - 22f, size);
         Bevel(left - 4f, top - 4f, size + 8f, size + 8f, raised: true, PanelFill);
         Rect(_plain, left, top, size, size, new Vector4(0.06f, 0.07f, 0.07f, 1f));
         layout.Add(ZoneKind.Map, 0, left, top, size, size);
@@ -2700,6 +2706,35 @@ public sealed class HudRenderer : IDisposable
         Text(FitText(title, content - 32f, 16f), x + 16f, top + 12f, 16f, Vector4.One);
         Rect(_plain, x + 16f, top + 36f, content - 32f, 1f, MenuEdge);
         return true;
+    }
+
+    /// <summary>How wide the items screen's column of journal tabs is.</summary>
+    private const float JournalColumn = 112f;
+
+    /// <summary>
+    /// The journal's tabs as a column beside a container panel — the items screen, where the pack's
+    /// own inventory art and the recipe book need the rest of the width at a crisp, whole zoom.
+    /// </summary>
+    private void JournalTabs(HudScreen screen, ScreenLayout layout, float left, float top)
+    {
+        Text("DRIFTWOOD", left + 6f, top, MenuGlyph, MenuAmber);
+        Text("journal", left + 6f, top + 12f, MenuGlyph, InkFaint);
+
+        for (var i = 0; i < screen.TabNames.Length; i++)
+        {
+            var y = top + 32f + i * 22f;
+            var open = screen.Tab == i;
+            var hot = screen.Hovered is { Kind: ZoneKind.Tab } over && over.Index == i;
+            if (!ThemedButton(left, y, JournalColumn, 20f, open || hot))
+            {
+                Rect(_plain, left, y, JournalColumn, 20f,
+                    open ? MenuLit with { W = 0.85f } : hot ? MenuHot : MenuSide with { W = 0.75f });
+                if (open) Rect(_plain, left, y, 3f, 20f, Picked);
+            }
+            Text(FitText(Capitalised(screen.TabNames[i]), JournalColumn - 20f, MenuGlyph),
+                left + 10f, y + 6f, MenuGlyph, open ? Vector4.One : hot ? Ink : InkDim);
+            layout.Add(ZoneKind.Tab, i, left, y, JournalColumn, 20f);
+        }
     }
 
     /// <summary>The settings screen as a sidebar of categories beside one roomy pane.</summary>
@@ -3713,7 +3748,9 @@ public sealed class HudRenderer : IDisposable
     private void Footer(HudScreen screen, float w, float h)
     {
         if (screen.Footer.Length == 0) return;
-        TextCentred(screen.Footer, w / 2f, h - 46f, 8f, InkDim);
+        // A container screen keeps the bottom edge for the recipe book's caption, which runs down
+        // under the book, so its help line goes to the clear space above the panel instead.
+        TextCentred(screen.Footer, w / 2f, screen.IsContainer ? 8f : h - 46f, 8f, InkDim);
     }
 
     /// <summary>
@@ -3966,7 +4003,8 @@ public sealed class HudRenderer : IDisposable
 
         layout.BuildPanel(
             kind, screen.Grid?.Width ?? 0, w, h,
-            screen.BookOut, screen.BookPage, screen.Recipes.Count);
+            screen.BookOut, screen.BookPage, screen.Recipes.Count,
+            reserveLeft: screen.TabNames.Length > 1 ? JournalColumn + 16f : 0f);
 
         var z = layout.Zoom;
 
@@ -3996,10 +4034,10 @@ public sealed class HudRenderer : IDisposable
         else
             PanelBevel(layout, 0f, 0f, ScreenLayout.PanelWidth, ScreenLayout.PanelHeight, raised: true, PanelFill);
 
-        // The player screen's tabs sit on top of the panel. A station has none — a furnace is not a
-        // place you look up what you have unlocked.
+        // The player screen's tabs are a column at the left of the screen, as in every reworked menu;
+        // a station has none — a furnace is not a place you look up what you have unlocked.
         if (screen.TabNames.Length > 1)
-            Tabs(screen, layout, layout.X(0f), layout.Y(0f) - 18f, layout.Size(ScreenLayout.PanelWidth));
+            JournalTabs(screen, layout, 12f, layout.OriginY);
 
         // The button that folds the book out, on whichever panel has one.
         foreach (var zone in layout.Zones)

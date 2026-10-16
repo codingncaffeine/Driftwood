@@ -360,7 +360,7 @@ public sealed class ScreenLayout
     /// </param>
     public void BuildPanel(
         PanelKind kind, int craftCells, float screenWidth, float screenHeight,
-        bool bookOut = false, int bookPage = 0, int bookCount = 0)
+        bool bookOut = false, int bookPage = 0, int bookCount = 0, float reserveLeft = 0f)
     {
         _zones.Clear();
         Kind = kind;
@@ -377,14 +377,15 @@ public sealed class ScreenLayout
         // because its list IS its panel, built from the rock on its bed.
         BookOut = bookOut && kind is PanelKind.Player or PanelKind.Bench or PanelKind.Furnace;
 
-        Zoom = ZoomFor(screenWidth, screenHeight, BookOut);
+        // A column kept clear on the left (the journal's tabs) narrows what the panel may use.
+        Zoom = ZoomFor(screenWidth - reserveLeft, screenHeight, BookOut);
 
         // The pair is centred together when the book is out, so folding it away does not leave the
         // panel sitting off to one side of the screen.
         // Centre the book and panel as the pair they have always been; the category tabs protrude
         // from that pair like tabs do. ZoomFor still budgets their reach so none are clipped.
         var spread = BookOut ? (BookWidth + BookGap) * Zoom : 0f;
-        OriginX = MathF.Round((screenWidth - PanelWidth * Zoom + spread) * 0.5f);
+        OriginX = MathF.Round(reserveLeft + (screenWidth - reserveLeft - PanelWidth * Zoom + spread) * 0.5f);
         OriginY = MathF.Round((screenHeight - PanelHeight * Zoom) * 0.5f);
         BookX = OriginX - (BookWidth + BookGap) * Zoom;
 
