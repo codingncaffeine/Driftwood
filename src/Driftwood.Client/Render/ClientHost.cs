@@ -6203,6 +6203,11 @@ public sealed class ClientHost : IDisposable
                         : pack.Kind, Card: true, Icon: Math.Max(0, icon)));
             }
 
+            // ⛳ One box searches everything. A name typed here used to filter only what was
+            // installed, and a pack that lives on Modrinth came back as nothing at all — so the same
+            // words also search Modrinth, and its matches follow the installed ones.
+            if (!_packSearchBox.Empty) AddRemotePackResults("ON MODRINTH");
+
             _hudScreen.Rows.Add(new MenuRow("LOCAL IMPORT", Heading: true));
             if (NativeFilePicker.Available)
             {
@@ -6233,36 +6238,7 @@ public sealed class ClientHost : IDisposable
             _packSearchTask is null ? "" : "SEARCHING",
             Note: Said("Refreshes online metadata; MY PACKS never depends on the result.")));
 
-        if (_packSearchTask is not null)
-            _hudScreen.Rows.Add(new MenuRow("MODRINTH — SEARCHING", Heading: true));
-        else if (_packPage is { } page)
-        {
-            var first = page.Total == 0 ? 0 : page.Offset + 1;
-            var last = Math.Min(page.Total, page.Offset + page.Packs.Count);
-            _hudScreen.Rows.Add(new MenuRow(page.Total == 0 ? "MODRINTH — NO MATCHES"
-                : $"MODRINTH — {first:N0}-{last:N0} OF {page.Total:N0}"
-                  + (page.Cached ? " · OFFLINE CACHE" : ""), Heading: true));
-            var names = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var remote in page.Packs)
-            {
-                var label = UniquePackLabel(remote.Name, names);
-                names.Add(label);
-                _remotePackRows[label] = remote;
-                var installed = _packs.Any(pack => pack.ProjectId == remote.Id);
-                var selected = _selectedRemotePack?.Id == remote.Id;
-                var downloading = _packDownloadTask is not null
-                    && (_selectedRemotePack?.Id == remote.Id || _packUpdating?.ProjectId == remote.Id);
-                var progress = downloading ? Volatile.Read(ref _packDownloadProgress) : null;
-                var badges = installed ? "INSTALLED · MODRINTH" : selected ? "SELECTED · MODRINTH" : "MODRINTH";
-                _hudScreen.Rows.Add(new MenuRow(label, badges,
-                    Note: $"by {remote.Author} · {FriendlyLicense(remote.License)} · {remote.Downloads:N0} downloads",
-                    Progress: downloading ? progress?.Fraction ?? 0f : -1f, Card: true,
-                    Icon: _remotePackIconLayers.GetValueOrDefault(remote.Id, 0)));
-            }
-            if (page.HasPrevious) _hudScreen.Rows.Add(new MenuRow(PackPreviousRow));
-            if (page.HasNext) _hudScreen.Rows.Add(new MenuRow(PackNextRow));
-        }
-        else _hudScreen.Rows.Add(new MenuRow("MODRINTH — PRESS REFRESH", Heading: true));
+        AddRemotePackResults("MODRINTH");
 
         if (_selectedRemotePack is { } selectedRemote)
         {
@@ -6380,6 +6356,44 @@ public sealed class ClientHost : IDisposable
         Action(RemoveSelectedPackRow, active ? "SWITCH FIRST" : _packRemoveArmed ? "CONFIRM" : "");
         Action(PackOpenShelfRow);
         if (pack.Value.UpdateAvailable) Action(PackUpdateRow);
+    }
+
+    /// <summary>
+    /// The current Modrinth search as cards, under a heading — the browse view's list, and the
+    /// "on Modrinth" section a search in My Packs adds below the installed matches.
+    /// </summary>
+    private void AddRemotePackResults(string prefix)
+    {
+        if (_packSearchTask is not null)
+            _hudScreen.Rows.Add(new MenuRow($"{prefix} — SEARCHING", Heading: true));
+        else if (_packPage is { } page)
+        {
+            var first = page.Total == 0 ? 0 : page.Offset + 1;
+            var last = Math.Min(page.Total, page.Offset + page.Packs.Count);
+            _hudScreen.Rows.Add(new MenuRow(page.Total == 0 ? $"{prefix} — NO MATCHES"
+                : $"{prefix} — {first:N0}-{last:N0} OF {page.Total:N0}"
+                  + (page.Cached ? " · OFFLINE CACHE" : ""), Heading: true));
+            var names = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var remote in page.Packs)
+            {
+                var label = UniquePackLabel(remote.Name, names);
+                names.Add(label);
+                _remotePackRows[label] = remote;
+                var installed = _packs.Any(pack => pack.ProjectId == remote.Id);
+                var selected = _selectedRemotePack?.Id == remote.Id;
+                var downloading = _packDownloadTask is not null
+                    && (_selectedRemotePack?.Id == remote.Id || _packUpdating?.ProjectId == remote.Id);
+                var progress = downloading ? Volatile.Read(ref _packDownloadProgress) : null;
+                var badges = installed ? "INSTALLED · MODRINTH" : selected ? "SELECTED · MODRINTH" : "MODRINTH";
+                _hudScreen.Rows.Add(new MenuRow(label, badges,
+                    Note: $"by {remote.Author} · {FriendlyLicense(remote.License)} · {remote.Downloads:N0} downloads",
+                    Progress: downloading ? progress?.Fraction ?? 0f : -1f, Card: true,
+                    Icon: _remotePackIconLayers.GetValueOrDefault(remote.Id, 0)));
+            }
+            if (page.HasPrevious) _hudScreen.Rows.Add(new MenuRow(PackPreviousRow));
+            if (page.HasNext) _hudScreen.Rows.Add(new MenuRow(PackNextRow));
+        }
+        else _hudScreen.Rows.Add(new MenuRow($"{prefix} — PRESS REFRESH", Heading: true));
     }
 
     private void AddSelectedRemotePackRows()
@@ -7108,7 +7122,8 @@ public sealed class ClientHost : IDisposable
 
     private void PollPackWork(double dt)
     {
-        if (OnTab(GameTab.Packs) && _packBrowse && ReferenceEquals(_hudScreen.Typing, _packSearchBox))
+        if (OnTab(GameTab.Packs) && (_packBrowse || !_packSearchBox.Empty)
+            && ReferenceEquals(_hudScreen.Typing, _packSearchBox))
         {
             if (_packSearchBox.Text != _packDebounceText)
             {
@@ -8372,8 +8387,8 @@ public sealed class ClientHost : IDisposable
                     ? kept =>
                     {
                         if (!kept) return;
-                        if (_packBrowse) StartPackSearch(0);
-                        else RefreshScreen();
+                        if (_packBrowse || !_packSearchBox.Empty) StartPackSearch(0);
+                        RefreshScreen();
                     }
                 : box == _packCategoryBox || box == _packVersionBox
                     ? kept => { if (kept) StartPackSearch(0); }
@@ -8543,7 +8558,12 @@ public sealed class ClientHost : IDisposable
                 case UseSelectedPackRow: UseSelectedPack(); return;
                 case RemoveSelectedPackRow: RemoveSelectedPack(); return;
                 default:
-                    if (_remotePackRows.TryGetValue(row.Label, out var remote)) SelectRemotePack(remote);
+                    if (_remotePackRows.TryGetValue(row.Label, out var remote))
+                    {
+                        // A Modrinth result picked from My Packs opens where its download lives.
+                        if (!_packBrowse) { _packBrowse = true; _hudScreen.PackListScroll = 0; }
+                        SelectRemotePack(remote);
+                    }
                     else if (_installedPackRows.ContainsKey(row.Label) || row.Label == BuiltInPackRow)
                         ChoosePack(row.Label);
                     return;
