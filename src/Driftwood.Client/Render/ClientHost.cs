@@ -10069,6 +10069,16 @@ public sealed class ClientHost : IDisposable
                 ScrollTradeRows(_hudScreen.Scroll - Math.Sign(wheelY) * 3);
                 return;
             }
+            // The reworked screens scroll smoothly and take the wheel themselves, whichever column
+            // the pointer is over; only the packs details column still scrolls a row at a time.
+            var overDetail = _hudScreen.Hovered is { Kind: ZoneKind.Row } pointed
+                && pointed.Index >= 0 && pointed.Index < _hudScreen.Rows.Count
+                && _hudScreen.Rows[pointed.Index].Pane == MenuPane.Detail;
+            if (_hudScreen.SmoothScroll && !(OnTab(GameTab.Packs) && overDetail))
+            {
+                _hudScreen.Wheel -= wheelY;
+                return;
+            }
             if (OnTab(GameTab.Packs))
             {
                 ScrollPackRows(-Math.Sign(wheelY) * 3);

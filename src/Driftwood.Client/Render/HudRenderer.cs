@@ -175,6 +175,19 @@ public readonly record struct TradeListing(
 /// setting in the game — and it is why the world tab, which is mostly read-outs, costs nothing
 /// here at all.</para>
 /// </remarks>
+/// <summary>
+/// One scrolled column: where it is, where the wheel or the selection wants it, and how tall its
+/// content was last frame. Offsets are in layout units and glide toward the target.
+/// </summary>
+public sealed class ScrollState
+{
+    public float Offset;
+    public float Target;
+    public float Content;
+    public float Clock = -1f;
+    public int Selected = -1;
+}
+
 public sealed class HudScreen
 {
     public HudScreenKind Kind;
@@ -420,6 +433,15 @@ public sealed class HudScreen
     /// <summary>Where the pointer is, in layout units. The hotspot is the top left of the tile.</summary>
     public Vector2 Pointer;
 
+    /// <summary>Wheel notches not yet taken by a scrolled column; positive scrolls down.</summary>
+    public float Wheel;
+
+    /// <summary>True while the reworked screens own scrolling, so the host hands them the wheel.</summary>
+    public bool SmoothScroll;
+
+    /// <summary>Each scrolled column's position, by name, kept between frames.</summary>
+    public readonly Dictionary<string, ScrollState> ScrollStates = new(StringComparer.Ordinal);
+
     /// <summary>Where the code-authored cursor landed this frame, in layout units.</summary>
     /// <remarks>
     /// Zero-width while no screen is open. Published so the framebuffer check can read the pointer
@@ -530,11 +552,14 @@ public sealed class HudRenderer : IDisposable
         layout(location = 0) in vec2 aPos;
         layout(location = 1) in vec3 aUvw;
         layout(location = 2) in vec4 aColor;
+        layout(location = 3) in vec4 aClip;
 
         uniform vec2 uScreen;
 
         out vec3 vUvw;
         out vec4 vColor;
+        out vec2 vPos;
+        flat out vec4 vClip;
 
         void main()
         {
@@ -543,6 +568,8 @@ public sealed class HudRenderer : IDisposable
             gl_Position = vec4(ndc, 0.0, 1.0);
             vUvw = aUvw;
             vColor = aColor;
+            vPos = aPos;
+            vClip = aClip;
         }
         """;
 
@@ -550,6 +577,8 @@ public sealed class HudRenderer : IDisposable
         #version 330 core
         in vec3 vUvw;
         in vec4 vColor;
+        in vec2 vPos;
+        flat in vec4 vClip;
 
         uniform sampler2DArray uAtlas;
         uniform int uTextured;
@@ -558,6 +587,8 @@ public sealed class HudRenderer : IDisposable
 
         void main()
         {
+            // A scrolled list is cut at the edges of its own column, not at the edge of the window.
+            if (vPos.x < vClip.x || vPos.y < vClip.y || vPos.x > vClip.z || vPos.y > vClip.w) discard;
             vec4 c = vColor;
             if (uTextured != 0) c *= texture(uAtlas, vUvw);
             if (c.a < 0.004) discard;
@@ -592,7 +623,7 @@ public sealed class HudRenderer : IDisposable
     public static float ScaleFor(int screenHeight) =>
         MathF.Max(1f, MathF.Round(screenHeight / DesignHeight));
 
-    private const int Floats = 9;
+    private const int Floats = 13;
 
     /// <summary>How many quads one batch can hold. The index buffer is built for exactly this many.</summary>
     private const int MaxQuads = 8192;
@@ -751,6 +782,8 @@ public sealed class HudRenderer : IDisposable
         _gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, stride, (void*)(2 * sizeof(float)));
         _gl.EnableVertexAttribArray(2);
         _gl.VertexAttribPointer(2, 4, VertexAttribPointerType.Float, false, stride, (void*)(5 * sizeof(float)));
+        _gl.EnableVertexAttribArray(3);
+        _gl.VertexAttribPointer(3, 4, VertexAttribPointerType.Float, false, stride, (void*)(9 * sizeof(float)));
 
         _gl.BindVertexArray(0);
     }
@@ -856,7 +889,12 @@ public sealed class HudRenderer : IDisposable
         {
             try
             {
+                _clip = NoClip;
+                screen.SmoothScroll = false;
                 Screen(catalogue, inventory, equipment, screen, layout, w, h);
+                // A notch no scrolled column took this frame is dropped rather than saved up.
+                screen.Wheel = 0f;
+                _clip = NoClip;
             }
             catch (Exception ex) when (_screenFault != ex.GetType().Name + screen.Kind)
             {
@@ -2535,6 +2573,7 @@ public sealed class HudRenderer : IDisposable
         var gallery = screen.Tab == (int)GameTab.Packs || screen.Tab == (int)GameTab.Skins;
         var content = MathF.Min(gallery ? 620f : 480f, w - MenuSideWidth - 40f);
         if (content < 300f || screen.TabNames.Length == 0) return false;
+        screen.SmoothScroll = true;
 
         var total = MenuSideWidth + 10f + content;
         var left = MathF.Round((w - total) / 2f);
@@ -2632,73 +2671,94 @@ public sealed class HudRenderer : IDisposable
             if (rows.Length == 0) return;
         }
 
-        var first = Math.Clamp(screen.PackListScroll, 0, Math.Max(0, rows.Length - 1));
-        var pen = top;
+        // The leading controls are a toolbar that stays put, two to a line; everything after them
+        // (headings, cards, the rest) is one smoothly scrolled column under it.
+        // ⛔ Two to a line, because one to a line the browse view's seven controls left no room for
+        // a single row of cards, and a search that had found nine packs looked like one that found none.
+        var at = 0;
+        var bar = top;
+        while (at < rows.Length && !rows[at].row.Card && !rows[at].row.Heading)
+        {
+            var pairs = at + 1 < rows.Length && !rows[at + 1].row.Card && !rows[at + 1].row.Heading;
+            if (pairs)
+            {
+                var half = MathF.Floor((galleryWide - 6f) / 2f);
+                MenuRowAt(screen, layout, rows[at].index, left, bar, half, MenuRowTall, buttons: false);
+                MenuRowAt(screen, layout, rows[at + 1].index, left + half + 6f, bar, half, MenuRowTall, buttons: false);
+                at += 2;
+            }
+            else
+            {
+                MenuRowAt(screen, layout, rows[at].index, left, bar, galleryWide, MenuRowTall, buttons: false);
+                at++;
+            }
+            bar += MenuRowTall;
+        }
+
+        var viewTop = bar + 4f;
+        var view = bottom - viewTop;
+        if (view < MenuRowTall) return;
+        var heading = rows.Skip(at).FirstOrDefault(static pair => pair.row.Heading).row.Label ?? "";
+        var state = BeginScroll(screen, "packs:" + heading, left, viewTop, galleryWide, view);
+        var pen = 0f;
         var column = 0;
 
-        for (var at = first; at < rows.Length; at++)
+        for (; at < rows.Length; at++)
         {
             var (row, global) = rows[at];
             if (!row.Card)
             {
                 if (column > 0) { pen += cardTall + cardGap; column = 0; }
-                if (pen + MenuRowTall > bottom) break;
-
-                // ⛔ Controls go two to a line. One to a line, the browse view's seven of them left no
-                // room for a single row of cards, and a search that had found nine packs looked
-                // exactly like a search that had found none.
-                var pairs = !row.Heading && at + 1 < rows.Length
-                    && !rows[at + 1].row.Card && !rows[at + 1].row.Heading;
-                if (pairs)
-                {
-                    var half = MathF.Floor((galleryWide - 6f) / 2f);
-                    MenuRowAt(screen, layout, global, left, pen, half, MenuRowTall, buttons: false);
-                    MenuRowAt(screen, layout, rows[at + 1].index, left + half + 6f, pen, half, MenuRowTall, buttons: false);
-                    at++;
-                }
-                else
-                    MenuRowAt(screen, layout, global, left, pen, galleryWide, MenuRowTall, buttons: false);
+                var ry = viewTop + pen - state.Offset;
+                if (ry + MenuRowTall > viewTop && ry < bottom)
+                    MenuRowAt(screen, layout, global, left, ry, galleryWide - 6f, MenuRowTall, buttons: false);
+                ScrollToPick(screen, state, global, pen, pen + MenuRowTall, view);
                 pen += MenuRowTall;
                 continue;
             }
 
-            if (pen + cardTall > bottom) break;
-
             var cx = left + column * (wide + cardGap);
-            var lit = global == screen.Selected;
-            var hot = screen.Hovered is { Kind: ZoneKind.Row } over && over.Index == global;
-            Rect(_plain, cx, pen, wide, cardTall, lit ? new Vector4(0.10f, 0.13f, 0.14f, 0.96f) : MenuButton);
-
-            // The picture, edge to edge across the top of the card.
-            Rect(_plain, cx, pen, wide, imageTall, new Vector4(0.02f, 0.025f, 0.03f, 1f));
-            if (HasPackCard(row.Icon))
-                Rect(_packCardQuads, cx, pen, wide, imageTall, Vector4.One, row.Icon);
-            else if (_packIcons is not null && row.Icon >= 0 && row.Icon < _packIcons.LayerCount)
-                Rect(_packIconQuads, cx + (wide - 32f) * 0.5f, pen + (imageTall - 32f) * 0.5f, 32f, 32f, Vector4.One, row.Icon);
-
-            var name = row.Label.Trim().Length > 0 ? row.Label : "unnamed pack";
-            Text(FitText(name, wide - 12f, MenuGlyph), cx + 6f, pen + imageTall + 6f, MenuGlyph, lit ? Vector4.One : Ink);
-            if (row.Value.Length > 0)
-                Text(FitText(row.Value, wide - 12f, 7f), cx + 6f, pen + imageTall + 18f, 7f,
-                    row.Value.Contains("WORN", StringComparison.Ordinal) ? MenuAmber : InkFaint);
-
-            if (row.Progress >= 0f)
+            var cy = viewTop + pen - state.Offset;
+            ScrollToPick(screen, state, global, pen, pen + cardTall, view);
+            if (cy + cardTall > viewTop && cy < bottom)
             {
-                Rect(_plain, cx, pen + imageTall - 3f, wide, 3f, MenuTrack);
-                Rect(_plain, cx, pen + imageTall - 3f, wide * Math.Clamp(row.Progress, 0f, 1f), 3f, MenuAmber);
+                var lit = global == screen.Selected;
+                var hot = screen.Hovered is { Kind: ZoneKind.Row } over && over.Index == global;
+                Rect(_plain, cx, cy, wide, cardTall, lit ? new Vector4(0.10f, 0.13f, 0.14f, 0.96f) : MenuButton);
+
+                // The picture, edge to edge across the top of the card.
+                Rect(_plain, cx, cy, wide, imageTall, new Vector4(0.02f, 0.025f, 0.03f, 1f));
+                if (HasPackCard(row.Icon))
+                    Rect(_packCardQuads, cx, cy, wide, imageTall, Vector4.One, row.Icon);
+                else if (_packIcons is not null && row.Icon >= 0 && row.Icon < _packIcons.LayerCount)
+                    Rect(_packIconQuads, cx + (wide - 32f) * 0.5f, cy + (imageTall - 32f) * 0.5f, 32f, 32f, Vector4.One, row.Icon);
+
+                var name = row.Label.Trim().Length > 0 ? row.Label : "unnamed pack";
+                Text(FitText(name, wide - 12f, MenuGlyph), cx + 6f, cy + imageTall + 6f, MenuGlyph, lit ? Vector4.One : Ink);
+                if (row.Value.Length > 0)
+                    Text(FitText(row.Value, wide - 12f, 7f), cx + 6f, cy + imageTall + 18f, 7f,
+                        row.Value.Contains("WORN", StringComparison.Ordinal) ? MenuAmber : InkFaint);
+
+                if (row.Progress >= 0f)
+                {
+                    Rect(_plain, cx, cy + imageTall - 3f, wide, 3f, MenuTrack);
+                    Rect(_plain, cx, cy + imageTall - 3f, wide * Math.Clamp(row.Progress, 0f, 1f), 3f, MenuAmber);
+                }
+
+                var edge = lit ? Picked : hot ? new Vector4(1f, 1f, 1f, 0.30f) : MenuEdge;
+                Rect(_plain, cx, cy, wide, 1f, edge);
+                Rect(_plain, cx, cy + cardTall - 1f, wide, 1f, edge);
+                Rect(_plain, cx, cy, 1f, cardTall, edge);
+                Rect(_plain, cx + wide - 1f, cy, 1f, cardTall, edge);
+
+                ClippedZone(layout, ZoneKind.Row, global, cx, cy, wide, cardTall);
             }
-
-            var edge = lit ? Picked : hot ? new Vector4(1f, 1f, 1f, 0.30f) : MenuEdge;
-            Rect(_plain, cx, pen, wide, 1f, edge);
-            Rect(_plain, cx, pen + cardTall - 1f, wide, 1f, edge);
-            Rect(_plain, cx, pen, 1f, cardTall, edge);
-            Rect(_plain, cx + wide - 1f, pen, 1f, cardTall, edge);
-
-            layout.Add(ZoneKind.Row, global, cx, pen, wide, cardTall);
 
             column++;
             if (column >= columns) { column = 0; pen += cardTall + cardGap; }
         }
+        if (column > 0) pen += cardTall;
+        EndScroll(state, left, viewTop, galleryWide, view, pen);
     }
 
     private bool HasPackCard(int layer) =>
@@ -2732,56 +2792,62 @@ public sealed class HudRenderer : IDisposable
         TextCentred(PreviewFacing(screen.SkinPreviewYaw), px + previewWide * 0.5f, top + ph - 12f, MenuGlyph, InkDim);
 
         var total = screen.Rows.Count;
-        var lines = ScreenLayout.MenuLines(h);
-        var first = Math.Clamp(screen.Scroll, 0, Math.Max(0, total - lines));
         var columns = Math.Max(1, (int)((galleryWide + cardGap) / (cardWide + cardGap)));
 
-        var pen = top;
+        // One smooth column holding every card and row; drawn only where it can be seen.
+        var view = bottom - top;
+        var state = BeginScroll(screen, "skins", left, top, galleryWide, view);
+        var pen = 0f;
         var column = 0;
-        for (var i = first; i < Math.Min(total, first + lines); i++)
+        for (var i = 0; i < total; i++)
         {
             var row = screen.Rows[i];
-            var card = row.Thumb >= 0;
-
-            if (!card)
+            if (row.Thumb < 0)
             {
                 if (column > 0) { pen += cardTall + cardGap; column = 0; }
-                if (pen + MenuRowTall > bottom) break;
-                MenuRowAt(screen, layout, i, left, pen, galleryWide, MenuRowTall, buttons: false);
+                var ry = top + pen - state.Offset;
+                if (ry + MenuRowTall > top && ry < bottom)
+                    MenuRowAt(screen, layout, i, left, ry, galleryWide - 6f, MenuRowTall, buttons: false);
+                ScrollToPick(screen, state, i, pen, pen + MenuRowTall, view);
                 pen += MenuRowTall;
                 continue;
             }
 
-            if (pen + cardTall > bottom) break;
-
             var cx = left + column * (cardWide + cardGap);
-            var lit = i == screen.Selected;
-            var hot = screen.Hovered is { Kind: ZoneKind.Row } over && over.Index == i;
-            Rect(_plain, cx, pen, cardWide, cardTall, lit ? new Vector4(0.10f, 0.13f, 0.14f, 0.96f) : MenuButton);
-            var edge = lit ? Picked : hot ? new Vector4(1f, 1f, 1f, 0.22f) : MenuEdge;
-            Rect(_plain, cx, pen, cardWide, 1f, edge);
-            Rect(_plain, cx, pen + cardTall - 1f, cardWide, 1f, edge);
-            Rect(_plain, cx, pen, 1f, cardTall, edge);
-            Rect(_plain, cx + cardWide - 1f, pen, 1f, cardTall, edge);
+            var cy = top + pen - state.Offset;
+            ScrollToPick(screen, state, i, pen, pen + cardTall, view);
+            if (cy + cardTall > top && cy < bottom)
+            {
+                var lit = i == screen.Selected;
+                var hot = screen.Hovered is { Kind: ZoneKind.Row } over && over.Index == i;
+                Rect(_plain, cx, cy, cardWide, cardTall, lit ? new Vector4(0.10f, 0.13f, 0.14f, 0.96f) : MenuButton);
+                var edge = lit ? Picked : hot ? new Vector4(1f, 1f, 1f, 0.22f) : MenuEdge;
+                Rect(_plain, cx, cy, cardWide, 1f, edge);
+                Rect(_plain, cx, cy + cardTall - 1f, cardWide, 1f, edge);
+                Rect(_plain, cx, cy, 1f, cardTall, edge);
+                Rect(_plain, cx + cardWide - 1f, cy, 1f, cardTall, edge);
 
-            // The figure: a 32-square tile with the 16-by-32 figure in its middle, drawn at three
-            // screen pixels to one skin pixel so it stays sharp.
-            if (row.Thumb >= 0 && _skinThumbs is not null && row.Thumb < _skinThumbs.LayerCount)
-                Rect(_skinThumbQuads, cx + (cardWide - 48f) * 0.5f, pen + 6f, 48f, 48f, Vector4.One, row.Thumb);
-            else
-                TextCentred("?", cx + cardWide * 0.5f, pen + 26f, 16f, InkFaint);
+                // The figure: a 32-square tile with the 16-by-32 figure in its middle, drawn at three
+                // screen pixels to one skin pixel so it stays sharp.
+                if (_skinThumbs is not null && row.Thumb < _skinThumbs.LayerCount)
+                    Rect(_skinThumbQuads, cx + (cardWide - 48f) * 0.5f, cy + 6f, 48f, 48f, Vector4.One, row.Thumb);
+                else
+                    TextCentred("?", cx + cardWide * 0.5f, cy + 26f, 16f, InkFaint);
 
-            var name = row.Label.Trim().Length > 0 ? row.Label : "unnamed";
-            TextCentred(FitText(name, cardWide - 6f, 7f), cx + cardWide * 0.5f, pen + 58f, 7f, lit ? Vector4.One : Ink);
-            if (row.Value.Length > 0)
-                TextCentred(FitText(row.Value, cardWide - 6f, 7f), cx + cardWide * 0.5f, pen + 70f, 7f,
-                    row.Value == "worn" ? MenuAmber : InkFaint);
+                var name = row.Label.Trim().Length > 0 ? row.Label : "unnamed";
+                TextCentred(FitText(name, cardWide - 6f, 7f), cx + cardWide * 0.5f, cy + 58f, 7f, lit ? Vector4.One : Ink);
+                if (row.Value.Length > 0)
+                    TextCentred(FitText(row.Value, cardWide - 6f, 7f), cx + cardWide * 0.5f, cy + 70f, 7f,
+                        row.Value == "worn" ? MenuAmber : InkFaint);
 
-            layout.Add(ZoneKind.Row, i, cx, pen, cardWide, cardTall);
+                ClippedZone(layout, ZoneKind.Row, i, cx, cy, cardWide, cardTall);
+            }
 
             column++;
             if (column >= columns) { column = 0; pen += cardTall + cardGap; }
         }
+        if (column > 0) pen += cardTall;
+        EndScroll(state, left, top, galleryWide, view, pen);
     }
 
     /// <summary>The start screen: the title, then large stacked buttons.</summary>
@@ -2808,6 +2874,25 @@ public sealed class HudRenderer : IDisposable
         float h, bool buttons)
     {
         var total = screen.Rows.Count;
+
+        // Settings: every row in one smoothly scrolled column, drawn only where it can be seen.
+        if (!buttons)
+        {
+            var view = bottom - top;
+            var state = BeginScroll(screen, $"rows:{screen.Kind}:{screen.Tab}", left, top, width, view);
+            var pen = 0f;
+            for (var i = 0; i < total; i++)
+            {
+                var y = top + pen - state.Offset;
+                if (y + MenuRowTall > top && y < bottom)
+                    MenuRowAt(screen, layout, i, left, y, width - 8f, MenuRowTall, buttons: false);
+                ScrollToPick(screen, state, i, pen, pen + MenuRowTall, view);
+                pen += MenuRowTall;
+            }
+            EndScroll(state, left, top, width, view, pen);
+            return;
+        }
+
         var lines = ScreenLayout.MenuLines(h);
         var shown = Math.Min(lines, total);
         var first = Math.Clamp(screen.Scroll, 0, Math.Max(0, total - lines));
@@ -2930,10 +3015,75 @@ public sealed class HudRenderer : IDisposable
             else
                 Text(text, left + 10f + iconWidth, mid, MenuGlyph, colour);
 
-            layout.Add(ZoneKind.Row, i, left, y, rowWidth, line);
+            ClippedZone(layout, ZoneKind.Row, i, left, y, rowWidth, line);
             if (boxWidth > 0f)
-                layout.Add(ZoneKind.Field, i, left + rowWidth - 6f - boxWidth, mid - 2f, boxWidth, ScreenLayout.MenuLine);
+                ClippedZone(layout, ZoneKind.Field, i, left + rowWidth - 6f - boxWidth, mid - 2f, boxWidth, ScreenLayout.MenuLine);
         }
+    }
+
+    // ⛳ SMOOTH COLUMNS. A column scrolls by layout units, not by whole rows or cards: the wheel moves
+    // a target and the drawn offset glides to it, a moved selection is brought just into view, and
+    // everything is cut at the column's edges by the clip rectangle so a half-scrolled card is half
+    // a card. Content height is measured as the column draws and bounds the next frame's target.
+
+    private const float WheelStep = 44f;
+
+    /// <summary>Starts a scrolled column: takes the wheel if the pointer is over it, moves, clips.</summary>
+    private ScrollState BeginScroll(HudScreen screen, string key, float x, float y, float w, float h)
+    {
+        if (!screen.ScrollStates.TryGetValue(key, out var state))
+            screen.ScrollStates[key] = state = new ScrollState();
+
+        if (screen.Wheel != 0f && screen.Pointer.X >= x && screen.Pointer.X < x + w
+            && screen.Pointer.Y >= y && screen.Pointer.Y < y + h)
+        {
+            state.Target += screen.Wheel * WheelStep;
+            screen.Wheel = 0f;
+        }
+
+        state.Target = Math.Clamp(state.Target, 0f, MathF.Max(0f, state.Content - h));
+        var dt = state.Clock < 0f ? 1f : Math.Clamp(screen.Clock - state.Clock, 0f, 0.1f);
+        state.Clock = screen.Clock;
+        state.Offset += (state.Target - state.Offset) * (1f - MathF.Exp(-dt * 18f));
+        if (MathF.Abs(state.Target - state.Offset) < 0.3f) state.Offset = state.Target;
+
+        _clip = new Vector4(x, y, x + w, y + h);
+        return state;
+    }
+
+    /// <summary>
+    /// Brings the picked item into view when the pick has just moved to it — and only then, so the
+    /// wheel can still scroll away from a pick that is not being moved.
+    /// </summary>
+    private static void ScrollToPick(HudScreen screen, ScrollState state, int index, float itemTop, float itemBottom, float viewHeight)
+    {
+        if (index != screen.Selected || state.Selected == index) return;
+        state.Selected = index;
+        if (itemTop < state.Target) state.Target = itemTop;
+        else if (itemBottom > state.Target + viewHeight) state.Target = itemBottom - viewHeight;
+    }
+
+    /// <summary>A zone cut to the current clip, so a click can only land on what is visible.</summary>
+    private static void ClippedZone(ScreenLayout layout, ZoneKind kind, int index, float x, float y, float w, float h)
+    {
+        var top = MathF.Max(y, _clip.Y);
+        var bottom = MathF.Min(y + h, _clip.W);
+        if (bottom - top < 2f) return;
+        layout.Add(kind, index, x, top, w, bottom - top);
+    }
+
+    /// <summary>Ends a column: records how tall it was and draws a thin bar when there is more.</summary>
+    private void EndScroll(ScrollState state, float x, float y, float w, float h, float contentHeight)
+    {
+        _clip = NoClip;
+        state.Content = contentHeight;
+        if (contentHeight <= h + 0.5f) return;
+
+        var thumb = MathF.Max(16f, h * h / contentHeight);
+        var travel = h - thumb;
+        var at = Math.Clamp(state.Offset / MathF.Max(1f, contentHeight - h), 0f, 1f);
+        Rect(_plain, x + w - 3f, y, 2f, h, MenuEdge);
+        Rect(_plain, x + w - 3f, y + travel * at, 2f, thumb, new Vector4(1f, 1f, 1f, 0.35f));
     }
 
     /// <summary>The picked row's description, in one fixed strip so the eye learns where it is.</summary>
@@ -5703,6 +5853,15 @@ public sealed class HudRenderer : IDisposable
                 us[column], vs[row], us[column + 1], vs[row + 1], colour, (int)layer);
     }
 
+    /// <summary>
+    /// The rectangle every quad drawn from now on is cut to, in layout units, as x0, y0, x1, y1.
+    /// Everywhere by default; set around a scrolled column and put back after it.
+    /// </summary>
+    /// <remarks>Static because the quad helpers are; the overlay is drawn on one thread only.</remarks>
+    private static Vector4 _clip = NoClip;
+
+    private static readonly Vector4 NoClip = new(-1e6f, -1e6f, 1e6f, 1e6f);
+
     private static void Vertex(List<float> into, float x, float y, float u, float v, float layer, Vector4 colour)
     {
         into.Add(x);
@@ -5714,6 +5873,10 @@ public sealed class HudRenderer : IDisposable
         into.Add(colour.Y);
         into.Add(colour.Z);
         into.Add(colour.W);
+        into.Add(_clip.X);
+        into.Add(_clip.Y);
+        into.Add(_clip.Z);
+        into.Add(_clip.W);
     }
 
     public void Dispose()
