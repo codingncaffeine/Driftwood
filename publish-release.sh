@@ -37,7 +37,7 @@ echo "[2/8] publishing a self-contained $RID build..."
 case "$OUT" in artifacts/Driftwood-linux-x64) ;; *) fail "PUBLISH FAILED - refusing to clean an unexpected path." ;; esac
 rm -rf -- "$OUT"
 dotnet publish src/Driftwood.Client/Driftwood.Client.csproj -c Release -r "$RID" --self-contained true \
-  -o "$OUT" -v quiet --nologo -p:PublishSingleFile=true -p:DebugType=embedded || fail "PUBLISH FAILED."
+  -o "$OUT" -v quiet --nologo -p:PublishSingleFile=true -p:DebugType=embedded -p:ContinuousIntegrationBuild=true || fail "PUBLISH FAILED."
 
 # ⚠ Single-file, but with the native libraries BESIDE the executable rather than extracted from it:
 # self-extraction on Linux unpacks into ~/.net on every machine that runs it. The SDL package carries

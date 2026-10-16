@@ -27,7 +27,7 @@ powershell.exe -NoProfile -Command ^
   "if (Test-Path -LiteralPath $target) { Remove-Item -LiteralPath $target -Recurse -Force }"
 if errorlevel 1 goto :failed_publish
 
-dotnet publish src\Driftwood.Client\Driftwood.Client.csproj -c Release -r win-x64 --self-contained true -o "%OUT%" -v quiet --nologo -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:IncludeAllContentForSelfExtract=true -p:DebugType=embedded
+dotnet publish src\Driftwood.Client\Driftwood.Client.csproj -c Release -r win-x64 --self-contained true -o "%OUT%" -v quiet --nologo -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:IncludeAllContentForSelfExtract=true -p:DebugType=embedded -p:ContinuousIntegrationBuild=true
 if errorlevel 1 goto :failed_publish
 
 REM The public app must be a Windows GUI executable so a normal launch never opens a console. Its
