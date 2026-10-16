@@ -4036,7 +4036,7 @@ public sealed class HudRenderer : IDisposable
 
         // The player screen's tabs are a column at the left of the screen, as in every reworked menu;
         // a station has none — a furnace is not a place you look up what you have unlocked.
-        if (screen.TabNames.Length > 1)
+        if (screen.TabNames.Length > 1 && !layout.BookOut)
             JournalTabs(screen, layout, 12f, layout.OriginY);
 
         // The button that folds the book out, on whichever panel has one.
