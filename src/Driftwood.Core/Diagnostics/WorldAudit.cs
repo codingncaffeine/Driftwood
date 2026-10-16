@@ -1859,7 +1859,7 @@ public static class WorldAudit
                 : $"{treeFaults.Count} faults: {treeFaults[0]}");
 
         // ⛳ And what a leaf pays, as a CENSUS IN BANDS: twenty thousand driftoak leaves under a bare
-        // hand, against the user's own table — saplings 5%, sticks 2%, apples 0.5% — and the cherry,
+        // hand, against the table — saplings 6.25%, sticks 3%, apples 0.5% — and the cherry,
         // which pays no apple at all, as the negative control. ⛔ A floor-only check passes a 50%
         // sapling; the bands are what catch a rate wrong in either direction.
         var leafFaults = LeafDropCensus(registry, items, drops, out var leafDetail);
@@ -8913,8 +8913,8 @@ public static class WorldAudit
     /// holds what came up to the user's table — in bands, both ways.
     /// </summary>
     /// <remarks>
-    /// ⛔ Bands, not floors: at 20,000 rolls a 5% rate lands within about ±0.5% every time, so the
-    /// 4–6% band is wide enough never to flap and narrow enough that a rate written as 50% — or as
+    /// ⛔ Bands, not floors: at 20,000 rolls a 6.25% rate lands within about ±0.5% every time, so the
+    /// 5.25–7.25% band is wide enough never to flap and narrow enough that a rate written as 50% — or as
     /// 0.5% — goes red. The cherry's apple count is the negative control: exactly zero, because a
     /// census that only counts what appears cannot tell a build that pays apples from every leaf.
     /// </remarks>
@@ -8960,10 +8960,10 @@ public static class WorldAudit
         static bool Within(int count, float low, float high) =>
             count >= Leaves * low && count <= Leaves * high;
 
-        if (!Within(oak.Saplings, 0.04f, 0.06f))
-            faults.Add($"driftoak leaves paid {oak.Saplings} saplings in {Leaves}, outside 4-6%");
-        if (!Within(oak.Sticks, 0.015f, 0.025f))
-            faults.Add($"driftoak leaves paid sticks {oak.Sticks} times in {Leaves}, outside 1.5-2.5%");
+        if (!Within(oak.Saplings, 0.0525f, 0.0725f))
+            faults.Add($"driftoak leaves paid {oak.Saplings} saplings in {Leaves}, outside 5.25-7.25%");
+        if (!Within(oak.Sticks, 0.025f, 0.035f))
+            faults.Add($"driftoak leaves paid sticks {oak.Sticks} times in {Leaves}, outside 2.5-3.5%");
         if (oak.Sticks > 0 && (oak.StickCount <= oak.Sticks || oak.StickCount >= oak.Sticks * 2))
             faults.Add($"{oak.Sticks} stick drops came to {oak.StickCount} sticks, which is not one-to-two each");
         if (!Within(oak.Apples, 0.003f, 0.007f))
@@ -8971,13 +8971,13 @@ public static class WorldAudit
         if (oak.Other != 0)
             faults.Add($"driftoak leaves paid {oak.Other} things that are not in the table");
 
-        if (!Within(cherry.Saplings, 0.04f, 0.06f))
-            faults.Add($"cherry leaves paid {cherry.Saplings} saplings in {Leaves}, outside 4-6%");
+        if (!Within(cherry.Saplings, 0.0525f, 0.0725f))
+            faults.Add($"cherry leaves paid {cherry.Saplings} saplings in {Leaves}, outside 5.25-7.25%");
         if (cherry.Apples != 0)
             faults.Add($"cherry leaves paid {cherry.Apples} apples; the cherry pays none");
 
-        if (!Within(placed.Saplings, 0.04f, 0.06f))
-            faults.Add($"placed driftoak leaves paid {placed.Saplings} saplings in {Leaves}, outside 4-6%");
+        if (!Within(placed.Saplings, 0.0525f, 0.0725f))
+            faults.Add($"placed driftoak leaves paid {placed.Saplings} saplings in {Leaves}, outside 5.25-7.25%");
 
         // Shears take the leaf itself, whole, and roll nothing beside it — from either form.
         foreach (var name in (string[])["driftoak_leaves", StarterBlocks.LeavesPlacedName])

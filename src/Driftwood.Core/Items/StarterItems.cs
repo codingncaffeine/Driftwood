@@ -1031,11 +1031,15 @@ public static class StarterItems
         return new BlockDrops(blocks, items, [.. rules], Maybes(), Instead());
     }
 
-    /// <summary>What a leaf pays one time in twenty: the sapling rate, the user's own table.</summary>
-    public const float SaplingChance = 0.05f;
+    /// <summary>What a leaf pays one time in sixteen: the sapling rate.</summary>
+    /// <remarks>⛳ The user, 2026-10-16: "the trees themselves should probably produce saplings more
+    /// often ... bump it up a smidge" from the reference's one in twenty.</remarks>
+    public const float SaplingChance = 0.0625f;
 
-    /// <summary>What a leaf pays one time in fifty: a stick or two.</summary>
-    public const float StickChance = 0.02f;
+    /// <summary>What a leaf pays about one time in thirty-three: a stick or two.</summary>
+    /// <remarks>⛳ Raised from the reference's one in fifty with the sapling, 2026-10-16: cutting the
+    /// branches down should turn up twigs now and then, and at 2% it hardly seemed to.</remarks>
+    public const float StickChance = 0.03f;
 
     /// <summary>What a driftoak leaf pays one time in two hundred: an apple.</summary>
     public const float AppleChance = 0.005f;
@@ -1046,7 +1050,7 @@ public static class StarterItems
     /// <remarks>
     /// <para>⛳ <b>THE LEAVES (2026-08-22, the user's report: "the tree leaves aren't dropping
     /// anything").</b> Every leaf form of a species pays its sapling at 5%, one or two sticks at
-    /// 2%, and — driftoak only, the oak's rule — an apple at 0.5%. The rates are the user's table
+    /// 2% (raised to 6.25% and 3% on 2026-10-16, a smidge above the reference), and — driftoak only, the oak's rule — an apple at 0.5%. The rates are the user's table
     /// (the genre's standard-canopy numbers; the 2.5% dense-canopy rate is reserved for a species
     /// that does not exist yet); Fortune raises each by <see cref="BlockDrops.FortuneStepPerTier"/>
     /// a tier when it exists. A placed leaf pays the same as a grown one: a hedge is still a tree's
