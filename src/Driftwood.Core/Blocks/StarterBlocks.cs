@@ -1265,6 +1265,19 @@ public static class StarterBlocks
 
         // ⛳ The pumpkin, found whole in the meadows' wild patches and worth carrying home for what
         // a pair of shears turns it into. Wood to the ear and to the axe.
+        // ⛳ The fence gate (2026-10-16): the way into a pen. Four facings, shut or open; the fence
+        // either side runs up to it, and opening it is a right click like a trapdoor's.
+        for (var i = 0; i < Placeable.Facings.Length; i++)
+        foreach (var open in (bool[])[false, true])
+            registry.Register(new BlockType
+            {
+                Name = FenceGateName(i, open),
+                Hardness = 2f, Opaque = false, Crafted = true, Solid = !open, Anchors = true,
+                Derived = open,
+                Sounds = SoundMaterial.Wood, Use = BlockUse.Toggle, HarvestClass = ToolClass.Axe,
+                Model = BlockModel.FenceGate(LayerPlanks, Placeable.Facings[i], open),
+            });
+
         // ⛳ Signs (2026-10-16): four standing on a post, turned to face whoever placed them, and
         // four flat on a wall. Every one of them opens its words on a right click.
         for (var i = 0; i < Placeable.Facings.Length; i++)
@@ -2714,6 +2727,11 @@ public static class StarterBlocks
 
         for (var i = 0; i < Placeable.Facings.Length; i++)
         {
+            var gateShut = registry.ByName(FenceGateName(i, open: false)).Id;
+            var gateOpen = registry.ByName(FenceGateName(i, open: true)).Id;
+            yield return (gateShut, gateOpen);
+            yield return (gateOpen, gateShut);
+
             foreach (var upper in (bool[])[false, true])
             {
                 var shut = registry.ByName(TrapdoorName(i, upper, open: false)).Id;
@@ -2939,6 +2957,18 @@ public static class StarterBlocks
         var at = Array.IndexOf(SignForms, name);
         return at < 0 ? null : (Placeable.Facings[at % 4], at >= 4);
     }
+
+    /// <summary>A fence gate's block name: which way it faces, and whether it stands open.</summary>
+    public static string FenceGateName(int facing, bool open) =>
+        $"fence_gate_{FacingNames[facing]}{(open ? "_open" : "")}";
+
+    /// <summary>The four shut gates in <see cref="Placeable.Facings"/> order, for the item to place.</summary>
+    public static BlockId[] FenceGates(BlockRegistry registry) =>
+        [.. Enumerable.Range(0, Placeable.Facings.Length).Select(i => registry.ByName(FenceGateName(i, false)).Id)];
+
+    /// <summary>The four open gates, which nothing places and which give back a gate when mined.</summary>
+    public static IEnumerable<string> OpenFenceGates =>
+        Enumerable.Range(0, Placeable.Facings.Length).Select(i => FenceGateName(i, true));
 
     /// <summary>The wooden pressure plate's block name; its pressed form adds "_on".</summary>
     public const string PlateWood = "pressure_plate_wood";

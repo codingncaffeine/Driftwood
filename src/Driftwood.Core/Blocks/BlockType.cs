@@ -142,6 +142,12 @@ public sealed class BlockType
     /// <summary>Stops movement. Drives collision, never face culling.</summary>
     public bool Solid { get; init; } = true;
 
+    /// <summary>
+    /// Fences, walls and panes join on to this as they do to a solid block, though it is not one —
+    /// a fence gate, which the fence either side of it has to run up to.
+    /// </summary>
+    public bool Anchors { get; init; }
+
     /// <summary>Hides whatever is behind it. Drives face culling and blocks light outright.</summary>
     public bool Opaque { get; init; } = true;
 

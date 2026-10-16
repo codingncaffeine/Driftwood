@@ -71,7 +71,7 @@ public sealed class ConnectionTable
         for (var id = 1; id < registry.Count; id++)
         {
             var type = registry[(ushort)id];
-            _anchor[id] = type.Solid && type.Model.IsFullCube;
+            _anchor[id] = type.Solid && type.Model.IsFullCube || type.Anchors;
         }
 
         for (var f = 0; f < families.Length; f++)

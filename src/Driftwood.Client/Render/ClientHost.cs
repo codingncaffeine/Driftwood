@@ -14485,7 +14485,7 @@ public sealed class ClientHost : IDisposable
     private readonly record struct Shot(
         int Frame, string Name, string Item, ViewMode View, bool Strike, ShotScreen Screen = ShotScreen.None,
         bool Creature = false, string Wears = "", string Offhand = "", bool Guard = false,
-        bool Signs = false);
+        bool Signs = false, bool Gates = false);
 
     /// <summary>Which interface, if any, is up when the picture is taken.</summary>
     private enum ShotScreen
@@ -14576,6 +14576,7 @@ public sealed class ClientHost : IDisposable
         // ⛳ Signs (2026-10-16): one standing and one on a wall, written on, then the editor open.
         new(640, "27-signs", "stick", ViewMode.First, false, Signs: true),
         new(680, "28-sign-editor", "stick", ViewMode.First, false, ShotScreen.Sign),
+        new(840, "29-fence-gates", "stick", ViewMode.First, false, Gates: true),
     ];
 
     /// <summary>
@@ -14724,6 +14725,7 @@ public sealed class ClientHost : IDisposable
             // ⚠ A longer lead than the creature's: the edits have to be meshed before the picture,
             // and a spot in a canopy took longer than thirty frames — the words floated on nothing.
             if (shot.Signs && _shotFrame == shot.Frame - SignLead) PutUpSigns();
+            if (shot.Gates && _shotFrame == shot.Frame - SignLead) PutUpFences();
 
             if (_shotFrame == shot.Frame) WriteShot(size, shot.Name);
         }
@@ -14818,8 +14820,43 @@ public sealed class ClientHost : IDisposable
         }
     }
 
+    /// <summary>
+    /// Two runs of fence across the view with a gate in the middle of each, the near one shut and
+    /// the far one open — through the same edits a player's own placing makes, so the fence joins
+    /// up to the gate exactly as it would for them.
+    /// </summary>
+    private void PutUpFences()
+    {
+        // The sign shot used this same clear spot; its blocks come down first.
+        StandInTheOpen();
+        foreach (var (x, y, z) in _shotSignCells) _streamer.EditBlock(x, y, z, BlockId.Air);
+        var ahead = Placeable.Cardinal(_camera.Forward);
+        var toward = Array.IndexOf(Placeable.Facings, Placeable.Opposite(ahead));
+        var (fx, _, fz) = Faces.Normals[ahead];
+        var (rx, rz) = (-fz, fx);
+        var floor = (int)MathF.Floor(_player.Position.Y);
+        var (px, pz) = ((int)MathF.Floor(_player.Position.X), (int)MathF.Floor(_player.Position.Z));
+        var fence = _registry.ByName("driftoak_fence_0").Id;
+
+        // One run three ahead: a shut gate left of centre, an open one right of it.
+        for (var side = -4; side <= 4; side++)
+        {
+            var (x, z) = (px + fx * 3 + rx * side, pz + fz * 3 + rz * side);
+            var id = side is -2 or 2
+                ? _registry.ByName(StarterBlocks.FenceGateName(toward, open: side > 0)).Id
+                : fence;
+            _streamer.EditBlock(x, floor, z, id);
+        }
+
+        _camera.Pitch = -20f;
+        Console.WriteLine($"shots       a fence 3 ahead with a shut gate and an open one, facing face {Placeable.Facings[toward]}");
+    }
+
     /// <summary>The standing sign the sign shots put up, for the editor shot to open.</summary>
     private (int X, int Y, int Z)? _shotSign;
+
+    /// <summary>Every cell the sign shot built in, for the next scene to clear.</summary>
+    private readonly List<(int X, int Y, int Z)> _shotSignCells = [];
 
     /// <summary>
     /// Puts a written standing sign two blocks ahead, and a plank with a written sign on its face
@@ -14848,6 +14885,7 @@ public sealed class ClientHost : IDisposable
         _signs.Set(standing.X, standing.Y, standing.Z, ["Welcome to", "Driftwood", "", "\u2192 the sea"]);
         _signs.Set(onWall.X, onWall.Y, onWall.Z, ["\u2191 home", "\u2190 mine \u2192", "", "\u2193 cave \u2193"]);
         _shotSign = standing;
+        _shotSignCells.AddRange([standing, plank, onWall]);
 
         _camera.Pitch = -14f;
         Console.WriteLine($"shots       signs at {standing} (standing) and {onWall} (on a wall), facing face {toward}");

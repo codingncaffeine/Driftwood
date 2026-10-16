@@ -289,6 +289,7 @@ public static class StarterRecipes
         Shaped("ladder", "ladder", 3, ["S S", "SSS", "S S"]);
         Shaped("door", "door", 1, ["PP", "PP", "PP"], mirrored: false);
         Shaped("trapdoor", "trapdoor", 2, ["PPP", "PPP"], mirrored: false);
+        Shaped("fence gate", "fence_gate", 1, ["SPS", "SPS"], station: CraftStation.Bench);
 
         // ── The signal kit (#27), and the first thing copper is FOR. ─────────────────────────────
         // Wire is drawn from the ingot; the hands are a stick on stone and a worked stone; the

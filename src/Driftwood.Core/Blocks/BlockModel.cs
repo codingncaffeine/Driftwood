@@ -407,6 +407,66 @@ public sealed class BlockModel
         return new BlockModel([board, post]);
     }
 
+    /// <summary>
+    /// A fence gate across the cell, its rails toward <paramref name="facing"/>'s sides: two posts
+    /// at the ends and two rails between them, or, <paramref name="open"/>, the two halves swung
+    /// back from the posts away from that face — the reference's gate.
+    /// </summary>
+    /// <remarks>
+    /// Shut, it stops a body a fence's height up, so an animal pen holds; open it stops nothing,
+    /// the reference's own rule for walking through. Built facing +z and turned, so the four facings
+    /// cannot disagree about where a rail is.
+    /// </remarks>
+    public static BlockModel FenceGate(ushort planks, int facing, bool open)
+    {
+        var boxes = new List<(Vector3 From, Vector3 To)>
+        {
+            (new Vector3(0f, 5f, 7f), new Vector3(2f, 16f, 9f)),
+            (new Vector3(14f, 5f, 7f), new Vector3(16f, 16f, 9f)),
+        };
+
+        if (!open)
+        {
+            boxes.Add((new Vector3(2f, 6f, 7f), new Vector3(14f, 9f, 9f)));
+            boxes.Add((new Vector3(2f, 12f, 7f), new Vector3(14f, 15f, 9f)));
+            boxes.Add((new Vector3(6f, 9f, 7f), new Vector3(10f, 12f, 9f)));
+        }
+        else
+        {
+            // Each half swung a quarter turn about its post, lying back along -z.
+            foreach (var x in (float[])[0f, 14f])
+            {
+                boxes.Add((new Vector3(x, 6f, 1f), new Vector3(x + 2f, 9f, 7f)));
+                boxes.Add((new Vector3(x, 12f, 1f), new Vector3(x + 2f, 15f, 7f)));
+                boxes.Add((new Vector3(x, 9f, 1f), new Vector3(x + 2f, 12f, 3f)));
+            }
+        }
+
+        var elements = boxes.Select(box =>
+        {
+            var (a, b) = (Turn(box.From, facing), Turn(box.To, facing));
+            return Box(Vector3.Min(a, b), Vector3.Max(a, b), planks, planks, planks);
+        }).ToArray();
+
+        var model = new BlockModel(elements);
+        if (open) return model;
+
+        // The whole width a fence's height and a half up, as a fence stops a body.
+        var across = Turn(new Vector3(0f, 0f, 6f), facing);
+        var far = Turn(new Vector3(16f, 24f, 10f), facing);
+        var physical = new BlockModel([Box(Vector3.Min(across, far), Vector3.Max(across, far), planks, planks, planks)]);
+        return model.WithCollisionFrom(physical);
+
+        // A point of the +z-facing gate, turned so +z becomes the given face.
+        static Vector3 Turn(Vector3 p, int facing) => facing switch
+        {
+            Blocks.Faces.NegZ => new Vector3(16f - p.X, p.Y, 16f - p.Z),
+            Blocks.Faces.PosX => new Vector3(p.Z, p.Y, 16f - p.X),
+            Blocks.Faces.NegX => new Vector3(16f - p.Z, p.Y, p.X),
+            _ => p,
+        };
+    }
+
     /// <summary>How thick a sign's board is, in sixteenths.</summary>
     public const float SignThickness = 1.5f;
 

@@ -456,6 +456,18 @@ public static class StarterItems
 
         items.Register(new ItemType
         {
+            Name = "fence_gate", Label = "fence gate", IconLayer = StarterBlocks.LayerPlanks,
+            BurnSeconds = Timber, DrawsAsBlock = true,
+            Places = new Placeable
+            {
+                Label = "fence gate",
+                Kind = PlacementKind.Facing,
+                Variants = StarterBlocks.FenceGates(blocks),
+            },
+        });
+
+        items.Register(new ItemType
+        {
             Name = "trapdoor", Label = "trapdoor", IconLayer = StarterBlocks.LayerTrapdoor,
             BurnSeconds = Timber, DrawsAsBlock = true,
             Places = new Placeable
@@ -1063,6 +1075,7 @@ public static class StarterItems
         foreach (var name in StarterBlocks.UpperHalves) rules.Add(new BlockDrops.Rule(name, null));
         foreach (var name in StarterBlocks.OpenLowerHalves) rules.Add(new BlockDrops.Rule(name, "door"));
         foreach (var name in StarterBlocks.OpenTrapdoors) rules.Add(new BlockDrops.Rule(name, "trapdoor"));
+        foreach (var name in StarterBlocks.OpenFenceGates) rules.Add(new BlockDrops.Rule(name, "fence_gate"));
 
         // ⛳ Mining a LIT cask is the defusal, and getting the cask back is what defusing pays —
         // without this row the lit form has no placing item and would leave nothing.
