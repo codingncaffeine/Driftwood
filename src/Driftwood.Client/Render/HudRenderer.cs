@@ -2250,7 +2250,12 @@ public sealed class HudRenderer : IDisposable
                            && (!pair.row.NarrowOnly || narrow)).ToArray();
         SurfaceFrame(x - 4f, y - 4f, width + 8f, height + 8f, GuiTextureSet.Layer.OptionsBackground);
 
-        var actionHeight = actions.Length > 0 ? 25f : 0f;
+        // ⛔ Every button shows its whole label. They share a line only while every label fits in
+        // its share of it; otherwise they wrap to more lines, fewer to a line, down to one each.
+        var perLine = Math.Max(1, actions.Length);
+        while (perLine > 1 && actions.Any(pair => TextWidth(pair.row.Label, 7f) + 12f > width / perLine)) perLine--;
+        var actionLines = actions.Length == 0 ? 0 : (actions.Length + perLine - 1) / perLine;
+        var actionHeight = actionLines * 22f + (actionLines > 0 ? 3f : 0f);
         var noteHeight = 31f;
         var hasProjectImage = screen.PackDetailImage >= 0 && _packIcons is not null
             && screen.PackDetailImage < _packIcons.LayerCount;
@@ -2323,21 +2328,23 @@ public sealed class HudRenderer : IDisposable
                 6f, InkFaint);
 
         if (actions.Length == 0) return;
-        var buttonWidth = width / actions.Length;
         for (var i = 0; i < actions.Length; i++)
         {
             var (row, global) = actions[i];
-            var bx = x + i * buttonWidth;
-            var by = y + height - actionHeight + 2f;
+            var line = i / perLine;
+            var inLine = Math.Min(perLine, actions.Length - line * perLine);
+            var lineWidth = width / inLine;
+            var bx = x + (i % perLine) * lineWidth;
+            var by = y + height - actionHeight + 2f + line * 22f;
             var selected = global == screen.Selected;
             var hot = screen.Hovered is { Kind: ZoneKind.Row } over && over.Index == global;
             var layer = selected || hot ? GuiTextureSet.Layer.WidgetButtonHighlighted
                 : GuiTextureSet.Layer.WidgetButton;
-            NineSlice(_guiUnder, bx + 1f, by, buttonWidth - 2f, actionHeight - 3f,
+            NineSlice(_guiUnder, bx + 1f, by, lineWidth - 2f, 20f,
                 layer, 200f, 20f, 4f, Vector4.One);
-            TextCentred(FitText(row.Label, buttonWidth - 8f, 7f), bx + buttonWidth * 0.5f,
+            TextCentred(FitText(row.Label, lineWidth - 8f, 7f), bx + lineWidth * 0.5f,
                 by + 6f, 7f, selected ? Highlight : InkDim);
-            layout.Add(ZoneKind.Row, global, bx + 1f, by, buttonWidth - 2f, actionHeight - 3f);
+            layout.Add(ZoneKind.Row, global, bx + 1f, by, lineWidth - 2f, 20f);
         }
     }
 
