@@ -22,7 +22,7 @@ optdepends=('libdecor: window decorations on GNOME Wayland'
 options=('!strip')   # self-contained .NET single-file bundle — stripping breaks it
 source_x86_64=("$url/releases/download/v$pkgver/Driftwood-v$pkgver-linux-x64.tar.gz")
 # The release's own tarball, hashed when it was built (publish-release.sh writes the .sha256).
-sha256sums_x86_64=('SKIP')
+sha256sums_x86_64=('006fa637a078db496e258b408a72ead371654aa1b13d35d46f31fd341222d93f')
 
 package() {
     local id=io.github.codingncaffeine.Driftwood
