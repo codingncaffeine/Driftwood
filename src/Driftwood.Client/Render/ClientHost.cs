@@ -6178,10 +6178,12 @@ public sealed class ClientHost : IDisposable
                 Heading: true));
 
             var ownSelected = _selectedPackName is "";
-            _hudScreen.Rows.Add(new MenuRow(BuiltInPackRow,
-                _settings.TexturePack.Length == 0 ? "WORN · BUILT IN" : "BUILT IN",
-                Note: "Driftwood-owned art covers every runtime layer and is always available.",
-                Card: true, Icon: 0));
+            // The built-in art is a match like any other: shown while searching only if it is one.
+            if (_packSearchBox.Empty || BuiltInPackRow.Contains(_packSearchBox.Text.Trim(), StringComparison.OrdinalIgnoreCase))
+                _hudScreen.Rows.Add(new MenuRow(BuiltInPackRow,
+                    _settings.TexturePack.Length == 0 ? "WORN · BUILT IN" : "BUILT IN",
+                    Note: "Driftwood-owned art covers every runtime layer and is always available.",
+                    Card: true, Icon: 0));
 
             var names = new HashSet<string>(StringComparer.Ordinal) { BuiltInPackRow };
             foreach (var pack in visible)
@@ -6390,8 +6392,15 @@ public sealed class ClientHost : IDisposable
                     Progress: downloading ? progress?.Fraction ?? 0f : -1f, Card: true,
                     Icon: _remotePackIconLayers.GetValueOrDefault(remote.Id, 0)));
             }
-            if (page.HasPrevious) _hudScreen.Rows.Add(new MenuRow(PackPreviousRow));
-            if (page.HasNext) _hudScreen.Rows.Add(new MenuRow(PackNextRow));
+            // ⛳ Search results come in pages of twenty, and a popular word has hundreds of pages.
+            // The two page rows stay last in the order, for the keyboard and the controller, but are
+            // pinned to the bottom of the gallery, so the way to the next page is always on screen.
+            var pageNumber = page.Offset / ModrinthResourcePackProvider.PageSize + 1;
+            var pageCount = Math.Max(1, (page.Total + ModrinthResourcePackProvider.PageSize - 1) / ModrinthResourcePackProvider.PageSize);
+            if (page.HasPrevious)
+                _hudScreen.Rows.Add(new MenuRow(PackPreviousRow, $"page {pageNumber - 1:N0}", Pinned: true));
+            if (page.HasNext)
+                _hudScreen.Rows.Add(new MenuRow(PackNextRow, $"page {pageNumber + 1:N0} of {pageCount:N0}", Pinned: true));
         }
         else _hudScreen.Rows.Add(new MenuRow($"{prefix} — PRESS REFRESH", Heading: true));
     }

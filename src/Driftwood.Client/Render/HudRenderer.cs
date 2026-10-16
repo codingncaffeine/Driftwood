@@ -156,7 +156,7 @@ public readonly record struct MenuRow(
     string Label, string Value = "", bool Heading = false, string Note = "", TextField? Edits = null,
     float Progress = -1f, MenuPane Pane = MenuPane.List, bool Card = false, bool Action = false,
     int Icon = -1, bool NarrowOnly = false, MenuControl Control = MenuControl.Button,
-    float ControlAmount = 0f, int Thumb = -1);
+    float ControlAmount = 0f, int Thumb = -1, bool Pinned = false);
 
 /// <summary>One complete merchant listing, already phrased by the gameplay side.</summary>
 public readonly record struct TradeListing(
@@ -2619,6 +2619,19 @@ public sealed class HudRenderer : IDisposable
             .Where(static pair => pair.row.Pane == MenuPane.List).ToArray();
         if (rows.Length == 0) return;
 
+        // Pinned rows (the pager) keep a line of their own at the foot, whatever is scrolled above.
+        var pinned = rows.Where(static pair => pair.row.Pinned).ToArray();
+        if (pinned.Length > 0)
+        {
+            bottom -= MenuRowTall + 6f;
+            Rect(_plain, left, bottom + 2f, galleryWide, 1f, MenuEdge);
+            var slot = MathF.Floor((galleryWide - 6f * (pinned.Length - 1)) / pinned.Length);
+            for (var p = 0; p < pinned.Length; p++)
+                MenuRowAt(screen, layout, pinned[p].index, left + p * (slot + 6f), bottom + 6f, slot, MenuRowTall, buttons: false);
+            rows = rows.Where(static pair => !pair.row.Pinned).ToArray();
+            if (rows.Length == 0) return;
+        }
+
         var first = Math.Clamp(screen.PackListScroll, 0, Math.Max(0, rows.Length - 1));
         var pen = top;
         var column = 0;
@@ -2630,7 +2643,21 @@ public sealed class HudRenderer : IDisposable
             {
                 if (column > 0) { pen += cardTall + cardGap; column = 0; }
                 if (pen + MenuRowTall > bottom) break;
-                MenuRowAt(screen, layout, global, left, pen, galleryWide, MenuRowTall, buttons: false);
+
+                // ⛔ Controls go two to a line. One to a line, the browse view's seven of them left no
+                // room for a single row of cards, and a search that had found nine packs looked
+                // exactly like a search that had found none.
+                var pairs = !row.Heading && at + 1 < rows.Length
+                    && !rows[at + 1].row.Card && !rows[at + 1].row.Heading;
+                if (pairs)
+                {
+                    var half = MathF.Floor((galleryWide - 6f) / 2f);
+                    MenuRowAt(screen, layout, global, left, pen, half, MenuRowTall, buttons: false);
+                    MenuRowAt(screen, layout, rows[at + 1].index, left + half + 6f, pen, half, MenuRowTall, buttons: false);
+                    at++;
+                }
+                else
+                    MenuRowAt(screen, layout, global, left, pen, galleryWide, MenuRowTall, buttons: false);
                 pen += MenuRowTall;
                 continue;
             }
