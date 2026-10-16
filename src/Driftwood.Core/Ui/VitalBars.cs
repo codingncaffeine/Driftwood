@@ -88,6 +88,31 @@ public static class VitalBars
     public static float FromBottom(VitalBar bar) => Upper(bar) ? 53f : 44f;
 
     /// <summary>
+    /// How far every row above the hearts is pushed up by hearts past the first ten, which wrap
+    /// into rows of their own over the first.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ The reference's rule, and the fix for the user's report (2026-10-16: "the hearts are being
+    /// covered by the spellbar"): a level-raised maximum wrapped the hearts into a second row at
+    /// the height of the armour row and the spell bar. Extra rows lift what is over them instead.
+    /// </remarks>
+    public static float HeartLift(int maximumHealth) =>
+        (Math.Max(1, (maximumHealth + 1) / 2) - 1) / 10 * (Icon + 1f);
+
+    /// <summary>
+    /// The top of the whole vitals block, from the bottom of the screen: the upper row (armour and
+    /// air) over every row of hearts. Reserved whether or not armour is worn, so putting it on or
+    /// diving does not shift the spell bar.
+    /// </summary>
+    public static float StackTop(int maximumHealth) => FromBottom(VitalBar.Armour) + HeartLift(maximumHealth);
+
+    /// <summary>The spell bar frame's height, and the clear gap it keeps above the vitals.</summary>
+    public const float SpellFrameHeight = 34f, SpellGap = 4f;
+
+    /// <summary>Where the spell bar's frame starts by default, from the bottom of the screen.</summary>
+    public static float SpellBarFromBottom(int maximumHealth) => StackTop(maximumHealth) + SpellGap + SpellFrameHeight;
+
+    /// <summary>
     /// That the four rows keep out of each other's way, and that the middle stays clear.
     /// </summary>
     /// <remarks>
@@ -128,6 +153,17 @@ public static class VitalBars
 
         if (gapHigh < Icon)
             faults.Add($"armour and air are {gapHigh:F0} units apart, under one icon's worth");
+
+        // ⛳ The spell bar sits clear of everything under it, at every number of heart rows. The
+        // first version ended at h-48 and the armour row runs to h-53: its label went under it.
+        foreach (var health in (int[])[20, 40, 60])
+        {
+            var frameBottom = SpellBarFromBottom(health) - SpellFrameHeight;
+            var highest = FromBottom(VitalBar.Health) + HeartLift(health);
+            if (frameBottom < StackTop(health) + 1f || frameBottom < highest + Icon)
+                faults.Add($"at {health / 2} hearts the spell bar ends {frameBottom:F0} up, over the vitals "
+                         + $"that reach {StackTop(health):F0}");
+        }
 
         // And the crosshair is in that gap rather than under a bar.
         if (Right(VitalBar.Health, Width) > middle || Left(VitalBar.Food, Width) < middle)

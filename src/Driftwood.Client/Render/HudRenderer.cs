@@ -953,8 +953,8 @@ public sealed class HudRenderer : IDisposable
             Food(vitals, screen.Drift, w, h);
             ArmourBar(vitals, w, h);
             Bubbles(vitals, screen.Drift, w, h);
-            SpellBar(screen, layout, w, h);
-            CharacterMeters(screen, w, h);
+            SpellBar(screen, layout, w, h, vitals.MaximumHealth);
+            CharacterMeters(screen, w, h, vitals.MaximumHealth);
             CompanionPanel(screen, layout, w, h);
             WaypointPanel(screen, w);
             DeveloperPanel(screen, w);
@@ -1202,21 +1202,22 @@ public sealed class HudRenderer : IDisposable
     }
 
     /// <summary>The eight swappable spells held in memory, above the ordinary item hotbar.</summary>
-    private void SpellBar(HudScreen screen, ScreenLayout layout, float w, float h)
+    private void SpellBar(HudScreen screen, ScreenLayout layout, float w, float h, int maximumHealth)
     {
         if (screen.Character is not { } character) return;
 
         const float slot = 20f;
         const float gap = 2f;
         const float inset = 4f;
-        const float frameHeight = 34f;
+        const float frameHeight = VitalBars.SpellFrameHeight;
         var slotsWidth = CharacterProgression.PreparedCapacity * slot
             + (CharacterProgression.PreparedCapacity - 1) * gap;
         var frameWidth = slotsWidth + inset * 2f;
         var defaultLeft = MathF.Round((w - frameWidth) * 0.5f);
-        // The frame ends four units above the heart/food row. Its first version reused the old
-        // slot baseline and added a grip underneath, putting the new label through both vitals.
-        var defaultTop = MathF.Round(h - 82f);
+        // The frame ends four units above the whole vitals block — armour row and every row of
+        // hearts — rather than above the bottom row alone, which put its label under the armour
+        // and a second row of hearts over its slots.
+        var defaultTop = MathF.Round(h - VitalBars.SpellBarFromBottom(maximumHealth));
         var frameLeft = Math.Clamp(defaultLeft + screen.SpellBarWindowOffset.X,
             4f, MathF.Max(4f, w - frameWidth - 4f));
         var frameTop = Math.Clamp(defaultTop + screen.SpellBarWindowOffset.Y,
@@ -1334,14 +1335,14 @@ public sealed class HudRenderer : IDisposable
         }
     }
 
-    private void CharacterMeters(HudScreen screen, float w, float h)
+    private void CharacterMeters(HudScreen screen, float w, float h, int maximumHealth)
     {
         if (screen.Character is not { } character) return;
         const float width = 174f;
         var left = MathF.Round((w - width) * 0.5f);
-        // Travels above the movable spell frame as one compact stack; the frame's default top is
-        // h-82, leaving a clean seven-unit gutter below these two bars.
-        var top = MathF.Round(h - 99f);
+        // Travels above the movable spell frame as one compact stack, seventeen units over the
+        // frame's default top, leaving a clean seven-unit gutter below these two bars.
+        var top = MathF.Round(h - VitalBars.SpellBarFromBottom(maximumHealth) - 17f);
         var stats = character.Statistics;
         var xp = character.Level >= CharacterProgression.MaximumLevel
             ? 1f : character.Experience / (float)Math.Max(1, character.ExperienceNeeded);
@@ -5492,7 +5493,7 @@ public sealed class HudRenderer : IDisposable
         // layout check is what said so. A bar is a proportion of its maximum, not a tally of it; the
         // torn fill already draws any fraction, so nothing was needed to make ten work.
         var left = BarsLeft(w);
-        var top = h - VitalBars.FromBottom(VitalBar.Armour);
+        var top = h - VitalBars.FromBottom(VitalBar.Armour) - VitalBars.HeartLift(vitals.MaximumHealth);
 
         // ⛳ Lit while it is up, so raising the shield is visible from the bar rather than only from
         // the damage numbers. The one thing a player has to be able to tell at a glance is whether
