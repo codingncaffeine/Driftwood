@@ -127,6 +127,9 @@ public sealed class Creature
     /// <summary>Seconds of walking that went nowhere. A path that is not working is replaced.</summary>
     public float Stuck { get; set; }
 
+    /// <summary>True from a leap's launch to its landing; the leap travels while it is in the air.</summary>
+    public bool Leaping { get; set; }
+
     /// <summary>True while a climber is holding a wall rather than standing on anything.</summary>
     public bool Clinging { get; set; }
 
@@ -574,6 +577,9 @@ public sealed class CreatureHerd
     public const float HopRestSeconds = 0.9f;
 
     public const float HopRestHunting = 0.25f;
+
+    /// <summary>A spider's leap: up at this, carried forward at the hop's own stride.</summary>
+    public const float LeapLaunch = 7f;
 
     /// <summary>Degrees a second it can turn. Fast enough to look intentional, slow enough to see.</summary>
     public const float TurnSpeed = 140f;
@@ -1303,7 +1309,7 @@ public sealed class CreatureHerd
             {
                 // A hopper travels while it is in the air — the hop IS the stride. Straight along
                 // the yaw it launched with, no steering: it aimed on the ground.
-                if (creature.Move == CreatureMove.Hop) HopDrift(creature, dt, solid);
+                if (creature.Move == CreatureMove.Hop || creature.Leaping) HopDrift(creature, dt, solid);
                 continue;
             }
 
@@ -1543,11 +1549,10 @@ public sealed class CreatureHerd
     /// </summary>
     /// <returns>True while it has somebody in sight, which is what makes it move at hunting pace.</returns>
     /// <remarks>
-    /// ⚠ <b>Sight is a distance and nothing else — no line of sight, no light level.</b> Both would
-    /// be right and neither is cheap: a ray per hostile per frame against a voxel world, for a
-    /// creature that will walk into the wall between you anyway because there is no path-finding
-    /// here yet. Sixteen blocks is short enough that a wall usually means it loses you by running
-    /// out of range, and the honest note is that it does not currently need to see you.
+    /// A hunt begins with a line between the eyes inside the kind's follow range, measured in three
+    /// dimensions, and ends three seconds after the line is lost; in between it walks a path over
+    /// the block grid (see <see cref="Steer"/>). The look is taken twice a second rather than every
+    /// frame — a ray per hostile per frame is the cost that kept this out before.
     /// </remarks>
     private bool Hunt(Creature creature, float dt, Vector3? player, Func<int, int, int, bool> solid)
     {
@@ -1696,6 +1701,17 @@ public sealed class CreatureHerd
             }
 
             return true;
+        }
+
+        // ⛳ The spider's leap: two to four blocks out, on the ground and in view, it springs —
+        // the reference's leap-at-target, which is what makes backing off one feel like a mistake.
+        if (CreatureVitals.Climbs(creature.Kind) && creature.SeesTarget && !creature.Leaping
+            && range is > 2f and < 4f && height < 1f && creature.FallSpeed == 0f && !creature.Clinging
+            && _random.NextDouble() < dt * 1.5f)
+        {
+            creature.Leaping = true;
+            creature.Yaw = creature.WantsYaw;
+            creature.FallSpeed = -LeapLaunch;
         }
 
         if (range <= StrikeRange && height <= 2f && creature.Swings <= 0f)
@@ -2255,6 +2271,10 @@ public sealed class CreatureHerd
             creature.DyingFor = 0f;
             return true;
         }
+
+        // A leap is over the moment it is back on the ground — or on a wall.
+        if (creature.Leaping && creature.FallSpeed >= 0f && creature.Position.Y - ground <= 0.02f)
+            creature.Leaping = false;
 
         // A climber holding a wall does not fall off it.
         if (creature.Clinging && creature.FallSpeed >= 0f && TouchingWall(solid, creature.Position, Tall(creature)))

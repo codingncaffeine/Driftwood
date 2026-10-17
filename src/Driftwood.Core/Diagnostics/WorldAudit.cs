@@ -11282,6 +11282,27 @@ public static class WorldAudit
         if (archery.Off > 10f) faults.Add($"a skeleton's arrow left {archery.Off:F1}° off the player's line");
         if (walled.Shots > 0) faults.Add($"a skeleton loosed {walled.Shots} at a player behind a wall it cannot see through");
 
+        // ── The leap: a spider three blocks out springs; a zombie never leaves the ground. ──────
+        float Highest(SpawnKind kind)
+        {
+            var herd = new CreatureHerd(9);
+            var who = herd.SpawnAt(kind, new Vector3(0.5f, 0f, 0.5f));
+            who.Provoked = true;
+            var top = 0f;
+            for (var t = 0f; t < 6f; t += 1f / 60f)
+            {
+                herd.Update(1f / 60f, (x, y, z) => y < 0, new Vector3(3.6f, 0f, 0.5f));
+                herd.TakeAttacks();
+                top = MathF.Max(top, who.Position.Y);
+            }
+            return top;
+        }
+
+        var leapt = Highest(spider);
+        var stayed = Highest(zombie);
+        if (leapt < 0.5f) faults.Add($"a spider three blocks from its target rose only {leapt:F2} in six seconds — no leap");
+        if (stayed > 0.05f) faults.Add($"a zombie on flat ground rose {stayed:F2} — something lifts it");
+
         var spiderUp = Face(spider);
         var zombieUp = Face(zombie);
         if (spiderUp < 3.9f) faults.Add($"a spider at a four-high face got only to {spiderUp:F1}");
@@ -11291,7 +11312,7 @@ public static class WorldAudit
                + $"walks off two ({stepped:F0}) and declines six; a hunter drops six ({chased:F0}); "
                + $"a cave floor at -40 holds; a spider climbs four ({spiderUp:F1}), a zombie does not; "
                + $"a skeleton draws {archery.First:F1}s and looses every {archery.Gap:F1}s within {archery.Off:F1}°, "
-               + $"and never through a wall";
+               + $"and never through a wall; a spider leaps {leapt:F1} high, a zombie stays down";
         return faults;
     }
 
