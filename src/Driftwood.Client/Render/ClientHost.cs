@@ -1514,21 +1514,17 @@ public sealed class ClientHost : IDisposable
     /// fixed number of seconds instead would be a guess about a worker pool. Asking again while
     /// there is room is neither, and it is also the shape a real spawner wants.
     /// </remarks>
-    /// <summary>Sky light at or below which something will spawn in a cell. The genre's own line.</summary>
-    private const int SpawnDarkness = SpawnRules.Darkness;
-
-    /// <summary>Seconds until the next attempt at putting something in the dark.</summary>
-    private float _hostileTry;
-
     /// <summary>
-    /// The rolls the dark is made of, seeded off the world.
+    /// The dark's spawner, seeded off the world so a night is repeatable.
     /// </summary>
-    /// <remarks>
-    /// ⚠ <b>Seeded rather than <c>Random.Shared</c>, so a night is repeatable.</b> A spawner nobody
-    /// can reproduce is a spawner nobody can tune, and the whole point of this pass was that it was
-    /// tuned wrong.
-    /// </remarks>
-    private Random _spawnRoll = new(0);
+    private MonsterSpawner? _monsters;
+
+    /// <summary>The monster kinds this build can draw, by name — rebuilt when the shelf may have changed.</summary>
+    private Dictionary<string, SpawnKind> _monsterKinds = new(StringComparer.Ordinal);
+    private float _monsterKindsAge = float.MaxValue;
+
+    /// <summary>What the spawner may ask of the world. Built once; it only holds delegates.</summary>
+    private SpawnWorld? _spawnWorld;
 
     private void TopUpCreatures(float dt)
     {
@@ -1537,7 +1533,7 @@ public sealed class ClientHost : IDisposable
         if (_herd is null)
         {
             _herd = new CreatureHerd(_seed.Derive("creatures"));
-            _spawnRoll = new Random(_seed.Derive("spawn.hostiles"));
+            _monsters = new MonsterSpawner(_seed.Derive("spawn.hostiles"));
 
             // ⛳ The save's animals come back the moment the herd exists, before any top-up can
             // count the world as empty and fill it. A kind this build cannot stand up is skipped
@@ -1552,8 +1548,11 @@ public sealed class ClientHost : IDisposable
             }
         }
 
-        // ⛳ The hostiles keep their own clock, because theirs is the one that has to be irregular.
-        // A herd of cows appearing on a tidy cadence is nothing anybody notices; a spawner does.
+        // ⛳ The dark runs every frame on the reference's tick, and lets go of what is far before it
+        // counts what is left — the order that keeps the slots following the player.
+        // ⚠ Only the dark's own and the cave's: an animal or a resident is never let go.
+        _herd.Despawn(_player.Position, dt,
+            creature => FamilyOf(creature.Kind) is CreatureFamily.Hostile or CreatureFamily.Cave);
         TopUpHostiles(dt);
 
         _creatureTopUp -= dt;
@@ -1664,82 +1663,71 @@ public sealed class ClientHost : IDisposable
     }
 
     /// <summary>
-    /// And puts hostiles wherever the light has gone.
+    /// And puts monsters wherever the light has gone, by the reference's rules.
     /// </summary>
     /// <remarks>
     /// <para>⛳ <b>Darkness rather than the clock, which is the whole of the design.</b> A cave at
-    /// noon is as dangerous as a field at midnight, and a well-lit field at midnight is not dangerous
-    /// at all — so a torch is a decision about safety rather than about seeing, and the night is
-    /// something a player can build their way out of. Asking the clock instead would make lighting a
-    /// house pointless and a mineshaft free.</para>
-    /// <para>⚠ <b>Never within twelve blocks.</b> Something appearing beside you is a jump scare
-    /// rather than a threat, and it is also unfair — there is nothing to react to.</para>
+    /// noon is as dangerous as a field at midnight, and a lit field at midnight is not dangerous at
+    /// all — so a torch is a decision about safety rather than about seeing.</para>
+    /// <para>⛔ <b>The old spawner was a ring of five round the player, never taken back.</b> See
+    /// <see cref="MonsterSpawner"/> and <see cref="SpawnRules"/>: seventy within 128 blocks, any
+    /// height, packs of four, block light nothing, and the far ones let go. "Really aggressive at
+    /// night" (2026-08) was a deficit refilled on the doorstep twelve blocks out; the reference
+    /// spreads the same night across a whole sphere, most of it caves nobody is in.</para>
     /// </remarks>
     private void TopUpHostiles(float dt)
     {
-        if (_creatureRenderer is null || _herd is null) return;
+        if (_creatureRenderer is null || _herd is null || _monsters is null) return;
 
-        // ⛔ ON ITS OWN CLOCK, ROLLED FRESH, AND THAT IS THE FIX. This used to run every second and
-        // refill the whole deficit in one call — a set point with infinite gain — so a night arrived
-        // complete rather than building, kill one and it was back before the body had faded, and a
-        // player learned the beat within a minute. Reported as "really aggressive at night".
-        _hostileTry -= dt;
-        if (_hostileTry > 0f) return;
-
-        _hostileTry = SpawnRules.NextAttempt(_spawnRoll.NextDouble());
+        _monsterKindsAge += dt;
+        if (_monsterKindsAge > 5f)
+        {
+            _monsterKindsAge = 0f;
+            _monsterKinds = new Dictionary<string, SpawnKind>(StringComparer.Ordinal);
+            foreach (var kind in KindsOf(CreatureFamily.Hostile)) _monsterKinds[kind.Name] = kind;
+        }
 
         // ⚠ By FAMILY, not by the Hostile flag: a farwalker is born calm (see Fierce) and still
-        // takes a bed in the night's own count, or the dark would fill with them unboundedly.
-        var hostiles = 0;
-        foreach (var creature in _herd.All)
-            if (FamilyOf(creature.Kind) == CreatureFamily.Hostile) hostiles++;
-        if (hostiles >= SpawnRules.HostileCap) return;
-
-        // And an attempt that fires does not always place anything. The chance falls to nothing as
-        // the night fills, so the first hour of dark is quiet and clearing your doorstep buys quiet
-        // back rather than being answered on the next tick.
-        if (_spawnRoll.NextDouble() > SpawnRules.Pressure(hostiles, SpawnRules.HostileCap)) return;
-
-        // ⛳ The drowned is not in the open-ground pool — it has its own door below, because a
-        // drowned standing in a midnight meadow is a zombie wearing the wrong colours. Two axes,
-        // the bat's own lesson: what the dark is, and what it is the dark OF.
-        var kinds = KindsOf(CreatureFamily.Hostile);
-        kinds.RemoveAll(kind => kind.Name == "drowned");
-        if (kinds.Count == 0) return;
-
-        var room = Math.Min(SpawnRules.HostileCap - hostiles, SpawnRules.HostileBatch);
-        var want = 1 + _spawnRoll.Next(room);
-
-        _herd.Spawn(
-            SolidForCreature, kinds, _player.Position, want,
-            where: Dark, minRadius: SpawnRules.HostileMinRadius,
-            spawnSupport: TreeFreeSpawnSupport);
-
-        TopUpDrowned();
-    }
-
-    /// <summary>How many of the sea's own are kept about when there is dark water to hold them.</summary>
-    private const int DrownedCount = 2;
-
-    /// <summary>Puts the drowned where it belongs: standing IN dark water, never on a lawn.</summary>
-    private void TopUpDrowned()
-    {
-        if (_creatureRenderer is null || _herd is null) return;
-
+        // takes a slot in the dark's own count, or the dark would fill with them unboundedly.
         var living = 0;
-        foreach (var creature in _herd.All) if (creature.Kind == "drowned") living++;
-        if (living >= DrownedCount) return;
+        foreach (var creature in _herd.All)
+            if (creature.Alive && FamilyOf(creature.Kind) == CreatureFamily.Hostile) living++;
 
-        if (KindFor("drowned") is not { } kind) return;
+        // A line now and then, because "how many are about" is the question every report starts
+        // with and the answer is otherwise invisible from the far side of a cave wall.
+        _monsterReport -= dt;
+        if (_monsterReport <= 0f)
+        {
+            _monsterReport = 30f;
+            int near = 0, open = 0;
+            foreach (var creature in _herd.All)
+            {
+                if (!creature.Alive || FamilyOf(creature.Kind) != CreatureFamily.Hostile) continue;
+                if (Vector3.DistanceSquared(creature.Position, _player.Position) < 32f * 32f) near++;
+                var p = creature.Position;
+                if (LightValue.Sky(_streamer.World.GetLight(
+                        (int)MathF.Floor(p.X), (int)MathF.Floor(p.Y), (int)MathF.Floor(p.Z))) > 0) open++;
+            }
 
-        _herd.Spawn(
-            SolidForCreature, [kind], _player.Position, DrownedCount - living,
-            where: (x, y, z) =>
-                _registry[_streamer.World.GetBlock(x, y, z)].Fluid == FluidKind.Water
-                && Dark(x, y, z),
-            minRadius: SpawnRules.HostileMinRadius,
-            spawnSupport: TreeFreeSpawnSupport);
+            Console.WriteLine($"monsters    {living} of {SpawnRules.MonsterCap} about ({near} within 32, "
+                            + $"{open} under the sky), {_monsters.Placed} placed from {_monsters.Samples:N0} samples");
+        }
+
+        if (living >= SpawnRules.MonsterCap) return;
+
+        _spawnWorld ??= new SpawnWorld(
+            SolidForCreature,
+            TreeFreeSpawnSupport,
+            (x, y, z) => _registry[_streamer.World.GetBlock(x, y, z)].Fluid != FluidKind.None,
+            (x, y, z) => _registry[_streamer.World.GetBlock(x, y, z)].Fluid == FluidKind.Water,
+            (x, y, z) => _streamer.World.GetLight(x, y, z),
+            (x, z) => _terrain.BiomeAt(x, z));
+
+        foreach (var placed in _monsters.Step(dt, _spawnWorld, _player.Position, Daylight, living, _monsterKinds))
+            _herd.SpawnAt(placed.Kind, placed.Position, placed.Yaw);
     }
+
+    private float _monsterReport = 10f;
 
     /// <summary>True where a creature's feet would stand in the dark.</summary>
     /// <remarks>
@@ -9494,6 +9482,16 @@ public sealed class ClientHost : IDisposable
 
         foreach (var blast in _herd.TakeBlasts()) Detonate(blast.Position);
 
+        // The dark's arrows go into the same flight pool as the player's, owned by the creature so
+        // they test the player and never the herd.
+        foreach (var shot in _herd.TakeShots())
+        {
+            if (!_projectiles.Spawn(ProjectileKind.Arrow, ProjectileOwner.Creature, shot.From, shot.Direction,
+                    ProjectileSystem.ArrowSpeed, ProjectileSystem.ArrowGravity, shot.HalfHearts))
+                continue;
+            _audio?.Play(Pick(ActionSounds.BowShoot), shot.From, 0.7f, 0.92f);
+        }
+
         // A blink is a soft pop and a wisp at both ends — the departure matters as much as the
         // arrival, because "where did it go" starts from where it was.
         foreach (var blink in _herd.TakeBlinks())
@@ -9767,7 +9765,13 @@ public sealed class ClientHost : IDisposable
                 shot.Position - shot.Velocity * MathF.Min(dt, 0.05f), shot.Position, _character.Rank);
         }
 
-        _projectiles.Update(_streamer.World, _herd, dt);
+        // The player's box, for the arrows the dark looses. Only while walking: a flying builder is
+        // not a target, the same rule the herd's own hunt uses.
+        (Vector3, Vector3)? body = _walking
+            ? (_player.Position - new Vector3(PlayerBody.Width * 0.5f, 0f, PlayerBody.Width * 0.5f),
+               _player.Position + new Vector3(PlayerBody.Width * 0.5f, _player.CurrentHeight, PlayerBody.Width * 0.5f))
+            : null;
+        _projectiles.Update(_streamer.World, _herd, dt, body);
         StepFishing(dt);
 
         foreach (ref readonly var impact in _projectiles.Impacts)
@@ -9785,6 +9789,26 @@ public sealed class ClientHost : IDisposable
                     impact.Position - impact.Velocity * 0.03f, impact.Position, _character.Rank);
                 PlayMagic(MagicSounds.Impact, impact.Position, 0.52f,
                     0.98f + _character.Rank * 0.02f);
+            }
+
+            if (impact.Player)
+            {
+                HurtPlayer(impact.Damage);
+                Rumble(0.5f, 0.8f, 110);
+                _audio?.Play(Pick(CreatureSounds.ArrowHits), impact.Position, 0.85f, Wobble());
+                continue;
+            }
+
+            // A creature's arrow that found the ground or a wall: its own sound, not a pick on stone.
+            if (impact.Owner == ProjectileOwner.Creature && impact.Creature is null)
+            {
+                _audio?.Play(Pick(CreatureSounds.ArrowMisses), impact.Position, 0.7f, Wobble());
+                if (impact.Face >= 0)
+                {
+                    var hit = _registry[_streamer.World.GetBlock(impact.X, impact.Y, impact.Z)];
+                    _particles.Chip(hit, impact.X, impact.Y, impact.Z, impact.Face, 3);
+                }
+                continue;
             }
 
             if (impact.Creature is { } creature && _herd is not null)

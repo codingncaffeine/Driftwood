@@ -1,4 +1,8 @@
-The five WAV recordings under animals/ and enemies/ are original Driftwood recordings.
+The five WAV recordings animals/frog.wav, enemies/bat.wav, enemies/spider.wav,
+enemies/spider_attack.wav and enemies/zombie.wav are original Driftwood recordings.
+
+enemies/arrow_hit.wav and enemies/arrow_miss.wav were supplied for Driftwood by the project owner on
+2026-10-17 as MP3 and converted to WAV; the MP3 sources are not distributed.
 
 Third-party sound packs are not distributed with Driftwood. Players may download their own
 original pack archives from the Audio tab; those archives and their license metadata remain in

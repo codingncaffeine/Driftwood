@@ -101,6 +101,35 @@ public sealed class Creature
     /// <summary>How far it has fallen without touching down, in blocks.</summary>
     public float FellFor { get; set; }
 
+    /// <summary>Seconds spent beyond the keep radius with nobody near. See <see cref="CreatureHerd.Despawn"/>.</summary>
+    public float Idle { get; set; }
+
+    /// <summary>The walk it is following toward its target, and how far along it is.</summary>
+    public List<PathStep>? Path { get; set; }
+    public int PathAt { get; set; }
+
+    /// <summary>Where the path was aimed, so a target that has moved on gets a new one.</summary>
+    public PathStep PathGoal { get; set; }
+
+    /// <summary>Seconds until the path is looked at again whatever happens.</summary>
+    public float Repath { get; set; }
+
+    /// <summary>True while it has someone to come at — acquired by sight, kept by memory.</summary>
+    public bool Targeting { get; set; }
+
+    /// <summary>Whether the last look found the target in view, and when it looks again.</summary>
+    public bool SeesTarget { get; set; }
+    public float SightCheck { get; set; }
+
+    /// <summary>Seconds the target has been out of view while still being hunted.</summary>
+    public float Unseen { get; set; }
+
+    /// <summary>Seconds of walking that went nowhere. A path that is not working is replaced.</summary>
+    public float Stuck { get; set; }
+
+    /// <summary>True while a climber is holding a wall rather than standing on anything.</summary>
+    public bool Clinging { get; set; }
+
     /// <summary>How grown it is: 0 for a newborn, 1 for an adult. Everything spawns grown.</summary>
     public float Grown { get; set; } = 1f;
 
@@ -199,6 +228,9 @@ public readonly record struct CreatureBlast(string Kind, Vector3 Position);
 
 /// <summary>One teleport step taken, both ends of it, for whoever draws the departure.</summary>
 public readonly record struct CreatureBlink(string Kind, Vector3 From, Vector3 To);
+
+/// <summary>One arrow a creature loosed, for whoever owns the flight pool to put in the air.</summary>
+public readonly record struct CreatureShot(string Kind, Vector3 From, Vector3 Direction, int HalfHearts);
 
 /// <summary>
 /// What each creature sounds like: our name for it against a clip's name.
@@ -299,6 +331,10 @@ public static class CreatureSounds
     /// <summary>The soft pop of a blink — the pack's own pearl-throw, repurposed.</summary>
     public static readonly string[] Blinks = ["item/throwables/throw_enderpearl"];
 
+    /// <summary>A creature's arrow finding the player, and finding anything else.</summary>
+    public static readonly string[] ArrowHits = ["enemies/arrow_hit"];
+    public static readonly string[] ArrowMisses = ["enemies/arrow_miss"];
+
     /// <summary>What the last blow sounds like.</summary>
     public static readonly string[] Deaths = Run("damage/gore/bleed", 3);
 
@@ -347,7 +383,9 @@ public static class CreatureSounds
             .Concat(Meals)
             .Concat(Fuses)
             .Concat(Explosions)
-            .Concat(Blinks);
+            .Concat(Blinks)
+            .Concat(ArrowHits)
+            .Concat(ArrowMisses);
 }
 
 /// <summary>
@@ -403,6 +441,46 @@ public sealed class CreatureHerd
 
     /// <summary>How far off one notices somebody, in blocks.</summary>
     public const float SightRange = 16f;
+
+    /// <summary>
+    /// Path searches allowed in one frame, across the whole herd.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ A budget, because a night of seventy can all want a path on the same frame — the one the
+    /// player stepped round a corner. The rest keep the walk they have and ask again next frame; at
+    /// sixty frames a second nobody waits long.
+    /// </remarks>
+    public const int PathsPerFrame = 4;
+
+    /// <summary>Seconds a hunter keeps after a target it can no longer see. The reference's three.</summary>
+    public const float UnseenMemory = 3f;
+
+    /// <summary>An archer stands off and shoots inside this, in blocks. The reference's fifteen.</summary>
+    public const float ArcherRange = 15f;
+
+    /// <summary>Seconds between arrows, and the draw before the first. The reference's two and one.</summary>
+    public const float ArcherEvery = 2f;
+    public const float ArcherDraw = 1f;
+
+    /// <summary>How far an arrow is thrown off its line, per axis, as a fraction of its direction.</summary>
+    public const float ArcherSpread = 0.045f;
+
+    /// <summary>The furthest a wanderer will walk off an edge. The reference's three blocks.</summary>
+    public const int WanderDrop = 3;
+
+    /// <summary>
+    /// Half the width a body takes against the terrain.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>Capped under half a block, whatever the creature measures.</b> A spider is wider than
+    /// a block; given its whole width against the walls it can never enter the one-wide tunnels that
+    /// most caves are made of, and every path through one is a path it cannot walk. The hit box a
+    /// blow lands in is still the whole creature — this is only what scrapes on the rock.
+    /// </remarks>
+    public const float BodyHalf = 0.3f;
+
+    /// <summary>How fast a climber goes up a wall, in blocks a second.</summary>
+    public const float ClimbSpeed = 2.4f;
 
     /// <summary>And how near it has to be to land a blow.</summary>
     /// <remarks>
@@ -512,8 +590,16 @@ public sealed class CreatureHerd
     private readonly List<CreatureBirth> _births = [];
     private readonly List<CreatureBlast> _blasts = [];
     private readonly List<CreatureBlink> _blinks = [];
+
+    private readonly List<CreatureShot> _shots = [];
     private readonly List<Creature> _newborn = [];
     private readonly Random _random;
+
+    /// <summary>The one searcher every hunter shares. Searches are short and never overlap.</summary>
+    private readonly CreaturePaths _paths = new();
+
+    /// <summary>Searches left this frame. See <see cref="PathsPerFrame"/>.</summary>
+    private int _pathBudget;
 
     public CreatureHerd(int seed) => _random = new Random(seed);
 
@@ -630,7 +716,10 @@ public sealed class CreatureHerd
         int from,
         out float y)
     {
-        for (var at = from; at > 1; at--)
+        // ⛔ Down to the world's floor rather than to y 1, which was the floor before the world grew
+        // a deep. Bounded too, so a column of open air under a ledge is not a 384-cell walk.
+        var lowest = Math.Max(Gen.TerrainGenerator.WorldBottom, from - 160);
+        for (var at = from; at > lowest; at--)
         {
             if (!solid(x, at, z)) continue;
 
@@ -877,6 +966,56 @@ public sealed class CreatureHerd
     /// <summary>Takes one out of the world without it having died — what a despawn is.</summary>
     public void Remove(Creature creature) => _creatures.Remove(creature);
 
+    /// <summary>
+    /// Lets the far ones go, by the reference's rule, and says how many went.
+    /// </summary>
+    /// <param name="transient">Which creatures may be let go at all. Animals and residents may not.</param>
+    /// <remarks>
+    /// <para>⛔ <b>This did not exist, and its absence was most of the fault.</b> Nothing hostile was
+    /// ever taken out of the world, so the cap was spent once — on whatever appeared first, wherever
+    /// that was — and the dark stopped spawning for the rest of the session.</para>
+    /// <para>Beyond 128 blocks a monster goes at once. Within 32 it never goes, and its idle clock is
+    /// reset. Between, once it has been alone for thirty seconds, it has a one-in-800 chance a tick,
+    /// which averages forty seconds more — long enough that walking away from a fight and back finds
+    /// it still there, short enough that the slots follow the player.</para>
+    /// </remarks>
+    public int Despawn(Vector3 player, float dt, Func<Creature, bool> transient)
+    {
+        var gone = 0;
+        var far = SpawnRules.SpawnRadius * SpawnRules.SpawnRadius;
+        var keep = SpawnRules.KeepRadius * SpawnRules.KeepRadius;
+
+        for (var i = _creatures.Count - 1; i >= 0; i--)
+        {
+            var creature = _creatures[i];
+            if (!creature.Alive || !transient(creature)) continue;
+
+            var distance = Vector3.DistanceSquared(creature.Position, player);
+
+            if (distance > far)
+            {
+                _creatures.RemoveAt(i);
+                gone++;
+                continue;
+            }
+
+            if (distance < keep)
+            {
+                creature.Idle = 0f;
+                continue;
+            }
+
+            creature.Idle += dt;
+            if (creature.Idle <= SpawnRules.IdleSeconds) continue;
+            if (_random.NextDouble() >= SpawnRules.DespawnPerSecond * dt) continue;
+
+            _creatures.RemoveAt(i);
+            gone++;
+        }
+
+        return gone;
+    }
+
     /// <summary>One creature as the save carries it — the identity, never the mood.</summary>
     /// <remarks>
     /// ⛳ <b>What persists is what a player would miss.</b> Where it stands, what it is, how hurt
@@ -1057,6 +1196,8 @@ public sealed class CreatureHerd
             if (dying.DyingFor <= 0f) _creatures.RemoveAt(i);
         }
 
+        _pathBudget = PathsPerFrame;
+
         foreach (var creature in _creatures)
         {
             if (!creature.Alive) continue;
@@ -1177,7 +1318,7 @@ public sealed class CreatureHerd
             }
 
             Scorch(creature, dt, sunlit, scorch);
-            var hunting = !creature.MagicallyFeared && Hunt(creature, dt, player);
+            var hunting = !creature.MagicallyFeared && Hunt(creature, dt, player, solid);
             var courting = !hunting && Court(creature, dt);
 
             creature.Thinks -= dt;
@@ -1242,22 +1383,38 @@ public sealed class CreatureHerd
                 continue;
             }
 
-            var yaw = float.DegreesToRadians(creature.Yaw);
-            var ahead = new Vector3(MathF.Cos(yaw), 0f, MathF.Sin(yaw));
             var speed = hunting ? HuntSpeed : creature.FleeFor > 0f ? PanicSpeed : WalkSpeed;
-            var wanted = creature.Position + ahead * (speed * magicMovement * dt);
+            var before = creature.Position;
 
-            var x = (int)MathF.Floor(wanted.X);
-            var z = (int)MathF.Floor(wanted.Z);
-
-            // A step is allowed onto ground within a block of the one being stood on. Anything more
-            // is a cliff or a wall, and the answer to both is to go somewhere else.
-            if (TryGround(solid, x, z, (int)creature.Position.Y + 1, out var y)
-                && MathF.Abs(y - creature.Position.Y) <= 1.01f)
+            // ⛔ A body against the rock, one axis at a time, a block's step up, and a fall when
+            // there is nothing ahead — the old step refused any change of more than one block, so
+            // nothing ever walked off a ledge and a two-block cliff was a wall. A wanderer still
+            // declines a fall of more than three; a hunter takes
+            // whatever its health will stand, which is the reference's own rule.
+            var drop = hunting ? ChaseDrop(creature) : WanderDrop;
+            if (Walk(creature, speed * magicMovement * dt, solid, drop))
             {
-                creature.Position = new Vector3(wanted.X, y, wanted.Z);
+                creature.Clinging = false;
+
+                // Going nowhere while trying to go somewhere: a path that is not working.
+                var moved = Vector3.DistanceSquared(before, creature.Position);
+                creature.Stuck = moved < (speed * dt * 0.2f) * (speed * dt * 0.2f) ? creature.Stuck + dt : 0f;
                 continue;
             }
+
+            // ⛳ A climber that meets a wall goes up it — the spider's whole difference, and what
+            // makes a two-block wall round a base a thing it laughs at.
+            if (CreatureVitals.Climbs(creature.Kind) && Climb(creature, dt, solid))
+            {
+                creature.Stuck = 0f;
+                continue;
+            }
+
+            creature.Stuck += dt;
+
+            // A hunter on a path owns its heading; the blocked step is the path's problem, and a
+            // path that stays blocked is replaced once Stuck runs up.
+            if (hunting) continue;
 
             // ⚠ A cornered animal turns a little rather than the same ninety every time. Frightened
             // it turns tightly and keeps running; grazing it may as well go anywhere.
@@ -1362,7 +1519,7 @@ public sealed class CreatureHerd
     /// here yet. Sixteen blocks is short enough that a wall usually means it loses you by running
     /// out of range, and the honest note is that it does not currently need to see you.
     /// </remarks>
-    private bool Hunt(Creature creature, float dt, Vector3? player)
+    private bool Hunt(Creature creature, float dt, Vector3? player, Func<int, int, int, bool> solid)
     {
         creature.Swings = MathF.Max(0f, creature.Swings - dt);
 
@@ -1371,21 +1528,57 @@ public sealed class CreatureHerd
             // Nobody to burn for. A fuse with no player in the world goes out rather than
             // carrying a blast into the next time somebody logs in beside it.
             if (creature.FuseFor > 0f) creature.FuseFor = 0f;
+            LoseTarget(creature);
             return false;
         }
 
         var toward = target - creature.Position;
+        var distance = toward.Length();
         toward.Y = 0f;
-
         var range = toward.Length();
-        if (range > SightRange || range < 1e-4f)
+
+        // ⛔ In three dimensions, and by sight. Measured flat, a zombie forty blocks down in another
+        // cave was "within sixteen" of a player standing over it and walked about under them all
+        // night; now there has to be a line between the eyes to begin, and a hunt that loses that
+        // line for three seconds is over — the reference's own memory.
+        if (distance > CreatureVitals.FollowRange(creature.Kind) || range < 1e-4f)
         {
             if (creature.FuseFor > 0f) creature.FuseFor = 0f;
+            LoseTarget(creature);
             return false;
         }
 
-        creature.WantsYaw = float.RadiansToDegrees(MathF.Atan2(toward.Z, toward.X));
-        creature.Moving = true;
+        creature.SightCheck -= dt;
+        if (creature.SightCheck <= 0f)
+        {
+            creature.SightCheck = 0.4f + (float)_random.NextDouble() * 0.2f;
+            var eye = creature.Position + new Vector3(0f, MathF.Max(0.4f, creature.Size.Y * creature.Scale * 0.85f), 0f);
+            creature.SeesTarget = LineOfSight(solid, eye, target + new Vector3(0f, 1.5f, 0f));
+        }
+
+        creature.Unseen = creature.SeesTarget ? 0f : creature.Unseen + dt;
+
+        if (!creature.Targeting)
+        {
+            // ⚠ A struck one knows where the blow came from without seeing it.
+            if (!creature.SeesTarget && !creature.Provoked) return false;
+            creature.Targeting = true;
+            creature.Repath = 0f;
+
+            // The draw: an archer that has just seen you is not already at full stretch.
+            if (CreatureVitals.Archer(creature.Kind)) creature.Swings = MathF.Max(creature.Swings, ArcherDraw);
+        }
+        else if (creature.Unseen > UnseenMemory && !creature.Provoked)
+        {
+            if (creature.FuseFor > 0f) creature.FuseFor = 0f;
+            LoseTarget(creature);
+            return false;
+        }
+
+        Steer(creature, dt, target, toward, range, solid);
+
+        // In reach it stands and swings rather than walking circles on your toes.
+        creature.Moving = !(creature.SeesTarget && range < 1.1f && MathF.Abs(target.Y - creature.Position.Y) < 1.2f);
 
         // ⚠ Held short so the ordinary re-think cannot fire mid-chase and send it wandering. The
         // heading is rewritten every step anyway; this is what stops the *decision to move* being
@@ -1430,6 +1623,26 @@ public sealed class CreatureHerd
             return true;
         }
 
+        // ⛳ The archer's whole difference: it stands off and shoots. The reference's bow goal —
+        // within fifteen and in view it holds its ground, turns to you, and looses every two
+        // seconds after a second's draw; out of view or out of range it walks its path like anyone.
+        if (CreatureVitals.Archer(creature.Kind))
+        {
+            if (!creature.SeesTarget || distance > ArcherRange) return true;
+
+            creature.WantsYaw = float.RadiansToDegrees(MathF.Atan2(toward.Z, toward.X));
+            creature.Moving = distance > ArcherRange * 0.75f;
+
+            var facing = MathF.Abs(Wrap(creature.WantsYaw - creature.Yaw)) < 20f;
+            if (creature.Swings <= 0f && facing)
+            {
+                creature.Swings = ArcherEvery * (0.9f + (float)_random.NextDouble() * 0.3f);
+                Loose(creature, target);
+            }
+
+            return true;
+        }
+
         if (range <= StrikeRange && height <= 2f && creature.Swings <= 0f)
         {
             creature.Swings = StrikeEvery;
@@ -1447,6 +1660,280 @@ public sealed class CreatureHerd
     /// going out at dusk. ⚠ There is a grace period, so one step through a doorway is survivable and
     /// a creature caught in the open is not.
     /// </remarks>
+    /// <summary>
+    /// The highest floor under any part of the body's footprint, or negative infinity for none.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>The whole footprint, not the centre's column.</b> Asked of the centre alone, a spider
+    /// that had climbed to the lip of a wall and stepped a hand's width onto the top was still
+    /// "over" the drop it had just climbed, and fell straight back down it.
+    /// </remarks>
+    private static float Footing(Func<int, int, int, bool> solid, Vector3 at)
+    {
+        const float hair = 1e-3f;
+        var from = (int)MathF.Floor(at.Y) + 1;
+        var best = float.NegativeInfinity;
+
+        var x0 = (int)MathF.Floor(at.X - BodyHalf + hair);
+        var x1 = (int)MathF.Floor(at.X + BodyHalf - hair);
+        var z0 = (int)MathF.Floor(at.Z - BodyHalf + hair);
+        var z1 = (int)MathF.Floor(at.Z + BodyHalf - hair);
+
+        for (var x = x0; x <= x1; x++)
+        for (var z = z0; z <= z1; z++)
+        {
+            // ⚠ Never a floor above the feet: a corner of the box touching a wall would otherwise
+            // read the wall's top as ground and lift the body onto it.
+            if (TryGround(solid, x, z, from, out var y) && y <= at.Y + 0.02f && y > best) best = y;
+        }
+
+        return best;
+    }
+
+    /// <summary>Forgets the hunt: no target, no path.</summary>
+    private static void LoseTarget(Creature creature)
+    {
+        creature.Targeting = false;
+        creature.Path = null;
+        creature.Unseen = 0f;
+    }
+
+    /// <summary>How many cells of head room a body needs.</summary>
+    public static int Tall(Creature creature) =>
+        Math.Max(1, (int)MathF.Ceiling(creature.Size.Y * creature.Scale - 0.05f));
+
+    /// <summary>
+    /// The furthest a hunter will drop to reach its target: three, and more the healthier it is.
+    /// </summary>
+    /// <remarks>
+    /// The reference's rule on its normal setting: three, plus whatever health it has over a third
+    /// of its most, less four. Our health is counted in halves, so it is halved first. A zombie at
+    /// full health will take twelve blocks; a wounded one stays on the ledge.
+    /// </remarks>
+    public static int ChaseDrop(Creature creature)
+    {
+        var spare = (int)(creature.Health * 0.5f - creature.MaxHealth * 0.5f * 0.33f) - 4;
+        return WanderDrop + Math.Max(0, spare);
+    }
+
+    /// <summary>
+    /// Points it along its path toward the target, finding a new path when this one has gone stale.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>The last few blocks are straight.</b> In view, level and close, the grid has nothing to
+    /// add and a path would only make it walk to the middle of a cell before turning to you.
+    /// </remarks>
+    private void Steer(Creature creature, float dt, Vector3 target, Vector3 toward, float range,
+        Func<int, int, int, bool> solid)
+    {
+        var height = MathF.Abs(target.Y - creature.Position.Y);
+
+        if (creature.SeesTarget && range < 3f && height < 1.2f)
+        {
+            creature.WantsYaw = float.RadiansToDegrees(MathF.Atan2(toward.Z, toward.X));
+            creature.Path = null;
+            return;
+        }
+
+        creature.Repath -= dt;
+
+        var goal = Cell(target);
+        var stale = creature.Path is null
+                    || creature.Repath <= 0f
+                    || creature.Stuck > 0.8f
+                    || Math.Abs(goal.X - creature.PathGoal.X) + Math.Abs(goal.Z - creature.PathGoal.Z)
+                       + Math.Abs(goal.Y - creature.PathGoal.Y) > 2;
+
+        // ⚠ Only from standing. A body in the air has no cell to start from, and the fall will
+        // put it somewhere a path can begin.
+        if (stale && _pathBudget > 0 && creature.FallSpeed == 0f)
+        {
+            _pathBudget--;
+            creature.Repath = 1f + (float)_random.NextDouble() * 0.6f;
+            creature.PathGoal = goal;
+            creature.Stuck = 0f;
+            creature.Path = _paths.Find(
+                solid, Cell(creature.Position), goal, Tall(creature), ChaseDrop(creature),
+                CreatureVitals.Climbs(creature.Kind));
+            creature.PathAt = 1;
+        }
+
+        if (creature.Path is { } path)
+        {
+            while (creature.PathAt < path.Count)
+            {
+                var step = path[creature.PathAt];
+                var dx = step.X + 0.5f - creature.Position.X;
+                var dz = step.Z + 0.5f - creature.Position.Z;
+
+                // Reached this one: in its column, near its height. Then aim at the next.
+                // ⚠ A climber's steps up a face share one column, and "face the next step" from
+                // directly under it has no direction at all — the first spider stood at the foot of
+                // its wall turning in circles. In the column is enough for it; pressing on toward
+                // the step after is what puts it against the wall, and the wall does the rest.
+                var level = MathF.Abs(step.Y - creature.Position.Y) < 1.2f || CreatureVitals.Climbs(creature.Kind);
+                if (dx * dx + dz * dz < 0.3f * 0.3f && level)
+                {
+                    creature.PathAt++;
+                    continue;
+                }
+
+                creature.WantsYaw = float.RadiansToDegrees(MathF.Atan2(dz, dx));
+                return;
+            }
+
+            // Walked it all and still not there: the path was partial. Look again soon.
+            creature.Path = null;
+            creature.Repath = 0f;
+        }
+
+        creature.WantsYaw = float.RadiansToDegrees(MathF.Atan2(toward.Z, toward.X));
+    }
+
+    /// <summary>The cell a position's feet are in.</summary>
+    private static PathStep Cell(Vector3 at) =>
+        new((int)MathF.Floor(at.X), (int)MathF.Floor(at.Y + 0.01f), (int)MathF.Floor(at.Z));
+
+    /// <summary>
+    /// Whether a straight line between two points passes through nothing solid.
+    /// </summary>
+    /// <remarks>Sampled every quarter block — at two looks a second per hunter, cheaper than exact.</remarks>
+    public static bool LineOfSight(Func<int, int, int, bool> solid, Vector3 from, Vector3 to)
+    {
+        var line = to - from;
+        var length = line.Length();
+        if (length < 1e-3f) return true;
+
+        var steps = (int)MathF.Ceiling(length / 0.25f);
+        var step = line / steps;
+        var at = from;
+
+        for (var i = 1; i < steps; i++)
+        {
+            at += step;
+            if (solid((int)MathF.Floor(at.X), (int)MathF.Floor(at.Y), (int)MathF.Floor(at.Z))) return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// One step forward along the yaw against the terrain, and whether it went anywhere at all.
+    /// </summary>
+    /// <param name="maxDrop">
+    /// The furthest it will walk off an edge. A step whose column has no floor that close is refused,
+    /// as a wall is.
+    /// </param>
+    /// <remarks>
+    /// <para>⛳ <b>Each axis on its own.</b> A body pressed into a wall at an angle slides along it
+    /// rather than stopping dead, which is most of what a creature caught on the terrain looked like.</para>
+    /// <para>A step that meets a wall one block high is lifted onto it, if there is head room for
+    /// the lift; anything higher is a wall. A step into open air is taken — the fall that follows is
+    /// <see cref="Fall"/>'s, and it is charged for.</para>
+    /// </remarks>
+    private static bool Walk(Creature creature, float distance, Func<int, int, int, bool> solid, int maxDrop)
+    {
+        var yaw = float.DegreesToRadians(creature.Yaw);
+        var move = new Vector3(MathF.Cos(yaw), 0f, MathF.Sin(yaw)) * distance;
+        var tall = Tall(creature);
+        var start = creature.Position;
+        var at = start;
+
+        foreach (var axis in (ReadOnlySpan<int>)[0, 2])
+        {
+            var next = axis == 0 ? at with { X = at.X + move.X } : at with { Z = at.Z + move.Z };
+            if (axis == 0 ? MathF.Abs(move.X) < 1e-6f : MathF.Abs(move.Z) < 1e-6f) continue;
+
+            if (Fits(solid, next, tall))
+            {
+                at = next;
+                continue;
+            }
+
+            // A one-block step: the same move, a block up, with the head room to rise into.
+            var lifted = next with { Y = MathF.Floor(at.Y + 0.01f) + 1f };
+            if (Fits(solid, lifted, tall) && Fits(solid, at with { Y = lifted.Y }, tall))
+                at = lifted;
+        }
+
+        if (Vector3.DistanceSquared(at, start) < 1e-8f) return false;
+
+        // ⚠ The edge, asked of the column the centre is about to be over. Floor within the drop it
+        // will take, or the step is not taken at all.
+        if (at.Y <= start.Y + 0.01f)
+        {
+            var x = (int)MathF.Floor(at.X);
+            var z = (int)MathF.Floor(at.Z);
+            var feet = (int)MathF.Floor(at.Y + 0.01f);
+            var floor = false;
+
+            for (var d = 0; d <= maxDrop; d++)
+            {
+                if (solid(x, feet - 1 - d, z))
+                {
+                    floor = true;
+                    break;
+                }
+            }
+
+            if (!floor) return false;
+        }
+
+        creature.Position = at;
+        return true;
+    }
+
+    /// <summary>Lifts a climber up the face in front of it, if there is room above.</summary>
+    private static bool Climb(Creature creature, float dt, Func<int, int, int, bool> solid)
+    {
+        var tall = Tall(creature);
+        var up = creature.Position with { Y = creature.Position.Y + ClimbSpeed * dt };
+        if (!Fits(solid, up, tall) || !TouchingWall(solid, creature.Position, tall)) return false;
+
+        creature.Position = up;
+        creature.Clinging = true;
+        creature.FallSpeed = 0f;
+        return true;
+    }
+
+    /// <summary>Whether a wall is within reach of the body's sides at any height it stands.</summary>
+    private static bool TouchingWall(Func<int, int, int, bool> solid, Vector3 at, int tall)
+    {
+        const float reach = BodyHalf + 0.15f;
+        var y0 = (int)MathF.Floor(at.Y + 0.01f);
+
+        for (var y = y0; y < y0 + tall; y++)
+        {
+            if (solid((int)MathF.Floor(at.X + reach), y, (int)MathF.Floor(at.Z))) return true;
+            if (solid((int)MathF.Floor(at.X - reach), y, (int)MathF.Floor(at.Z))) return true;
+            if (solid((int)MathF.Floor(at.X), y, (int)MathF.Floor(at.Z + reach))) return true;
+            if (solid((int)MathF.Floor(at.X), y, (int)MathF.Floor(at.Z - reach))) return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>Whether a body of this height fits with its feet at this point.</summary>
+    private static bool Fits(Func<int, int, int, bool> solid, Vector3 at, int tall)
+    {
+        // ⚠ Shaved by a hair. A body slid flush against a wall sits at 5.700006 against a face at
+        // 6, and unshaved its own position overlaps the wall — every move from there, the climb
+        // included, was refused, and the first spider stood against its wall for good.
+        const float hair = 1e-3f;
+        var x0 = (int)MathF.Floor(at.X - BodyHalf + hair);
+        var x1 = (int)MathF.Floor(at.X + BodyHalf - hair);
+        var z0 = (int)MathF.Floor(at.Z - BodyHalf + hair);
+        var z1 = (int)MathF.Floor(at.Z + BodyHalf - hair);
+        var y0 = (int)MathF.Floor(at.Y + 0.01f);
+
+        for (var x = x0; x <= x1; x++)
+        for (var z = z0; z <= z1; z++)
+        for (var y = y0; y < y0 + tall; y++)
+            if (solid(x, y, z)) return false;
+
+        return true;
+    }
+
     private static void Scorch(
         Creature creature,
         float dt,
@@ -1477,6 +1964,47 @@ public sealed class CreatureHerd
         var taken = new List<CreatureAttack>(_attacks);
         _attacks.Clear();
         return taken;
+    }
+
+    /// <summary>Every arrow loosed since last asked, drained like the attacks are.</summary>
+    public List<CreatureShot> TakeShots()
+    {
+        if (_shots.Count == 0) return [];
+        var taken = new List<CreatureShot>(_shots);
+        _shots.Clear();
+        return taken;
+    }
+
+    /// <summary>
+    /// Aims one arrow at the target's chest, lobbed for the drop and thrown off a little.
+    /// </summary>
+    /// <remarks>
+    /// The lob is worked out from the pool's own arrow speed and gravity, so a change to either moves
+    /// the aim with it. ⚠ The spread is the reference's on its normal setting — about two and a half
+    /// degrees a side — which is what makes strafing worth doing and standing still a mistake.
+    /// </remarks>
+    private void Loose(Creature creature, Vector3 target)
+    {
+        var from = creature.Position + new Vector3(0f, MathF.Max(0.6f, creature.Size.Y * creature.Scale * 0.8f), 0f);
+        var chest = target + new Vector3(0f, 1.1f, 0f);
+        var line = chest - from;
+
+        var flat = MathF.Sqrt(line.X * line.X + line.Z * line.Z);
+        var time = flat / Projectiles.ProjectileSystem.ArrowSpeed;
+        line.Y += 0.5f * Projectiles.ProjectileSystem.ArrowGravity * time * time;
+
+        var aim = Vector3.Normalize(line);
+        aim += new Vector3(Gauss(), Gauss(), Gauss()) * ArcherSpread;
+
+        var damage = CreatureVitals.DamageFor(creature.Kind) + _random.Next(3);
+        _shots.Add(new CreatureShot(creature.Kind, from + Vector3.Normalize(aim) * 0.6f, Vector3.Normalize(aim), damage));
+
+        float Gauss()
+        {
+            var u = 1.0 - _random.NextDouble();
+            var v = _random.NextDouble();
+            return (float)(Math.Sqrt(-2.0 * Math.Log(u)) * Math.Cos(Math.Tau * v));
+        }
     }
 
     /// <summary>Every fuse that burned down since last asked, drained like the attacks are.</summary>
@@ -1552,9 +2080,28 @@ public sealed class CreatureHerd
         // ⚠ From a block above its feet, not from its feet. Standing on a surface, the cell its feet
         // are in is the air just above the ground — starting the search there would find that same
         // surface, which is right, but starting one lower would find whatever is under the floor.
-        var ground = TryGround(solid, x, z, (int)MathF.Floor(creature.Position.Y) + 1, out var y)
-            ? y
-            : 0f;
+        // ⛔ Nothing found is a fall, not a floor at nought. The search used to give up at y 1 and
+        // the answer was "the ground is at 0", so anything in a cave below the zero line was put
+        // back up inside the rock the first frame it stood there.
+        var ground = Footing(solid, creature.Position);
+
+        // Out of the bottom of the world: gone, with nothing left behind — there is nowhere for it.
+        if (creature.Position.Y < Gen.TerrainGenerator.WorldBottom - 8)
+        {
+            creature.Health = 0;
+            creature.DyingFor = 0f;
+            return true;
+        }
+
+        // A climber holding a wall does not fall off it.
+        if (creature.Clinging && creature.FallSpeed >= 0f && TouchingWall(solid, creature.Position, Tall(creature)))
+        {
+            creature.FallSpeed = 0f;
+            creature.FellFor = 0f;
+            return false;
+        }
+
+        creature.Clinging = false;
 
         // ⚠ Only a body on its way DOWN can be standing. A hopper the instant it launches is at
         // ground height with upward speed, and the unguarded test read that as "landed" and zeroed

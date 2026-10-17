@@ -681,6 +681,10 @@ public static class WorldAudit
         Check("where a thing lives takes two questions", spawnFaults.Count == 0,
             spawnFaults.Count == 0 ? spawnDetail : string.Join("; ", spawnFaults));
 
+        var moveFaults = CreatureMovementFaults(out var moveDetail);
+        Check("monsters walk off ledges, round walls and up them", moveFaults.Count == 0,
+            moveFaults.Count == 0 ? moveDetail : string.Join("; ", moveFaults));
+
         var shelfFaults = PackShelfFaults(out var shelfDetail);
         Check("a pack can be put on the shelf and named", shelfFaults.Count == 0,
             shelfFaults.Count == 0 ? shelfDetail : string.Join("; ", shelfFaults));
@@ -8316,6 +8320,27 @@ public static class WorldAudit
         if (aimed.Impacts.Length != 1 || aimed.Impacts[0].Creature != herd.All[0])
             faults.Add("terrain behind a creature won the projectile's nearest-hit comparison");
 
+        // ⛔ A creature's arrow passes through the herd and finds the player. The same line as the
+        // shot above, the same cow in it — and the player standing just past the cow.
+        var loosed = new ProjectileSystem(registry);
+        loosed.Spawn(
+            ProjectileKind.Arrow, ProjectileOwner.Creature,
+            new Vector3(2f, 1.7f, 1.5f), Vector3.UnitX,
+            speed: 40f, gravity: 0f, damage: 3);
+        loosed.Update(herdWorld, herd, 0.2f, (new Vector3(6.7f, 1f, 1.2f), new Vector3(7.3f, 2.8f, 1.8f)));
+        if (loosed.Impacts.Length != 1 || !loosed.Impacts[0].Player || loosed.Impacts[0].Creature is not null)
+            faults.Add("a creature's arrow did not pass the cow and find the player behind it");
+
+        // And with nobody in the way it goes on to the stone, as a miss.
+        var wide = new ProjectileSystem(registry);
+        wide.Spawn(
+            ProjectileKind.Arrow, ProjectileOwner.Creature,
+            new Vector3(2f, 1.7f, 1.5f), Vector3.UnitX,
+            speed: 40f, gravity: 0f, damage: 3);
+        wide.Update(herdWorld, herd, 0.2f, (new Vector3(6.7f, 1f, 4.2f), new Vector3(7.3f, 2.8f, 4.8f)));
+        if (wide.Impacts.Length != 1 || wide.Impacts[0].Player || wide.Impacts[0].X != 9)
+            faults.Add("a creature's arrow with nobody on its line did not end in the stone");
+
         // Unloaded space is not transparent world. Crossing x=32 retires the shot without claiming
         // an impact on a block that does not exist yet.
         var edge = new ProjectileSystem(registry);
@@ -11088,50 +11113,13 @@ public static class WorldAudit
         Want("a lit cave, dark", SpawnRules.Dark(lit, 1f), false);
         Want("a lit cave, buried", SpawnRules.Buried(lit), false);
 
-        // ── How hard the dark pushes, which was reported as "really aggressive at night" ─────────
+        // ── The monster spawner, against a world of two floors ──────────────────────────────────
         //
-        // ⛔ The spawner was a set point with infinite gain: every second it refilled the entire
-        // deficit, so a night arrived complete instead of building and a kill was answered before
-        // the body faded. These are the three numbers that turn it into a rate.
-        if (SpawnRules.Pressure(0, SpawnRules.HostileCap) < 0.99f)
-            faults.Add("an empty night is not certain to place anything, so the dark never starts");
-
-        if (SpawnRules.Pressure(SpawnRules.HostileCap, SpawnRules.HostileCap) > 0f)
-            faults.Add("a full night still places more, so the cap is not a cap");
-
-        // ⛳ THE CONTROL, and it is the one that matters: pressure has to FALL. A build that always
-        // spawns reads 1 at every population — which is exactly what shipped — and satisfies both
-        // of the bounds above if they are written as "between 0 and 1".
-        var falling = true;
-        for (var n = 1; n <= SpawnRules.HostileCap; n++)
-            falling &= SpawnRules.Pressure(n, SpawnRules.HostileCap)
-                     < SpawnRules.Pressure(n - 1, SpawnRules.HostileCap);
-
-        if (!falling) faults.Add("spawn pressure does not fall as the night fills");
-
-        // One attempt may not fill the night. This is the whole of "scale it back" as a number.
-        //
-        // ⚠ Through locals ON PURPOSE. Compared constant against constant the compiler folds the
-        // test, reports the body as unreachable, and what is left is a check that never runs — see
-        // the same trap in the radius test below. Reading them first keeps it a runtime assertion.
-        var batch = SpawnRules.HostileBatch;
-        var cap = SpawnRules.HostileCap;
-
-        if (batch >= cap)
-            faults.Add($"one attempt may place {batch} of a cap of "
-                     + $"{cap}, which is the deficit-refill it replaced");
-
-        // And they arrive at an irregular remove, not on a beat and not on your doorstep.
-        var soonest = SpawnRules.NextAttempt(0.0);
-        var latest = SpawnRules.NextAttempt(1.0);
-
-        if (soonest < 2f) faults.Add($"attempts come as often as every {soonest:F1}s");
-        if (latest <= soonest + 2f)
-            faults.Add($"attempts land between {soonest:F1}s and {latest:F1}s, which is a metronome");
-
-        var minRadius = SpawnRules.HostileMinRadius;
-        if (minRadius < 20f)
-            faults.Add($"things appear {minRadius:F0} blocks away, close enough to be an ambush");
+        // ⛔ The fault this replaced: a cap of five, a ring round the player, and nothing ever let
+        // go — so the first five to appear anywhere dark held every slot all session. These are the
+        // reference's numbers, checked as behaviour rather than read back as constants.
+        var monsterFaults = MonsterSpawnerFaults(out var monsterDetail);
+        faults.AddRange(monsterFaults);
 
         // And the fault this was written for: a cave animal filed as a meadow animal.
         foreach (var kind in CreatureSet.All)
@@ -11148,10 +11136,290 @@ public static class WorldAudit
             faults.Add($"only {families.Count} families exist, so a band check has nothing to separate");
 
         detail = $"a field at midnight is dark and not buried, a cave at noon is both, a torch "
-               + $"clears either; {families.Count} families; the dark tries every "
-               + $"{SpawnRules.NextAttempt(0.0):F0}-{SpawnRules.NextAttempt(1.0):F0}s, places at "
-               + $"most {SpawnRules.HostileBatch} of {SpawnRules.HostileCap} at "
-               + $"{SpawnRules.HostileMinRadius:F0} blocks, and stops pushing as it fills";
+               + $"clears either; {families.Count} families; {monsterDetail}";
+
+        return faults;
+    }
+
+    /// <summary>
+    /// Walks creatures over made-up ground: ledges, a wall with one gap, a deep cave and a cliff face.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛔ <b>The fault this guards:</b> the old step refused any change of height over a block,
+    /// so nothing walked off a ledge, and a hunter walked straight at its target into whatever was
+    /// in the way.</para>
+    /// <para>⛳ <b>Each claim with the control that makes it mean something.</b> The gap test runs
+    /// twice, once with the gap bricked up: a hunter that "reaches" a player it has no way to is
+    /// walking through the wall, and one that cannot reach through the gap is not pathing. The drop
+    /// test has a wanderer refuse the same fall a hunter takes.</para>
+    /// </remarks>
+    private static List<string> CreatureMovementFaults(out string detail)
+    {
+        var faults = new List<string>();
+        var zombie = new SpawnKind("zombie", new Vector3(0.6f, 1.95f, 0.6f), true);
+        var spider = new SpawnKind("spider", new Vector3(1.4f, 0.9f, 1.4f), true);
+
+        // Steps the herd for a while toward a player standing still, and says how close it got.
+        static float Chase(CreatureHerd herd, Creature who, Func<int, int, int, bool> solid, Vector3 player, float seconds)
+        {
+            var best = float.MaxValue;
+            for (var t = 0f; t < seconds; t += 1f / 60f)
+            {
+                herd.Update(1f / 60f, solid, player);
+                herd.TakeAttacks();
+                best = MathF.Min(best, Vector3.Distance(who.Position, player));
+            }
+            return best;
+        }
+
+        // ── A wall with one gap. Floor at y 0 (solid below), wall two high along x = 6. ─────────
+        bool Walled(int x, int y, int z, bool gap) =>
+            // ⚠ No ends: the first version stopped at z ±12 and the "bricked up" hunter walked
+            // round the end of it, which is a pass that read as a fault.
+            y < 0 || (x == 6 && y < 2 && !(gap && z == 8));
+
+        float Behind(bool gap)
+        {
+            var herd = new CreatureHerd(3);
+            var who = herd.SpawnAt(zombie, new Vector3(0.5f, 0f, 0.5f));
+            who.Provoked = true;
+            return Chase(herd, who, (x, y, z) => Walled(x, y, z, gap), new Vector3(11.5f, 0f, 0.5f), 25f);
+        }
+
+        var through = Behind(gap: true);
+        var bricked = Behind(gap: false);
+        if (through > 2.5f) faults.Add($"with a gap in the wall the hunter got no nearer than {through:F1} blocks");
+        if (bricked < 4f) faults.Add($"with the wall bricked up the hunter still got to {bricked:F1} blocks — through the wall");
+
+        // ── Ledges. Floor at y 0 for x < 8, then a step down to the given depth. ────────────────
+        float Off(int depth, bool hunt)
+        {
+            var herd = new CreatureHerd(4);
+            bool Solid(int x, int y, int z) => x < 8 ? y < 0 : y < -depth;
+            var who = herd.SpawnAt(zombie, new Vector3(4.5f, 0f, 0.5f));
+            if (hunt)
+            {
+                who.Provoked = true;
+                Chase(herd, who, Solid, new Vector3(14.5f, -depth, 0.5f), 12f);
+            }
+            else
+            {
+                // A wanderer pointed at the edge and left to walk; its own re-thinks are held off.
+                who.Yaw = 0f;
+                who.WantsYaw = 0f;
+                who.Moving = true;
+                for (var t = 0f; t < 6f; t += 1f / 60f)
+                {
+                    who.Thinks = 10f;
+                    herd.Update(1f / 60f, Solid);
+                }
+            }
+            return who.Position.Y;
+        }
+
+        var stepped = Off(2, hunt: false);
+        var declined = Off(6, hunt: false);
+        var chased = Off(6, hunt: true);
+        if (stepped > -1.5f) faults.Add($"a wanderer at a two-block ledge stayed at {stepped:F1} rather than walking off");
+        if (declined < -0.5f) faults.Add($"a wanderer walked off a six-block cliff (now at {declined:F1})");
+        if (chased > -5.5f) faults.Add($"a hunter would not drop six blocks to its target (stayed at {chased:F1})");
+
+        // ── The deep. A cave floor far below the zero line must hold a creature where it stands. ──
+        {
+            var herd = new CreatureHerd(6);
+            static bool Cave(int x, int y, int z) => !(y >= -40 && y < -36);
+            var who = herd.SpawnAt(zombie, new Vector3(0.5f, -40f, 0.5f));
+            for (var i = 0; i < 120; i++) herd.Update(1f / 60f, Cave);
+            if (MathF.Abs(who.Position.Y + 40f) > 0.05f || !who.Alive)
+                faults.Add($"a creature on a cave floor at y -40 ended at {who.Position.Y:F1}");
+        }
+
+        // ── A face four high with the player on top: the spider climbs, the zombie cannot. ──────
+        float Face(SpawnKind kind)
+        {
+            var herd = new CreatureHerd(7);
+            static bool Solid(int x, int y, int z) => y < 0 || (x >= 6 && y < 4);
+            var who = herd.SpawnAt(kind, new Vector3(3.5f, 0f, 0.5f));
+            who.Provoked = true;
+            Chase(herd, who, Solid, new Vector3(9.5f, 4f, 0.5f), 15f);
+            return who.Position.Y;
+        }
+
+        // ── An archer on open ground: draws, looses on a beat, at the player — and not through a wall.
+        (int Shots, float First, float Gap, float Off) Archery(bool wall)
+        {
+            var herd = new CreatureHerd(8);
+            bool Solid(int x, int y, int z) => y < 0 || (wall && x == 5 && y < 4);
+            var who = herd.SpawnAt(new SpawnKind("skeleton", new Vector3(0.6f, 1.99f, 0.6f), true), new Vector3(0.5f, 0f, 0.5f));
+            var player = new Vector3(10.5f, 0f, 0.5f);
+            var times = new List<float>();
+            var worst = 0f;
+            for (var t = 0f; t < 9f; t += 1f / 60f)
+            {
+                herd.Update(1f / 60f, Solid, player);
+                foreach (var shot in herd.TakeShots())
+                {
+                    times.Add(t);
+                    var flat = new Vector2(shot.Direction.X, shot.Direction.Z);
+                    var want = new Vector2(player.X - shot.From.X, player.Z - shot.From.Z);
+                    var off = MathF.Acos(Math.Clamp(Vector2.Dot(Vector2.Normalize(flat), Vector2.Normalize(want)), -1f, 1f));
+                    worst = MathF.Max(worst, float.RadiansToDegrees(off));
+                }
+            }
+            var gap = times.Count > 1 ? (times[^1] - times[0]) / (times.Count - 1) : 0f;
+            return (times.Count, times.Count > 0 ? times[0] : -1f, gap, worst);
+        }
+
+        var archery = Archery(wall: false);
+        var walled = Archery(wall: true);
+        if (archery.Shots < 3) faults.Add($"a skeleton with the player in view loosed {archery.Shots} in nine seconds");
+        if (archery.First is >= 0f and < 0.9f) faults.Add($"a skeleton loosed {archery.First:F2}s after seeing the player, with no draw");
+        if (archery.Gap is > 0f and (< 1.6f or > 2.8f)) faults.Add($"a skeleton looses every {archery.Gap:F2}s, not about two");
+        if (archery.Off > 10f) faults.Add($"a skeleton's arrow left {archery.Off:F1}° off the player's line");
+        if (walled.Shots > 0) faults.Add($"a skeleton loosed {walled.Shots} at a player behind a wall it cannot see through");
+
+        var spiderUp = Face(spider);
+        var zombieUp = Face(zombie);
+        if (spiderUp < 3.9f) faults.Add($"a spider at a four-high face got only to {spiderUp:F1}");
+        if (zombieUp > 0.5f) faults.Add($"a zombie went up a four-high face to {zombieUp:F1}");
+
+        detail = $"round a wall through its gap to {through:F1} (bricked up: {bricked:F1}); a wanderer "
+               + $"walks off two ({stepped:F0}) and declines six; a hunter drops six ({chased:F0}); "
+               + $"a cave floor at -40 holds; a spider climbs four ({spiderUp:F1}), a zombie does not; "
+               + $"a skeleton draws {archery.First:F1}s and looses every {archery.Gap:F1}s within {archery.Off:F1}°, "
+               + $"and never through a wall";
+        return faults;
+    }
+
+    /// <summary>
+    /// Runs the monster spawner and the despawn rule over a made-up world: a field and a cave below it.
+    /// </summary>
+    /// <remarks>
+    /// <para>The world is a flat field at y 0 over solid rock, with one wide cave hollowed out at
+    /// y −20, the east half of it lit by torches. Every floor cell is equally likely to be sampled, so
+    /// the ratio of field to cave placements is the light roll's odds and nothing else.</para>
+    /// <para>⛳ <b>Each claim has its control.</b> Noon must put nothing on the field and something in
+    /// the cave; midnight must put something on both, the field near a quarter as often per cell; the
+    /// torches must clear their half whatever the hour; and despawn must take the far, keep the near,
+    /// and keep anything the caller says is not transient however far it is.</para>
+    /// </remarks>
+    private static List<string> MonsterSpawnerFaults(out string detail)
+    {
+        var faults = new List<string>();
+
+        static bool Solid(int x, int y, int z) => y < 0 && !(y >= -20 && y < -17);
+        static bool Lit(int x, int y) => y < 0 && x > 40;
+
+        var world = new SpawnWorld(
+            Solid,
+            Solid,
+            (x, y, z) => false,
+            (x, y, z) => false,
+            (x, y, z) => y >= 0 ? LightValue.Pack(15, 0, 0, 0)
+                : Lit(x, y) ? LightValue.Pack(0, 6, 5, 3) : LightValue.Pack(0, 0, 0, 0),
+            (x, z) => Biome.Meadow);
+
+        var kinds = new Dictionary<string, SpawnKind>(StringComparer.Ordinal)
+        {
+            ["zombie"] = new("zombie", new Vector3(0.6f, 1.95f, 0.6f), true),
+            ["spider"] = new("spider", new Vector3(1.4f, 0.9f, 1.4f), true),
+        };
+
+        // Between the two floors, so both are well inside the band and outside the near ring.
+        var player = new Vector3(0.5f, -10f, 0.5f);
+
+        (int Field, int Cave, int Lit, int Near, int Far, int Total) Run(float daylight, int seed)
+        {
+            var spawner = new MonsterSpawner(seed);
+            var tally = (Field: 0, Cave: 0, Lit: 0, Near: 0, Far: 0, Total: 0);
+
+            // ⚠ The living count held at nothing, so the cap never stops it and the ratio is the
+            // light's alone. The cap has its own check below.
+            for (var frame = 0; frame < 400; frame++)
+            {
+                foreach (var placed in spawner.Step(0.05f, world, player, daylight, 0, kinds))
+                {
+                    tally.Total++;
+                    var p = placed.Position;
+                    var d = Vector3.Distance(p, player);
+                    if (d < SpawnRules.MinRadius) tally.Near++;
+                    if (d > SpawnRules.SpawnRadius) tally.Far++;
+                    if (p.Y >= 0f) tally.Field++;
+                    else tally.Cave++;
+                    if (Lit((int)MathF.Floor(p.X), (int)MathF.Floor(p.Y))) tally.Lit++;
+                }
+            }
+
+            return tally;
+        }
+
+        var noon = Run(1f, 11);
+        var night = Run(0f, 12);
+
+        if (noon.Cave == 0) faults.Add("a cave at noon bred nothing");
+        if (noon.Field > 0) faults.Add($"a field at noon bred {noon.Field}");
+        if (night.Field == 0) faults.Add("a field at midnight bred nothing");
+        if (noon.Lit + night.Lit > 0) faults.Add($"{noon.Lit + night.Lit} stood in torchlight");
+        if (noon.Near + night.Near > 0) faults.Add($"{noon.Near + night.Near} appeared inside {SpawnRules.MinRadius:F0} blocks");
+        if (noon.Far + night.Far > 0) faults.Add($"{noon.Far + night.Far} appeared beyond {SpawnRules.SpawnRadius:F0} blocks");
+
+        // The field's floor is the whole disc; the cave's is the dark half of it — and a spider's
+        // footprint fits both the same. So per cell, field over cave is the light roll's odds.
+        // Counted rather than worked out: the torches take everything east of x 40, which is not
+        // a half of a disc and is not worth a formula.
+        var fieldCells = 0f;
+        var caveCells = 0f;
+        for (var x = -130; x <= 130; x++)
+        for (var z = -130; z <= 130; z++)
+        {
+            var d = MathF.Sqrt((x + 0.5f - player.X) * (x + 0.5f - player.X)
+                             + (z + 0.5f - player.Z) * (z + 0.5f - player.Z) + 100f);
+            if (d < SpawnRules.MinRadius || d > SpawnRules.SpawnRadius) continue;
+            fieldCells++;
+            if (!Lit(x, -20)) caveCells++;
+        }
+        var ratio = night.Cave == 0 ? 0f : night.Field / fieldCells / (night.Cave / caveCells);
+        var expected = SpawnRules.MonsterDarkChance(LightValue.Pack(15, 0, 0, 0), 0f);
+
+        // ⚠ Not the bare light odds, and the first run of this said so: a sample places at most
+        // four, so a dark cave sample stops at four out of twelve tries while a field sample spends
+        // all twelve at a quarter each. The reference's own cluster limit puts the field between
+        // its light odds and the cave — above the one, clearly below the other.
+        if (ratio < expected * 0.8f || ratio > 0.9f)
+            faults.Add($"a field at midnight bred {ratio:F2} as often per cell as a cave; "
+                     + $"want between its light odds {expected:F2} and the cave's own 1");
+
+        // The cap: a world one short of it takes one more and no more.
+        var capped = new MonsterSpawner(13);
+        var extra = 0;
+        for (var frame = 0; frame < 100; frame++)
+            extra += capped.Step(0.05f, world, player, 0f, SpawnRules.MonsterCap - 1 + extra, kinds).Count;
+        if (extra != 1) faults.Add($"one short of the cap, {extra} were placed");
+
+        // Despawn: far goes at once, near never, middle eventually, and a kept one never.
+        var herd = new CreatureHerd(5);
+        var at = new Vector3(0f, 0f, 0f);
+        var zombie = kinds["zombie"];
+        var far = herd.SpawnAt(zombie, at + new Vector3(130f, 0f, 0f));
+        var near = herd.SpawnAt(zombie, at + new Vector3(10f, 0f, 0f));
+        var middle = herd.SpawnAt(zombie, at + new Vector3(60f, 0f, 0f));
+        var kept = herd.SpawnAt(zombie, at + new Vector3(200f, 0f, 0f));
+
+        herd.Despawn(at, 0.05f, creature => creature != kept);
+        if (herd.All.Contains(far)) faults.Add("one beyond 128 blocks was not let go at once");
+        if (!herd.All.Contains(middle)) faults.Add("one at 60 blocks was let go before it had been idle");
+
+        for (var second = 0; second < 900 && herd.All.Contains(middle); second++)
+            herd.Despawn(at, 1f, creature => creature != kept);
+
+        if (herd.All.Contains(middle)) faults.Add("one idle at 60 blocks was never let go in fifteen minutes");
+        if (!herd.All.Contains(near)) faults.Add("one 10 blocks from the player was let go");
+        if (!herd.All.Contains(kept)) faults.Add("one the caller keeps was let go");
+
+        detail = $"monsters: noon {noon.Cave} in the cave and {noon.Field} on the field, midnight "
+               + $"{night.Cave} and {night.Field} (field per cell {ratio:F2} of a cave's, light odds "
+               + $"{expected:F2}), none in torchlight, inside {SpawnRules.MinRadius:F0} or past "
+               + $"{SpawnRules.SpawnRadius:F0}; cap {SpawnRules.MonsterCap} holds; despawn takes far, keeps near";
 
         return faults;
     }

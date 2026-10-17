@@ -85,7 +85,7 @@ public static class CreatureVitals
         ["zombie"] = 3,
         ["drowned"] = 3,
         ["husk"] = 3,
-        ["skeleton"] = 2,
+        ["skeleton"] = 3,
         ["spider"] = 2,
         ["crawler"] = 6,
         ["farwalker"] = 7,
@@ -152,6 +152,34 @@ public static class CreatureVitals
         new(StringComparer.Ordinal) { "zombie", "drowned", "skeleton" };
 
     /// <summary>Half-hearts this kind starts with.</summary>
+    /// <summary>
+    /// How far a hunter will notice and follow somebody, in blocks. The reference's own figures.
+    /// </summary>
+    /// <remarks>
+    /// The zombie family sees 35 — it is the one that turns up from further off than you expected —
+    /// the farwalker 64 once crossed, and everything else 16.
+    /// </remarks>
+    private static readonly Dictionary<string, float> Follow = new(StringComparer.Ordinal)
+    {
+        ["zombie"] = 35f,
+        ["husk"] = 35f,
+        ["drowned"] = 35f,
+        ["zombie_villager"] = 35f,
+        ["farwalker"] = 64f,
+    };
+
+    public static float FollowRange(string kind) => Follow.GetValueOrDefault(kind, 16f);
+
+    /// <summary>Kinds that walk up walls. Their paths may go straight up a face they are holding.</summary>
+    private static readonly HashSet<string> Climbers = new(StringComparer.Ordinal) { "spider", "cave_spider" };
+
+    public static bool Climbs(string kind) => Climbers.Contains(kind);
+
+    /// <summary>Kinds that shoot rather than strike. Their damage row is the arrow's least.</summary>
+    private static readonly HashSet<string> Archers = new(StringComparer.Ordinal) { "skeleton", "stray", "bogged" };
+
+    public static bool Archer(string kind) => Archers.Contains(kind);
+
     public static int HealthFor(string kind) => Health.GetValueOrDefault(kind, DefaultHealth);
 
     /// <summary>True when this kind leaves something behind on its own.</summary>

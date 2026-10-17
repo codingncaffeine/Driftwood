@@ -67,6 +67,13 @@
     <EmbeddedResource Include="..\..\assets\sounds\enemies\zombie.wav"
                       LogicalName="Driftwood.Core.Sounds.enemies/zombie.wav" />
 
+    <!-- The skeleton's arrows (2026-10-17): supplied by the owner as MP3 and converted to 44.1 kHz
+         mono WAV here; the MP3 sources stay out of git like the rain's. -->
+    <EmbeddedResource Include="..\..\assets\sounds\enemies\arrow_hit.wav"
+                      LogicalName="Driftwood.Core.Sounds.enemies/arrow_hit.wav" />
+    <EmbeddedResource Include="..\..\assets\sounds\enemies\arrow_miss.wav"
+                      LogicalName="Driftwood.Core.Sounds.enemies/arrow_miss.wav" />
+
     <!-- The rain loop (2026-08-22): a 48-second seamless mono excerpt of the recording the owner
          supplied as assets/sounds/ambient/weather/rain.mp3 (the source stays out of git). -->
     <EmbeddedResource Include="..\..\assets\sounds\ambient\weather\rain.ogg"

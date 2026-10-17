@@ -24,6 +24,8 @@ public sealed class SoundLibrary
         ("enemies/spider", "Driftwood.Core.Sounds.enemies/spider.wav"),
         ("enemies/spider_attack", "Driftwood.Core.Sounds.enemies/spider_attack.wav"),
         ("enemies/zombie", "Driftwood.Core.Sounds.enemies/zombie.wav"),
+        ("enemies/arrow_hit", "Driftwood.Core.Sounds.enemies/arrow_hit.wav"),
+        ("enemies/arrow_miss", "Driftwood.Core.Sounds.enemies/arrow_miss.wav"),
 
         // The rain loop (2026-08-22), a 48-second seamless excerpt of the recording the owner
         // supplied; Vorbis, through our own decoder, like every pack sound.

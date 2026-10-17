@@ -46,3 +46,5 @@ Desktop.ini
 
 ## The owner's rain recording: the 48-second loop ships embedded as rain.ogg; the long source does not.
 /assets/sounds/ambient/weather/rain.mp3
+/assets/sounds/enemies/arrow hit.mp3
+/assets/sounds/enemies/arrow miss.mp3

@@ -37,7 +37,8 @@ public readonly record struct ProjectileImpact(
     int X,
     int Y,
     int Z,
-    int Face);
+    int Face,
+    bool Player = false);
 
 /// <summary>
 /// A fixed flight pool, swept against the world's real block shapes and every living creature.
@@ -139,7 +140,12 @@ public sealed class ProjectileSystem
         return false;
     }
 
-    public void Update(VoxelWorld world, CreatureHerd? herd, float dt)
+    /// <param name="player">
+    /// The player's box, for shots a creature loosed. ⛔ A creature's arrow never tests the herd: the
+    /// pool has no idea who fired it, and the first skeleton to shoot would have put the arrow in its
+    /// own skull at the muzzle.
+    /// </param>
+    public void Update(VoxelWorld world, CreatureHerd? herd, float dt, (Vector3 Min, Vector3 Max)? player = null)
     {
         _impactCount = 0;
         if (dt <= 0f || Count == 0) return;
@@ -169,7 +175,7 @@ public sealed class ProjectileSystem
 
             Creature? creature = null;
             var creatureAt = float.PositiveInfinity;
-            if (herd is not null)
+            if (herd is not null && shot.Owner != ProjectileOwner.Creature)
             {
                 foreach (var candidate in herd.All)
                 {
@@ -182,6 +188,20 @@ public sealed class ProjectileSystem
                     creature = candidate;
                     creatureAt = at;
                 }
+            }
+
+            var playerAt = float.PositiveInfinity;
+            if (shot.Owner == ProjectileOwner.Creature && player is { } box
+                && CreatureHerd.RayBox(from, direction, box.Min, box.Max, out var into) && into <= distance)
+                playerAt = into;
+
+            if (playerAt < blockAt)
+            {
+                var hit = from + direction * playerAt;
+                Impact(shot, hit, -direction, null, (int)MathF.Floor(hit.X), (int)MathF.Floor(hit.Y),
+                    (int)MathF.Floor(hit.Z), -1, player: true);
+                Retire(ref shot);
+                continue;
             }
 
             var hitCreature = creature is not null && creatureAt < blockAt;
@@ -229,7 +249,8 @@ public sealed class ProjectileSystem
         int x,
         int y,
         int z,
-        int face)
+        int face,
+        bool player = false)
     {
         _impacts[_impactCount++] = new ProjectileImpact(
             shot.Kind,
@@ -242,7 +263,8 @@ public sealed class ProjectileSystem
             x,
             y,
             z,
-            face);
+            face,
+            player);
     }
 
     private void Retire(ref Slot shot)
