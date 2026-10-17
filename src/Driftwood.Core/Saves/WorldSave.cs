@@ -71,6 +71,9 @@ public sealed record WorldState(
     /// <summary>Where a slept-in bed stands, or null when none ever was (#99).</summary>
     public Vector3? BedSpawn { get; set; }
 
+    /// <summary>Seconds played since the last sleep or death — what brings the phantoms.</summary>
+    public float AwakeSeconds { get; set; }
+
     /// <summary>What is written on the world's signs.</summary>
     public SignBank Signs { get; set; } = new();
 
@@ -1112,6 +1115,9 @@ public static class WorldSave
             into.Write(bed.Y);
             into.Write(bed.Z);
         }
+
+        // ⛳ Time awake, appended for the same reason again: an older build stops reading before it.
+        into.Write(state.AwakeSeconds);
     });
 
     private static void ReadPlayer(BinaryReader from, WorldState into, int[] toItem)
@@ -1169,5 +1175,9 @@ public static class WorldSave
         // ever slept in, which is exactly what null says.
         if (from.BaseStream.Position < from.BaseStream.Length && from.ReadBoolean())
             into.BedSpawn = new Vector3(from.ReadSingle(), from.ReadSingle(), from.ReadSingle());
+
+        // Time awake, if the save carries it; an older one opens rested.
+        if (from.BaseStream.Position + 4 <= from.BaseStream.Length)
+            into.AwakeSeconds = Math.Max(0f, from.ReadSingle());
     }
 }

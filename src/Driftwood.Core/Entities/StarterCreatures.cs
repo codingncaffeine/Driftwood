@@ -353,6 +353,119 @@ public static class StarterCreatures
                 Box(1f, 0f, -1f, 2f, 12f, 2f, 16, 48, mirror: true)),
         ]);
 
+    /// <summary>The snow's and the marsh's skeletons: the same bones, other weather.</summary>
+    public static CreatureModel Stray() => Skeleton() with { Name = "stray" };
+    public static CreatureModel Bogged() => Skeleton() with { Name = "bogged" };
+
+    /// <summary>
+    /// A villager the dead took: the villager's head, nose and robe on the zombie's reaching arms.
+    /// </summary>
+    /// <remarks>
+    /// The reference's own arrangement — its zombie villager wears the villager net with the two
+    /// arms cut separately and held out, rather than the trader's folded arm bar.
+    /// </remarks>
+    public static CreatureModel ZombieVillager()
+    {
+        var bones = Villager("zombie_villager").Bones.Where(b => b.Name != "arms").ToList();
+        bones.Add(Posed("arm0", "body", new Vector3(-5f, 22f, 0f), new Vector3(-78f, 0f, 0f),
+            Box(-8f, 10f, -2f, 4f, 12f, 4f, 44, 22)));
+        bones.Add(Posed("arm1", "body", new Vector3(5f, 22f, 0f), new Vector3(-78f, 0f, 0f),
+            Box(4f, 10f, -2f, 4f, 12f, 4f, 44, 22, mirror: true)));
+        return new CreatureModel("zombie_villager", 64, 64, [.. bones]);
+    }
+
+    /// <summary>
+    /// The marsh's brewer: the villager net on a sheet twice as tall, with the tall hat in four tiers.
+    /// </summary>
+    /// <remarks>
+    /// The hat's tiers are the reference's boxes at its uvs on the lower half of the 64×128 sheet,
+    /// stacked straight rather than bent back — the bend is a rotation per tier and reads the same
+    /// from more than a few blocks off. The wart is a box of its own on the nose.
+    /// </remarks>
+    public static CreatureModel Witch()
+    {
+        var bones = Villager("witch").Bones.Where(b => b.Name is not ("helmet" or "brim")).ToList();
+        bones.Add(Bone("wart", "nose", new Vector3(0f, 26f, 0f), Box(0f, 24f, -6.75f, 1f, 1f, 1f, 0, 0)));
+        bones.Add(Bone("hat", "head", new Vector3(0f, 34f, 0f),
+            Box(-5f, 34f, -5f, 10f, 2f, 10f, 0, 64),
+            Box(-3.5f, 36f, -3f, 7f, 4f, 7f, 0, 76),
+            Box(-2f, 40f, -1.5f, 4f, 4f, 4f, 0, 87),
+            Box(-0.5f, 44f, 0f, 1f, 2f, 1f, 0, 95)));
+        return new CreatureModel("witch", 64, 128, [.. bones]);
+    }
+
+    /// <summary>The mines' spider: the same net, drawn at seven tenths.</summary>
+    public static CreatureModel CaveSpider() => Spider() with { Name = "cave_spider" };
+
+    /// <summary>
+    /// The thing in the stone: seven tapering segments and three tufts, on the reference's net.
+    /// </summary>
+    /// <remarks>
+    /// Segment sizes, uvs and spacing are the reference's, laid nose-first along −z; the three tufts
+    /// ride over the second, third and fifth segments. Everything stands on 0.
+    /// </remarks>
+    public static CreatureModel Silverfish()
+    {
+        (int W, int H, int D, int U, int V)[] parts =
+            [(3, 2, 2, 0, 0), (4, 3, 2, 0, 4), (6, 4, 3, 0, 9), (3, 3, 3, 0, 16), (2, 2, 3, 0, 22), (2, 1, 2, 11, 0), (1, 1, 2, 13, 4)];
+
+        var z = new float[parts.Length];
+        z[0] = -3.5f;
+        for (var i = 1; i < parts.Length; i++) z[i] = z[i - 1] + (parts[i - 1].D + parts[i].D) * 0.5f;
+
+        var bones = new List<CreatureBone>();
+        for (var i = 0; i < parts.Length; i++)
+        {
+            var (w, h, d, u, v) = parts[i];
+            var name = i == 0 ? "head" : i == 2 ? "body" : $"segment{i}";
+            var parent = i == 2 ? "" : "body";
+            bones.Add(Bone(name, parent, new Vector3(0f, h * 0.5f, z[i]),
+                Box(-w * 0.5f, 0f, z[i] - d * 0.5f, w, h, d, u, v)));
+        }
+
+        bones.Add(Bone("tuft0", "body", new Vector3(0f, 4f, z[2]), Box(-5f, 0f, z[2] - 1.5f, 10f, 8f, 3f, 20, 0)));
+        bones.Add(Bone("tuft1", "body", new Vector3(0f, 2f, z[4]), Box(-3f, 0f, z[4] - 1.5f, 6f, 4f, 3f, 20, 11)));
+        bones.Add(Bone("tuft2", "body", new Vector3(0f, 2.5f, z[1]), Box(-3f, 0f, z[1] - 1f, 6f, 5f, 2f, 20, 18)));
+
+        return new CreatureModel("silverfish", 64, 32, [.. bones]);
+    }
+
+    /// <summary>
+    /// The night's flier: a flat body, a broad two-part wing a side, a two-part tail, a wide head.
+    /// </summary>
+    /// <remarks>
+    /// The reference's boxes at its uvs, flattened onto one plane — its own model tilts the body and
+    /// droops the wing tips, which the flap animation does for it. Flat as a kite, so it is the one
+    /// creature excused the height check in <see cref="Validate"/>.
+    /// </remarks>
+    public static CreatureModel Phantom() => new(
+        "phantom", 64, 64,
+        [
+            Bone("body", "", new Vector3(0f, 1.5f, -3.5f),
+                Box(-3f, 0f, -8f, 5f, 3f, 9f, 0, 8)),
+
+            Bone("head", "body", new Vector3(0f, 1.5f, -8f),
+                Box(-4f, 0f, -13f, 7f, 3f, 5f, 0, 0)),
+
+            Bone("wing0", "body", new Vector3(2f, 2f, -3.5f),
+                Box(2f, 1f, -8f, 6f, 2f, 9f, 23, 12)),
+
+            Bone("wingtip0", "wing0", new Vector3(8f, 2.5f, -3.5f),
+                Box(8f, 2f, -8f, 13f, 1f, 9f, 16, 24)),
+
+            Bone("wing1", "body", new Vector3(-3f, 2f, -3.5f),
+                Box(-9f, 1f, -8f, 6f, 2f, 9f, 23, 12, mirror: true)),
+
+            Bone("wingtip1", "wing1", new Vector3(-9f, 2.5f, -3.5f),
+                Box(-22f, 2f, -8f, 13f, 1f, 9f, 16, 24, mirror: true)),
+
+            Bone("tail", "body", new Vector3(-0.5f, 2f, 1f),
+                Box(-2f, 1f, 1f, 3f, 2f, 6f, 3, 20)),
+
+            Bone("tailtip", "tail", new Vector3(-0.5f, 2f, 7f),
+                Box(-1f, 1.5f, 7f, 1f, 1f, 6f, 4, 29)),
+        ]);
+
     /// <summary>Owned summons retain familiar movement rigs but never a wild identity.</summary>
     public static CreatureModel SummonedSkeleton() => Skeleton() with { Name = "summoned_skeleton" };
     public static CreatureModel SummonedZombie() => Zombie() with { Name = "summoned_zombie" };
@@ -735,8 +848,12 @@ public static class StarterCreatures
     public static IReadOnlyList<CreatureModel> All { get; } =
         [Cow(), Pig(), Sheep(), Chicken(), Wolf(), Zombie(), Drowned(), Husk(), Skeleton(), Spider(),
          Slime(), Crawler(), Farwalker(), Rabbit(), Fox(), Cat(), Bat(), Squid(),
+         Stray(), Bogged(), ZombieVillager(), Witch(), CaveSpider(), Silverfish(), Phantom(),
          Shorewright(), Forager(), Waykeeper(), Lorekeeper(), StormSentinel(), Starwarden(),
          SummonedSkeleton(), SummonedZombie(), SpiritWolf(), EarthElemental()];
+
+    /// <summary>Kinds excused the height band because they are flat on purpose.</summary>
+    private static readonly HashSet<string> Flat = new(StringComparer.Ordinal) { "phantom" };
 
     /// <summary>Ours for this creature, or null when we have not drawn one yet.</summary>
     public static CreatureModel? ByName(string name)
@@ -777,7 +894,7 @@ public static class StarterCreatures
             // And it has to be an animal-sized thing. Four units or four hundred is a transposed
             // digit, which is the failure a table of numbers actually has. ⚠ The ceiling is the
             // farwalker's 50 with a little headroom — it is the tallest thing we ship on purpose.
-            if (size.Y is < 6f or > 56f)
+            if (size.Y is < 6f or > 56f && !Flat.Contains(model.Name))
                 faults.Add($"{model.Name} is {size.Y:F0} units tall, which is not an animal");
         }
 

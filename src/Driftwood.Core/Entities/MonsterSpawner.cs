@@ -139,7 +139,7 @@ public sealed class MonsterSpawner
 
                 if (entry is null)
                 {
-                    entry = SpawnRules.Pick(SpawnRules.MonstersFor(world.BiomeAt(x, z)), kinds.ContainsKey, _roll);
+                    entry = SpawnRules.Pick(SpawnRules.MonstersFor(world.BiomeAt(x, z), y), kinds.ContainsKey, _roll);
                     if (entry is not { } chosen) return;
 
                     steps = chosen.PackMin + _roll.Next(1 + chosen.PackMax - chosen.PackMin);

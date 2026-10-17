@@ -29,6 +29,9 @@ public enum VitalsCause
 
     /// <summary>Leaning on something that pricks — a cactus, mostly.</summary>
     Prick,
+
+    /// <summary>A bite or a flask still working. Never the last half heart.</summary>
+    Poison,
 }
 
 public readonly record struct VitalsEvent(

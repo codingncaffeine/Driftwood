@@ -163,7 +163,7 @@ public static class CreatureArt
     };
 
     /// <summary>True when we have colours for this creature.</summary>
-    public static bool Has(string name) => Hides.ContainsKey(name);
+    public static bool Has(string name) => Hides.ContainsKey(name) || CreatureDesigns.TryGet(name, out _);
 
     /// <summary>Every creature we can paint.</summary>
     public static IEnumerable<string> All => Hides.Keys;
@@ -178,6 +178,10 @@ public static class CreatureArt
     /// </remarks>
     public static Image Paint(CreatureModel model, int seed = 0)
     {
+        // ⛳ A designed creature is drawn from its design, texel by texel; a hide is the fallback
+        // for the animals, which read well enough as a coat and a face.
+        if (CreatureDesigns.TryGet(model.Name, out var design)) return PaintDesigned(model, design, seed);
+
         var hide = Hides.TryGetValue(model.Name, out var found)
             ? found
             : new CreatureHide((150, 140, 130), (120, 112, 104), (110, 100, 94), (90, 84, 78), 0.2f, 0.06f);
@@ -213,6 +217,71 @@ public static class CreatureArt
                         continue;
 
                     PaintFace(pixels, model, hide, role, min, max, cube.Mirror, face, rx, ry, rw, rh, seed);
+                }
+            }
+        }
+
+        return new Image(model.SheetWidth, model.SheetHeight, pixels);
+    }
+
+    /// <summary>
+    /// Paints a creature from its design: each face of each box asks the design for each texel.
+    /// </summary>
+    /// <remarks>
+    /// The same top-lit lift the hides get, and grain only where the design's ink allows it — an eye
+    /// or a glow is asked for with none, so it stays the colour it was drawn.
+    /// </remarks>
+    private static Image PaintDesigned(CreatureModel model, Func<DesignTexel, Ink?> design, int seed)
+    {
+        var pixels = new byte[model.SheetWidth * model.SheetHeight * 4];
+
+        foreach (var bone in model.Bones)
+        {
+            for (var c = 0; c < bone.Cubes.Length; c++)
+            {
+                var cube = bone.Cubes[c];
+                var w = (int)MathF.Round(cube.Size.X);
+                var h = (int)MathF.Round(cube.Size.Y);
+                var d = (int)MathF.Round(cube.Size.Z);
+                if (w == 0 || h == 0 || d == 0) continue;
+
+                var min = cube.Origin;
+                var max = cube.Origin + cube.Size;
+                var centre = (min + max) * 0.5f;
+                var size = max - min;
+
+                for (var face = 0; face < 6; face++)
+                {
+                    var (rx, ry, rw, rh) = PlayerModel.FaceRect(cube.U, cube.V, w, h, d, cube.Mirror, face);
+                    if (rw <= 0 || rh <= 0) continue;
+                    if (rx < 0 || ry < 0 || rx + rw > model.SheetWidth || ry + rh > model.SheetHeight) continue;
+
+                    var (normal, uAxis, vAxis) = PlayerModel.FaceAxes(face, cube.Mirror);
+                    var faceCentre = centre + normal * (Vector3.Dot(size, Vector3.Abs(normal)) * 0.5f);
+                    var acrossU = Vector3.Dot(size, Vector3.Abs(uAxis));
+                    var acrossV = Vector3.Dot(size, Vector3.Abs(vAxis));
+                    var lift = 1f + normal.Y * 0.08f - MathF.Abs(normal.X) * 0.04f;
+
+                    for (var y = 0; y < rh; y++)
+                    for (var x = 0; x < rw; x++)
+                    {
+                        var at = faceCentre
+                               + uAxis * (((x + 0.5f) / rw - 0.5f) * acrossU)
+                               + vAxis * (((y + 0.5f) / rh - 0.5f) * acrossV);
+
+                        var i = ((ry + y) * model.SheetWidth + rx + x) * 4;
+                        if (design(new DesignTexel(bone.Name, c, face, x, y, rw, rh, at)) is not { } ink)
+                        {
+                            pixels[i + 3] = 0;
+                            continue;
+                        }
+
+                        var shade = (ink.Grain > 0f ? lift : 1f) + (Noise(at, seed + 71) - 0.5f) * ink.Grain * 2f;
+                        pixels[i] = Clamp(ink.R * shade);
+                        pixels[i + 1] = Clamp(ink.G * shade);
+                        pixels[i + 2] = Clamp(ink.B * shade);
+                        pixels[i + 3] = 255;
+                    }
                 }
             }
         }

@@ -12,6 +12,9 @@ public enum ProjectileKind : byte
     Arrow,
     Farpearl,
     FireBolt,
+
+    /// <summary>A witch's flask: thrown, lobbed, and splashing where it lands.</summary>
+    Flask,
 }
 
 /// <summary>Who launched a projectile. Spells and creature shots can extend this without a new pool.</summary>
@@ -38,7 +41,8 @@ public readonly record struct ProjectileImpact(
     int Y,
     int Z,
     int Face,
-    bool Player = false);
+    bool Player = false,
+    Entities.ShotTag Tag = Entities.ShotTag.None);
 
 /// <summary>
 /// A fixed flight pool, swept against the world's real block shapes and every living creature.
@@ -61,6 +65,10 @@ public sealed class ProjectileSystem
     public const float FarpearlSpeed = 22f;
     public const float FarpearlGravity = 10f;
     public const float FireBoltSpeed = 20f;
+
+    /// <summary>A thrown flask's speed and fall: the reference's, a slow lob that drops hard.</summary>
+    public const float FlaskSpeed = 15f;
+    public const float FlaskGravity = 20f;
     public const float Lifetime = 20f;
 
     private struct Slot
@@ -73,6 +81,7 @@ public sealed class ProjectileSystem
         public float Gravity;
         public float Age;
         public int Damage;
+        public Entities.ShotTag Tag;
     }
 
     private readonly Slot[] _slots = new Slot[Capacity];
@@ -113,7 +122,8 @@ public sealed class ProjectileSystem
         Vector3 direction,
         float speed,
         float gravity,
-        int damage)
+        int damage,
+        Entities.ShotTag tag = Entities.ShotTag.None)
     {
         var lengthSquared = direction.LengthSquared();
         if (lengthSquared < 1e-8f || speed <= 0f) return false;
@@ -132,6 +142,7 @@ public sealed class ProjectileSystem
                 Velocity = direction * speed,
                 Gravity = MathF.Max(0f, gravity),
                 Damage = Math.Max(0, damage),
+                Tag = tag,
             };
             Count++;
             return true;
@@ -264,7 +275,8 @@ public sealed class ProjectileSystem
             y,
             z,
             face,
-            player);
+            player,
+            shot.Tag);
     }
 
     private void Retire(ref Slot shot)

@@ -43,6 +43,9 @@ public sealed class PlayerBody
 
     public const float WalkSpeed = 4.3f;
     public const float SprintSpeed = 5.7f;
+
+    /// <summary>What an ailment leaves of the feet, 1 when nothing ails them.</summary>
+    public float SpeedScale { get; set; } = 1f;
     public const float SneakSpeed = 1.3f;
 
     /// <summary>Ground acceleration. High enough that walking feels immediate, not like skating.</summary>
@@ -249,6 +252,7 @@ public sealed class PlayerBody
         if (wishLength > 1f) wish /= wishLength;
 
         var target = sneak ? SneakSpeed : sprint ? SprintSpeed : WalkSpeed;
+        target *= Math.Clamp(SpeedScale, 0.1f, 1f);
         if (InLava) target *= LavaDrag;
         else if (InWater) target *= WaterDrag;
 

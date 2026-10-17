@@ -62,6 +62,15 @@ public static class CreatureVitals
         // can actually beat — two swings of a bare fist. Its threat is arithmetic, not health.
         ["slime"] = 8,
 
+        // The rest of the dark, at the reference's figures doubled like everything above.
+        ["zombie_villager"] = 40,
+        ["stray"] = 40,
+        ["bogged"] = 32,
+        ["cave_spider"] = 24,
+        ["witch"] = 52,
+        ["silverfish"] = 16,
+        ["phantom"] = 40,
+
         ["storm_sentinel"] = 52,
         ["starwarden"] = 240,
     };
@@ -90,6 +99,12 @@ public static class CreatureVitals
         ["crawler"] = 6,
         ["farwalker"] = 7,
         ["slime"] = 2,
+        ["zombie_villager"] = 3,
+        ["stray"] = 3,
+        ["bogged"] = 2,
+        ["cave_spider"] = 2,
+        ["silverfish"] = 1,
+        ["phantom"] = 4,
         ["storm_sentinel"] = 5,
         ["starwarden"] = 8,
 
@@ -149,7 +164,7 @@ public static class CreatureVitals
     /// on land like its cousin — its shelter is the water it spawns in.
     /// </remarks>
     private static readonly HashSet<string> Burns =
-        new(StringComparer.Ordinal) { "zombie", "drowned", "skeleton" };
+        new(StringComparer.Ordinal) { "zombie", "drowned", "skeleton", "zombie_villager", "stray", "bogged", "phantom" };
 
     /// <summary>Half-hearts this kind starts with.</summary>
     /// <summary>

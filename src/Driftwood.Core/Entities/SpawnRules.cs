@@ -178,6 +178,56 @@ public static class SpawnRules
     /// <para>⛳ A row whose creature this build cannot draw is skipped by the caller rather than
     /// filtered here, so a kind added later is a model and nothing else.</para>
     /// </remarks>
+    /// <summary>
+    /// The table at a height: the biome's, and below the zero line the deep's own spider too.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ <b>Ours, not the reference's.</b> Its cave spider only ever comes out of the spawners in
+    /// abandoned mines, which this world does not have; without a door of its own it would never be
+    /// met at all. So the deep breeds it, in ones to threes — rarer than the common four, and only
+    /// where the light has never been.
+    /// </remarks>
+    public static IReadOnlyList<MonsterEntry> MonstersFor(Biome biome, int y) =>
+        y < DeepLine ? DeepOf(MonstersFor(biome)) : MonstersFor(biome);
+
+    /// <summary>Below this the deep's own spider joins the table.</summary>
+    public const int DeepLine = 0;
+
+    private static readonly Dictionary<IReadOnlyList<MonsterEntry>, MonsterEntry[]> Deeps = new(ReferenceEqualityComparer.Instance);
+
+    private static IReadOnlyList<MonsterEntry> DeepOf(IReadOnlyList<MonsterEntry> table)
+    {
+        lock (Deeps)
+        {
+            if (!Deeps.TryGetValue(table, out var deep))
+                Deeps[table] = deep = [.. table, new("cave_spider", 40, 1, 3)];
+            return deep;
+        }
+    }
+
+    /// <summary>
+    /// Whether a stone in the highlands has something living in it.
+    /// </summary>
+    /// <remarks>
+    /// The reference's infested stone, which looks like any other and breaks into a silverfish. A
+    /// property of the cell rather than a roll at the break, so the same stone gives the same
+    /// answer however many times it is asked — about one in a hundred and twenty, below 64.
+    /// </remarks>
+    public static bool Infested(int seed, int x, int y, int z)
+    {
+        if (y >= 64) return false;
+        unchecked
+        {
+            var h = (uint)seed ^ (uint)x * 0x9E3779B1u ^ (uint)y * 0x85EBCA77u ^ (uint)z * 0xC2B2AE3Du ^ 0x51F15Eu;
+            h ^= h >> 16;
+            h *= 0x7FEB352Du;
+            h ^= h >> 15;
+            h *= 0x846CA68Bu;
+            h ^= h >> 16;
+            return h % 120u == 0u;
+        }
+    }
+
     public static IReadOnlyList<MonsterEntry> MonstersFor(Biome biome) => biome switch
     {
         Biome.Dunes => Desert,

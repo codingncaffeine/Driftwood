@@ -685,6 +685,10 @@ public static class WorldAudit
         Check("monsters walk off ledges, round walls and up them", moveFaults.Count == 0,
             moveFaults.Count == 0 ? moveDetail : string.Join("; ", moveFaults));
 
+        var kindFaults = MonsterKindFaults(out var kindDetail);
+        Check("the whole overworld dark is here and behaves", kindFaults.Count == 0,
+            kindFaults.Count == 0 ? kindDetail : string.Join("; ", kindFaults));
+
         var shelfFaults = PackShelfFaults(out var shelfDetail);
         Check("a pack can be put on the shelf and named", shelfFaults.Count == 0,
             shelfFaults.Count == 0 ? shelfDetail : string.Join("; ", shelfFaults));
@@ -11288,6 +11292,128 @@ public static class WorldAudit
                + $"a cave floor at -40 holds; a spider climbs four ({spiderUp:F1}), a zombie does not; "
                + $"a skeleton draws {archery.First:F1}s and looses every {archery.Gap:F1}s within {archery.Off:F1}°, "
                + $"and never through a wall";
+        return faults;
+    }
+
+    /// <summary>
+    /// The reference's overworld hostiles, each present and each doing the one thing it is known for.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ Every behaviour with the control that makes it mean something: a witch that throws at a
+    /// player in view and not at one behind a wall; a phantom that dives on a player in the open and
+    /// cannot reach one under a roof; poison that bites down to the last half heart and no further.
+    /// </remarks>
+    private static List<string> MonsterKindFaults(out string detail)
+    {
+        var faults = new List<string>();
+
+        // Every kind a table or a special door can name has a model, a row and a drawing.
+        string[] named = ["zombie", "husk", "drowned", "zombie_villager", "skeleton", "stray", "bogged", "spider",
+                          "cave_spider", "crawler", "slime", "farwalker", "witch", "silverfish", "phantom"];
+        foreach (var kind in named)
+        {
+            if (StarterCreatures.ByName(kind) is null) faults.Add($"{kind} has no model");
+            if (!CreatureSet.All.Any(row => row.Name == kind && row.Family == CreatureFamily.Hostile))
+                faults.Add($"{kind} has no hostile row in the creature table");
+            if (!Textures.CreatureDesigns.TryGet(kind, out _) && kind != "slime")
+                faults.Add($"{kind} has no design and would be drawn as a hide");
+        }
+
+        foreach (var biome in Enum.GetValues<Biome>())
+        foreach (var row in SpawnRules.MonstersFor(biome, -20))
+            if (!named.Contains(row.Kind)) faults.Add($"{Biomes.NameOf(biome)}'s table names {row.Kind}, which is not a monster we have");
+
+        if (!SpawnRules.MonstersFor(Biome.Meadow, -10).Any(r => r.Kind == "cave_spider"))
+            faults.Add("the deep does not breed cave spiders");
+        if (SpawnRules.MonstersFor(Biome.Meadow, 10).Any(r => r.Kind == "cave_spider"))
+            faults.Add("cave spiders breed above the zero line");
+
+        // Infested stone: about one in 120 below 64, none above.
+        var infested = 0;
+        var above = 0;
+        for (var x = 0; x < 48; x++)
+        for (var z = 0; z < 48; z++)
+        for (var y = 0; y < 48; y++)
+        {
+            if (SpawnRules.Infested(77, x, y, z)) infested++;
+            if (SpawnRules.Infested(77, x, y + 64, z)) above++;
+        }
+        var rate = 48 * 48 * 48 / (float)Math.Max(1, infested);
+        if (rate is < 80f or > 180f) faults.Add($"one stone in {rate:F0} is infested, not about one in 120");
+        if (above > 0) faults.Add($"{above} stones above 64 are infested");
+
+        // Poison: bites to the last half heart and stops.
+        var ailments = new PlayerAilments();
+        ailments.Apply(Ailment.Poison, 20f);
+        var health = 4;
+        for (var t = 0f; t < 20f; t += 0.05f) health -= ailments.Step(0.05f, health);
+        if (health != 1) faults.Add($"twenty seconds of poison left {health} half hearts, not the last one");
+        ailments.Apply(Ailment.Slowness, 5f);
+        if (MathF.Abs(ailments.SpeedScale - PlayerAilments.SlownessScale) > 1e-3f) faults.Add("slowness does not slow");
+        ailments.Clear();
+        if (ailments.Has(Ailment.Slowness) || ailments.SpeedScale != 1f) faults.Add("a cleared player is still slowed");
+
+        // ── The witch, in view and behind a wall ─────────────────────────────────────────────────
+        int Flasks(bool wall)
+        {
+            var herd = new CreatureHerd(21);
+            bool Solid(int x, int y, int z) => y < 0 || (wall && x == 4 && y < 4);
+            herd.SpawnAt(new SpawnKind("witch", new Vector3(0.6f, 2.3f, 0.6f), true), new Vector3(0.5f, 0f, 0.5f));
+            var flasks = 0;
+            for (var t = 0f; t < 10f; t += 1f / 60f)
+            {
+                herd.Update(1f / 60f, Solid, new Vector3(8.5f, 0f, 0.5f));
+                flasks += herd.TakeShots().Count(s => s.Flask);
+            }
+            return flasks;
+        }
+
+        var thrown = Flasks(wall: false);
+        var walled = Flasks(wall: true);
+        if (thrown < 2) faults.Add($"a witch in view of the player threw {thrown} flasks in ten seconds");
+        if (walled > 0) faults.Add($"a witch threw {walled} flasks at a player behind a wall");
+
+        // ── Tipped arrows ────────────────────────────────────────────────────────────────────────
+        ShotTag FirstTag(string kind)
+        {
+            var herd = new CreatureHerd(22);
+            herd.SpawnAt(new SpawnKind(kind, new Vector3(0.6f, 1.99f, 0.6f), true), new Vector3(0.5f, 0f, 0.5f));
+            for (var t = 0f; t < 5f; t += 1f / 60f)
+            {
+                herd.Update(1f / 60f, (x, y, z) => y < 0, new Vector3(10.5f, 0f, 0.5f));
+                foreach (var shot in herd.TakeShots()) return shot.Tag;
+            }
+            return (ShotTag)255;
+        }
+
+        if (FirstTag("stray") != ShotTag.Slowing) faults.Add("a stray's arrow does not slow");
+        if (FirstTag("bogged") != ShotTag.Poisoned) faults.Add("a bogged's arrow does not poison");
+        if (FirstTag("skeleton") != ShotTag.None) faults.Add("a plain skeleton's arrow carries something");
+
+        // ── The phantom, in the open and under a roof ────────────────────────────────────────────
+        float Bitten(bool roof)
+        {
+            var herd = new CreatureHerd(23);
+            bool Solid(int x, int y, int z) => y < 0 || (roof && y == 4 && x is > -40 and < 40 && z is > -40 and < 40);
+            herd.SpawnAt(new SpawnKind("phantom", new Vector3(2.7f, 0.2f, 1.4f), true, CreatureMove.Fly),
+                new Vector3(6.5f, 22f, 0.5f));
+            for (var t = 0f; t < 40f; t += 1f / 60f)
+            {
+                herd.Update(1f / 60f, Solid, new Vector3(0.5f, 0f, 0.5f));
+                if (herd.TakeAttacks().Any(a => a.Kind == "phantom")) return t;
+            }
+            return -1f;
+        }
+
+        var open = Bitten(roof: false);
+        var roofed = Bitten(roof: true);
+        if (open < 0f) faults.Add("a phantom over a player in the open never dived on them in forty seconds");
+        if (roofed >= 0f) faults.Add($"a phantom reached a player under a roof after {roofed:F1}s");
+
+        detail = $"{named.Length} hostiles with models, rows and drawings; cave spiders only below 0; one stone in "
+               + $"{rate:F0} infested below 64; poison stops at the last half heart; a witch throws {thrown} in view and "
+               + $"none through a wall; stray slows, bogged poisons; a phantom dives in {open:F1}s in the open and never "
+               + "through a roof";
         return faults;
     }
 

@@ -1203,6 +1203,7 @@ public static class StarterItems
         // which the reachability walk said out loud rather than quietly letting them pass.
         new CreatureDrops.Rule("spider", DropTrigger.Killed, "string", 0, 2),
         new CreatureDrops.Rule("skeleton", DropTrigger.Killed, "bone", 1, 3),
+        new CreatureDrops.Rule("skeleton", DropTrigger.Killed, "arrow", 0, 2),
         new CreatureDrops.Rule("zombie", DropTrigger.Killed, "rotten_flesh", 1, 2),
 
         // ⛳ The zombie's cousins. The drowned sometimes surfaces with an ingot in its fist — the
@@ -1210,6 +1211,21 @@ public static class StarterItems
         new CreatureDrops.Rule("drowned", DropTrigger.Killed, "rotten_flesh", 1, 2),
         new CreatureDrops.Rule("drowned", DropTrigger.Killed, "copper_ingot", 0, 1),
         new CreatureDrops.Rule("husk", DropTrigger.Killed, "rotten_flesh", 1, 2),
+        new CreatureDrops.Rule("zombie_villager", DropTrigger.Killed, "rotten_flesh", 0, 2),
+
+        // The skeleton's cousins leave what it does, and the marsh's one a toadstool off its crown.
+        new CreatureDrops.Rule("stray", DropTrigger.Killed, "bone", 0, 2),
+        new CreatureDrops.Rule("stray", DropTrigger.Killed, "arrow", 0, 2),
+        new CreatureDrops.Rule("bogged", DropTrigger.Killed, "bone", 0, 2),
+        new CreatureDrops.Rule("bogged", DropTrigger.Killed, "arrow", 0, 2),
+        new CreatureDrops.Rule("bogged", DropTrigger.Killed, "mushroom_red", 0, 1),
+        new CreatureDrops.Rule("cave_spider", DropTrigger.Killed, "string", 0, 2),
+
+        // The witch's satchel, from what the world has: the reference's mix is seven things and
+        // three of them are here. Each roll is its own, so a kill can leave all three or none.
+        new CreatureDrops.Rule("witch", DropTrigger.Killed, "sugar", 0, 2, Chance: 0.5f),
+        new CreatureDrops.Rule("witch", DropTrigger.Killed, "stick", 0, 2, Chance: 0.5f),
+        new CreatureDrops.Rule("witch", DropTrigger.Killed, "gunpowder", 0, 2, Chance: 0.5f),
 
         // ⛳ #93's first new drop. A component the magic arc (M1) is waiting on, obtainable the
         // day the slime is — the string-and-bone posture exactly.

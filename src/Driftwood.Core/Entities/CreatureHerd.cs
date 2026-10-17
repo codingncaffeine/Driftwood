@@ -130,6 +130,13 @@ public sealed class Creature
     /// <summary>True while a climber is holding a wall rather than standing on anything.</summary>
     public bool Clinging { get; set; }
 
+    /// <summary>A flier's circle: where round it is, how high it rides, and when it next dives.</summary>
+    public float Orbit { get; set; }
+    public float RideHeight { get; set; }
+    public float SwoopIn { get; set; }
+    public bool Swooping { get; set; }
+    public float SwoopFor { get; set; }
+
     /// <summary>How grown it is: 0 for a newborn, 1 for an adult. Everything spawns grown.</summary>
     public float Grown { get; set; } = 1f;
 
@@ -230,7 +237,9 @@ public readonly record struct CreatureBlast(string Kind, Vector3 Position);
 public readonly record struct CreatureBlink(string Kind, Vector3 From, Vector3 To);
 
 /// <summary>One arrow a creature loosed, for whoever owns the flight pool to put in the air.</summary>
-public readonly record struct CreatureShot(string Kind, Vector3 From, Vector3 Direction, int HalfHearts);
+/// <param name="Flask">True for a thrown flask, whose brew the host picks — it knows what ails the target.</param>
+public readonly record struct CreatureShot(
+    string Kind, Vector3 From, Vector3 Direction, int HalfHearts, ShotTag Tag = ShotTag.None, bool Flask = false);
 
 /// <summary>
 /// What each creature sounds like: our name for it against a clip's name.
@@ -282,6 +291,8 @@ public static class CreatureSounds
         // the drowned and the husk are zombies as far as a recording is concerned.
         ["drowned"] = ["enemies/zombie"],
         ["husk"] = ["enemies/zombie"],
+        ["zombie_villager"] = ["enemies/zombie"],
+        ["cave_spider"] = ["enemies/spider"],
     };
 
     /// <summary>What one cries when a blow lands on it.</summary>
@@ -296,6 +307,7 @@ public static class CreatureSounds
     private static readonly Dictionary<string, string[]> Angry = new(StringComparer.Ordinal)
     {
         ["spider"] = ["enemies/spider_attack"],
+        ["cave_spider"] = ["enemies/spider_attack"],
         ["wolf"] = Run("mob/wolf/classic/growl", 3),
     };
 
@@ -454,6 +466,16 @@ public sealed class CreatureHerd
 
     /// <summary>Seconds a hunter keeps after a target it can no longer see. The reference's three.</summary>
     public const float UnseenMemory = 3f;
+
+    /// <summary>A witch throws inside this, every so often. The reference's ten blocks and three seconds.</summary>
+    public const float WitchRange = 10f;
+    public const float WitchEvery = 3f;
+
+    /// <summary>A phantom's circle: how wide, how high over the player, how fast round and in the dive.</summary>
+    public const float PhantomRadius = 10f;
+    public const float PhantomHeight = 14f;
+    public const float PhantomSpeed = 6f;
+    public const float PhantomDive = 11f;
 
     /// <summary>An archer stands off and shoots inside this, in blocks. The reference's fifteen.</summary>
     public const float ArcherRange = 15f;
@@ -1262,6 +1284,14 @@ public sealed class CreatureHerd
 
             // A flier owes gravity nothing, and a swimmer owes it nothing while the water holds
             // it — beached, it falls like anything else and then can only lie there.
+            // ⛳ The phantom flies its own way: a wide circle high over the player and a dive.
+            if (creature.Kind == "phantom")
+            {
+                Scorch(creature, dt, sunlit, scorch);
+                if (magicMovement > 0f) Swoop(creature, dt * magicMovement, player, solid);
+                continue;
+            }
+
             var swimming = creature.Move == CreatureMove.Swim
                 && water is not null
                 && water(
@@ -1626,6 +1656,31 @@ public sealed class CreatureHerd
         // ⛳ The archer's whole difference: it stands off and shoots. The reference's bow goal —
         // within fifteen and in view it holds its ground, turns to you, and looses every two
         // seconds after a second's draw; out of view or out of range it walks its path like anyone.
+        // ⛳ The witch stands off at ten and throws a flask every three seconds — the reference's
+        // own range and beat. Which brew is the host's choice, because only it knows what already
+        // ails the target and how hurt it is.
+        if (creature.Kind == "witch")
+        {
+            if (!creature.SeesTarget || distance > WitchRange) return true;
+
+            creature.WantsYaw = float.RadiansToDegrees(MathF.Atan2(toward.Z, toward.X));
+            creature.Moving = distance > WitchRange * 0.7f;
+
+            if (creature.Swings <= 0f && MathF.Abs(Wrap(creature.WantsYaw - creature.Yaw)) < 25f)
+            {
+                creature.Swings = WitchEvery;
+                var from = creature.Position + new Vector3(0f, creature.Size.Y * creature.Scale * 0.8f, 0f);
+                var line = target + new Vector3(0f, 1.1f, 0f) - from;
+                var flat = MathF.Sqrt(line.X * line.X + line.Z * line.Z);
+                var time = flat / Projectiles.ProjectileSystem.FlaskSpeed;
+                line.Y += 0.5f * Projectiles.ProjectileSystem.FlaskGravity * time * time;
+                var aim = Vector3.Normalize(line);
+                _shots.Add(new CreatureShot(creature.Kind, from + aim * 0.6f, aim, 0, Flask: true));
+            }
+
+            return true;
+        }
+
         if (CreatureVitals.Archer(creature.Kind))
         {
             if (!creature.SeesTarget || distance > ArcherRange) return true;
@@ -1688,6 +1743,106 @@ public sealed class CreatureHerd
         }
 
         return best;
+    }
+
+    /// <summary>
+    /// A phantom's step: round a circle high over the player, and every few seconds a dive at them.
+    /// </summary>
+    /// <remarks>
+    /// <para>The reference's flight, plainly: it circles out of reach, picks a moment, comes down
+    /// straight at you, bites, and climbs away to circle again. A dive that has not landed in four
+    /// seconds is given up, and one that meets rock pulls up — a phantom never flies through a roof
+    /// to reach somebody under it.</para>
+    /// <para>⚠ No path and no sight to begin: it is the sky's, and the only test it needs is the
+    /// line it is about to fly down.</para>
+    /// </remarks>
+    private void Swoop(Creature creature, float dt, Vector3? player, Func<int, int, int, bool> solid)
+    {
+        creature.Swings = MathF.Max(0f, creature.Swings - dt);
+        creature.Moving = true;
+
+        if (player is not { } target)
+        {
+            Glide(creature, dt, solid, null);
+            return;
+        }
+
+        if (creature.RideHeight <= 0f)
+        {
+            creature.RideHeight = PhantomHeight + (float)_random.NextDouble() * 6f;
+            creature.SwoopIn = 4f + (float)_random.NextDouble() * 4f;
+            creature.Orbit = MathF.Atan2(creature.Position.Z - target.Z, creature.Position.X - target.X);
+        }
+
+        var chest = target + new Vector3(0f, 1.1f, 0f);
+        Vector3 goal;
+        float speed;
+
+        if (creature.Swooping)
+        {
+            goal = chest;
+            speed = PhantomDive;
+            creature.SwoopFor += dt;
+
+            if (Vector3.Distance(creature.Middle, chest) < 1.6f && creature.Swings <= 0f)
+            {
+                creature.Swings = 1f;
+                _attacks.Add(new CreatureAttack(creature.Kind, creature.Middle, CreatureVitals.DamageFor(creature.Kind)));
+                EndSwoop(creature);
+            }
+            else if (creature.SwoopFor > 4f)
+            {
+                EndSwoop(creature);
+            }
+        }
+        else
+        {
+            creature.Orbit += dt * PhantomSpeed / PhantomRadius;
+            goal = new Vector3(
+                target.X + MathF.Cos(creature.Orbit) * PhantomRadius,
+                target.Y + creature.RideHeight,
+                target.Z + MathF.Sin(creature.Orbit) * PhantomRadius);
+            speed = PhantomSpeed;
+
+            creature.SwoopIn -= dt;
+            if (creature.SwoopIn <= 0f)
+            {
+                if (LineOfSight(solid, creature.Middle, chest))
+                {
+                    creature.Swooping = true;
+                    creature.SwoopFor = 0f;
+                }
+                else
+                {
+                    creature.SwoopIn = 1.5f;
+                }
+            }
+        }
+
+        var to = goal - creature.Position;
+        var length = to.Length();
+        if (length < 1e-3f) return;
+
+        var next = creature.Position + to / length * MathF.Min(speed * dt, length);
+        var cell = (X: (int)MathF.Floor(next.X), Y: (int)MathF.Floor(next.Y + 0.1f), Z: (int)MathF.Floor(next.Z));
+
+        if (solid(cell.X, cell.Y, cell.Z))
+        {
+            // Rock in the way: a dive pulls up, a circle rides higher.
+            if (creature.Swooping) EndSwoop(creature);
+            else creature.RideHeight += 2f;
+            return;
+        }
+
+        creature.Position = next;
+        creature.Yaw = creature.WantsYaw = float.RadiansToDegrees(MathF.Atan2(to.Z, to.X));
+    }
+
+    private void EndSwoop(Creature creature)
+    {
+        creature.Swooping = false;
+        creature.SwoopIn = 5f + (float)_random.NextDouble() * 5f;
+        creature.RideHeight = PhantomHeight + (float)_random.NextDouble() * 6f;
     }
 
     /// <summary>Forgets the hunt: no target, no path.</summary>
@@ -1997,7 +2152,15 @@ public sealed class CreatureHerd
         aim += new Vector3(Gauss(), Gauss(), Gauss()) * ArcherSpread;
 
         var damage = CreatureVitals.DamageFor(creature.Kind) + _random.Next(3);
-        _shots.Add(new CreatureShot(creature.Kind, from + Vector3.Normalize(aim) * 0.6f, Vector3.Normalize(aim), damage));
+
+        // The stray's arrows slow and the bogged's poison — the tipped arrows they are known by.
+        var tag = creature.Kind switch
+        {
+            "stray" => ShotTag.Slowing,
+            "bogged" => ShotTag.Poisoned,
+            _ => ShotTag.None,
+        };
+        _shots.Add(new CreatureShot(creature.Kind, from + Vector3.Normalize(aim) * 0.6f, Vector3.Normalize(aim), damage, tag));
 
         float Gauss()
         {

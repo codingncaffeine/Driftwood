@@ -637,6 +637,15 @@ public sealed class ClientHost : IDisposable
     /// <summary>Where a slept-in bed stands, or null — the respawn asks it before the world spawn.</summary>
     private Vector3? _bedSpawn;
 
+    /// <summary>What the dark has left on the player besides wounds.</summary>
+    private readonly PlayerAilments _ailments = new();
+
+    /// <summary>Seconds played since the last sleep or death. Three days of it brings phantoms.</summary>
+    private float _awake;
+
+    /// <summary>Seconds until the sky is next asked whether it has phantoms for the sleepless.</summary>
+    private float _phantomTry = 60f;
+
     /// <summary>What holds each block up, and what comes down when that is taken away.</summary>
     private SupportTable _supports = null!;
 
@@ -2151,6 +2160,7 @@ public sealed class ClientHost : IDisposable
         _savedCreatures.AddRange(state.Creatures);
 
         _bedSpawn = state.BedSpawn;
+        _awake = state.AwakeSeconds;
         if (_character.Bind is null && _bedSpawn is { } legacyBind)
             _character.SetBind(legacyBind);
 
@@ -2212,6 +2222,7 @@ public sealed class ClientHost : IDisposable
             Played = _playedBefore + _elapsed,
             DayTime = _clock.TimeOfDay,
             BedSpawn = _bedSpawn,
+            AwakeSeconds = _awake,
             Signs = _signs,
             Progress = _progress,
             Map = _map,
@@ -9454,7 +9465,7 @@ public sealed class ClientHost : IDisposable
         // from wherever the player loads in, and unloaded space reads as air — stepped there it
         // falls through the floor its chunk will contain. Frozen instead, until the world arrives.
         _herd.Update(
-            dt, SolidForCreature, _walking ? _player.Position : null, Sunlit,
+            dt, SolidForCreature, _walking && _lineup.Count == 0 ? _player.Position : null, Sunlit,
             known: (x, y, z) => _streamer.World.TryGetChunk(ChunkPos.FromWorld(x, y, z), out _),
             water: (x, y, z) => _registry[_streamer.World.GetBlock(x, y, z)].Fluid == FluidKind.Water,
             scorch: SustainSunlightBurn);
@@ -9472,6 +9483,9 @@ public sealed class ClientHost : IDisposable
             {
                 HurtPlayer(blow.HalfHearts);
                 Rumble(0.72f, 1f, 150);
+
+                // The cave spider's bite is the reference's poison: seven seconds of it.
+                if (blow.Kind == "cave_spider") Ail(Ailment.Poison, 7f);
             }
 
             _audio?.Play(Pick(CreatureSounds.Blows), blow.Position, 0.62f, Wobble());
@@ -9486,11 +9500,20 @@ public sealed class ClientHost : IDisposable
         // they test the player and never the herd.
         foreach (var shot in _herd.TakeShots())
         {
+            if (shot.Flask)
+            {
+                _projectiles.Spawn(ProjectileKind.Flask, ProjectileOwner.Creature, shot.From, shot.Direction,
+                    ProjectileSystem.FlaskSpeed, ProjectileSystem.FlaskGravity, 0, Brew(shot.From));
+                continue;
+            }
+
             if (!_projectiles.Spawn(ProjectileKind.Arrow, ProjectileOwner.Creature, shot.From, shot.Direction,
-                    ProjectileSystem.ArrowSpeed, ProjectileSystem.ArrowGravity, shot.HalfHearts))
+                    ProjectileSystem.ArrowSpeed, ProjectileSystem.ArrowGravity, shot.HalfHearts, shot.Tag))
                 continue;
             _audio?.Play(Pick(ActionSounds.BowShoot), shot.From, 0.7f, 0.92f);
         }
+
+        StepPhantoms(dt);
 
         // A blink is a soft pop and a wisp at both ends — the departure matters as much as the
         // arrival, because "where did it go" starts from where it was.
@@ -9791,11 +9814,19 @@ public sealed class ClientHost : IDisposable
                     0.98f + _character.Rank * 0.02f);
             }
 
+            // A flask bursts wherever it lands and splashes whoever is near.
+            if (impact.Kind == ProjectileKind.Flask)
+            {
+                Splash(impact);
+                continue;
+            }
+
             if (impact.Player)
             {
                 HurtPlayer(impact.Damage);
                 Rumble(0.5f, 0.8f, 110);
                 _audio?.Play(Pick(CreatureSounds.ArrowHits), impact.Position, 0.85f, Wobble());
+                LandTag(impact.Tag, 1f);
                 continue;
             }
 
@@ -9833,6 +9864,107 @@ public sealed class ClientHost : IDisposable
             var struck = _registry[_streamer.World.GetBlock(impact.X, impact.Y, impact.Z)];
             _particles.Chip(struck, impact.X, impact.Y, impact.Z, impact.Face, 5);
             PlaySound(struck, SoundEvent.Hit, impact.Position, 0.38f, 1.16f);
+        }
+    }
+
+    /// <summary>
+    /// Which flask a witch throws: the reference's choice, made against what already ails the player.
+    /// </summary>
+    /// <remarks>
+    /// Far off and not yet slowed: slowness. Healthy and not yet poisoned: poison. Close, not yet
+    /// weakened, one time in four: weakness. Otherwise harm.
+    /// </remarks>
+    private ShotTag Brew(Vector3 from)
+    {
+        var distance = Vector3.Distance(from, _player.Position);
+        if (distance >= 8f && !_ailments.Has(Ailment.Slowness)) return ShotTag.SlownessFlask;
+        if (_vitals.Health >= 8 && !_ailments.Has(Ailment.Poison)) return ShotTag.PoisonFlask;
+        if (distance <= 3f && !_ailments.Has(Ailment.Weakness) && Random.Shared.NextDouble() < 0.25)
+            return ShotTag.WeaknessFlask;
+        return ShotTag.Harming;
+    }
+
+    /// <summary>A flask bursting: glass, a puff, and whatever it held on whoever stood within four blocks.</summary>
+    private void Splash(in ProjectileImpact impact)
+    {
+        _audio?.Play(Pick(CreatureSounds.ArrowMisses), impact.Position, 0.75f, 1.35f);
+        _particles.DeathPuff(impact.Position, 1.4f, StarterBlocks.LayerSmoke, 14);
+
+        if (!_walking) return;
+        var chest = _player.Position + new Vector3(0f, 1f, 0f);
+        var distance = impact.Player ? 0f : Vector3.Distance(chest, impact.Position);
+        if (distance > 4f) return;
+
+        LandTag(impact.Tag, 1f - distance / 4f);
+    }
+
+    /// <summary>Puts a shot's or a splash's effect on the player, with a word the first time it takes.</summary>
+    private void LandTag(ShotTag tag, float nearness)
+    {
+        var harm = tag switch
+        {
+            ShotTag.Slowing or ShotTag.SlownessFlask => Ail(Ailment.Slowness, tag == ShotTag.Slowing ? 30f : 90f * nearness),
+            ShotTag.Poisoned or ShotTag.PoisonFlask => Ail(Ailment.Poison, tag == ShotTag.Poisoned ? 4f : 45f * nearness),
+            ShotTag.WeaknessFlask => Ail(Ailment.Weakness, 90f * nearness),
+            ShotTag.Harming => (int)MathF.Round(6f * nearness),
+            _ => 0,
+        };
+
+        if (harm > 0) HurtPlayer(harm, armoured: false);
+    }
+
+    /// <summary>Applies an ailment, saying so when it is new rather than renewed. Always 0, for the switch above.</summary>
+    private int Ail(Ailment ailment, float seconds)
+    {
+        if (seconds <= 0f) return 0;
+        var fresh = !_ailments.Has(ailment);
+        _ailments.Apply(ailment, seconds);
+        if (fresh)
+            Notice(ailment switch
+            {
+                Ailment.Poison => "poisoned",
+                Ailment.Slowness => "slowed",
+                _ => "weakened",
+            }, null);
+        return 0;
+    }
+
+    /// <summary>
+    /// Sends phantoms down on a player who has gone three days without sleep, the reference's way.
+    /// </summary>
+    /// <remarks>
+    /// Every one to two minutes, at night, under open sky and above the sea: the chance is one less
+    /// three days over the time awake, so the fourth night is a coin and the tenth nearly certain.
+    /// One to three come, twenty to thirty-four blocks overhead.
+    /// </remarks>
+    private void StepPhantoms(float dt)
+    {
+        if (_herd is null || !_walking) return;
+
+        _phantomTry -= dt;
+        if (_phantomTry > 0f) return;
+        _phantomTry = 60f + (float)Random.Shared.NextDouble() * 60f;
+
+        const float threeDays = 3f * SkyClock.DefaultDayLength;
+        var awake = _awake * (SkyClock.DefaultDayLength / _clock.DayLength);
+        if (awake < threeDays || Daylight > 0.05f) return;
+        if (Random.Shared.NextDouble() * awake < threeDays) return;
+
+        var head = _player.Position + new Vector3(0f, _player.CurrentHeight, 0f);
+        if (_player.Position.Y < TerrainGenerator.SeaLevel) return;
+        if (LightValue.Sky(_streamer.World.GetLight(
+                (int)MathF.Floor(head.X), (int)MathF.Floor(head.Y), (int)MathF.Floor(head.Z))) < LightValue.Max)
+            return;
+
+        if (KindFor("phantom") is not { } kind) return;
+
+        var count = 1 + Random.Shared.Next(3);
+        for (var i = 0; i < count; i++)
+        {
+            var at = _player.Position + new Vector3(
+                Random.Shared.Next(-10, 11), 20 + Random.Shared.Next(15), Random.Shared.Next(-10, 11));
+            if (SolidForCreature((int)MathF.Floor(at.X), (int)MathF.Floor(at.Y), (int)MathF.Floor(at.Z))) continue;
+            _herd.SpawnAt(kind, at, (float)(Random.Shared.NextDouble() * 360.0));
         }
     }
 
@@ -10151,7 +10283,8 @@ public sealed class ClientHost : IDisposable
     {
         if (_herd is null) return;
 
-        var damage = Combat.DamageOf(_inventory.HeldType) + _character.Statistics.WeaponDamage;
+        var damage = Math.Max(1, Combat.DamageOf(_inventory.HeldType) + _character.Statistics.WeaponDamage
+                                 - _ailments.BlowPenalty);
         if (Random.Shared.NextDouble() < _character.Statistics.CriticalChance)
             damage = Math.Max(damage + 1, (int)MathF.Round(damage * 1.5f));
         var before = quarry.Health;
@@ -12134,8 +12267,22 @@ public sealed class ClientHost : IDisposable
             // (shears take the leaf itself). The ripe wheat's seed is a chance row of wheat's now;
             // it used to be an "is ripe" branch here, and that branch paid wheat seed for every ripe
             // carrot, potato and berry bush too.
+            // ⛳ Highland stone with something living in it comes apart into a silverfish and
+            // nothing else — the reference's infested stone, decided by the cell.
+            var infested = (target.Id == _ids.Stone || target.Id == _ids.Deepstone)
+                && _terrain.BiomeAt(broken.Item1, broken.Item3) == Biome.Highlands
+                && SpawnRules.Infested(_seed.Derive("infested"), broken.Item1, broken.Item2, broken.Item3);
+
             _harvested.Clear();
-            _dropTable.Harvest(target, _inventory.HeldType, _growthRandom, _harvested);
+            if (infested)
+            {
+                if (_herd is not null && KindFor("silverfish") is { } fish)
+                    _herd.SpawnAt(fish, centre - new Vector3(0f, 0.5f, 0f), (float)(Random.Shared.NextDouble() * 360.0));
+            }
+            else
+            {
+                _dropTable.Harvest(target, _inventory.HeldType, _growthRandom, _harvested);
+            }
             foreach (var stack in _harvested) _drops.Drop(stack, centre);
 
             // A ripe crop coming up sounds like a harvest, on top of the plant's own rustle.
@@ -12357,6 +12504,16 @@ public sealed class ClientHost : IDisposable
 
         var what = _vitals.Update(_streamer.World, _player, dt);
 
+        // The ailments' clocks, and the poison's half hearts — never the last one.
+        var poisoned = _ailments.Step(dt, _vitals.Health);
+        if (poisoned > 0)
+        {
+            _vitals.Hurt(poisoned, armoured: false, cause: VitalsCause.Poison);
+            _audio?.Play(Pick(CreatureSounds.Blows), _viewPosition, 0.35f, 1.3f);
+        }
+        _player.SpeedScale = _ailments.SpeedScale;
+        _awake += dt;
+
         // ⛳ What the armour was asked to stand up to, and what that cost it. Read here rather than
         // where each blow lands because there are three places a blow comes from — a fall, the
         // world, a creature — and the wear rule belongs in one of them, not three.
@@ -12482,6 +12639,8 @@ public sealed class ClientHost : IDisposable
     {
         _player.Teleport(RespawnPoint());
         _vitals.Restore();
+        _ailments.Clear();
+        _awake = 0f;
         _walking = true;
 
         // Cleared here so CloseScreen's no-escaping-death refusal does not refuse the one door.
@@ -13527,6 +13686,7 @@ public sealed class ClientHost : IDisposable
         }
 
         _clock.SetTime(Beds.Morning);
+        _awake = 0f;
         _bedSpawn = new Vector3(x + 0.5f, y + 0.6f, z + 0.5f);
         _character.SetBind(_bedSpawn);
 
@@ -14553,7 +14713,7 @@ public sealed class ClientHost : IDisposable
     private readonly record struct Shot(
         int Frame, string Name, string Item, ViewMode View, bool Strike, ShotScreen Screen = ShotScreen.None,
         bool Creature = false, string Wears = "", string Offhand = "", bool Guard = false,
-        bool Signs = false, bool Gates = false, bool Fishing = false);
+        bool Signs = false, bool Gates = false, bool Fishing = false, string[]? Lineup = null);
 
     /// <summary>Which interface, if any, is up when the picture is taken.</summary>
     private enum ShotScreen
@@ -14647,6 +14807,14 @@ public sealed class ClientHost : IDisposable
         new(840, "29-fence-gates", "stick", ViewMode.First, false, Gates: true),
         new(1000, "30-fishing", "fishing_rod", ViewMode.First, false, Fishing: true),
         new(1040, "31-fishing-third", "fishing_rod", ViewMode.ThirdBehind, false),
+
+        // ⛳ The dark, stood in a row and held still: every hostile's drawing on its own model in the
+        // real renderer, which a sheet laid flat cannot show — a ribcage you can see through is a
+        // claim about the shader as much as the paint.
+        new(1200, "32-monsters", "stick", ViewMode.First, false,
+            Lineup: ["zombie", "husk", "drowned", "skeleton", "spider", "crawler", "farwalker", "slime"]),
+        new(1360, "33-monsters-new", "stick", ViewMode.First, false,
+            Lineup: ["zombie_villager", "stray", "bogged", "cave_spider", "witch", "silverfish", "phantom"]),
     ];
 
     /// <summary>
@@ -14797,6 +14965,8 @@ public sealed class ClientHost : IDisposable
             if (shot.Signs && _shotFrame == shot.Frame - SignLead) PutUpSigns();
             if (shot.Gates && _shotFrame == shot.Frame - SignLead) PutUpFences();
             if (shot.Fishing && _shotFrame == shot.Frame - SignLead) DigAPondAndCast();
+            if (shot.Lineup is { } row && _shotFrame == shot.Frame - SignLead) LineUp(row);
+            if (shot.Lineup is not null && _shotFrame > shot.Frame - SignLead) HoldTheLine();
 
             if (_shotFrame == shot.Frame) WriteShot(size, shot.Name);
         }
@@ -14838,6 +15008,63 @@ public sealed class ClientHost : IDisposable
         Console.WriteLine(
             $"shots       standing at {stand.X:F1} {stand.Y:F1} {stand.Z:F1}, "
             + $"looking at a {creature.Kind} 3 blocks away");
+    }
+
+    /// <summary>The creatures a lineup shot stood up, held still until the picture.</summary>
+    private readonly List<Creature> _lineup = [];
+    private readonly List<Vector3> _lineupAt = [];
+
+    /// <summary>
+    /// Stands the named kinds in a row seven blocks behind the start, facing the camera, at noon.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ Behind, turned round: the shots before this one dug a pond and put up fences in front of
+    /// the start, and the first row stood half of the dark in the water.
+    /// </remarks>
+    private void LineUp(string[] kinds)
+    {
+        if (_herd is null) return;
+
+        foreach (var old in _lineup) _herd.Remove(old);
+        _lineup.Clear();
+        _lineupAt.Clear();
+        _clock.SetTime(0.5f);
+
+        var origin = _player.Position;
+        _camera.Position = _player.EyePosition;
+        _camera.Yaw = 90f;
+        _camera.Pitch = -8f;
+        _animator.Reset(_camera.Yaw);
+
+        var spacing = 2.2f;
+        var left = origin.X - (kinds.Length - 1) * spacing * 0.5f;
+        for (var i = 0; i < kinds.Length; i++)
+        {
+            if (KindFor(kinds[i]) is not { } kind) continue;
+            var x = left + i * spacing;
+            var z = origin.Z + 7f;
+            var y = CreatureHerd.TryGround(SolidForCreature, (int)MathF.Floor(x), (int)MathF.Floor(z),
+                (int)origin.Y + 6, out var ground) ? ground : origin.Y;
+            if (kinds[i] == "phantom") y += 1.5f;
+            _lineup.Add(_herd.SpawnAt(kind, new Vector3(x, y, z), -90f));
+            _lineupAt.Add(new Vector3(x, y, z));
+        }
+
+        Console.WriteLine($"shots       {_lineup.Count} of {kinds.Length} stood in a row for the picture");
+    }
+
+    /// <summary>Keeps a lineup facing the camera and going nowhere.</summary>
+    private void HoldTheLine()
+    {
+        for (var i = 0; i < _lineup.Count; i++)
+        {
+            var creature = _lineup[i];
+            creature.Position = _lineupAt[i];
+            creature.Moving = false;
+            creature.Thinks = 1000f;
+            creature.Yaw = creature.WantsYaw = -90f;
+            creature.Provoked = false;
+        }
     }
 
     /// <summary>Puts up the screen a shot wants, or takes down whatever is up.</summary>

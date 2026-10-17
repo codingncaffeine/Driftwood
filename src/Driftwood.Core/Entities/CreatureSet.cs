@@ -150,6 +150,23 @@ public static class CreatureSet
         new("husk", "husk", CreatureFamily.Hostile, "zombie.husk",
             ["textures/entity/zombie/husk.png"]),
 
+        // The rest of the reference's overworld dark. Plain words keep their names; the skeletons'
+        // cousins are filed under the skeleton the way the zombie's are under the zombie.
+        new("zombie_villager", "zombie villager", CreatureFamily.Hostile, "zombie.villager",
+            ["textures/entity/zombie_villager/zombie_villager.png", "textures/entity/zombie/zombie_villager.png"]),
+        new("stray", "stray", CreatureFamily.Hostile, "skeleton.stray",
+            ["textures/entity/skeleton/stray.png"]),
+        new("bogged", "bogged", CreatureFamily.Hostile, "skeleton.bogged",
+            ["textures/entity/skeleton/bogged.png"]),
+        new("cave_spider", "cave spider", CreatureFamily.Hostile, "spider",
+            ["textures/entity/spider/cave_spider.png"]),
+        new("witch", "witch", CreatureFamily.Hostile, "witch",
+            ["textures/entity/witch.png"]),
+        new("silverfish", "silverfish", CreatureFamily.Hostile, "silverfish",
+            ["textures/entity/silverfish.png"]),
+        new("phantom", "phantom", CreatureFamily.Hostile, "phantom",
+            ["textures/entity/phantom.png"]),
+
         // P14 residents use the folded-arm villager net. Pack paths are observational bridges;
         // Driftwood ships complete geometry and paint when a pack lacks the layered base art.
         new("shorewright", "shorewright", CreatureFamily.Inhabitant, "villager",
@@ -179,6 +196,7 @@ public static class CreatureSet
         ["slime"] = CreatureMove.Hop,
         ["bat"] = CreatureMove.Fly,
         ["squid"] = CreatureMove.Swim,
+        ["phantom"] = CreatureMove.Fly,
     };
 
     public static CreatureMove MoveFor(string kind) => Moves.GetValueOrDefault(kind, CreatureMove.Walk);
@@ -205,6 +223,9 @@ public static class CreatureSet
         ["rabbit"] = 0.6f,
         ["cat"] = 0.8f,
         ["bat"] = 0.35f,
+
+        // The reference draws its cave spider at seven tenths of the spider.
+        ["cave_spider"] = 0.7f,
         ["starwarden"] = 1.22f,
     };
 
