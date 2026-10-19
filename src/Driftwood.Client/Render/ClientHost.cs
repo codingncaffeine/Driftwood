@@ -10953,6 +10953,13 @@ public sealed class ClientHost : IDisposable
         _mouseBreakHeld = _mouseCaptured && !_hudScreen.IsOpen && _keys.Held(_input, GameAction.BreakOrAttack);
         _mousePlaceHeld = _mouseCaptured && !_hudScreen.IsOpen && _keys.Held(_input, GameAction.UseOrPlace);
 
+        // ⛔ Before any of the returns below. With the controller switched off it is never started,
+        // and every path after this one returns early — so when the hands were only refreshed on the
+        // pad path, a press stayed held for the rest of the session (v0.5.3–v0.5.4, 2026-10-19). The
+        // pad path below folds its own buttons in again when there is a pad.
+        _holdingBreak = _mouseBreakHeld || _controllerBreakHeld;
+        _holdingPlace = _mousePlaceHeld || _controllerPlaceHeld;
+
         // Native discovery is not part of the startup critical path, nor of a benchmark or visual
         // instrument. A normal run pays for it once, on the main thread, after the first frame.
         if (!_controller.Started && _firstFrameDrawn && _settings.ControllerEnabled
@@ -15889,7 +15896,7 @@ public sealed class ClientHost : IDisposable
         if (_airStage > 0)
         {
             StepAirProbe(size);
-            if (_airStage == 5) { JudgeUi(); _window.Close(); }
+            if (_airStage == 5 && StepHandsProbe()) { JudgeUi(); _window.Close(); }
         }
 
         // A few frames to let the world stream in, then each screen in turn.
@@ -16342,6 +16349,45 @@ public sealed class ClientHost : IDisposable
 
     /// <summary>What the fire's book came to: rows laid out, and rows that reached the screen.</summary>
     private (int Page, int Foods, int Drawn, bool Loaded) _uiFire = (-1, -1, -1, false);
+
+    private int _handsProbeFrame = -1;
+    private bool _handsWentDown;
+    private bool _handsCameUp;
+
+    /// <summary>
+    /// Clicks both hands through the real mouse handler, then lets the real per-frame poll see the
+    /// buttons up. True once it has seen enough frames to judge.
+    /// </summary>
+    /// <remarks>
+    /// ⛔⛔ <b>Reported by the user (v0.5.4): a right click to place kept going after it was let go,
+    /// and only closing the game stopped it.</b> The hands were re-read off the window only on the
+    /// controller's path, and a switched-off controller returns before it. This check never starts a
+    /// controller, so it is that path exactly: the press is <c>OnMouseDown</c>, the release is GLFW
+    /// reporting no button held on a window nobody is clicking. Last, after the dive, so a swing it
+    /// leaves behind cannot land in any picture taken before it.
+    /// </remarks>
+    private bool StepHandsProbe()
+    {
+        switch (++_handsProbeFrame)
+        {
+            case 0:
+                SetMouseCaptured(true);
+                OnMouseDown(MouseButton.Right);
+                OnMouseDown(MouseButton.Left);
+                _handsWentDown = _holdingPlace && _holdingBreak;
+                return false;
+
+            // Frames, not seconds, on purpose: the fault is a poll that never runs, and a handful of
+            // frames is a handful of polls however fast they go.
+            case < 6:
+                return false;
+
+            default:
+                _handsCameUp = !_holdingPlace && !_holdingBreak;
+                StopHands();
+                return true;
+        }
+    }
 
     private int _airStage;
     private double _airDeadline;
@@ -18750,6 +18796,13 @@ public sealed class ClientHost : IDisposable
         // starts, and looks exactly like a button somebody forgot to wire up.
         faults.AddRange(NativeFilePicker.SelfTest(out var chooser));
         Console.WriteLine($"ui-check    file chooser  {chooser}");
+
+        // The click is the control: a press that never took hold would make "let go" true of nothing.
+        if (!_handsWentDown)
+            faults.Add("a click on the hands did not take hold, so the release check proves nothing");
+        else if (!_handsCameUp)
+            faults.Add("a hand stayed held after its button came up, with no controller running");
+        Console.WriteLine($"ui-check    hands  held on click {_handsWentDown}, let go on release {_handsCameUp}");
 
         var resolved = _visuals.ReadResolvedPixel(_visuals.Width / 2, _visuals.Height / 2);
         if (!_visuals.Available || !_visuals.HistoryReady)
