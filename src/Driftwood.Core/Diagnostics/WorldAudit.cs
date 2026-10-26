@@ -654,6 +654,51 @@ public static class WorldAudit
         // anything. These are the checks that notice.
         Check("terrain has relief", probeMax - probeMin >= 55, $"span {probeMax - probeMin} blocks over {ReliefProbeSpan}");
 
+        // ⛳ Version 2's cliffs and overhangs (2026-10-25), asked of the generator's own rules and
+        // then of the world it wrote: a cliff is a column with ground falling away beside it, an
+        // overhang a cell the undercut rule hollowed. Every hollowed cell must be open in the world —
+        // leaves, vines and anything else decoration grows into air are fine — and its column must
+        // still be capped, or the heightmap stops being the top of the ground. Version 1 has neither.
+        long cliffColumns = 0, overhangCells = 0, overhangFilled = 0, overhangUncapped = 0;
+        string? firstOverhangFault = null;
+        for (var wz = minBlock; wz <= maxBlock; wz++)
+        for (var wx = minBlock; wx <= maxBlock; wx++)
+        {
+            var surface = generator.SurfaceHeight(wx, wz);
+            var lip = generator.LipOf(wx, wz, surface);
+            if (lip.Reach == 0) continue;
+            if (lip.Reach == 1) cliffColumns++;
+
+            var hollowed = false;
+            for (var y = lip.Foot + 1; y < surface; y++)
+            {
+                if (!generator.Undercut(wx, y, wz, surface)) continue;
+                overhangCells++;
+                hollowed = true;
+                var there = world.GetBlock(wx, y, wz);
+                if (!there.IsAir && registry[there].Solid && there != ids.Leaves && there != ids.CherryLeaves
+                    && there != ids.Log && there != ids.CherryLog && !authoredCells.Contains((wx, y, wz)))
+                {
+                    overhangFilled++;
+                    firstOverhangFault ??= $"{registry[there].Name} in a hollow at {wx},{y},{wz}";
+                }
+            }
+
+            if (hollowed && !registry[world.GetBlock(wx, surface, wz)].Solid)
+            {
+                overhangUncapped++;
+                firstOverhangFault ??= $"an overhang at {wx},{wz} has no cap at y {surface}";
+            }
+        }
+
+        Check("cliffs stand and overhangs hang",
+            generator.Version >= 2
+                ? cliffColumns > 0 && overhangCells > 0 && overhangFilled == 0 && overhangUncapped == 0
+                : cliffColumns == 0 && overhangCells == 0,
+            $"{cliffColumns:N0} cliff-edge columns, {overhangCells:N0} cells hollowed under them"
+            + (firstOverhangFault is null ? ", every one open and capped" : $"; {overhangFilled:N0} filled, "
+               + $"{overhangUncapped:N0} uncapped, first {firstOverhangFault}"));
+
         // Ocean coverage is calibrated, not emergent, so it gets held to the number it was asked
         // for. The tolerance covers the probe sampling a different grid than the calibration did.
         var oceanMeasured = (100 - probeLandPct) / 100.0;

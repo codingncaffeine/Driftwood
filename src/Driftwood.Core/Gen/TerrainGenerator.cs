@@ -130,6 +130,8 @@ public sealed class TerrainGenerator
     private readonly int _seedErosion;
     private readonly int _seedWeird;
     private readonly int _seedRiver;
+    private readonly int _seedCliff;
+    private readonly int _seedOverhang;
 
     /// <summary>Version 2's heights by chunk column, each computed once — its height costs several fields.</summary>
     private readonly System.Collections.Concurrent.ConcurrentDictionary<long, int[]> _columns = new();
@@ -223,6 +225,8 @@ public sealed class TerrainGenerator
         _seedErosion = seed.Derive("terrain.v2.erosion");
         _seedWeird = seed.Derive("terrain.v2.weirdness");
         _seedRiver = seed.Derive("terrain.v2.rivers");
+        _seedCliff = seed.Derive("terrain.v2.cliffs");
+        _seedOverhang = seed.Derive("terrain.v2.overhangs");
 
         _seedContinent = seed.Derive("terrain.continent");
         _seedHills = seed.Derive("terrain.hills");
@@ -378,7 +382,7 @@ public sealed class TerrainGenerator
     /// <summary>Version 2's height for one column: the shaped land, then the rivers cut into it.</summary>
     private int HeightV2(int x, int z)
     {
-        var height = RawHeight(x, z) + _heightBias;
+        var height = Cliffs(x, z, RawHeight(x, z) + _heightBias);
 
         // ⛳ Rivers, after the sea is set so they cut down to it: where the river field crosses
         // zero, land above the sea is carved to a bed three under it, the banks sloping in. The
@@ -397,6 +401,120 @@ public sealed class TerrainGenerator
         }
 
         return Math.Clamp((int)MathF.Round(height), 1, WorldTop - 8);
+    }
+
+    /// <summary>
+    /// Version 2's cliffs (2026-10-25): high ground stepped into tiers, flat treads and sheer risers.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ A terrace curve over the height, not a second field added to it. Within each tier
+    /// the lower two thirds of the climb are squeezed into a gentle tread and the rest into a riser
+    /// several times steeper than the slope under it — so a hillside stays a hillside, but a
+    /// mountain flank, already climbing a block or more per block, comes out as a wall of rock
+    /// with ledges between. The steepness rule then bares the risers by itself.</para>
+    /// <para>The tier height and the tiers' offset both wander on slow fields, the lava table's
+    /// lesson: one fixed step and every ledge in the world sits on the same handful of heights.
+    /// A third field says where land is cliffed at all, so some ranges stay smooth.</para>
+    /// <para>⛔ Never lifts, only lowers (by at most half a tier), and fades in from eight over the
+    /// sea, so it cannot change the coastline the ocean calibration fitted.</para>
+    /// </remarks>
+    private float Cliffs(int x, int z, float height)
+    {
+        var fade = Smooth(SeaLevel + 8f, SeaLevel + 22f, height);
+        if (fade <= 0f) return height;
+
+        var cliffed = Smooth(-0.02f, 0.2f, Noise.Fbm2(x / 260f, z / 260f, _seedCliff, 3)) * fade;
+        if (cliffed <= 0f) return height;
+
+        var step = 8f + 5f * Smooth(-0.3f, 0.3f, Noise.Fbm2(x / 400f, z / 400f, _seedCliff + 11, 2));
+        var shift = Noise.Fbm2(x / 180f, z / 180f, _seedCliff + 7, 2) * step * 2f;
+
+        var u = (height + shift) / step;
+        var tier = MathF.Floor(u);
+        var f = u - tier;
+        const float Tread = 0.8f, Rise = 0.12f;
+        var g = f < Tread ? f * (Rise / Tread) : Rise + (1f - Rise) * Smooth(Tread, 1f, f);
+
+        return float.Lerp(height, (tier + g) * step - shift, cliffed);
+    }
+
+    private static float Smooth(float from, float to, float value)
+    {
+        var t = Math.Clamp((value - from) / (to - from), 0f, 1f);
+        return t * t * (3f - 2f * t);
+    }
+
+    /// <summary>How far back under a cliff's lip an overhang can reach, in blocks.</summary>
+    private const int UndercutReach = 4;
+
+    /// <summary>How far ground must fall away within reach for its edge to count as a cliff.</summary>
+    private const int LipDrop = 7;
+
+    /// <summary>The fewest solid cells an overhang leaves over itself, top block included.</summary>
+    private const int UndercutRoof = 4;
+
+    /// <summary>
+    /// Where a column stands over a cliff: the ground at the cliff's foot, and how many columns
+    /// back from the open face this one is. A reach of zero is no cliff in range.
+    /// </summary>
+    /// <remarks>
+    /// Public so the audit asks the same question the generator answered.
+    /// </remarks>
+    public (int Foot, int Reach) LipOf(int x, int z, int surface)
+    {
+        if (Version < 2 || surface <= SeaLevel + LipDrop) return (0, 0);
+
+        for (var k = 1; k <= UndercutReach; k++)
+        {
+            var foot = int.MaxValue;
+            foot = Math.Min(foot, SurfaceHeight(x + k, z));
+            foot = Math.Min(foot, SurfaceHeight(x - k, z));
+            foot = Math.Min(foot, SurfaceHeight(x, z + k));
+            foot = Math.Min(foot, SurfaceHeight(x, z - k));
+            if (surface - foot >= LipDrop) return (foot, k);
+        }
+
+        return (0, 0);
+    }
+
+    /// <summary>
+    /// Version 2's overhangs (2026-10-25): a hollow cut back under a cliff's lip.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ <b>The surface stays the top of every column, and that is the whole design.</b> A
+    /// density field would put solid over air anywhere, and every reader of the heightmap — sky
+    /// light, spawning, the biome rules, every site placed on the ground — would be wrong under it.
+    /// Cutting back under the lip instead gives the same silhouette from outside while the top
+    /// block, and the <see cref="UndercutRoof"/> under it, are never touched.</para>
+    /// <para>A band of the face, starting at its foot or partway up it, is hollowed as far back as
+    /// a 3D field allows, so the cut is ragged in every direction and only some faces get one at
+    /// all. A column further back is cut only where the field reaches that far, so every hollow
+    /// stays open to the face it was cut from.</para>
+    /// <para>⛔ Never at or a cell over the sea, so a cliff over a river or a shore never opens its
+    /// water into a hollow beside it.</para>
+    /// </remarks>
+    public bool Undercut(int wx, int wy, int wz, int surface) =>
+        Undercut(wx, wy, wz, surface, LipOf(wx, wz, surface));
+
+    private bool Undercut(int wx, int wy, int wz, int surface, (int Foot, int Reach) lip)
+    {
+        if (lip.Reach == 0 || wy <= SeaLevel + 1 || wy <= lip.Foot) return false;
+
+        var top = surface - UndercutRoof;
+        if (wy > top) return false;
+
+        var where = Noise.Fbm2(wx / 70f, wz / 70f, _seedOverhang, 2);
+        if (where < 0.02f) return false;
+
+        // The band: three to eight tall, sitting at the foot or lifted partway up the face.
+        var tall = 3 + (int)(Smooth(0.02f, 0.3f, where) * 5f);
+        var room = Math.Max(0, top - lip.Foot - tall);
+        var lift = (int)(Smooth(-0.3f, 0.3f, Noise.Fbm2(wx / 50f, wz / 50f, _seedOverhang + 5, 2)) * room);
+        var bottom = lip.Foot + 1 + lift;
+        if (wy < bottom || wy >= bottom + tall) return false;
+
+        var reach = 1f + (Noise.Fbm3(wx / 9f, wy / 6f, wz / 9f, _seedOverhang + 9, 2) + 0.35f) * 6f;
+        return lip.Reach <= reach;
     }
 
     /// <summary>
@@ -460,6 +578,11 @@ public sealed class TerrainGenerator
             var beach = surface <= SeaLevel + 2;
             var steep = Version >= 2 && surface >= oy - 4 && surface <= oy + Chunk.Size + 4 && Steep(wx, wz, surface);
 
+            // Only a chunk that holds part of the face under a column's roof can cut into it, so the
+            // lip — sixteen heights — is asked there alone.
+            var lip = Version >= 2 && surface - UndercutRoof >= oy && oy + Chunk.Size > SeaLevel + 2
+                ? LipOf(wx, wz, surface) : (Foot: 0, Reach: 0);
+
             for (var y = 0; y < Chunk.Size; y++)
             {
                 var wy = oy + y;
@@ -497,6 +620,13 @@ public sealed class TerrainGenerator
                         id = wy <= LavaTable(wx, wz) ? _ids.Lava.Value : (ushort)0;
 
                     if (IsRock(id)) id = OreAt(wx, wy, wz, id);
+
+                    if (lip.Reach != 0 && wy > lip.Foot)
+                    {
+                        // A roof holds no gravel: it would come down on whoever walks under it.
+                        if (id == _ids.Gravel.Value) id = RockAt(wx, wy, wz);
+                        if (Undercut(wx, wy, wz, surface, lip)) id = 0;
+                    }
                 }
 
                 if (hollow && CoreHollow.At(wx, wy, wz, _ids) is { } carved) id = carved.Value;
@@ -1054,12 +1184,6 @@ public sealed class TerrainGenerator
     /// </remarks>
     private float RawHeightV2(int x, int z)
     {
-        static float Smooth(float from, float to, float value)
-        {
-            var t = Math.Clamp((value - from) / (to - from), 0f, 1f);
-            return t * t * (3f - 2f * t);
-        }
-
         var c = Math.Clamp(Noise.Fbm2(x / 1100f, z / 1100f, _seedContinent, 5) * 2.4f, -1f, 1f);
         var e = Math.Clamp(Noise.Fbm2(x / 520f, z / 520f, _seedErosion, 4) * 2.4f, -1f, 1f);
         var w = Math.Clamp(Noise.Fbm2(x / 300f, z / 300f, _seedWeird, 4) * 2.4f, -1f, 1f);
@@ -2155,6 +2279,12 @@ public sealed class TerrainGenerator
         ITreeCanvas canvas, in TreeSpec tree,
         int cx, int topY, int cz, int radius, int depth)
     {
+        if (Version >= 2)
+        {
+            PlaceRoundCrown(canvas, tree, cx, topY, cz, radius, depth);
+            return;
+        }
+
         for (var dy = -(depth - 1); dy <= 1; dy++)
         {
             var y = topY + dy;
@@ -2183,6 +2313,89 @@ public sealed class TerrainGenerator
                 // Vines hang off the underside only, which is the edge you see them against.
                 if (dy == -(depth - 1)) HangVine(canvas, tree, lx, y, lz);
             }
+        }
+    }
+
+    /// <summary>
+    /// Version 2's crown (2026-10-25): the same cells to fill, cut to a lumpy ellipsoid.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ The layered crown stacks flat discs, and from the side every tree is a box with its
+    /// corners off. This one keeps the layered crown's extent — the same layers, the same reach —
+    /// and keeps a cell only inside an ellipsoid through them, with each cell's edge nudged in or
+    /// out by noise, so a crown reads as a round mass and no two masses match. Its underside sits a
+    /// little flatter than its top, the way a crown grows towards the light.</para>
+    /// <para>⛔ <b>Every leaf is held up by construction.</b> A leaf lives only if the cell one step
+    /// nearer the wood holds a leaf too, and never more than <see cref="Growth.LeafReach"/> steps
+    /// out — so the support walk always finds wood, gaps or no gaps. A rounder crown reaches its
+    /// corners further than the layered one, and without this its edge leaves decayed where they
+    /// stood. Gaps are only punched in the outer shell, so one never cuts off what lies past it.</para>
+    /// </remarks>
+    private void PlaceRoundCrown(
+        ITreeCanvas canvas, in TreeSpec tree,
+        int cx, int topY, int cz, int radius, int depth)
+    {
+        var bottom = topY - (depth - 1);
+        var cy = (bottom + topY + 1) / 2f;
+        var ry = (depth + 1) / 2f + 0.35f;
+        var rx = radius + 0.6f;
+        var seed = tree.Seed;
+
+        // The wood the crown hangs from: the trunk's whole column for the crown, one log for a knot.
+        var knot = radius != tree.CrownRadius || topY != tree.TopY;
+        var (wx, wz) = knot ? (cx, cz) : (tree.X, tree.Z);
+
+        bool Inside(int x, int y, int z)
+        {
+            if (y < bottom || y > topY + 1) return false;
+            var dx = x - cx;
+            var dz = z - cz;
+            if (Math.Abs(dx) > radius || Math.Abs(dz) > radius) return false;
+            if (dx == 0 && dz == 0) return true;
+            var vy = (y - cy) / ry;
+            if (vy < 0f) vy *= 0.8f;
+            var d = (dx * dx + dz * dz) / (rx * rx) + vy * vy;
+            return d <= 1f + (Noise.Value3(x, y, z, seed + 43) - 0.5f) * 0.45f;
+        }
+
+        int Steps(int x, int y, int z) =>
+            Math.Abs(x - wx) + Math.Abs(z - wz) + (knot ? Math.Abs(y - topY) : Math.Max(0, y - topY));
+
+        // One step nearer the wood, always along the same axis for the same cell.
+        (int X, int Y, int Z) Toward(int x, int y, int z)
+        {
+            int ax = x - wx, az = z - wz;
+            if (ax != 0 && Math.Abs(ax) >= Math.Abs(az)) return (x - Math.Sign(ax), y, z);
+            if (az != 0) return (x, y, z - Math.Sign(az));
+            return (x, y - Math.Sign(y - topY), z);
+        }
+
+        bool Leaf(int x, int y, int z)
+        {
+            var steps = Steps(x, y, z);
+            if (steps == 0) return true;          // the wood itself
+            if (steps >= Growth.LeafReach || !Inside(x, y, z)) return false;
+
+            var (nx, ny, nz) = Toward(x, y, z);
+
+            // A gap, but only where nothing further out leans on this cell.
+            var atCentre = x == cx && z == cz;
+            if (!atCentre && Noise.Value3(x, y, z, seed + 29) > 0.88f && !Inside(2 * x - nx, 2 * y - ny, 2 * z - nz))
+                return false;
+
+            return Leaf(nx, ny, nz);
+        }
+
+        for (var y = bottom; y <= topY + 1; y++)
+        for (var z = cz - radius; z <= cz + radius; z++)
+        for (var x = cx - radius; x <= cx + radius; x++)
+        {
+            if (Steps(x, y, z) == 0 || !Leaf(x, y, z)) continue;
+
+            PlaceIntoAir(canvas, x, y, z, tree.LeavesOf(_ids));
+
+            // Vines hang from whatever leaf has nothing of the crown under it.
+            if (!Leaf(x, y - 1, z) && !(x == wx && z == wz && !knot)) HangVine(canvas, tree, x, y, z);
         }
     }
 

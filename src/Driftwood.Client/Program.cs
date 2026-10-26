@@ -782,6 +782,9 @@ public static class Program
                 case "--shot":
                     options = options with { ShotPath = Next(args, ref i, "--shot"), Mute = true };
                     break;
+                case "--shot-only":
+                    options = options with { ShotOnly = Next(args, ref i, "--shot-only").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries) };
+                    break;
                 // Takes a path, so the parser has to step over it as well as allow it.
                 case "--icon-sheet":
                     i++;
@@ -939,6 +942,7 @@ public static class Program
                                 --ui-check, write each deterministic UI state instead.
                                 The real world, the real camera, the real grip; the way to look at
                                 a held thing without starting the game and holding one.
+              --shot-only <a,b> with --shot, take only these shots, by number or name (43, 42-hollow)
               --uploads <n>     chunk uploads allowed per frame (default 4)
               --stall <ms>      with --bench, burn this long every 200th frame — the control that
                                 proves the benchmark can see a hitch it is known to contain

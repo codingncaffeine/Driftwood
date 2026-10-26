@@ -197,6 +197,10 @@ public sealed record ClientOptions
     /// apart, pointing at the player, and it took the user starting the game to say so.
     /// </remarks>
     public string? ShotPath { get; init; }
+
+    /// <summary>With <see cref="ShotPath"/>, take only these shots (by name or number), brought to
+    /// the front of the run — one picture without waiting out the frames of all the others.</summary>
+    public string[]? ShotOnly { get; init; }
 }
 
 /// <summary>Where the camera sits relative to the player. Cycled with F5.</summary>
@@ -15752,6 +15756,10 @@ public sealed class ClientHost : IDisposable
 
         // ⛳ Terrain version 2 (2026-10-25): the tallest ground near the start, from across a valley.
         new(2600, "43-mountains", "stick", ViewMode.First, false, Visit: "mountains"),
+
+        // ⛳ T1b's cliffs and overhangs (2026-10-25): a sheer face with a hollow cut under its lip,
+        // from the ground in front of it, so the overhang is seen the way a walker meets it.
+        new(2900, "44-cliffs", "stick", ViewMode.First, false, Visit: "cliffs"),
     ];
 
     /// <summary>
@@ -15845,6 +15853,34 @@ public sealed class ClientHost : IDisposable
             _equipment.Restore(EquipSlot.Offhand, new ItemStack(held.Id, 1));
     }
 
+    /// <summary>
+    /// The shots this run takes: every one, or <see cref="ClientOptions.ShotOnly"/>'s, each moved
+    /// earlier by the same amount so the first lands where the whole run's first visit could.
+    /// </summary>
+    /// <remarks>
+    /// One offset for the lot keeps the gaps between the chosen shots, which a strike or a creature
+    /// needs to travel through; the first lands a visit's lead past placing, the longest lead any
+    /// shot asks for.
+    /// </remarks>
+    private Shot[] TakenShots => _takenShots ??= ChooseShots();
+
+    private Shot[]? _takenShots;
+
+    private Shot[] ChooseShots()
+    {
+        if (_options.ShotOnly is not { Length: > 0 } only) return Shots;
+
+        var chosen = Shots.Where(s => only.Any(o => s.Name == o || s.Name.StartsWith(o + "-"))).ToArray();
+        if (chosen.Length == 0)
+        {
+            Console.WriteLine($"shot-only   none of {string.Join(", ", only)} is a shot; taking them all");
+            return Shots;
+        }
+
+        var offset = chosen[0].Frame - (PlaceFrame + VisitLead + ShotLead + 1);
+        return offset <= 0 ? chosen : chosen.Select(s => s with { Frame = s.Frame - offset }).ToArray();
+    }
+
     private void RunShots(Vector2D<int> size)
     {
         _shotFrame++;
@@ -15868,7 +15904,7 @@ public sealed class ClientHost : IDisposable
         if (_shotFrame == PlaceFrame) StandInTheOpen();
         if (_shotFrame <= PlaceFrame) return;
 
-        foreach (var shot in Shots)
+        foreach (var shot in TakenShots)
         {
             if (_shotFrame == shot.Frame - ShotLead)
             {
@@ -15917,9 +15953,9 @@ public sealed class ClientHost : IDisposable
             if (_shotFrame == shot.Frame) WriteShot(size, shot.Name);
         }
 
-        if (_shotFrame >= Shots[^1].Frame + ShotLead)
+        if (_shotFrame >= TakenShots[^1].Frame + ShotLead)
         {
-            Console.WriteLine($"shots       {Shots.Length} written to {_options.ShotPath}");
+            Console.WriteLine($"shots       {TakenShots.Length} written to {_options.ShotPath}");
             _window.Close();
         }
     }
@@ -16115,6 +16151,34 @@ public sealed class ClientHost : IDisposable
                 }
                 eye = new Vector3(bestX + 0.5f, best - 10f, bestZ + 120.5f);
                 pitch = 6f;
+                break;
+            }
+
+            case "cliffs":
+            {
+                // The tallest face near by that opens to the south and has a hollow under it, so the
+                // camera's own facing looks straight into it.
+                var (bestX, bestZ, foot, drop) = (sx, sz, 0, 0);
+                for (var dz = -640; dz <= 640; dz += 2)
+                for (var dx = -640; dx <= 640; dx += 2)
+                {
+                    int x = sx + dx, z = sz + dz, h = _terrain.SurfaceHeight(x, z);
+                    var lip = _terrain.LipOf(x, z, h);
+                    if (lip.Reach != 1 || h - lip.Foot <= drop || _terrain.SurfaceHeight(x, z + 1) != lip.Foot) continue;
+                    var hollow = false;
+                    for (var y = lip.Foot + 1; y < h && !hollow; y++) hollow = _terrain.Undercut(x, y, z, h);
+                    if (hollow) (bestX, bestZ, foot, drop) = (x, z, lip.Foot, h - lip.Foot);
+                }
+
+                if (drop == 0)
+                {
+                    Console.WriteLine("shot visit  no cliff with an overhang in reach");
+                    return;
+                }
+
+                eye = new Vector3(bestX + 0.5f, foot + 3.5f, bestZ + 14.5f);
+                pitch = 14f;
+                Console.WriteLine($"shot visit  cliff at {bestX},{bestZ}, {drop} high over y {foot}");
                 break;
             }
 
