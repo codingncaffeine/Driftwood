@@ -194,9 +194,9 @@ public sealed class AchievementBook
     /// <summary>What a toast says over the achievement's name, by its frame.</summary>
     public static string Heading(AchievementFrame frame) => frame switch
     {
-        AchievementFrame.Goal => "goal reached!",
-        AchievementFrame.Challenge => "challenge complete!",
-        _ => "achievement get!",
+        AchievementFrame.Goal => "Goal Reached!",
+        AchievementFrame.Challenge => "Challenge Complete!",
+        _ => "Achievement Unlocked!",
     };
 
     private static AchievementCriterion C(string @event, string subject) => new(@event, subject);
