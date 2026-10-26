@@ -937,6 +937,34 @@ public static class StarterItems
             },
         });
         Loose(items, "ember_star", "ember star", StarterBlocks.LayerEmberStar);
+
+        // ⛳ R1 (2026-10-25): the reference's makes this world had the makings of.
+        Block(items, blocks, "hay_bale", "hay bale", StarterBlocks.LayerHaySide);
+        Block(items, blocks, "bone_block", "bone block", StarterBlocks.LayerBoneBlock);
+        Block(items, blocks, "terracotta", "terracotta", StarterBlocks.LayerTerracotta);
+        Block(items, blocks, "mossy_stone_bricks", "mossy stone bricks", StarterBlocks.LayerMossyStoneBricks);
+        Block(items, blocks, "cracked_stone_bricks", "cracked stone bricks", StarterBlocks.LayerCrackedStoneBricks);
+        Block(items, blocks, "chiseled_stone_bricks", "chiseled stone bricks", StarterBlocks.LayerChiseledStoneBricks);
+        Loose(items, "iron_nugget", "iron nugget", StarterBlocks.LayerIronNugget);
+        Loose(items, "gold_nugget", "gold nugget", StarterBlocks.LayerGoldNugget);
+        items.Register(new ItemType
+        {
+            Name = "beetroot_soup", Label = "beetroot soup", IconLayer = StarterBlocks.LayerBeetrootSoup,
+            Feeds = 6, MaxStack = 1, Remains = "bowl",
+        });
+        items.Register(new ItemType
+        {
+            Name = "rabbit_stew", Label = "rabbit stew", IconLayer = StarterBlocks.LayerRabbitStew,
+            Feeds = 10, MaxStack = 1, Remains = "bowl",
+        });
+        items.Register(new ItemType
+        {
+            Name = "golden_carrot", Label = "golden carrot", IconLayer = StarterBlocks.LayerGoldenCarrot, Feeds = 6,
+        });
+        items.Register(new ItemType
+        {
+            Name = "golden_apple", Label = "golden apple", IconLayer = StarterBlocks.LayerGoldenApple, Feeds = 4,
+        });
         Block(items, blocks, "starbeacon", "starbeacon", StarterBlocks.LayerStarbeacon);
         items.Register(new ItemType
         {

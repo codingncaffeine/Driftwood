@@ -775,7 +775,23 @@ public static class StarterBlocks
     public const ushort LayerEmberStar = LayerTideCrystals + 1;
     public const ushort LayerStarbeacon = LayerTideCrystals + 2;
 
-    public const int LayerCount = LayerStarbeacon + 1;
+    /// <summary>R1's (2026-10-25): the reference's recipes this world had the makings of.</summary>
+    public const ushort LayerHayTop = LayerStarbeacon + 1;
+    public const ushort LayerHaySide = LayerStarbeacon + 2;
+    public const ushort LayerBoneBlock = LayerStarbeacon + 3;
+    public const ushort LayerPackedIce = LayerStarbeacon + 4;
+    public const ushort LayerTerracotta = LayerStarbeacon + 5;
+    public const ushort LayerMossyStoneBricks = LayerStarbeacon + 6;
+    public const ushort LayerCrackedStoneBricks = LayerStarbeacon + 7;
+    public const ushort LayerChiseledStoneBricks = LayerStarbeacon + 8;
+    public const ushort LayerIronNugget = LayerStarbeacon + 9;
+    public const ushort LayerGoldNugget = LayerStarbeacon + 10;
+    public const ushort LayerBeetrootSoup = LayerStarbeacon + 11;
+    public const ushort LayerRabbitStew = LayerStarbeacon + 12;
+    public const ushort LayerGoldenCarrot = LayerStarbeacon + 13;
+    public const ushort LayerGoldenApple = LayerStarbeacon + 14;
+
+    public const int LayerCount = LayerGoldenApple + 1;
 
     /// <summary>One stage of the ashcap, as a block name.</summary>
     public static string AshcapName(int stage) => $"ashcap_{stage}";
@@ -1420,6 +1436,23 @@ public static class StarterBlocks
             LightEmission = LightValue.PackBlock(15, 15, 14),
             TopLayer = LayerStarbeacon, SideLayer = LayerStarbeacon, BottomLayer = LayerStarbeacon,
         });
+
+        // ⛳ R1 (2026-10-25): the reference's storage and worked blocks this world had the makings of.
+        foreach (var (name, top, side, hard, sound, tool) in (ReadOnlySpan<(string, ushort, ushort, float, SoundMaterial, ToolClass)>)
+                 [
+                     ("hay_bale", LayerHayTop, LayerHaySide, 0.5f, SoundMaterial.Plant, ToolClass.None),
+                     ("bone_block", LayerBoneBlock, LayerBoneBlock, 2f, SoundMaterial.Stone, ToolClass.Pickaxe),
+                     ("terracotta", LayerTerracotta, LayerTerracotta, 1.25f, SoundMaterial.Stone, ToolClass.Pickaxe),
+                     ("mossy_stone_bricks", LayerMossyStoneBricks, LayerMossyStoneBricks, 1.5f, SoundMaterial.Stone, ToolClass.Pickaxe),
+                     ("cracked_stone_bricks", LayerCrackedStoneBricks, LayerCrackedStoneBricks, 1.5f, SoundMaterial.Stone, ToolClass.Pickaxe),
+                     ("chiseled_stone_bricks", LayerChiseledStoneBricks, LayerChiseledStoneBricks, 1.5f, SoundMaterial.Stone, ToolClass.Pickaxe),
+                 ])
+            registry.Register(new BlockType
+            {
+                Name = name, Hardness = hard, Crafted = true, Sounds = sound, HarvestClass = tool,
+                HarvestTier = tool == ToolClass.Pickaxe ? 1 : 0,
+                TopLayer = top, SideLayer = side, BottomLayer = top,
+            });
 
         // ⛳ The helm (2026-10-25): a ship's wheel on a post, four facings. Taking it lifts whatever
         // it is built into off the world and sails it — see Ships.
@@ -3163,6 +3196,16 @@ public static class StarterBlocks
             SoundMaterial.Stone, ToolClass.Pickaxe, 1),
         new("cut_sandstone", LayerSandstoneCut, LayerSandstoneCut, LayerSandstoneCut,
             SoundMaterial.Stone, ToolClass.Pickaxe, 0),
+
+        // R1 (2026-10-25): the Deepwatch's stone and the Emberhold's brick, cut as the reference cuts
+        // its prismarine and its nether brick.
+        new("tidestone", LayerTidestone, LayerTidestone, LayerTidestone, SoundMaterial.Stone, ToolClass.Pickaxe, 1),
+        new("tidestone_bricks", LayerTidestoneBricks, LayerTidestoneBricks, LayerTidestoneBricks,
+            SoundMaterial.Stone, ToolClass.Pickaxe, 1),
+        new("dark_tidestone", LayerDarkTidestone, LayerDarkTidestone, LayerDarkTidestone,
+            SoundMaterial.Stone, ToolClass.Pickaxe, 1),
+        new("ember_bricks", LayerEmberBricks, LayerEmberBricks, LayerEmberBricks,
+            SoundMaterial.Deepstone, ToolClass.Pickaxe, 1),
     ];
 
     /// <summary>One rock worked into another form: what it is called, what it looks like, its cost.</summary>
@@ -3282,6 +3325,10 @@ public static class StarterBlocks
         new("sandstone_wall", LayerSandstone, SoundMaterial.Stone, ToolClass.Pickaxe, 0,
             4f, 3f, [(0f, 14f)], FenceCollideHigh),
         new("brick_wall", LayerBricks, SoundMaterial.Stone, ToolClass.Pickaxe, 1,
+            4f, 3f, [(0f, 14f)], FenceCollideHigh),
+        new("tidestone_wall", LayerTidestone, SoundMaterial.Stone, ToolClass.Pickaxe, 1,
+            4f, 3f, [(0f, 14f)], FenceCollideHigh),
+        new("ember_brick_wall", LayerEmberBricks, SoundMaterial.Deepstone, ToolClass.Pickaxe, 1,
             4f, 3f, [(0f, 14f)], FenceCollideHigh),
         new("glass_pane", LayerGlass, SoundMaterial.Glass, ToolClass.None, 0,
             1f, 1f, [(0f, 16f)], 0f),

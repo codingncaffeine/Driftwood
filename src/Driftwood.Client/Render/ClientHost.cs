@@ -11625,7 +11625,11 @@ public sealed class ClientHost : IDisposable
 
         if (food is null) return false;
 
-        if (_vitals.Eat(food.Feeds) == 0)
+        // ⛳ The golden apple (2026-10-25): the reference's five seconds of strong mending, eaten
+        // even on a full stomach.
+        if (food.Name == "golden_apple") _ailments.Apply(Ailment.Regeneration, 5f, 2);
+
+        if (_vitals.Eat(food.Feeds) == 0 && food.Name != "golden_apple")
         {
             // ⛔ A refusal that says why, which this did not — and a fresh spawn starts with the
             // bar FULL, so anybody trying their first cooked steak straight out of the furnace

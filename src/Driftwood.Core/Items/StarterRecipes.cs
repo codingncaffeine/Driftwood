@@ -50,6 +50,10 @@ public static class StarterRecipes
         ("polished_driftstone", "polished_driftstone"),
         ("polished_saltstone", "polished_saltstone"),
         ("cut_sandstone", "cut_sandstone"),
+        ("tidestone", "tidestone"),
+        ("tidestone_bricks", "tidestone_bricks"),
+        ("dark_tidestone", "dark_tidestone"),
+        ("ember_bricks", "ember_bricks"),
     ];
 
     /// <summary>
@@ -83,6 +87,8 @@ public static class StarterRecipes
         ("deepstone_brick_wall", "deepstone_bricks"),
         ("sandstone_wall", "sandstone"),
         ("brick_wall", "bricks"),
+        ("tidestone_wall", "tidestone"),
+        ("ember_brick_wall", "ember_bricks"),
     ];
 
     public static RecipeBook Build(ItemRegistry items)
@@ -279,6 +285,24 @@ public static class StarterRecipes
         Shaped("tidestone", "tidestone", 1, ["MM", "MM"], "tide_shard", station: CraftStation.Bench);
         Shaped("tidestone bricks", "tidestone_bricks", 1, ["MMM", "MMM", "MMM"], "tide_shard", station: CraftStation.Bench);
         Shaped("dark tidestone", "dark_tidestone", 1, ["MMM", "MbM", "MMM"], "tide_shard", station: CraftStation.Bench);
+        // ⛳ R1 (2026-10-25): the reference's recipes this world had the makings of. Every pack packs
+        // back out; nuggets are a ninth of an ingot; the stone brick family is mossed, cracked and
+        // carved as the reference does it; the soups and the gold-dipped food are its own.
+        Shaped("hay bale", "hay_bale", 1, ["MMM", "MMM", "MMM"], "wheat", station: CraftStation.Bench);
+        LooseAt("wheat from a bale", "wheat", 9, CraftStation.Bench, "hay_bale");
+        Shaped("bone block", "bone_block", 1, ["MMM", "MMM", "MMM"], "bonemeal", station: CraftStation.Bench);
+        LooseAt("bonemeal from a block", "bonemeal", 9, CraftStation.Bench, "bone_block");
+        Shaped("iron ingot from nuggets", "iron_ingot", 1, ["MMM", "MMM", "MMM"], "iron_nugget", station: CraftStation.Bench);
+        LooseAt("iron nuggets", "iron_nugget", 9, CraftStation.Bench, "iron_ingot");
+        Shaped("gold ingot from nuggets", "gold_ingot", 1, ["MMM", "MMM", "MMM"], "gold_nugget", station: CraftStation.Bench);
+        LooseAt("gold nuggets", "gold_nugget", 9, CraftStation.Bench, "gold_ingot");
+        LooseAt("mossy stone bricks", "mossy_stone_bricks", 1, CraftStation.Bench, "stone_bricks", "moss");
+        Shaped("chiseled stone bricks", "chiseled_stone_bricks", 1, ["M", "M"], "stone_bricks_slab", station: CraftStation.Bench);
+        Shaped("beetroot soup", "beetroot_soup", 1, ["MMM", "MMM", " w "], "beetroot", station: CraftStation.Bench);
+        Shaped("rabbit stew", "rabbit_stew", 1, [" k ", "rpm", " w "], station: CraftStation.Bench);
+        Shaped("golden carrot", "golden_carrot", 1, ["MMM", "MrM", "MMM"], "gold_nugget", station: CraftStation.Bench);
+        Shaped("golden apple", "golden_apple", 1, ["MMM", "MaM", "MMM"], "gold_ingot", station: CraftStation.Bench);
+
         // ⛳ The starbeacon (2026-10-25): glass round the ember star on a polished deepstone foot.
         Shaped("starbeacon", "starbeacon", 1, ["GGG", "GsG", "MMM"], "polished_deepstone", station: CraftStation.Bench);
         Shaped("deeplight", "deeplight", 1, ["McM", "ccc", "McM"], "tide_shard", station: CraftStation.Bench);
@@ -598,6 +622,8 @@ public static class StarterRecipes
         // what makes a second pass through the fire worth doing.
         Smelt("stone", "smooth_stone");
         Smelt("wet_sponge", "sponge");
+        Smelt("clay", "terracotta");
+        Smelt("stone_bricks", "cracked_stone_bricks");
         Smelt("sandstone", "cut_sandstone");
 
         Smelt("sand", "glass");
@@ -720,6 +746,12 @@ public static class StarterRecipes
     private static string KeyOf(char key, string recipe, string? material) => key switch
     {
         'b' => "ink_sac",
+        'w' => "bowl",
+        'k' => "cooked_rabbit",
+        'r' => "carrot",
+        'p' => "baked_potato",
+        'm' => "mushroom_brown",
+        'a' => "apple",
         's' => "ember_star",
         'c' => "tide_crystals",
         'M' => material ?? throw new InvalidOperationException($"recipe '{recipe}' uses M with no material"),

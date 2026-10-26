@@ -9385,7 +9385,8 @@ public static class WorldAudit
         (StarterBlocks.LayerCherryBoatIcon, "cherry_boat"),
         (StarterBlocks.LayerTidestone, "tidestone"),
         (StarterBlocks.LayerTideCrystals, "tide_crystals"),
-        ((ushort)(StarterBlocks.LayerCount - 1), "starbeacon"),
+        (StarterBlocks.LayerStarbeacon, "starbeacon"),
+        ((ushort)(StarterBlocks.LayerCount - 1), "golden_apple"),
     ];
 
     /// <summary>
@@ -12822,11 +12823,12 @@ public static class WorldAudit
         var seagrass = registry.ByName("seagrass").Id;
 
         // ── The pairing table is populated and points both ways ──────────────────────────────────
-        // 580 written as a literal on purpose: 140 shaped + 416 connected + 16 trapdoors + 4
+        // 652 written as a literal on purpose: 180 shaped + 448 connected + 16 trapdoors + 4
         // ladders + 4 chests — cherry's slabs, stairs and fence joined at #94, iron bars' sixteen
-        // on 2026-10-16. A clone loop that quietly skipped a family reads fewer.
-        if (wet.Pairs != 580)
-            faults.Add($"the waterlogging table pairs {wet.Pairs} forms, not the 580 registered");
+        // on 2026-10-16, R1's four stones' shapes and two walls on 2026-10-25. A clone loop that
+        // quietly skipped a family reads fewer.
+        if (wet.Pairs != 652)
+            faults.Add($"the waterlogging table pairs {wet.Pairs} forms, not the 652 registered");
         if (!wet.TryWet(fenceDry, out var wetOfFence) || wetOfFence != fenceWet)
             faults.Add("the fence's wet form is not its dry form's partner");
         if (wet.DryOf(fenceWet) != fenceDry)
