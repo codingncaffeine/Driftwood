@@ -667,7 +667,11 @@ public static class WorldAudit
             var surface = generator.SurfaceHeight(wx, wz);
             var lip = generator.LipOf(wx, wz, surface);
             if (lip.Reach == 0) continue;
-            if (lip.Reach == 1) cliffColumns++;
+
+            // ⚠ Every lip, not only the sheer ones (2026-10-26): the release gate's twelve-chunk
+            // window hollowed 2,767 cells under lips whose drop was two to four out and had not one
+            // column with it right beside — a smaller window, not a missing cliff.
+            cliffColumns++;
 
             var hollowed = false;
             for (var y = lip.Foot + 1; y < surface; y++)
