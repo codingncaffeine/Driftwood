@@ -1058,7 +1058,7 @@ public static class WorldAudit
         Check("a block texture comes from the pack's minecraft folder, never a mod's", spaceFaults.Count == 0,
             spaceFaults.Count == 0 ? spaceDetail : $"{spaceFaults.Count} faults: {spaceFaults[0]}");
 
-        // ⛳ And a pack that keeps its stone where its model says (2026-10-16): Alacrity's art is all
+        // ⛳ And a pack that keeps its stone where its model says (2026-10-16): one pack's art is all
         // at paths like block/stone/stone/side_1, reached through blockstate and model, never by name.
         // ⛳ Fishing (2026-10-16), driven start to finish with no window: cast, land, wait, bite,
         // reel; the misses; and the reference's split of what comes up.

@@ -94,7 +94,7 @@ public sealed class ControllerBindings
     private readonly ControllerControl[] _controls = new ControllerControl[ControllerActions.All.Length];
 
     /// <summary>
-    /// The shipped layout: the one a Minecraft player's hands already know (2026-10-26).
+    /// The shipped layout: the one the genre's players' hands already know (2026-10-26).
     /// </summary>
     /// <remarks>
     /// <para>⛳ <b>The user's report: "it didn't feel right".</b> Attack and use had moved to the

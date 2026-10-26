@@ -1060,7 +1060,7 @@ public sealed class TexturePack : IDisposable
     /// </summary>
     /// <remarks>
     /// ⛔ <b>A texture comes from <c>minecraft</c> only</b> (2026-10-16, the user's report: blocks
-    /// they stood next to were partly see-through). Alacrity ships a mod's art beside its own, and
+    /// they stood next to were partly see-through). One pack ships a mod's art beside its own, and
     /// <c>assets/waystones/textures/block/deepslate.png</c> is not deepslate: it is the waystone's
     /// UV sheet, a quarter of it empty. With no <c>minecraft</c> deepslate in the pack the lookup fell
     /// through to it, and deepstone, driftstone and sandstone each lost a corner to the cutout

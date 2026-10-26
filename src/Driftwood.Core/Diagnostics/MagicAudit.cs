@@ -379,7 +379,7 @@ public static class MagicAudit
         if (keys.Primary(GameAction.ToggleDeveloper) != "GraveAccent")
             faults.Add("developer flight is not on the tilde/grave key");
         var pad = ControllerBindings.Defaults();
-        // ⛳ The Minecraft-shaped layout (2026-10-26): triggers break and place, bumpers walk the
+        // ⛳ The genre's console layout (2026-10-26): triggers break and place, bumpers walk the
         // hotbar on a tap and open the spell banks on a hold, the right stick's click sneaks.
         if (pad.Control(ControllerAction.BreakOrAttack) != ControllerControl.RightTrigger
             || pad.Control(ControllerAction.UseOrPlace) != ControllerControl.LeftTrigger
@@ -391,7 +391,7 @@ public static class MagicAudit
             || pad.Control(ControllerAction.Jump) != ControllerControl.South
             || pad.Control(ControllerAction.OpenInventory) != ControllerControl.North
             || pad.Control(ControllerAction.ToggleView) != ControllerControl.DPadUp)
-            faults.Add("the shipped controller layout is not the Minecraft-shaped one");
+            faults.Add("the shipped controller layout is not the genre's console layout");
 
         // The magic-era layout, untouched, moves to it on its own; one changed row keeps it.
         var magicEra = new HashSet<ControllerAction>(ControllerActions.All);

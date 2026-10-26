@@ -180,7 +180,7 @@ public sealed class JavaPackModels
     /// </summary>
     /// <remarks>
     /// ⛳ <b>For the texture table, 2026-10-16.</b> A modern pack keeps its stone at whatever path its
-    /// model says — Alacrity's is <c>block/stone/stone/side_1</c> — and the only way from "stone" to
+    /// model says — one pack's is <c>block/stone/stone/side_1</c> — and the only way from "stone" to
     /// that file is the one the reference takes: blockstate, model, parent chain, face variable.
     /// <see cref="Bake"/> drops such a face, since no layer is named after it; this hands it to the
     /// texture loader instead, so the picture comes onto the layer the block already draws.
@@ -211,11 +211,11 @@ public sealed class JavaPackModels
             }
         }
 
-        // ⚠ And it has to be the OUTSIDE of the block, covering most of it. Alacrity's smoker is
+        // ⚠ And it has to be the OUTSIDE of the block, covering most of it. one pack's smoker is
         // hollow: its widest upward face is the floor inside, and its real top a frame of strips.
         if (best is null || owner is null || widest < 128 || !OnSurface(owner, direction)) return null;
 
-        // ⚠ A face painted in layers is not one picture. Alacrity's carved pumpkin is a plain
+        // ⚠ A face painted in layers is not one picture. One pack's carved pumpkin is a plain
         // pumpkin with its face on a second skin just outside it, and its lit furnace a front with
         // the fire on another; taking the widest alone gave a pumpkin with no face. Any second face
         // looking the same way at half the area or more means the look is a stack — keep ours.

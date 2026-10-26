@@ -1716,7 +1716,7 @@ public sealed class HudRenderer : IDisposable
         Rect(_guiUnder, left, top, width, height, Vector4.One, (int)GuiTextureSet.Layer.Hotbar);
 
         // ⚠ Under the items, as the reference draws it (2026-10-26): a pack's selection frame may
-        // be filled — Alacrity's is near-opaque inside — and laid over the item it greyed out the
+        // be filled — one in use here is near-opaque inside — and laid over the item it greyed out the
         // very thing in hand.
         if (HasGui(GuiTextureSet.Layer.HotbarSelection))
             Rect(_guiUnder, left - 1f + inventory.Selected * pitch, top - 1f, 24f, 23f,
