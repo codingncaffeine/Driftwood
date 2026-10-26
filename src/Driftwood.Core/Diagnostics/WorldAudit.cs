@@ -1942,6 +1942,12 @@ public static class WorldAudit
         Check("the Emberdeep's own fight the way they should", ember.Count == 0,
             ember.Count == 0 ? emberSaid : $"{ember.Count} faults: {ember[0]}");
 
+        var potionFaults = Potions.Validate(items);
+        Check("every potion can be brewed", potionFaults.Count == 0,
+            potionFaults.Count == 0
+                ? $"{Potions.All.Count} potions from a water bottle and {Potions.Ingredients.Count()} ingredients"
+                : $"{potionFaults.Count} faults: {potionFaults[0]}");
+
         var achievementBook = new AchievementBook(items);
         var achievementFaults = achievementBook.Validate(items);
         achievementFaults.AddRange(AchievementLogFaults(achievementBook));
@@ -3395,6 +3401,21 @@ public static class WorldAudit
             if (Held(items.ByName("pumpkin").Id) && Held(items.ByName("shears").Id))
                 changed |= Gain(items.ByName("carved_pumpkin").Id);
 
+            // ⛳ DIP AND BREW (2026-10-25). An empty bottle dipped in water is a water bottle — water,
+            // as the farm rule says, is always about — and a stand with dust in it turns any bottle
+            // the walk holds into what each held ingredient makes of it.
+            if (Held(items.ByName("glass_bottle").Id))
+                changed |= Gain(items.ByName("water_bottle").Id);
+
+            if (Held(items.ByName("brewing_stand").Id) && Held(items.ByName("cinder_dust").Id))
+                foreach (var bottle in Potions.All)
+                {
+                    if (!Held(items.ByName(bottle.Name).Id)) continue;
+                    foreach (var ingredient in Potions.Ingredients)
+                        if (Held(items.ByName(ingredient).Id) && Potions.Brew(bottle.Name, ingredient) is { } made)
+                            changed |= Gain(items.ByName(made).Id);
+                }
+
             // Craft. ⚠ A recipe worked at a station cannot be made until the station itself has been
             // reached — which is the whole reason the gate exists, and without this line the walk
             // would report every worked stone in the game as obtainable by a player who has never
@@ -4033,6 +4054,7 @@ public static class WorldAudit
         foreach (var (kind, cells) in new[]
                  {
                      (PanelKind.Player, 2), (PanelKind.Bench, 3), (PanelKind.Furnace, 0),
+                     (PanelKind.BrewingStand, 0),
                  })
         {
             layout.BuildPanel(kind, cells, w, h);
@@ -4101,6 +4123,7 @@ public static class WorldAudit
             {
                 PanelKind.Player => Inventory.Slots + 4 + 1 + 5,       // pockets, worn, offhand, 2x2 and result
                 PanelKind.Bench => Inventory.Slots + 9 + 1,
+                PanelKind.BrewingStand => Inventory.Slots + BrewingStand.Bottles + 2,
                 _ => Inventory.Slots + 3,
             };
 
@@ -9257,7 +9280,8 @@ public static class WorldAudit
         (StarterBlocks.LayerCinderRod, "cinder_rod"),
         (StarterBlocks.LayerFireCharge, "fire_charge"),
         (StarterBlocks.LayerEmberBricks, "ember_bricks"),
-        ((ushort)(StarterBlocks.LayerCount - 1), "cinder_cage"),
+        (StarterBlocks.LayerCinderCage, "cinder_cage"),
+        ((ushort)(StarterBlocks.LayerCount - 1), "brewing_stand"),
     ];
 
     /// <summary>
@@ -10297,6 +10321,7 @@ public static class WorldAudit
         ("rail", "a film on the floor with no solid in it; its tile is the picture"),
         ("powered_rail", "the same film as the rail, with a third rail drawn in"),
         ("sign", "eight forms of a thin board; the reference holds it as its own flat picture too"),
+        ("brewing_stand", "a rod and two bottles on crossed planes; the reference holds its own sprite too"),
     ];
 
     /// <summary>

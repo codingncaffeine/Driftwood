@@ -77,6 +77,9 @@ public sealed record WorldState(
     /// <summary>What is written on the world's signs.</summary>
     public SignBank Signs { get; set; } = new();
 
+    /// <summary>The world's brewing stands (2026-10-25).</summary>
+    public BrewingBank Brewing { get; set; } = new();
+
     /// <summary>The achievements earned in this world, and the part-met ones (2026-10-25).</summary>
     public AchievementLog Achievements { get; set; } = new();
 
@@ -313,6 +316,7 @@ public static class WorldSave
             var edits = EditBytes(state.World, blocks);
             var furnaces = FurnaceBytes(state.Furnaces, items, state.Catalogue);
             var chests = ChestBytes(state.Chests, items, state.Catalogue);
+            var brewing = BrewingBytes(state.Brewing, items, state.Catalogue);
             var cargo = CargoBytes(state.Carts, items, state.Catalogue);
             var player = PlayerBytes(state, items);
 
@@ -475,6 +479,9 @@ public static class WorldSave
                     }
                 }));
 
+                // ⛳ The brewing stands (2026-10-25), their bottles and their dust.
+                SaveSection.Write(into, "BREW", brewing);
+
                 // ⛳ Achievements (2026-10-25), on the same discipline: a build from before them
                 // skips the section by its length and the world opens with none earned.
                 SaveSection.Write(into, "ACHV", Bytes(state.Achievements.Write));
@@ -622,6 +629,7 @@ public static class WorldSave
             byte[]? inhabitants = null;
             byte[]? magic = null;
             byte[]? achievements = null;
+            byte[]? brewing = null;
 
             while (SaveSection.TryRead(from, out var tag, out var payload))
             {
@@ -669,6 +677,7 @@ public static class WorldSave
                     case "CRGO": cargo = payload; break;
                     case "SIGN": signText = payload; break;
                     case "ACHV": achievements = payload; break;
+                    case "BREW": brewing = payload; break;
 
                     // Written by a newer build than this one. Skipped, and deliberately not an
                     // error: the length said how far, which is the whole reason sections carry one.
@@ -684,6 +693,7 @@ public static class WorldSave
             if (edits is not null) ReadEdits(Reader(edits), into.World, toBlock);
             if (furnaces is not null) ReadFurnaces(Reader(furnaces), into.Furnaces, toItem);
             if (chests is not null) ReadChests(Reader(chests), into.Chests, toItem);
+            if (brewing is not null) ReadBrewing(Reader(brewing), into.Brewing, toItem);
             if (cargo is not null) ReadCargo(Reader(cargo), into, toItem);
 
             into.Signs.Clear();
@@ -1019,6 +1029,40 @@ public static class WorldSave
             furnace.BurnLeft = from.ReadSingle();
             furnace.BurnTotal = from.ReadSingle();
             furnace.Progress = from.ReadSingle();
+        }
+    }
+
+    private static byte[] BrewingBytes(BrewingBank bank, Palette items, ItemRegistry catalogue) => Bytes(into =>
+    {
+        into.Write(1); // payload version
+        into.Write(bank.Count);
+
+        foreach (var (at, stand) in bank.All)
+        {
+            into.Write(at.X);
+            into.Write(at.Y);
+            into.Write(at.Z);
+            foreach (var bottle in stand.Bottle) Stack(into, bottle, items, catalogue);
+            Stack(into, stand.Ingredient, items, catalogue);
+            Stack(into, stand.Fuel, items, catalogue);
+            into.Write(stand.FuelLeft);
+            into.Write(stand.Progress);
+        }
+    });
+
+    private static void ReadBrewing(BinaryReader from, BrewingBank bank, int[] toItem)
+    {
+        if (from.ReadInt32() != 1) return;
+        var count = from.ReadInt32();
+
+        for (var i = 0; i < count; i++)
+        {
+            var stand = bank.Open(from.ReadInt32(), from.ReadInt32(), from.ReadInt32());
+            for (var b = 0; b < BrewingStand.Bottles; b++) stand.Bottle[b] = Stack(from, toItem);
+            stand.Ingredient = Stack(from, toItem);
+            stand.Fuel = Stack(from, toItem);
+            stand.FuelLeft = from.ReadInt32();
+            stand.Progress = from.ReadSingle();
         }
     }
 

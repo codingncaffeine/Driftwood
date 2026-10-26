@@ -21,6 +21,9 @@ public enum BlockUse
     /// <summary>Opens the chest at this cell.</summary>
     Chest,
 
+    /// <summary>Opens the brewing stand at this cell (2026-10-25).</summary>
+    BrewingStand,
+
     /// <summary>Opens the stonecutter: one rock in, and everything it cuts into offered.</summary>
     Stonecutter,
 

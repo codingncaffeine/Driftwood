@@ -181,6 +181,9 @@ public static class Tooltip
         SlotRole.Smelted => new TooltipText("what came out", ""),
         SlotRole.Cutting => new TooltipText("to work", "stone at a cutter, wool at a loom"),
         SlotRole.Cut => new TooltipText("what it becomes", ""),
+        SlotRole.Brewing => new TooltipText("a bottle", "water, or a potion to brew further"),
+        SlotRole.Ingredient => new TooltipText("to brew in", "ashcap first, then what the potion is"),
+        SlotRole.BrewFuel => new TooltipText("cinder dust", "fires twenty brews"),
         _ => TooltipText.None,
     };
 
@@ -221,6 +224,7 @@ public static class Tooltip
                  {
                      SlotRole.Equip, SlotRole.Craft, SlotRole.Result, SlotRole.Smelting,
                      SlotRole.Fuel, SlotRole.Smelted, SlotRole.Cutting, SlotRole.Cut,
+                     SlotRole.Brewing, SlotRole.Ingredient, SlotRole.BrewFuel,
                  })
         {
             if (!For(Slot(role, 0), ItemStack.Empty, items).IsEmpty) continue;

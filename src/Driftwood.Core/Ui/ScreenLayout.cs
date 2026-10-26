@@ -19,6 +19,9 @@ public enum PanelKind
 
     /// <summary>A stonecutter: one rock in, everything it cuts into offered, one taken out.</summary>
     Stonecutter,
+
+    /// <summary>The brewing stand (2026-10-25): three bottles, an ingredient over them, dust to fire it.</summary>
+    BrewingStand,
 }
 
 /// <summary>What a square is for. The index means something different for each.</summary>
@@ -55,6 +58,15 @@ public enum SlotRole
 
     /// <summary>What the chosen cut would make. Gives only.</summary>
     Cut,
+
+    /// <summary>One of a brewing stand's three bottles; the index says which.</summary>
+    Brewing,
+
+    /// <summary>What is brewed into them.</summary>
+    Ingredient,
+
+    /// <summary>The cinder dust that fires the stand.</summary>
+    BrewFuel,
 }
 
 /// <summary>What kind of thing the pointer is over.</summary>
@@ -447,6 +459,16 @@ public sealed class ScreenLayout
                 Button(ScreenButton.Book, BenchBookToggle.X, BenchBookToggle.Y, BenchBookToggle.W, BenchBookToggle.H);
                 break;
 
+            // The reference's own sheet: bottles in a fan below, the ingredient over them, the dust
+            // in the corner — read off brewing_stand.png's squares.
+            case PanelKind.BrewingStand:
+                Square16(SlotRole.Brewing, 0, 56, 51);
+                Square16(SlotRole.Brewing, 1, 79, 58);
+                Square16(SlotRole.Brewing, 2, 102, 51);
+                Square16(SlotRole.Ingredient, 0, 79, 17);
+                Square16(SlotRole.BrewFuel, 0, 17, 17);
+                break;
+
             // ⚠ Not a grid. A stonecutter takes one thing and offers several, so what sits between
             // the input and the output is a LIST rather than an arrangement — the same zone kind the
             // recipe book uses, because it is the same gesture: look at what is on offer, pick one.
@@ -577,6 +599,11 @@ public sealed class ScreenLayout
     public static readonly (int X, int Y, int W, int H) BenchArrow = (90, 35, 22, 15);
     public static readonly (int X, int Y, int W, int H) FurnaceArrow = (80, 35, 22, 15);
     public static readonly (int X, int Y, int W, int H) FurnaceFlame = (56, 36, 14, 14);
+
+    /// <summary>The brewing stand's gauges: the falling arrow, the rising bubbles, and the dust bar.</summary>
+    public static readonly (int X, int Y, int W, int H) BrewArrow = (97, 16, 9, 28);
+    public static readonly (int X, int Y, int W, int H) BrewBubbles = (63, 14, 12, 29);
+    public static readonly (int X, int Y, int W, int H) BrewFuelBar = (60, 44, 18, 4);
 
     /// <summary>The window the player's own figure is shown in.</summary>
     public static readonly (int X, int Y, int W, int H) Figure = (25, 7, 50, 71);

@@ -71,6 +71,15 @@ public enum ItemUse
 
     /// <summary>Thrown as a fireball through the projectile pool — the fire charge (2026-10-25).</summary>
     ThrownFire,
+
+    /// <summary>Drunk at once, leaving the bottle — a potion (2026-10-25).</summary>
+    Drink,
+
+    /// <summary>Thrown, bursting on whoever is near where it lands — a splash potion.</summary>
+    ThrownSplash,
+
+    /// <summary>Dipped in water to fill — the empty bottle.</summary>
+    FillBottle,
 }
 
 /// <summary>

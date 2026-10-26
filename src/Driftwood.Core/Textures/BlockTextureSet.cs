@@ -722,6 +722,35 @@ public static class BlockTextureSet
         new("ashcap_2", "textures/block/nether_wart_stage2.png", true, "textures/blocks/nether_wart_stage_2.png"),
         new("ashcap", "textures/item/nether_wart.png", true, "textures/items/nether_wart.png"),
         new("cinder_cage", "textures/block/spawner.png", true, "textures/blocks/mob_spawner.png"),
+
+        // Brewing (2026-10-25). ⚠ The potions carry no pack path: the reference tints one bottle
+        // overlay at draw time, and a flat tile per colour cannot be had from that.
+        new("glass_bottle", "textures/item/glass_bottle.png", true, "textures/items/potion_bottle_empty.png"),
+        new("potion_icon_0", "", true),
+        new("potion_icon_1", "", true),
+        new("potion_icon_2", "", true),
+        new("potion_icon_3", "", true),
+        new("potion_icon_4", "", true),
+        new("potion_icon_5", "", true),
+        new("potion_icon_6", "", true),
+        new("potion_icon_7", "", true),
+        new("potion_icon_8", "", true),
+        new("potion_icon_9", "", true),
+        new("potion_icon_10", "", true),
+        new("potion_icon_11", "", true),
+        new("potion_icon_12", "", true),
+        new("potion_icon_13", "", true),
+        new("potion_icon_14", "", true),
+        new("potion_icon_15", "", true),
+        new("potion_icon_16", "", true),
+        new("potion_icon_17", "", true),
+        new("potion_icon_18", "", true),
+        new("potion_icon_19", "", true),
+        new("potion_icon_20", "", true),
+        new("potion_icon_21", "", true),
+        new("potion_icon_22", "", true),
+        new("potion_icon_23", "", true),
+        new("brewing_stand", "textures/item/brewing_stand.png", true, "textures/items/brewing_stand.png"),
     ];
 
     /// <summary>
@@ -1838,7 +1867,9 @@ public static class BlockTextureSet
                     (layer - StarterBlocks.LayerGateFirst) / 2,
                     ((layer - StarterBlocks.LayerGateFirst) & 1) == 1),
 
-            _ => Wheat(layer) ?? Crop(layer) ?? CropIcon(layer) ?? StainedGlass(layer)
+            StarterBlocks.LayerGlassBottle => TileGen.IconPotion(1403, 0, 0, 0, splash: false, empty: true),
+            StarterBlocks.LayerBrewingStand => TileGen.BrewingStand(1404),
+            _ => Wheat(layer) ?? Crop(layer) ?? CropIcon(layer) ?? PotionIcon(layer) ?? StainedGlass(layer)
                  ?? MetalBlock(layer) ?? Wool(layer) ?? Meat(layer) ?? Dye(layer)
                  ?? Armour(layer) ?? Shield(layer) ?? Tool(layer),
         };
@@ -1892,6 +1923,15 @@ public static class BlockTextureSet
             leafB: (byte)float.Lerp(crop.Leaf.B * 0.72f, crop.Leaf.B, t),
             rootR: crop.Root.R, rootG: crop.Root.G, rootB: crop.Root.B,
             showRoot: stage == StarterBlocks.CropStages - 1);
+    }
+
+    /// <summary>A potion's picture, by colour and kind of bottle, or null when this layer is not one.</summary>
+    private static byte[]? PotionIcon(int layer)
+    {
+        var index = layer - StarterBlocks.LayerFirstPotion;
+        if (index < 0 || index >= Items.Potions.IconCount) return null;
+        var ((r, g, b), splash) = Items.Potions.Icon(index);
+        return TileGen.IconPotion(1410 + index, r, g, b, splash, empty: false);
     }
 
     /// <summary>And what one is carried as, or null when this layer is not one.</summary>

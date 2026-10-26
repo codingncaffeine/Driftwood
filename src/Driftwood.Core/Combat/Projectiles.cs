@@ -32,7 +32,8 @@ public enum ProjectileOwner : byte
 
 /// <summary>One live projectile as presentation needs to see it.</summary>
 public readonly record struct ProjectileSnapshot(
-    ProjectileKind Kind, ProjectileOwner Owner, Vector3 Position, Vector3 Velocity, float Age);
+    ProjectileKind Kind, ProjectileOwner Owner, Vector3 Position, Vector3 Velocity, float Age,
+    Entities.ShotTag Tag = Entities.ShotTag.None, int Damage = 0);
 
 /// <summary>One projectile reaching a block or creature during the last update.</summary>
 public readonly record struct ProjectileImpact(
@@ -114,7 +115,7 @@ public sealed class ProjectileSystem
     public ProjectileSnapshot SnapshotAt(int index)
     {
         ref readonly var shot = ref _slots[index];
-        return new ProjectileSnapshot(shot.Kind, shot.Owner, shot.Position, shot.Velocity, shot.Age);
+        return new ProjectileSnapshot(shot.Kind, shot.Owner, shot.Position, shot.Velocity, shot.Age, shot.Tag, shot.Damage);
     }
 
     public bool ShootArrow(Vector3 origin, Vector3 direction, ProjectileOwner owner = ProjectileOwner.Player) =>

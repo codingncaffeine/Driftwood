@@ -265,6 +265,11 @@ public static class StarterRecipes
         // The Emberdeep's makes (2026-10-25): a rod grinds to two dust, dust in a slimeball is
         // ember cream, and dust, powder and a coal pack three fire charges — the reference's own.
         LooseAt("cinder dust", "cinder_dust", 2, CraftStation.Bench, "cinder_rod");
+
+        // Brewing's two makes: three glass in a V for three bottles, and a cinder rod over three
+        // rough stone for the stand — the reference's own shapes.
+        Shaped("glass bottle", "glass_bottle", 3, ["G G", " G "]);
+        Shaped("brewing stand", "brewing_stand", 1, [" X ", "RRR"]);
         LooseAt("ember bricks", "ember_bricks", 2, CraftStation.Bench, "emberstone", "emberstone");
         LooseAt("ember cream", "ember_cream", 1, CraftStation.Bench, "slimeball", "cinder_dust");
         LooseAt("fire charge", "fire_charge", 3, CraftStation.Bench, "gunpowder", "cinder_dust", "#coals");
@@ -713,6 +718,7 @@ public static class StarterRecipes
         'K' => "book",
         'Q' => "leather",
         'H' => "feather",
+        'X' => "cinder_rod",
         _ => throw new InvalidOperationException($"recipe '{recipe}' uses unknown key '{key}'"),
     };
 }

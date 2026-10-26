@@ -399,6 +399,12 @@ public sealed class PlayerVitals
     /// <summary>True while still alight after leaving the fire.</summary>
     public bool Burning => _burningFor > 0f;
 
+    /// <summary>Fire and lava cannot hurt — a potion of fire resistance. Set each frame by the host.</summary>
+    public bool FireProof { get; set; }
+
+    /// <summary>Water does not take the breath — a potion of water breathing. Set each frame by the host.</summary>
+    public bool BreathesWater { get; set; }
+
     /// <summary>Sets the player alight for at least this long — what a fireball does.</summary>
     public void Ignite(float seconds) => _burningFor = MathF.Max(_burningFor, seconds);
 
@@ -626,7 +632,9 @@ public sealed class PlayerVitals
         else if (Submerged || _drownsIn[FeetBlock(world, body).Value]) _burningFor = 0f;
         else _burningFor = MathF.Max(0f, _burningFor - dt);
 
-        if (touchingLava)
+        if (FireProof) _burningFor = 0f;
+
+        if (touchingLava && !FireProof)
         {
             _lavaFor += dt;
             while (_lavaFor >= 1f / LavaRate)
@@ -670,7 +678,7 @@ public sealed class PlayerVitals
             _prickTick = 0f;
         }
 
-        if (Submerged)
+        if (Submerged && !BreathesWater)
         {
             Breath = Math.Max(0, Breath - Ticks(dt));
             if (Breath == 0)

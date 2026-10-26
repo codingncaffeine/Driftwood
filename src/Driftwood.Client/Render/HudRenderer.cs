@@ -42,6 +42,9 @@ public enum HudScreenKind
     /// <summary>A station rather than a menu, so it has no tabs.</summary>
     Furnace,
 
+    /// <summary>A brewing stand (2026-10-25).</summary>
+    BrewingStand,
+
     /// <summary>The other station: three by three, and the pockets under it.</summary>
     Bench,
 
@@ -433,6 +436,9 @@ public sealed class HudScreen
 
     public Furnace? Burning;
 
+    /// <summary>The brewing stand open, while one is.</summary>
+    public BrewingStand? Brewing;
+
     /// <summary>The squares in front of the player, when the open screen has any.</summary>
     public CraftingGrid? Grid;
 
@@ -521,7 +527,7 @@ public sealed class HudScreen
     /// </remarks>
     public bool IsContainer =>
         (Kind == HudScreenKind.Player && Tab == (int)PlayerTab.Items)
-        || Kind is HudScreenKind.Bench or HudScreenKind.Furnace
+        || Kind is HudScreenKind.Bench or HudScreenKind.Furnace or HudScreenKind.BrewingStand
              or HudScreenKind.Chest or HudScreenKind.Stonecutter;
 
     /// <summary>The rock on a stonecutter's bed, what it could become, and which was picked.</summary>
@@ -4452,6 +4458,7 @@ public sealed class HudRenderer : IDisposable
         {
             HudScreenKind.Bench => PanelKind.Bench,
             HudScreenKind.Furnace => PanelKind.Furnace,
+            HudScreenKind.BrewingStand => PanelKind.BrewingStand,
             HudScreenKind.Chest => PanelKind.Chest,
             HudScreenKind.Stonecutter => PanelKind.Stonecutter,
             _ => PanelKind.Player,
@@ -4479,6 +4486,7 @@ public sealed class HudRenderer : IDisposable
             PanelKind.Furnace => GuiTextureSet.Layer.Furnace,
             PanelKind.Chest => GuiTextureSet.Layer.Chest,
             PanelKind.Stonecutter => GuiTextureSet.Layer.Stonecutter,
+            PanelKind.BrewingStand => GuiTextureSet.Layer.BrewingStand,
             _ => GuiTextureSet.Layer.Inventory,
         };
         var skinned = HasGui(panelLayer);
@@ -4555,6 +4563,10 @@ public sealed class HudRenderer : IDisposable
 
             case PanelKind.Furnace:
                 Hearth(layout, screen, chrome: !skinned);
+                break;
+
+            case PanelKind.BrewingStand:
+                Brewery(layout, screen, chrome: !skinned);
                 break;
         }
 
@@ -4677,6 +4689,9 @@ public sealed class HudRenderer : IDisposable
         SlotRole.Fuel => screen.Burning?.Fuel ?? ItemStack.Empty,
         SlotRole.Smelted => screen.Burning?.Output ?? ItemStack.Empty,
         SlotRole.Stored => screen.Stored?.Contents[zone.Index] ?? ItemStack.Empty,
+        SlotRole.Brewing => screen.Brewing?.Bottle[zone.Index] ?? ItemStack.Empty,
+        SlotRole.Ingredient => screen.Brewing?.Ingredient ?? ItemStack.Empty,
+        SlotRole.BrewFuel => screen.Brewing?.Fuel ?? ItemStack.Empty,
         SlotRole.Cutting => screen.Cutting,
         SlotRole.Cut => screen.Cut >= 0 && screen.Cut < screen.Cuts.Count
             ? screen.Cuts[screen.Cut].Result
@@ -5120,6 +5135,43 @@ public sealed class HudRenderer : IDisposable
         var done = MathF.Round(full.W * work);
         _ = z;
         Arrow(layout, (full.X, full.Y, (int)MathF.Max(1f, done), full.H), 1f);
+    }
+
+    /// <summary>
+    /// The brewing stand's gauges: the dust left as a bar, the brew as an arrow falling toward the
+    /// bottles, and bubbles rising beside it while it works.
+    /// </summary>
+    /// <remarks>Like the furnace's, drawn as plain shapes over the pack's sheet or our bevel.</remarks>
+    private void Brewery(ScreenLayout layout, HudScreen screen, bool chrome)
+    {
+        var stand = screen.Brewing;
+        var fuel = stand is null ? 0f : Math.Clamp(stand.FuelLeft / (float)BrewingStand.BrewsPerDust, 0f, 1f);
+        var work = stand?.Fraction ?? 0f;
+
+        var bar = ScreenLayout.BrewFuelBar;
+        if (chrome) PanelBevel(layout, bar.X, bar.Y, bar.W, bar.H, raised: false, new Vector4(0.15f, 0.15f, 0.15f, 0.95f));
+        var filled = MathF.Round(bar.W * fuel);
+        if (filled > 0f)
+            Rect(_plain, layout.X(bar.X), layout.Y(bar.Y), layout.Size(filled), layout.Size(bar.H),
+                new Vector4(0.95f, 0.62f, 0.2f, 1f));
+
+        var arrow = ScreenLayout.BrewArrow;
+        if (chrome) Rect(_plain, layout.X(arrow.X), layout.Y(arrow.Y), layout.Size(arrow.W), layout.Size(arrow.H),
+            new Vector4(0.2f, 0.2f, 0.2f, 0.5f));
+        var down = MathF.Round(arrow.H * work);
+        if (down > 0f)
+            Rect(_plain, layout.X(arrow.X), layout.Y(arrow.Y), layout.Size(arrow.W), layout.Size(down),
+                new Vector4(0.92f, 0.92f, 0.92f, 1f));
+
+        if (work <= 0f) return;
+        var bubbles = ScreenLayout.BrewBubbles;
+        for (var i = 0; i < 4; i++)
+        {
+            var rise = (work * 6f + i * 0.25f) % 1f;
+            var y = bubbles.Y + bubbles.H - 3 - rise * (bubbles.H - 3);
+            var x = bubbles.X + 2 + (i * 3) % (bubbles.W - 3);
+            Rect(_plain, layout.X(x), layout.Y(y), layout.Size(2f), layout.Size(2f), new Vector4(0.86f, 0.92f, 1f, 0.9f));
+        }
     }
 
     /// <summary>The pointer, and whatever is riding on it.</summary>

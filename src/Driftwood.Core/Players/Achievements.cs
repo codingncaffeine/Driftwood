@@ -107,6 +107,12 @@ public static class AchievementEvents
     /// <summary>The spellbook holds at least this many spells. Subject: the count, as digits.</summary>
     public const string Learned = "learned";
 
+    /// <summary>A brewing stand finished a brew near the player. Subject: <c>stand</c>.</summary>
+    public const string Brew = "brew";
+
+    /// <summary>The player drank a potion. Subject: the effect's name.</summary>
+    public const string Drink = "drink";
+
     /// <summary>A creature killed by its own bolt, struck back. Subject: its kind.</summary>
     public const string Returned = "returned";
 
@@ -261,6 +267,14 @@ public sealed class AchievementBook
                 "charred_skull", goal, Any(O, "charred_skull")),
             new("melted", deep, "emberdeep", "Hot to the Touch", "Make ember cream",
                 "ember_cream", task, Any(O, "ember_cream")),
+            new("local_brewery", deep, "into_fire", "Local Brewery", "Brew a potion",
+                "brewing_stand", task, Any(AchievementEvents.Brew, "*")),
+            new("strong_stuff", deep, "local_brewery", "Strong Stuff", "Drink a potion of strength",
+                "potion_strength", task, Any(AchievementEvents.Drink, "Strength")),
+            new("apothecary", deep, "local_brewery", "Apothecary", "Drink every kind of potion that does you good",
+                "potion_regeneration", challenge,
+                Any(AchievementEvents.Drink, "Swiftness", "Strength", "Regeneration", "FireResistance",
+                    "NightVision", "WaterBreathing", "Healing"), All: true),
 
             // ── Adventure ──
             new("adventure", adventure, "", "Adventure", "Adventure, exploration and combat",

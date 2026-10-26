@@ -1,5 +1,6 @@
 using System.Numerics;
 using Driftwood.Core.Blocks;
+using Driftwood.Core.Entities;
 using Driftwood.Core.Items;
 using Driftwood.Core.Projectiles;
 using Silk.NET.OpenGL;
@@ -295,10 +296,20 @@ public sealed class ItemRenderer : IDisposable
             var shot = flights.SnapshotAt(i);
             // The Emberdeep's fire is drawn as the reference draws its own: the fire charge, small for
             // a cinderwisp's shot and the size of a head for an ashwail's.
+            // A flask is drawn as the splash potion it is: the witch's by what she chose, the
+            // player's by the potion it carries (2026-10-25).
             var type = shot.Kind switch
             {
                 ProjectileKind.Arrow => arrow,
                 ProjectileKind.Ember or ProjectileKind.WailBolt => charge,
+                ProjectileKind.Flask => catalogue.ByName(shot.Tag switch
+                {
+                    ShotTag.SlownessFlask => "splash_potion_slowness",
+                    ShotTag.PoisonFlask => "splash_potion_poison",
+                    ShotTag.WeaknessFlask => "splash_potion_weakness",
+                    ShotTag.Potion when (uint)shot.Damage < (uint)Potions.All.Count => Potions.All[shot.Damage].Name,
+                    _ => "splash_potion_harming",
+                }),
                 _ => farpearl,
             };
 

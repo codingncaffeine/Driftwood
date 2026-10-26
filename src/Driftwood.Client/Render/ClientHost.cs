@@ -503,6 +503,10 @@ public sealed class ClientHost : IDisposable
     private RecipeBook _book = null!;
     private Handbook _handbook = null!;
     private FurnaceBank _furnaces = null!;
+
+    /// <summary>The world's brewing stands (2026-10-25).</summary>
+    private readonly BrewingBank _brewing = new();
+    private readonly List<(int X, int Y, int Z)> _brewed = [];
     private ChestBank _chests = null!;
 
     /// <summary>What is written on this world's signs.</summary>
@@ -1975,6 +1979,7 @@ public sealed class ClientHost : IDisposable
         _book = StarterRecipes.Build(_items);
         _handbook = new Handbook(_items, _registry, _book, _dropTable);
         _furnaces = new FurnaceBank(_items, _book);
+        _brewing.Bind(_items);
         _chests = new ChestBank(_items);
         (_smelterLighting, _smelterCooling) = StarterBlocks.SmelterStates(registry);
         _smelterKind = StarterBlocks.SmelterKinds(registry);
@@ -2351,6 +2356,7 @@ public sealed class ClientHost : IDisposable
             Character = _character,
             Companions = _companions,
             Achievements = _achievements,
+            Brewing = _brewing,
         };
 
         if (_herd is not null) state.Creatures.AddRange(_herd.Capture());
@@ -3734,6 +3740,7 @@ public sealed class ClientHost : IDisposable
         SlotRole.Craft => _hudScreen.Grid?.TakeAll(zone.Index) ?? ItemStack.Empty,
         SlotRole.Equip => _equipment.TakeAll((EquipSlot)zone.Index),
         SlotRole.Smelting or SlotRole.Fuel => EmptyFurnaceSlot(zone.Role),
+        SlotRole.Brewing or SlotRole.Ingredient or SlotRole.BrewFuel => TakeBrew(zone),
         SlotRole.Stored => TakeStored(zone.Index, half: false),
         SlotRole.Cutting => TakeCutting(),
         _ => ItemStack.Empty,
@@ -3749,6 +3756,9 @@ public sealed class ClientHost : IDisposable
         SlotRole.Smelting => _hudScreen.Burning?.Input ?? ItemStack.Empty,
         SlotRole.Fuel => _hudScreen.Burning?.Fuel ?? ItemStack.Empty,
         SlotRole.Smelted => _hudScreen.Burning?.Output ?? ItemStack.Empty,
+        SlotRole.Brewing => _hudScreen.Brewing?.Bottle[zone.Index] ?? ItemStack.Empty,
+        SlotRole.Ingredient => _hudScreen.Brewing?.Ingredient ?? ItemStack.Empty,
+        SlotRole.BrewFuel => _hudScreen.Brewing?.Fuel ?? ItemStack.Empty,
         SlotRole.Stored => _hudScreen.Stored?.Contents[zone.Index] ?? ItemStack.Empty,
         SlotRole.Cutting => _hudScreen.Cutting,
         SlotRole.Cut => _hudScreen.Cut >= 0 && _hudScreen.Cut < _hudScreen.Cuts.Count
@@ -3781,6 +3791,7 @@ public sealed class ClientHost : IDisposable
         SlotRole.Craft => _hudScreen.Grid?.Put(zone.Index, carried) ?? carried,
         SlotRole.Equip => _equipment.Put((EquipSlot)zone.Index, carried),
         SlotRole.Smelting or SlotRole.Fuel => FeedFurnace(zone.Role, carried),
+        SlotRole.Brewing or SlotRole.Ingredient or SlotRole.BrewFuel => PutBrew(zone, carried),
         SlotRole.Stored => PutStored(zone.Index, carried, one: false),
         SlotRole.Cutting => PutCutting(carried),
         _ => carried,
@@ -3911,7 +3922,7 @@ public sealed class ClientHost : IDisposable
                 Spill(_equipment.TakeAll((EquipSlot)zone.Index));
                 return;
 
-            case SlotRole.Smelting or SlotRole.Fuel:
+            case SlotRole.Smelting or SlotRole.Fuel or SlotRole.Brewing or SlotRole.Ingredient or SlotRole.BrewFuel:
                 Spill(TakeAllFrom(zone));
                 return;
 
@@ -4329,7 +4340,85 @@ public sealed class ClientHost : IDisposable
         RefreshScreen();
     }
 
-    /// <summary>A stonecutter: a rock on the bed, and everything that rock can be cut into.</summary>
+    /// <summary>A brewing stand: three bottles, the ingredient over them, and the dust that fires it.</summary>
+    private void OpenBrewing(int x, int y, int z)
+    {
+        _hudScreen.Kind = HudScreenKind.BrewingStand;
+        _hudScreen.TabNames = [];
+        _hudScreen.Tab = 0;
+        _hudScreen.Grid = null;
+        _laidOut = null;
+        _station = (x, y, z);
+        StopHands();
+        _shown.Clear();
+        _hudScreen.Selected = 0;
+        _hudScreen.BookOut = false;
+        _hudScreen.Brewing = _brewing.Open(x, y, z);
+        TakeThePointer();
+        RefreshScreen();
+    }
+
+    /// <summary>Brews every stand, and says so where one finishes.</summary>
+    private void StepBrewing(float dt)
+    {
+        _brewed.Clear();
+        if (_brewing.Update(dt, _brewed) == 0) return;
+
+        foreach (var (x, y, z) in _brewed)
+        {
+            var at = new Vector3(x + 0.5f, y + 0.6f, z + 0.5f);
+            _audio?.Play(Pick(ActionSounds.Fizz), at, 0.5f, 1.3f);
+            _particles.DeathPuff(at, 0.6f, StarterBlocks.LayerSmoke, 6);
+            if (Vector3.DistanceSquared(at, _player.Position) < 12f * 12f) Achieve(AchievementEvents.Brew, "stand");
+        }
+    }
+
+    /// <summary>The square a brewing role names, in the stand that is open.</summary>
+    private ref ItemStack BrewSlot(BrewingStand stand, Zone zone)
+    {
+        if (zone.Role == SlotRole.Ingredient) return ref stand.Ingredient;
+        if (zone.Role == SlotRole.BrewFuel) return ref stand.Fuel;
+        return ref stand.Bottle[Math.Clamp(zone.Index, 0, BrewingStand.Bottles - 1)];
+    }
+
+    private ItemStack TakeBrew(Zone zone)
+    {
+        if (_hudScreen.Brewing is not { } stand) return ItemStack.Empty;
+        ref var slot = ref BrewSlot(stand, zone);
+        var lifted = slot;
+        slot = ItemStack.Empty;
+        return lifted;
+    }
+
+    /// <summary>
+    /// Puts what is carried into a stand's square, if it belongs there: one bottle to a bottle
+    /// square, as the reference holds them; ingredients and dust stack.
+    /// </summary>
+    private ItemStack PutBrew(Zone zone, ItemStack carried)
+    {
+        if (_hudScreen.Brewing is not { } stand || carried.IsEmpty) return carried;
+        var type = _items[carried.Item];
+        var fits = zone.Role switch
+        {
+            SlotRole.Brewing => BrewingBank.FitsBottle(type),
+            SlotRole.Ingredient => BrewingBank.FitsIngredient(type),
+            _ => BrewingBank.FitsFuel(type),
+        };
+        if (!fits) return carried;
+
+        ref var slot = ref BrewSlot(stand, zone);
+        if (zone.Role == SlotRole.Brewing)
+        {
+            if (!slot.IsEmpty) return carried;
+            slot = carried with { Count = 1 };
+            return carried.MinusOne();
+        }
+
+        if (slot.IsEmpty) { slot = carried; return ItemStack.Empty; }
+        if (!slot.Matches(carried)) { var was = slot; slot = carried; return was; }
+        slot = slot.Merge(carried, type.MaxStack, out var over);
+        return over;
+    }
     private void OpenStonecutter(int x, int y, int z) =>
         OpenChooser(x, y, z, CraftStation.Stonecutter);
 
@@ -9768,6 +9857,9 @@ public sealed class ClientHost : IDisposable
                 if (lay.Length > 0) _audio?.Play(Pick(lay), creature.Position, 0.5f, Wobble());
             }
 
+            if (creature.Drank)
+                _audio?.Play(Pick(ActionSounds.Burp), creature.Middle, 0.5f, 1.2f);
+
             if (!creature.Spoke) continue;
 
             var voices = CreatureSounds.VoicesFor(creature.Kind);
@@ -10239,6 +10331,25 @@ public sealed class ClientHost : IDisposable
         var distance = impact.Player ? 0f : Vector3.Distance(chest, impact.Position);
         if (distance > 4f) return;
 
+        if (impact.Tag == ShotTag.Potion)
+        {
+            if ((uint)impact.Damage >= (uint)Potions.All.Count) return;
+            var potion = Potions.All[impact.Damage];
+            ApplyPotion(potion, 1f - distance / 4f);
+
+            // Harming is a weapon: it bursts on whatever stands in the splash, as well as on you.
+            if (potion.Effect == Ailment.Harming && _herd is not null)
+                foreach (var creature in _herd.All)
+                {
+                    if (!creature.Alive) continue;
+                    var apart = Vector3.Distance(creature.Middle, impact.Position);
+                    if (apart > 4f) continue;
+                    _herd.Hurt(creature, (int)MathF.Round(6f * potion.Level * (1f - apart / 4f)), impact.Position);
+                    if (impact.Owner == ProjectileOwner.Player) _playerContributions.Add(creature.RuntimeId);
+                }
+            return;
+        }
+
         LandTag(impact.Tag, 1f - distance / 4f);
     }
 
@@ -10269,10 +10380,57 @@ public sealed class ClientHost : IDisposable
                 Ailment.Poison => "poisoned",
                 Ailment.Slowness => "slowed",
                 Ailment.Withering => "withering",
-                _ => "weakened",
+                Ailment.Weakness => "weakened",
+                Ailment.Swiftness => "swift",
+                Ailment.Strength => "strong",
+                Ailment.Regeneration => "regenerating",
+                Ailment.FireResistance => "proof against fire",
+                Ailment.NightVision => "seeing in the dark",
+                _ => "breathing water",
             }, null);
         return 0;
     }
+
+    /// <summary>
+    /// What a potion does to the player, at a strength: the instant ones at once, the rest on a clock.
+    /// </summary>
+    /// <param name="nearness">1 for one drunk, less for a splash further off.</param>
+    private void ApplyPotion(Potion potion, float nearness)
+    {
+        if (potion.Effect is not { } effect || nearness <= 0f) return;
+        var strength = 1 << (potion.Level - 1);
+
+        switch (effect)
+        {
+            case Ailment.Healing:
+                _vitals.Heal((int)MathF.Round(4f * strength * nearness));
+                break;
+            case Ailment.Harming:
+                HurtPlayer((int)MathF.Round(6f * strength * nearness), armoured: false);
+                break;
+            default:
+                // Said through Ail the first time it takes; the strength rides on afterwards.
+                var seconds = potion.Seconds * (potion.Splash ? 0.75f * nearness : 1f);
+                Ail(effect, seconds);
+                _ailments.Apply(effect, seconds, potion.Level);
+                break;
+        }
+    }
+
+    /// <summary>Drinks what is in hand, keeps the bottle, and says what it did.</summary>
+    private bool DrinkHeld(ItemType held)
+    {
+        if (!Potions.TryGet(held.Name, out var potion)) return false;
+        _inventory.SpendHeld();
+        if (held.Remains is { } bottle) Spill(_items.Stack(bottle, 1));
+        _audio?.Play(Pick(ActionSounds.Burp), _viewPosition, 0.3f, 1.4f);
+        ApplyPotion(potion, 1f);
+        if (potion.Effect is { } effect) Achieve(AchievementEvents.Drink, effect.ToString());
+        return true;
+    }
+
+    /// <summary>The brightness the world is drawn at: the setting's, or close to full seeing in the dark.</summary>
+    private float ViewBrightness => _ailments.Has(Ailment.NightVision) ? 2.6f : _settings.Brightness / 100f;
 
     /// <summary>
     /// Sends phantoms down on a player who has gone three days without sleep, the reference's way.
@@ -10442,6 +10600,7 @@ public sealed class ClientHost : IDisposable
 
             // A station in the crater spills what it held, exactly as mining it does.
             foreach (var spilled in _furnaces.Remove(x, y, z)) _drops.Drop(spilled, at);
+            foreach (var spilled in _brewing.Remove(x, y, z)) _drops.Drop(spilled, at);
             foreach (var spilled in EmptyChestAt(x, y, z)) _drops.Drop(spilled, at);
 
             // The cell keeps the water a wet block stood in — a blast under the sea leaves sea.
@@ -11808,6 +11967,7 @@ public sealed class ClientHost : IDisposable
         StepFuses((float)dt);
         StepLeaffall((float)dt);
         StepFurnaces((float)dt);
+        StepBrewing((float)dt);
         StepProjectiles((float)dt);
         StepCreatures((float)dt);
         StepMagic((float)dt);
@@ -12918,6 +13078,11 @@ public sealed class ClientHost : IDisposable
             _audio?.Play(Pick(CreatureSounds.Blows), _viewPosition, 0.35f, 0.8f);
         }
         _player.SpeedScale = _ailments.SpeedScale;
+
+        // The potions' standing effects: fire and water held off, and regeneration's half hearts.
+        _vitals.FireProof = _ailments.Has(Ailment.FireResistance);
+        _vitals.BreathesWater = _ailments.Has(Ailment.WaterBreathing);
+        if (_ailments.Mended > 0) _vitals.Heal(_ailments.Mended);
         _awake += dt;
 
         // ⛳ What the armour was asked to stand up to, and what that cost it. Read here rather than
@@ -13267,6 +13432,7 @@ public sealed class ClientHost : IDisposable
         // clean it up — and a player who mines one mid-smelt has lost both the ore and the coal.
         var centre = new Vector3(hit.X + 0.5f, hit.Y + 0.5f, hit.Z + 0.5f);
         foreach (var spilled in _furnaces.Remove(hit.X, hit.Y, hit.Z)) _drops.Drop(spilled, centre);
+        foreach (var spilled in _brewing.Remove(hit.X, hit.Y, hit.Z)) _drops.Drop(spilled, centre);
         foreach (var spilled in EmptyChestAt(hit.X, hit.Y, hit.Z)) _drops.Drop(spilled, centre);
 
         // The cell keeps the water a wet block stood in — breaking a wet fence is a hole in the
@@ -13427,6 +13593,24 @@ public sealed class ClientHost : IDisposable
                 Rumble(0.08f, 0.14f, 38);
                 return true;
 
+            case ItemUse.Drink:
+                return DrinkHeld(held);
+
+            // ⛳ A splash potion goes the witch's way: lobbed through the flight pool, bursting on
+            // whoever is near where it lands. Which potion rides in the shot's damage.
+            case ItemUse.ThrownSplash when Potions.TryGet(held.Name, out var splash):
+                if (!_projectiles.Spawn(ProjectileKind.Flask, ProjectileOwner.Player, origin, _camera.Forward,
+                        ProjectileSystem.FlaskSpeed, ProjectileSystem.FlaskGravity,
+                        Potions.All.ToList().IndexOf(splash), ShotTag.Potion))
+                {
+                    Notice("too many shots in flight", held);
+                    return true;
+                }
+
+                _inventory.SpendHeld();
+                _audio?.Play(Pick(CreatureSounds.Blinks), origin, 0.5f, 0.8f);
+                return true;
+
             case ItemUse.ThrownFire:
                 if (!_projectiles.Spawn(ProjectileKind.Ember, ProjectileOwner.Player, origin, _camera.Forward,
                         ProjectileSystem.EmberSpeed, 0f, CreatureHerd.EmberDamage))
@@ -13583,6 +13767,20 @@ public sealed class ClientHost : IDisposable
 
         var eye = _camera.Position;
         var forward = _camera.Forward;
+
+        // ⛳ An empty bottle dipped in water comes up a water bottle, and the water stays where it was.
+        if (held.Name == "glass_bottle")
+        {
+            if (!Buckets.TrySource(
+                    _streamer.World, _fluidTable, _targetable, eye, forward, out var dipped, out var into)
+                || into != FluidKind.Water)
+                return false;
+
+            _inventory.SpendHeld();
+            _inventory.Add(new ItemStack(_items.ByName("water_bottle").Id, 1));
+            _audio?.Play(Pick(ActionSounds.BucketFillWater), new Vector3(dipped.X + 0.5f, dipped.Y + 0.5f, dipped.Z + 0.5f), 0.6f, 1.3f);
+            return true;
+        }
 
         if (held.Name == "bucket")
         {
@@ -14279,6 +14477,10 @@ public sealed class ClientHost : IDisposable
                 OpenFurnace(hit.X, hit.Y, hit.Z);
                 return true;
 
+            case BlockUse.BrewingStand:
+                OpenBrewing(hit.X, hit.Y, hit.Z);
+                return true;
+
             case BlockUse.Chest:
                 OpenChest(hit.X, hit.Y, hit.Z);
                 return true;
@@ -14957,7 +15159,7 @@ public sealed class ClientHost : IDisposable
         _chunkShader.SetVec3("uSkyAmbient", _skyState.SkyAmbient);
         _chunkShader.SetVec3("uGroundAmbient", _skyState.GroundAmbient);
         _chunkShader.SetVec3("uNightFloor", NightFloor);
-        _chunkShader.SetFloat("uBrightness", _settings.Brightness / 100f);
+        _chunkShader.SetFloat("uBrightness", ViewBrightness);
         _chunkShader.SetInt("uBlocks", 0);
         _blockTextures.Bind();
         _chunkShader.SetInt("uNormals", 1);
@@ -15080,6 +15282,8 @@ public sealed class ClientHost : IDisposable
         {
             _furnaces.TryGet(_station.X, _station.Y, _station.Z, out var open);
             _hudScreen.Burning = _hudScreen.Kind == HudScreenKind.Furnace ? open : null;
+            _brewing.TryGet(_station.X, _station.Y, _station.Z, out var brewing);
+            _hudScreen.Brewing = _hudScreen.Kind == HudScreenKind.BrewingStand ? brewing : null;
             SyncMagicHud();
 
             _hud.Draw(
@@ -15153,6 +15357,7 @@ public sealed class ClientHost : IDisposable
         Chest,
         Sign,
         Achievements,
+        Brewing,
     }
 
     /// <summary>
@@ -15255,6 +15460,9 @@ public sealed class ClientHost : IDisposable
         new(1640, "37-emberdeep", "stick", ViewMode.First, false,
             Lineup: ["cinderwisp", "ember_slime*4", "ember_slime", "charred_skeleton", "charred_skeleton"]),
         new(1800, "38-ashwail", "stick", ViewMode.First, false, Lineup: ["ashwail"]),
+
+        // ⛳ Brewing (2026-10-25): a stand mid-brew, three bottles under strength.
+        new(1820, "39-brewing", "stick", ViewMode.First, false, ShotScreen.Brewing),
     ];
 
     /// <summary>
@@ -15567,6 +15775,19 @@ public sealed class ClientHost : IDisposable
 
             case ShotScreen.Achievements:
                 OpenPlayer(PlayerTab.Achievements, atBench: false, default);
+                break;
+
+            case ShotScreen.Brewing:
+                OpenBrewing(at.Item1, at.Item2, at.Item3);
+                if (_hudScreen.Brewing is { } stand)
+                {
+                    for (var i = 0; i < BrewingStand.Bottles; i++)
+                        stand.Bottle[i] = new ItemStack(_items.ByName(i == 1 ? "awkward_potion" : "potion_swiftness").Id, 1);
+                    stand.Ingredient = new ItemStack(_items.ByName("cinder_dust").Id, 3);
+                    stand.Fuel = new ItemStack(_items.ByName("cinder_dust").Id, 5);
+                    stand.FuelLeft = 14;
+                    stand.Progress = BrewingStand.BrewSeconds * 0.45f;
+                }
                 break;
         }
     }
@@ -16055,6 +16276,8 @@ public sealed class ClientHost : IDisposable
 
         _furnaces.TryGet(_station.X, _station.Y, _station.Z, out var open);
         _hudScreen.Burning = _hudScreen.Kind == HudScreenKind.Furnace ? open : null;
+        _brewing.TryGet(_station.X, _station.Y, _station.Z, out var brewing);
+        _hudScreen.Brewing = _hudScreen.Kind == HudScreenKind.BrewingStand ? brewing : null;
         SyncMagicHud();
 
         _hud.Draw(
@@ -20276,7 +20499,7 @@ public sealed class ClientHost : IDisposable
 
         var sky = new SkyParams(
             _skyState.SunDirection, _skyState.SunColor, _skyState.SkyAmbient, _skyState.GroundAmbient,
-            NightFloor, _skyState.Horizon, _fogStart, _fogEnd, FlickerClock, _settings.Brightness / 100f);
+            NightFloor, _skyState.Horizon, _fogStart, _fogEnd, FlickerClock, ViewBrightness);
 
         var light = SampleLight(_camera.Position);
 

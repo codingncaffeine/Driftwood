@@ -725,7 +725,15 @@ public static class StarterBlocks
     public const ushort LayerAshcapItem = LayerFirstAshcap + AshcapStages;
     public const ushort LayerCinderCage = LayerAshcapItem + 1;
 
-    public const int LayerCount = LayerCinderCage + 1;
+    /// <summary>
+    /// Brewing (2026-10-25): the empty bottle, one picture per potion colour and kind of bottle
+    /// (<see cref="Items.Potions.IconCount"/> of them), and the brewing stand.
+    /// </summary>
+    public const ushort LayerGlassBottle = LayerCinderCage + 1;
+    public const ushort LayerFirstPotion = LayerGlassBottle + 1;
+    public const ushort LayerBrewingStand = LayerFirstPotion + 24;
+
+    public const int LayerCount = LayerBrewingStand + 1;
 
     /// <summary>One stage of the ashcap, as a block name.</summary>
     public static string AshcapName(int stage) => $"ashcap_{stage}";
@@ -2086,6 +2094,16 @@ public static class StarterBlocks
             });
             if (stage == AshcapStages - 1) ashcapRipe = id;
         }
+
+        // The brewing stand (2026-10-25): its own sprite stood up crosswise, as the reference's reads
+        // from every side, and a little light off the rod.
+        registry.Register(new BlockType
+        {
+            Name = "brewing_stand", Hardness = 0.5f, Opaque = false, Crafted = true,
+            HarvestClass = ToolClass.Pickaxe, Sounds = SoundMaterial.Metal, Use = BlockUse.BrewingStand,
+            LightEmission = LightValue.PackBlock(3, 2, 1),
+            Model = BlockModel.Cross(LayerBrewingStand, tinted: false),
+        });
 
         var cinderCage = registry.Register(new BlockType
         {

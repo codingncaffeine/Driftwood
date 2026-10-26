@@ -873,6 +873,31 @@ public static class StarterItems
             Use = ItemUse.ThrownFire,
         });
 
+        // ⛳ Brewing (2026-10-25): the bottle, and every potion as its own item — drunk ones leave
+        // the bottle behind, splash ones are thrown — one to a stack, as the reference keeps them.
+        items.Register(new ItemType
+        {
+            Name = "brewing_stand", Label = "brewing stand", IconLayer = StarterBlocks.LayerBrewingStand,
+            Places = new Placeable
+            {
+                Label = "brewing stand", Kind = PlacementKind.Plain,
+                Variants = [blocks.ByName("brewing_stand").Id],
+            },
+        });
+        items.Register(new ItemType
+        {
+            Name = "glass_bottle", Label = "glass bottle", IconLayer = StarterBlocks.LayerGlassBottle,
+            Use = ItemUse.FillBottle,
+        });
+        foreach (var potion in Potions.All)
+            items.Register(new ItemType
+            {
+                Name = potion.Name, Label = potion.Label, MaxStack = 1,
+                IconLayer = (ushort)(StarterBlocks.LayerFirstPotion + Potions.IconIndex(potion)),
+                Use = potion.Splash ? ItemUse.ThrownSplash : ItemUse.Drink,
+                Remains = potion.Splash ? null : "glass_bottle",
+            });
+
         // The rabbit's pair and its hide. ⚠ Standalone rather than rows in Meats, because that
         // table's icon layers are a fixed run mid-numbering — see StarterBlocks.LayerRawRabbit.
         // The chicken's own feed values: a small animal is a light meal.

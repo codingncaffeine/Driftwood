@@ -176,6 +176,12 @@ public sealed class Creature
     /// <summary>Where a big floater is drifting to.</summary>
     public Vector3 Drift { get; set; }
 
+    /// <summary>Seconds before a witch will drink again.</summary>
+    public float DrinkRest { get; set; }
+
+    /// <summary>True on the step a witch drank, for the host to play.</summary>
+    public bool Drank { get; set; }
+
     /// <summary>Seconds of courtship left after being fed. Two courting adults of a kind pair.</summary>
     public float LovedFor { get; set; }
 
@@ -1778,6 +1784,17 @@ public sealed class CreatureHerd
         // ails the target and how hurt it is.
         if (creature.Kind == "witch")
         {
+            // ⛳ Hurt past half, she drinks healing — the reference's witch keeps her own potions.
+            creature.DrinkRest = MathF.Max(0f, creature.DrinkRest - dt);
+            creature.Drank = false;
+            if (creature.Health * 2 < creature.MaxHealth && creature.DrinkRest <= 0f)
+            {
+                creature.Health = Math.Min(creature.MaxHealth, creature.Health + 8);
+                creature.DrinkRest = 12f;
+                creature.Drank = true;
+                return true;
+            }
+
             if (!creature.SeesTarget || distance > WitchRange) return true;
 
             creature.WantsYaw = float.RadiansToDegrees(MathF.Atan2(toward.Z, toward.X));

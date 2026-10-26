@@ -4865,6 +4865,77 @@ public static class TileGen
         return t;
     }
 
+    /// <summary>
+    /// A potion: a round-bellied bottle with a narrow neck and a cork, filled with its colour — or
+    /// empty, or the splash kind, whose belly is squarer and whose neck has a lip to throw it by.
+    /// </summary>
+    public static byte[] IconPotion(int seed, byte r, byte g, byte b, bool splash, bool empty)
+    {
+        var t = new byte[BytesPerTile];
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var dx = x - 7.5f;
+            bool glass, cork = false, inside;
+            if (y <= 1) { cork = MathF.Abs(dx) <= 1.5f; glass = cork; inside = false; }
+            else if (y <= 5)
+            {
+                glass = MathF.Abs(dx) <= (splash && y == 2 ? 2.5f : 1.5f);
+                inside = MathF.Abs(dx) <= 0.5f && y >= 4;
+            }
+            else
+            {
+                var dy = (y - 10f) / 4.6f;
+                var reach = splash ? 5.5f - MathF.Max(0f, y - 12f) : 5.8f * MathF.Sqrt(MathF.Max(0f, 1f - dy * dy));
+                glass = MathF.Abs(dx) <= reach && y <= 14;
+                inside = MathF.Abs(dx) <= reach - 1f && y <= 13 && y >= 7;
+            }
+
+            if (!glass) continue;
+            var d = (int)((Noise(x, y, seed) * 2f - 1f) * 6f);
+            if (cork) Put(t, x, y, Clamp(150 + d), Clamp(110 + d), Clamp(70 + d), 255);
+            else if (inside && !empty)
+            {
+                var shine = x <= 5 && y <= 9 ? 50 : 0;
+                Put(t, x, y, Clamp(r + d + shine), Clamp(g + d + shine), Clamp(b + d + shine), 255);
+            }
+            // ⚠ One piece of glass, not a spray: an empty bottle's inside is drawn as solid as its wall,
+            // just paler, so the silhouette stays one connected shape.
+            else Put(t, x, y, Clamp((inside ? 226 : 196) + d), Clamp((inside ? 236 : 210) + d), Clamp((inside ? 242 : 220) + d), 255);
+        }
+
+        return t;
+    }
+
+    /// <summary>
+    /// The brewing stand, as the reference draws its sprite: a cinder rod up the middle on a
+    /// three-footed base, an arm out each side with a bottle hanging off it.
+    /// </summary>
+    public static byte[] BrewingStand(int seed)
+    {
+        var t = new byte[BytesPerTile];
+        for (var y = 1; y <= 13; y++)
+        {
+            Put(t, 7, y, 230, 170, 62, 255);
+            Put(t, 8, y, 196, 132, 44, 255);
+        }
+
+        for (var x = 2; x <= 13; x++)
+        {
+            var d = (int)((Noise(x, 15, seed) * 2f - 1f) * 8f);
+            Put(t, x, 14, Clamp(112 + d), Clamp(112 + d), Clamp(116 + d), 255);
+            Put(t, x, 15, Clamp(82 + d), Clamp(82 + d), Clamp(86 + d), 255);
+        }
+
+        for (var x = 2; x <= 13; x++) if (x is < 7 or > 8) Put(t, x, 4, 150, 150, 156, 255);
+        foreach (var cx in (ReadOnlySpan<int>)[3, 12])
+        for (var y = 6; y <= 10; y++)
+        for (var x = cx - 1; x <= cx + 1; x++)
+            Put(t, x, y, 200, 214, 222, y >= 8 ? (byte)200 : (byte)140);
+
+        return t;
+    }
+
     /// <summary>A single drop, point up — the ashwail's tear.</summary>
     public static byte[] IconTear(int seed, byte r, byte g, byte b)
     {
