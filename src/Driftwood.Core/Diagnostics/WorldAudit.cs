@@ -9251,11 +9251,13 @@ public static class WorldAudit
         (StarterBlocks.LayerSign, "sign"),
 
         // Fishing (2026-10-16) after the sign, then the Emberdeep's leavings (2026-10-25); the
-        // fire charge is the true end.
+        // fire charge, then the Emberhold's blocks (2026-10-25); the cinder cage is the true end.
         (StarterBlocks.LayerFishingRod, "fishing_rod"),
         (StarterBlocks.LayerCookedSalmon, "cooked_salmon"),
         (StarterBlocks.LayerCinderRod, "cinder_rod"),
-        ((ushort)(StarterBlocks.LayerCount - 1), "fire_charge"),
+        (StarterBlocks.LayerFireCharge, "fire_charge"),
+        (StarterBlocks.LayerEmberBricks, "ember_bricks"),
+        ((ushort)(StarterBlocks.LayerCount - 1), "cinder_cage"),
     ];
 
     /// <summary>

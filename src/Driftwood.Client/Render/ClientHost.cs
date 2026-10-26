@@ -1752,13 +1752,88 @@ public sealed class ClientHost : IDisposable
             (x, y, z) => _registry[_streamer.World.GetBlock(x, y, z)].Fluid != FluidKind.None,
             (x, y, z) => _registry[_streamer.World.GetBlock(x, y, z)].Fluid == FluidKind.Water,
             (x, y, z) => _streamer.World.GetLight(x, y, z),
-            (x, z) => _terrain.BiomeAt(x, z));
+            (x, z) => _terrain.BiomeAt(x, z),
+            InHold);
 
         foreach (var placed in _monsters.Step(dt, _spawnWorld, _player.Position, Daylight, living, _monsterKinds))
             _herd.SpawnAt(placed.Kind, placed.Position, placed.Yaw, BulkFor(placed));
     }
 
     private float _monsterReport = 10f;
+
+    /// <summary>The Emberholds near enough to matter, refreshed once a second by <see cref="StepEmberholds"/>.</summary>
+    private readonly List<StructureSite> _nearHolds = [];
+    private float _holdScan;
+    private readonly Dictionary<(int X, int Y, int Z), float> _cageRest = [];
+
+    /// <summary>Whether a cell is inside an Emberhold's walls — the spawner's fortress table.</summary>
+    private bool InHold(int x, int y, int z)
+    {
+        foreach (var hold in _nearHolds)
+            if (Math.Abs(x - hold.X) <= hold.Radius && Math.Abs(z - hold.Z) <= hold.Radius
+                && y >= hold.Y - 1 && y <= hold.MaxY)
+                return true;
+        return false;
+    }
+
+    /// <summary>
+    /// The Emberholds' cinder cages: near one, it keeps a few cinderwisps about.
+    /// </summary>
+    /// <remarks>
+    /// The reference's spawner: within sixteen of a player, every ten to twenty seconds, one or two
+    /// come out of it while fewer than four are about. A cage that has been broken does nothing —
+    /// the cell is asked, not the plan.
+    /// </remarks>
+    private void StepEmberholds(float dt)
+    {
+        if (_herd is null || !_walking) return;
+
+        _holdScan -= dt;
+        if (_holdScan <= 0f)
+        {
+            _holdScan = 1f;
+            _nearHolds.Clear();
+            var px = (int)MathF.Floor(_player.Position.X);
+            var pz = (int)MathF.Floor(_player.Position.Z);
+            if (_player.Position.Y < TerrainGenerator.EmberdeepTop + 40)
+                foreach (var site in _terrain.Exploration.SitesAffecting(px - 160, px + 160, pz - 160, pz + 160, 0))
+                    if (site.Kind == StructureKind.Emberhold) _nearHolds.Add(site);
+        }
+
+        foreach (var hold in _nearHolds)
+        {
+            if (!_holdCages.TryGetValue(hold.Id, out var cages))
+                _holdCages[hold.Id] = cages = _terrain.Exploration.CageCells(hold);
+
+            foreach (var cell in cages)
+            {
+                var at = new Vector3(cell.X + 0.5f, cell.Y + 0.5f, cell.Z + 0.5f);
+                if (Vector3.DistanceSquared(at, _player.Position) > 16f * 16f) continue;
+                if (_streamer.World.GetBlock(cell.X, cell.Y, cell.Z) != _ids.CinderCage) continue;
+
+                var rest = _cageRest.GetValueOrDefault(cell) - dt;
+                _cageRest[cell] = rest;
+                if (rest > 0f) continue;
+                _cageRest[cell] = 10f + (float)Random.Shared.NextDouble() * 10f;
+
+                var about = _herd.All.Count(one => one.Alive && one.Kind == "cinderwisp"
+                                                   && Vector3.DistanceSquared(one.Position, at) < 9f * 9f);
+                if (about >= 4 || KindFor("cinderwisp") is not { } wisp) continue;
+
+                for (var i = 1 + Random.Shared.Next(2); i > 0; i--)
+                {
+                    var spot = at + new Vector3(Random.Shared.Next(-3, 4), Random.Shared.Next(0, 2), Random.Shared.Next(-3, 4));
+                    var (sx, sy, sz) = ((int)MathF.Floor(spot.X), (int)MathF.Floor(spot.Y), (int)MathF.Floor(spot.Z));
+                    if (SolidForCreature(sx, sy, sz) || SolidForCreature(sx, sy + 1, sz)) continue;
+                    _herd.SpawnAt(wisp, new Vector3(sx + 0.5f, sy, sz + 0.5f), (float)(Random.Shared.NextDouble() * 360.0));
+                    _particles.DeathPuff(spot + new Vector3(0f, 0.6f, 0f), 0.8f, StarterBlocks.LayerSmoke, 8);
+                }
+            }
+        }
+    }
+
+    /// <summary>Each Emberhold's cages, found once by walking its plan.</summary>
+    private readonly Dictionary<string, IReadOnlyList<(int X, int Y, int Z)>> _holdCages = new(StringComparer.Ordinal);
 
     /// <summary>
     /// The size an ember slime is born at: the reference's one, two or four, the biggest only where
@@ -9632,6 +9707,7 @@ public sealed class ClientHost : IDisposable
         }
 
         StepPhantoms(dt);
+        StepEmberholds(dt);
 
         // A blink is a soft pop and a wisp at both ends — the departure matters as much as the
         // arrival, because "where did it go" starts from where it was.
@@ -9890,6 +9966,11 @@ public sealed class ClientHost : IDisposable
             var dx = (long)site.X - px;
             var dz = (long)site.Z - pz;
             if (dx * dx + dz * dz > reach * reach) continue;
+
+            // ⚠ An Emberhold is found by going down to it, not by walking over its roof two hundred
+            // blocks up — so it asks for the depth too.
+            if (site.Kind == StructureKind.Emberhold
+                && (_player.Position.Y < site.MinY - 8 || _player.Position.Y > site.MaxY + 8)) continue;
             Achieve(AchievementEvents.Discover, site.Kind.ToString());
             SettleCharacterReward(
                 $"discovery:{site.Id}:{LocalPlayerId}", CharacterRewards.Discovery(site.Kind),
@@ -9999,6 +10080,7 @@ public sealed class ClientHost : IDisposable
         StructureKind.Driftstead => "a Driftstead",
         StructureKind.Tidewreck => "a tidewreck",
         StructureKind.StormVault => "a storm vault",
+        StructureKind.Emberhold => "an Emberhold",
         _ => "the Starfall Crown",
     };
 
@@ -13639,7 +13721,8 @@ public sealed class ClientHost : IDisposable
         if (StarterBlocks.SownBy(held.Name) is not { } seedling) return false;
 
         var ground = _streamer.World.GetBlock(hit.X, hit.Y, hit.Z);
-        if (!_growth.IsFarmland(ground)) return false;
+        // ⛳ The crop's own ground, whatever it is: tilled for the field crops, ashsand for the ashcap.
+        if (!_growth.Accepts(_registry.ByName(seedling).Id, ground)) return false;
 
         var above = _streamer.World.GetBlock(hit.X, hit.Y + 1, hit.Z);
         if (!_registry[above].Replaceable) return false;

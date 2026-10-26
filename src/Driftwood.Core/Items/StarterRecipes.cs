@@ -265,6 +265,7 @@ public static class StarterRecipes
         // The Emberdeep's makes (2026-10-25): a rod grinds to two dust, dust in a slimeball is
         // ember cream, and dust, powder and a coal pack three fire charges — the reference's own.
         LooseAt("cinder dust", "cinder_dust", 2, CraftStation.Bench, "cinder_rod");
+        LooseAt("ember bricks", "ember_bricks", 2, CraftStation.Bench, "emberstone", "emberstone");
         LooseAt("ember cream", "ember_cream", 1, CraftStation.Bench, "slimeball", "cinder_dust");
         LooseAt("fire charge", "fire_charge", 3, CraftStation.Bench, "gunpowder", "cinder_dust", "#coals");
 

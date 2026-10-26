@@ -295,6 +295,11 @@ public static class StarterItems
         Block(items, blocks, "emberstone", "emberstone", StarterBlocks.LayerEmberstone);
         Block(items, blocks, "glass", "glass", StarterBlocks.LayerGlass);
         Block(items, blocks, "bricks", "bricks", StarterBlocks.LayerBricks);
+
+        // The Emberhold's (2026-10-25). The cage is not one a player can carry — it leaves nothing.
+        Block(items, blocks, "ember_bricks", "ember bricks", StarterBlocks.LayerEmberBricks);
+        Block(items, blocks, "ashsand", "ashsand", StarterBlocks.LayerAshsand);
+        Loose(items, "ashcap", "ashcap", StarterBlocks.LayerAshcapItem);
         Block(items, blocks, "coal_block", "block of coal", StarterBlocks.LayerCoalBlock);
 
         for (var m = 0; m < StarterBlocks.MetalBlockCount; m++)
@@ -1300,6 +1305,12 @@ public static class StarterItems
     private static BlockDrops.Rule[] Written(BlockRegistry blocks, ItemRegistry items) =>
     [
         new BlockDrops.Rule("stone", "rubble"),
+
+        // The ashcap pays its own seed, three of it ripe; the cinder cage pays nothing at all.
+        new BlockDrops.Rule(StarterBlocks.AshcapName(0), "ashcap"),
+        new BlockDrops.Rule(StarterBlocks.AshcapName(1), "ashcap"),
+        new BlockDrops.Rule(StarterBlocks.AshcapName(2), "ashcap", 3),
+        new BlockDrops.Rule("cinder_cage", null),
         new BlockDrops.Rule("grass", "dirt"),
         new BlockDrops.Rule("clay", "clay_lump", 4),
 

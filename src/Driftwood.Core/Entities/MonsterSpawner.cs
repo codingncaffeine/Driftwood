@@ -17,7 +17,8 @@ public sealed record SpawnWorld(
     Func<int, int, int, bool> Fluid,
     Func<int, int, int, bool> Water,
     Func<int, int, int, ushort> Light,
-    Func<int, int, Biome> BiomeAt);
+    Func<int, int, Biome> BiomeAt,
+    Func<int, int, int, bool>? InHold = null);
 
 /// <summary>One monster the spawner placed.</summary>
 public readonly record struct MonsterPlacement(SpawnKind Kind, Vector3 Position, float Yaw);
@@ -139,7 +140,10 @@ public sealed class MonsterSpawner
 
                 if (entry is null)
                 {
-                    entry = SpawnRules.Pick(SpawnRules.MonstersFor(world.BiomeAt(x, z), y), kinds.ContainsKey, _roll);
+                    var table = world.InHold?.Invoke(x, y, z) == true
+                        ? SpawnRules.Emberhold
+                        : SpawnRules.MonstersFor(world.BiomeAt(x, z), y);
+                    entry = SpawnRules.Pick(table, kinds.ContainsKey, _roll);
                     if (entry is not { } chosen) return;
 
                     steps = chosen.PackMin + _roll.Next(1 + chosen.PackMax - chosen.PackMin);

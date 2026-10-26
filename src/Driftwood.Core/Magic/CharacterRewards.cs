@@ -49,6 +49,7 @@ public static class CharacterRewards
         StructureKind.Tidewreck => new(220, 1_100, "first tidewreck discovery"),
         StructureKind.StormVault => new(320, 1_800, "first storm-vault discovery"),
         StructureKind.StarfallCrown => new(420, 2_600, "first Starfall Crown discovery"),
+        StructureKind.Emberhold => new(400, 2_200, "first Emberhold discovery"),
         _ => default,
     };
 
@@ -63,6 +64,7 @@ public static class CharacterRewards
             StructureKind.Tidewreck => 420,
             StructureKind.StormVault => 700,
             StructureKind.StarfallCrown => 1_100,
+            StructureKind.Emberhold => 900,
             _ => 0,
         };
         return new(0, baseCoins + roll % (uint)Math.Max(1, baseCoins), "personal generated-chest coin cache");
@@ -81,7 +83,7 @@ public static class CharacterRewards
             StructureKind.BuriedGallery or StructureKind.Driftstead => 1,
             StructureKind.Tidewreck => 2,
             StructureKind.StormVault => 3,
-            StructureKind.StarfallCrown => 4,
+            StructureKind.StarfallCrown or StructureKind.Emberhold => 4,
             _ => 0,
         };
         if (rank == 0) return default;

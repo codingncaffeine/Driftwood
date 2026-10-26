@@ -714,7 +714,21 @@ public static class StarterBlocks
     public const ushort LayerCharredSkull = LayerCookedSalmon + 5;
     public const ushort LayerFireCharge = LayerCookedSalmon + 6;
 
-    public const int LayerCount = LayerFireCharge + 1;
+    /// <summary>
+    /// The Emberhold's (2026-10-25): its bricks, the ashsand its gardens stand in, the ashcap's three
+    /// stages and its pocket form, and the cinder cage the cinderwisps come out of.
+    /// </summary>
+    public const ushort LayerEmberBricks = LayerFireCharge + 1;
+    public const ushort LayerAshsand = LayerFireCharge + 2;
+    public const ushort LayerFirstAshcap = LayerFireCharge + 3;
+    public const int AshcapStages = 3;
+    public const ushort LayerAshcapItem = LayerFirstAshcap + AshcapStages;
+    public const ushort LayerCinderCage = LayerAshcapItem + 1;
+
+    public const int LayerCount = LayerCinderCage + 1;
+
+    /// <summary>One stage of the ashcap, as a block name.</summary>
+    public static string AshcapName(int stage) => $"ashcap_{stage}";
 
     /// <summary>One anvil's name, by how worn it is and which way it lies.</summary>
     /// <remarks>
@@ -780,7 +794,11 @@ public static class StarterBlocks
     /// True for a tilled crop, which grows only over watered farmland. False for a plant that
     /// stands on plain grass or dirt and asks only for light — the berry bush's rule.
     /// </param>
-    public readonly record struct GrowthLadder(string[] Rungs, bool OnFarmland);
+    /// <param name="Ground">
+    /// A block it grows on and nothing else, overriding both rules above — and needing no light,
+    /// which is what lets the ashcap grow in the Emberdeep's dark the way the reference's wart does.
+    /// </param>
+    public readonly record struct GrowthLadder(string[] Rungs, bool OnFarmland, string? Ground = null);
 
     /// <summary>
     /// Every crop in the game as a ladder of block names, ripe last.
@@ -795,7 +813,7 @@ public static class StarterBlocks
     /// </remarks>
     public static GrowthLadder[] CropLadders()
     {
-        var ladders = new GrowthLadder[2 + CropCount];
+        var ladders = new GrowthLadder[3 + CropCount];
 
         var wheat = new string[WheatStages];
         for (var s = 0; s < WheatStages; s++) wheat[s] = WheatName(s);
@@ -808,7 +826,9 @@ public static class StarterBlocks
             ladders[c + 1] = new GrowthLadder(rungs, OnFarmland: true);
         }
 
-        ladders[^1] = new GrowthLadder([BerryBushName, BerryBushRipeName], OnFarmland: false);
+        ladders[^2] = new GrowthLadder([BerryBushName, BerryBushRipeName], OnFarmland: false);
+        ladders[^1] = new GrowthLadder(
+            [.. Enumerable.Range(0, AshcapStages).Select(AshcapName)], OnFarmland: false, Ground: "ashsand");
         return ladders;
     }
 
@@ -822,6 +842,7 @@ public static class StarterBlocks
     public static string? SownBy(string item)
     {
         if (item == "seeds") return WheatName(0);
+        if (item == "ashcap") return AshcapName(0);
 
         for (var c = 0; c < CropCount; c++)
             if (Crops[c].Name == item) return CropName(c, 0);
@@ -947,7 +968,11 @@ public static class StarterBlocks
         BlockId Sapling,
         BlockId CherrySapling,
         BlockId LeavesPlaced,
-        BlockId CherryLeavesPlaced)
+        BlockId CherryLeavesPlaced,
+        BlockId EmberBricks,
+        BlockId Ashsand,
+        BlockId AshcapRipe,
+        BlockId CinderCage)
     {
         /// <summary>Every log a canopy counts as its tree, for the decay rule.</summary>
         public BlockId[] Logs => [Log, CherryLog];
@@ -2032,6 +2057,44 @@ public static class StarterBlocks
             BottomLayer = LayerCherryLeaves,
         });
 
+        // ⛳ The Emberhold's own (2026-10-25). Ember bricks are the reference's nether bricks, dark and
+        // hard; ashsand its soul sand, the one ground the ashcap takes; the cinder cage its blaze
+        // spawner, which a pickaxe breaks and which leaves nothing.
+        var emberBricks = registry.Register(new BlockType
+        {
+            Name = "ember_bricks", Hardness = 2f, Crafted = true,
+            HarvestClass = ToolClass.Pickaxe, HarvestTier = 1, Sounds = SoundMaterial.Deepstone,
+            TopLayer = LayerEmberBricks, SideLayer = LayerEmberBricks, BottomLayer = LayerEmberBricks,
+        });
+
+        var ashsand = registry.Register(new BlockType
+        {
+            Name = "ashsand", Hardness = 0.5f, Crafted = true,
+            HarvestClass = ToolClass.Shovel, Sounds = SoundMaterial.Sand,
+            TopLayer = LayerAshsand, SideLayer = LayerAshsand, BottomLayer = LayerAshsand,
+        });
+
+        var ashcapRipe = BlockId.Air;
+        for (var stage = 0; stage < AshcapStages; stage++)
+        {
+            var id = registry.Register(new BlockType
+            {
+                Name = AshcapName(stage), Hardness = 0.05f, Crafted = true, Derived = stage > 0,
+                Solid = false, Opaque = false, Sounds = SoundMaterial.Plant,
+                SupportFace = Faces.NegY,
+                Model = BlockModel.Cross((ushort)(LayerFirstAshcap + stage), tinted: false),
+            });
+            if (stage == AshcapStages - 1) ashcapRipe = id;
+        }
+
+        var cinderCage = registry.Register(new BlockType
+        {
+            Name = "cinder_cage", Hardness = 5f, Opaque = false, Crafted = true,
+            HarvestClass = ToolClass.Pickaxe, HarvestTier = 1, Sounds = SoundMaterial.Metal,
+            LightEmission = LightValue.PackBlock(9, 5, 2),
+            Model = BlockModel.Cube(LayerCinderCage, LayerCinderCage, LayerCinderCage),
+        });
+
         RegisterSignals(registry);
         RegisterRails(registry);
         RegisterWaterlogged(registry);
@@ -2047,7 +2110,8 @@ public static class StarterBlocks
             registry.ByName("chest_north").Id,
             registry.ByName("rail_x").Id,
             registry.ByName("lantern").Id,
-            sapling, cherrySapling, leavesPlaced, cherryLeavesPlaced);
+            sapling, cherrySapling, leavesPlaced, cherryLeavesPlaced,
+            emberBricks, ashsand, ashcapRipe, cinderCage);
     }
 
     /// <summary>The saplings and the placed leaves, by name, for the rows that speak of them.</summary>

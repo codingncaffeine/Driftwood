@@ -89,6 +89,9 @@ public sealed class Growth
     private readonly bool[] _saplingIsCherry;
     private readonly bool[] _naturalLeaves;
     private readonly bool[] _anyLeaves;
+    /// <summary>For a crop of one ground only, that ground's id; −1 for every other block.</summary>
+    private readonly int[] _ground;
+
     private readonly bool[] _isLog;
     private readonly BlockId _farmland;
     private readonly BlockId _farmlandWet;
@@ -138,6 +141,8 @@ public sealed class Growth
         _saplingIsCherry = new bool[registry.Count];
         _naturalLeaves = new bool[registry.Count];
         _anyLeaves = new bool[registry.Count];
+        _ground = new int[registry.Count];
+        Array.Fill(_ground, -1);
         _isLog = new bool[registry.Count];
 
         for (var i = 0; i < _next.Length; i++) _next[i] = -1;
@@ -164,6 +169,7 @@ public sealed class Growth
             var here = registry.ByName(ladder.Rungs[stage]).Id;
             _isCrop[here.Value] = true;
             _onFarmland[here.Value] = ladder.OnFarmland;
+            _ground[here.Value] = ladder.Ground is { } ground ? registry.ByName(ground).Id.Value : -1;
 
             if (stage + 1 < ladder.Rungs.Length)
                 _next[here.Value] = registry.ByName(ladder.Rungs[stage + 1]).Id.Value;
@@ -193,6 +199,12 @@ public sealed class Growth
 
     /// <summary>True when this block is tilled ground, wet or dry.</summary>
     public bool IsFarmland(BlockId block) => _isFarmland[block.Value];
+
+    /// <summary>Whether a crop's first stage may be put in this ground — its own rule, whichever it is.</summary>
+    public bool Accepts(BlockId seedling, BlockId ground) =>
+        _ground[seedling.Value] >= 0 ? ground.Value == _ground[seedling.Value]
+        : _onFarmland[seedling.Value] ? _isFarmland[ground.Value]
+        : ground == _grass || ground == _dirt;
 
     /// <summary>True when this crop has nothing left to become.</summary>
     public bool IsRipe(BlockId block) => _isCrop[block.Value] && _next[block.Value] < 0;
@@ -272,6 +284,16 @@ public sealed class Growth
         // only for light. The flag is the ladder's own, and it cuts both ways — a bush on watered
         // farmland is refused too, so the two ground rules never blur into "anything underneath".
         var below = world.GetBlock(x, y - 1, z);
+
+        // ⛳ A crop of one particular ground grows on that and nothing else, needs no light, and is
+        // slow — the ashcap in its ashsand, the reference's wart a tenth of its ticks.
+        if (_ground[here.Value] >= 0)
+        {
+            if (below.Value != _ground[here.Value] || roll >= StageChance * 0.5) return false;
+            Write(world, x, y, z, Next(here));
+            return true;
+        }
+
         if (_onFarmland[here.Value])
         {
             if (below != _farmlandWet) return false;

@@ -715,6 +715,13 @@ public static class BlockTextureSet
         // ⚠ No pack path: the reference draws its skulls as blocks, so a pack has no flat art for one.
         new("charred_skull", "", true),
         new("fire_charge", "textures/item/fire_charge.png", true, "textures/items/fireball.png"),
+        new("ember_bricks", "textures/block/nether_bricks.png", false, "textures/blocks/nether_brick.png"),
+        new("ashsand", "textures/block/soul_sand.png", false, "textures/blocks/soul_sand.png"),
+        new("ashcap_0", "textures/block/nether_wart_stage0.png", true, "textures/blocks/nether_wart_stage_0.png"),
+        new("ashcap_1", "textures/block/nether_wart_stage1.png", true, "textures/blocks/nether_wart_stage_1.png"),
+        new("ashcap_2", "textures/block/nether_wart_stage2.png", true, "textures/blocks/nether_wart_stage_2.png"),
+        new("ashcap", "textures/item/nether_wart.png", true, "textures/items/nether_wart.png"),
+        new("cinder_cage", "textures/block/spawner.png", true, "textures/blocks/mob_spawner.png"),
     ];
 
     /// <summary>
@@ -1741,6 +1748,16 @@ public static class BlockTextureSet
             StarterBlocks.LayerEmberCream => TileGen.IconCharge(1393, 212, 112, 38, 255, 214, 92),
             StarterBlocks.LayerCharredSkull => TileGen.IconSkull(1394, 64, 62, 62, 200, 86, 38),
             StarterBlocks.LayerFireCharge => TileGen.IconCharge(1395, 52, 38, 34, 246, 128, 36),
+
+            // The Emberhold's: dark red bricks, grey-brown ash, a maroon cap in three sizes, its
+            // pocket form, and the cage.
+            StarterBlocks.LayerEmberBricks => TileGen.Bricks(1396, 72, 32, 36, 28),
+            StarterBlocks.LayerAshsand => TileGen.Speckle(1397, 86, 72, 62, 26, 0.6f),
+            StarterBlocks.LayerFirstAshcap => TileGen.RootCrop(1398, 4, 118, 30, 40, 0, 0, 0, false),
+            StarterBlocks.LayerFirstAshcap + 1 => TileGen.RootCrop(1399, 7, 140, 34, 44, 0, 0, 0, false),
+            StarterBlocks.LayerFirstAshcap + 2 => TileGen.RootCrop(1400, 10, 170, 40, 50, 0, 0, 0, false),
+            StarterBlocks.LayerAshcapItem => TileGen.IconLump(1401, 158, 36, 46),
+            StarterBlocks.LayerCinderCage => TileGen.CinderCage(1402),
 
             StarterBlocks.LayerGlowcap => TileGen.Glowcap(1364),
             StarterBlocks.LayerMarshReed => TileGen.MarshReed(1365),

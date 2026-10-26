@@ -13,6 +13,9 @@ public enum StructureKind : byte
     Tidewreck,
     StormVault,
     StarfallCrown,
+
+    /// <summary>The Emberdeep's fortress (2026-10-25): the reference's Nether fortress, ours.</summary>
+    Emberhold,
 }
 
 /// <summary>A structure's identity and bounds. The id survives block-id and palette changes.</summary>
@@ -71,6 +74,7 @@ public sealed class ExplorationGenerator
         StructureKind.Tidewreck => 256,
         StructureKind.StormVault => 448,
         StructureKind.StarfallCrown => 960,
+        StructureKind.Emberhold => 384,
         _ => 320,
     };
 
@@ -102,6 +106,7 @@ public sealed class ExplorationGenerator
             StructureKind.Tidewreck => 0.62f,
             StructureKind.StormVault => 0.38f,
             StructureKind.StarfallCrown => 0.52f,
+            StructureKind.Emberhold => 0.7f,
             _ => 0f,
         };
         if (Noise.Value2(cellX, cellZ, salt) >= chance) return null;
@@ -158,6 +163,10 @@ public sealed class ExplorationGenerator
             StructureKind.BuriedGallery => Math.Max(TerrainGenerator.WorldBottom + 12, surface - 24),
             StructureKind.Tidewreck => TerrainGenerator.SeaLevel - 5,
             StructureKind.StormVault => Math.Max(TerrainGenerator.WorldBottom + 12, surface - 15),
+
+            // ⛳ The Emberhold keeps to the Emberdeep whatever the surface does: a floor somewhere
+            // forty to fifty below its top, above the molten sea at the bottom of the world.
+            StructureKind.Emberhold => TerrainGenerator.EmberdeepTop - 40 - (int)(Noise.Value2(cellX, cellZ, salt + 47) * 10f),
             _ => surface + 1,
         };
         var radius = kind switch
@@ -167,6 +176,7 @@ public sealed class ExplorationGenerator
             StructureKind.Tidewreck => 13,
             StructureKind.StormVault => 12,
             StructureKind.StarfallCrown => 18,
+            StructureKind.Emberhold => 20,
             _ => MaxRadius,
         };
 
@@ -177,6 +187,7 @@ public sealed class ExplorationGenerator
             StructureKind.Tidewreck => y - 1,
             StructureKind.StormVault => y - 1,
             StructureKind.StarfallCrown => y,
+            StructureKind.Emberhold => y - HoldPillars - 1,
             _ => y,
         };
         var maxY = kind switch
@@ -186,6 +197,7 @@ public sealed class ExplorationGenerator
             StructureKind.Tidewreck => TerrainGenerator.SeaLevel + 3,
             StructureKind.StormVault => y + 9,
             StructureKind.StarfallCrown => y + 14,
+            StructureKind.Emberhold => y + 8,
             _ => y,
         };
 
@@ -301,6 +313,7 @@ public sealed class ExplorationGenerator
             case StructureKind.Tidewreck: WalkWreck(site, emit); break;
             case StructureKind.StormVault: WalkVault(site, emit); break;
             case StructureKind.StarfallCrown: WalkCrown(site, emit); break;
+            case StructureKind.Emberhold: WalkHold(site, emit); break;
         }
     }
 
@@ -308,6 +321,15 @@ public sealed class ExplorationGenerator
     {
         var cells = new List<(int X, int Y, int Z)>();
         Walk(site, (x, y, z, block) => { if (block == _ids.Chest) cells.Add((x, y, z)); });
+        return cells.Distinct().ToArray();
+    }
+
+    /// <summary>Where an Emberhold's cinder cages stand — the cells the cinderwisps come out of.</summary>
+    public IReadOnlyList<(int X, int Y, int Z)> CageCells(StructureSite site)
+    {
+        if (site.Kind != StructureKind.Emberhold) return [];
+        var cells = new List<(int X, int Y, int Z)>();
+        Walk(site, (x, y, z, block) => { if (block == _ids.CinderCage) cells.Add((x, y, z)); });
         return cells.Distinct().ToArray();
     }
 
@@ -444,6 +466,124 @@ public sealed class ExplorationGenerator
         for (var y = s.Y; y <= s.Y + 6; y++) emit(s.X + dx, y, s.Z + dz, _ids.BrickOrRubble(y, s.Y));
         emit(s.X, s.Y, s.Z, _ids.Chest);
         emit(s.X, s.Y + 5, s.Z, _ids.Lantern);
+    }
+
+    /// <summary>How far an Emberhold's bridges stand on their pillars.</summary>
+    private const int HoldPillars = 12;
+
+    /// <summary>
+    /// The Emberhold: a keep of ember bricks with a cinder cage at its heart and ashcap beds along
+    /// its north wall, four bridges out on pillars, and a tower at the end of each.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ The reference's Nether fortress, shaped to the radius every site here keeps. It is
+    /// cut through whatever the Emberdeep has at that depth — rock, a hollow, a lava lake — so its
+    /// bridges cross open fire in one place and run as tunnels in the next, the way the reference's
+    /// fortress cuts through netherrack.</para>
+    /// <para>The north and south towers hold the other two cages, the east one a second chest; the
+    /// keep's own two chests stand in its southern corners.</para>
+    /// </remarks>
+    private void WalkHold(StructureSite s, Action<int, int, int, BlockId> emit)
+    {
+        var brick = _ids.EmberBricks;
+        var (x0, y0, z0) = (s.X, s.Y, s.Z);
+
+        // The keep.
+        CarveBox(x0 - 6, y0, z0 - 6, x0 + 6, y0 + 6, z0 + 6, emit);
+        for (var x = x0 - 7; x <= x0 + 7; x++)
+        for (var z = z0 - 7; z <= z0 + 7; z++)
+        {
+            emit(x, y0 - 1, z, brick);
+            emit(x, y0 + 7, z, brick);
+        }
+
+        for (var y = y0; y <= y0 + 6; y++)
+        {
+            for (var d = -7; d <= 7; d++)
+            {
+                // Doorways three wide and four tall, one in each wall.
+                var door = Math.Abs(d) <= 1 && y <= y0 + 3;
+                if (!door)
+                {
+                    emit(x0 + d, y, z0 - 7, brick);
+                    emit(x0 + d, y, z0 + 7, brick);
+                    emit(x0 - 7, y, z0 + d, brick);
+                    emit(x0 + 7, y, z0 + d, brick);
+                }
+            }
+
+            foreach (var (px, pz) in (ReadOnlySpan<(int, int)>)[(-4, -4), (4, -4), (-4, 4), (4, 4)])
+                emit(x0 + px, y, z0 + pz, brick);
+        }
+
+        // The garden: ashcap ripe in ashsand along the north wall, either side of the door.
+        for (var d = 2; d <= 5; d++)
+        foreach (var side in (ReadOnlySpan<int>)[-1, 1])
+        {
+            emit(x0 + d * side, y0 - 1, z0 - 6, _ids.Ashsand);
+            emit(x0 + d * side, y0, z0 - 6, _ids.AshcapRipe);
+        }
+
+        emit(x0, y0, z0, _ids.CinderCage);
+        emit(x0 - 5, y0, z0 + 5, _ids.Chest);
+        emit(x0 + 5, y0, z0 + 5, _ids.Chest);
+
+        // The bridges, and the towers at their ends.
+        foreach (var (dx, dz) in (ReadOnlySpan<(int, int)>)[(1, 0), (-1, 0), (0, 1), (0, -1)])
+        {
+            var (sx, sz) = (dz, dx);   // across the bridge
+            for (var along = 8; along <= 15; along++)
+            {
+                var cx = x0 + dx * along;
+                var cz = z0 + dz * along;
+                for (var across = -2; across <= 2; across++)
+                {
+                    var bx = cx + sx * across;
+                    var bz = cz + sz * across;
+                    emit(bx, y0 - 1, bz, brick);
+                    for (var y = y0; y <= y0 + 3; y++)
+                        emit(bx, y, bz, Math.Abs(across) == 2 && y == y0 ? brick : BlockId.Air);
+                }
+
+                if (along % 4 == 0)
+                    foreach (var side in (ReadOnlySpan<int>)[-1, 1])
+                    for (var y = y0 - 2; y >= y0 - HoldPillars; y--)
+                        emit(cx + sx * side, y, cz + sz * side, brick);
+            }
+
+            var tx = x0 + dx * 18;
+            var tz = z0 + dz * 18;
+            CarveBox(tx - 1, y0, tz - 1, tx + 1, y0 + 4, tz + 1, emit);
+            for (var x = tx - 2; x <= tx + 2; x++)
+            for (var z = tz - 2; z <= tz + 2; z++)
+            {
+                emit(x, y0 - 1, z, brick);
+                emit(x, y0 + 5, z, brick);
+            }
+
+            for (var y = y0; y <= y0 + 4; y++)
+            for (var d = -2; d <= 2; d++)
+            {
+                // The tower's one door faces the keep.
+                bool Door(int ox, int oz) => ox == -dx * 2 && Math.Abs(oz) <= 0 || oz == -dz * 2 && Math.Abs(ox) <= 0;
+                foreach (var (ox, oz) in (ReadOnlySpan<(int, int)>)[(d, -2), (d, 2), (-2, d), (2, d)])
+                {
+                    if (y <= y0 + 2 && Door(ox, oz)) continue;
+                    emit(tx + ox, y, tz + oz, brick);
+                }
+            }
+
+            for (var y = y0 - 2; y >= y0 - HoldPillars; y--)
+            {
+                emit(tx - 2, y, tz - 2, brick);
+                emit(tx + 2, y, tz - 2, brick);
+                emit(tx - 2, y, tz + 2, brick);
+                emit(tx + 2, y, tz + 2, brick);
+            }
+
+            if (dz != 0) emit(tx, y0, tz, _ids.CinderCage);
+            else if (dx > 0) emit(tx, y0, tz, _ids.Chest);
+        }
     }
 
     private void WalkCrown(StructureSite s, Action<int, int, int, BlockId> emit)

@@ -209,6 +209,18 @@ public static class SpawnRules
     ];
 
     /// <summary>
+    /// Inside an Emberhold's walls: the reference's fortress table — its skeletons and its blazes,
+    /// a few slimes, and the plain skeleton that wandered in.
+    /// </summary>
+    public static readonly MonsterEntry[] Emberhold =
+    [
+        new("charred_skeleton", 40, 2, 4),
+        new("cinderwisp", 30, 1, 2),
+        new("ember_slime", 10, 1, 2),
+        new("skeleton", 10, 1, 2),
+    ];
+
+    /// <summary>
     /// Kinds born of the Emberdeep, which stand in its glow: the lava lights every hollow down
     /// there, so asking for darkness would ask for nothing at all. The reference lets its Nether
     /// spawn by any block light for the same reason.

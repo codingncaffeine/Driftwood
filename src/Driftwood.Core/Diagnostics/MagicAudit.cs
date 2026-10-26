@@ -57,7 +57,7 @@ public static class MagicAudit
         if (first.Empty || first != again)
             faults.Add("a generated chest's personal coin value is empty or non-deterministic");
         var gearKinds = Enum.GetValues<StructureKind>();
-        var gearRanks = new[] { 1, 1, 2, 3, 4 };
+        var gearRanks = new[] { 1, 1, 2, 3, 4, 4 };
         for (var i = 0; i < gearKinds.Length; i++)
         {
             var gearSite = site with { Id = $"p14/gear/{i}", Kind = gearKinds[i] };

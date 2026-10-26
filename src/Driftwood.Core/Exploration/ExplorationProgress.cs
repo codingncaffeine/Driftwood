@@ -168,6 +168,14 @@ public static class WorldLoot
         [
             new("azurite", 3, 8), new("diamond", 1, 2, 0.45f), new("gold_ingot", 2, 5),
         ],
+
+        // The reference's fortress chest, by what this world has: gold and iron, diamonds now and
+        // then, ashcap to start a bed with, and a fire charge or two.
+        [StructureKind.Emberhold] =
+        [
+            new("gold_ingot", 1, 3), new("iron_ingot", 1, 5), new("diamond", 1, 3, 0.2f),
+            new("ashcap", 3, 7), new("ashsand", 2, 6), new("fire_charge", 1, 3, 0.4f),
+        ],
     };
 
     /// <summary>

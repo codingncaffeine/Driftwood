@@ -116,6 +116,7 @@ internal static class ExplorationAudit
         StructureKind.StormVault =>
             [BlockId.Air, ids.Rubble, ids.Moss, ids.Bricks, ids.Chest, ids.Lantern],
         StructureKind.StarfallCrown => [ids.Rubble, ids.Moss, ids.Bricks, ids.Chest, ids.Lantern],
+        StructureKind.Emberhold => [BlockId.Air, ids.EmberBricks, ids.Ashsand, ids.AshcapRipe, ids.CinderCage, ids.Chest],
         _ => [],
     };
 

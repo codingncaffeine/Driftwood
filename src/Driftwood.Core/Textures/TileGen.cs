@@ -1236,6 +1236,36 @@ public static class TileGen
     /// <summary>
     /// Iron bars: four upright rods and two cross straps, clear between — a cut-out like a pane.
     /// </summary>
+    /// <summary>
+    /// The cinder cage: a dark iron lattice over a glow — the reference's spawner, lit from inside by
+    /// what lives in it.
+    /// </summary>
+    public static byte[] CinderCage(int seed)
+    {
+        var t = new byte[BytesPerTile];
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var bar = x % 5 == 0 || y % 5 == 0 || x == Size - 1 || y == Size - 1;
+            var d = (int)((Noise(x, y, seed) * 2f - 1f) * 10f);
+            if (bar)
+            {
+                Put(t, x, y, Clamp(58 + d), Clamp(54 + d), Clamp(56 + d), 255);
+                continue;
+            }
+
+            // The glow: brightest at the middle, embers flecked through it, see-through at the rim.
+            var dx = (x - 7.5f) / 7.5f;
+            var dy = (y - 7.5f) / 7.5f;
+            var heat = 1f - MathF.Min(1f, MathF.Sqrt(dx * dx + dy * dy));
+            if (heat < 0.15f && Noise(x, y, seed + 9) < 0.7f) continue;
+            Put(t, x, y, Clamp(150 + (int)(heat * 100f) + d), Clamp(60 + (int)(heat * 90f) + d), Clamp(20 + d), 255);
+        }
+
+        return t;
+    }
+
     public static byte[] IronBars(int seed)
     {
         var t = new byte[BytesPerTile];
