@@ -130,6 +130,15 @@ public sealed class Growth
     private readonly BlockId _water;
     private readonly BlockId _kelp;
 
+    /// <summary>For a nest or hive short of full, the next honey level; -1 for everything else.</summary>
+    private readonly int[] _honeyNext;
+
+    /// <summary>What a bee can work: the flowers, and a cherry tree's blossom.</summary>
+    private readonly bool[] _bloom;
+
+    /// <summary>How far round a nest or hive its bees go for flowers.</summary>
+    public const int ForageReach = 5;
+
     /// <summary>For a cocoa pod, the next size up on the same side; -1 for a ripe pod and everything else.</summary>
     private readonly int[] _podNext;
 
@@ -150,6 +159,17 @@ public sealed class Growth
     {
         _water = registry.ByName("water").Id;
         _kelp = registry.ByName("kelp").Id;
+
+        _honeyNext = new int[registry.Count];
+        Array.Fill(_honeyNext, -1);
+        foreach (var nest in (bool[])[true, false])
+        for (var level = 0; level < StarterBlocks.HoneyFull; level++)
+            _honeyNext[registry.ByName(StarterBlocks.HiveName(nest, level)).Id.Value] =
+                registry.ByName(StarterBlocks.HiveName(nest, level + 1)).Id.Value;
+
+        _bloom = new bool[registry.Count];
+        foreach (var name in (string[])["seaflax", "marshlily", "emberbloom", "sunwort", "cherry_leaves"])
+            _bloom[registry.ByName(name).Id.Value] = true;
 
         _podNext = new int[registry.Count];
         Array.Fill(_podNext, -1);
@@ -322,6 +342,17 @@ public sealed class Growth
             return true;
         }
 
+        // ⛳ A nest or hive (2026-10-26) fills a level when its bees have flowers in reach — a
+        // look round the meadow is the reference's pollen run, and a bare hive in a stone yard
+        // never fills. A full one waits for a player to take it.
+        if (_honeyNext[here.Value] >= 0)
+        {
+            if (roll >= StageChance * 0.3) return false;
+            if (!Blooms(world, x, y, z)) return false;
+            Write(world, x, y, z, new BlockId((ushort)_honeyNext[here.Value]));
+            return true;
+        }
+
         // ⛳ A cocoa pod (2026-10-26) swells a size on a fifth of a crop's chance, light or dark —
         // it hangs in the shade of its own tree, so asking for light would starve every one.
         if (_podNext[here.Value] >= 0)
@@ -444,6 +475,17 @@ public sealed class Growth
                 if (_anyLeaves[block.Value]) frontier.Enqueue((nx, ny, nz, steps + 1));
             }
         }
+
+        return false;
+    }
+
+    /// <summary>Whether anything in flower stands within the bees' reach of a nest or hive.</summary>
+    public bool Blooms(VoxelWorld world, int x, int y, int z)
+    {
+        for (var dy = -3; dy <= 3; dy++)
+        for (var dz = -ForageReach; dz <= ForageReach; dz++)
+        for (var dx = -ForageReach; dx <= ForageReach; dx++)
+            if (_bloom[world.GetBlock(x + dx, y + dy, z + dz).Value]) return true;
 
         return false;
     }

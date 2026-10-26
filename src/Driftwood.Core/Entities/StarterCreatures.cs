@@ -191,6 +191,25 @@ public static class StarterCreatures
                 Box(7f, 18f, -3f, 6f, 6f, 6f, 32, 0, mirror: true)),
         ]);
 
+    /// <summary>
+    /// The bee (2026-10-26), on the reference's net: a striped barrel of a body with a sting at the
+    /// back, two flat wings on top and a pair of feelers.
+    /// </summary>
+    public static CreatureModel Bee() => new(
+        "bee", 64, 64,
+        [
+            Bone("body", "", new Vector3(0f, 3f, 0f),
+                Box(-3.5f, 0f, -5f, 7f, 7f, 10f, 0, 0),
+                Box(-0.5f, 2.5f, 5f, 1f, 1f, 2f, 26, 7)),           // the sting
+            Bone("rightWing", "body", new Vector3(-1.5f, 7f, -3f),
+                Box(-10.5f, 7f, -3f, 9f, 0f, 6f, 0, 18)),
+            Bone("leftWing", "body", new Vector3(1.5f, 7f, -3f),
+                Box(1.5f, 7f, -3f, 9f, 0f, 6f, 0, 18, mirror: true)),
+            Bone("feelers", "body", new Vector3(0f, 5f, -5f),
+                Box(-2.5f, 5f, -8f, 1f, 2f, 3f, 2, 0),
+                Box(1.5f, 5f, -8f, 1f, 2f, 3f, 2, 3)),
+        ]);
+
     public static CreatureModel Cow() => new(
         "cow", 64, 32,
         [
@@ -1077,7 +1096,7 @@ public static class StarterCreatures
          Shorewright(), Forager(), Waykeeper(), Lorekeeper(), StormSentinel(), Starwarden(),
          SummonedSkeleton(), SummonedZombie(), SpiritWolf(), EarthElemental(),
          Cinderwisp(), Ashwail(), EmberSlime(), CharredSkeleton(), CoreWyrm(),
-         Guardian("guardian"), Guardian("elder_guardian"), Ashwraith()];
+         Guardian("guardian"), Guardian("elder_guardian"), Ashwraith(), Bee()];
 
     /// <summary>Kinds excused the height band because they are flat on purpose.</summary>
     private static readonly HashSet<string> Flat = new(StringComparer.Ordinal) { "phantom" };

@@ -46,6 +46,7 @@ public static class CreatureVitals
         // each other — a table where the dangerous half is added later is a table that gets a
         // zombie with a cow's health in it.
         ["bat"] = 12,
+        ["bee"] = 10,
         ["spider"] = 32,
         ["zombie"] = 40,
         ["drowned"] = 40,
@@ -130,6 +131,9 @@ public static class CreatureVitals
 
         // The one beast with teeth. Only lands once provoked — see Retaliates.
         ["wolf"] = 3,
+
+        // A sting, and its poison is the client's to give — the cave spider's arrangement.
+        ["bee"] = 2,
     };
 
     /// <summary>
@@ -153,6 +157,9 @@ public static class CreatureVitals
     private static readonly HashSet<string> Retaliators = new(StringComparer.Ordinal)
     {
         "wolf",
+
+        // ⛳ The bee (2026-10-26): strike one and its swarm comes for you, the reference's way.
+        "bee",
 
         // ⛳ The farwalker is the dark's wolf: it stands in the night harming nobody, and striking
         // one buys a fight with something that hits for 7 and does not forget. Spawned through the
@@ -196,6 +203,7 @@ public static class CreatureVitals
     /// </remarks>
     private static readonly Dictionary<string, float> Follow = new(StringComparer.Ordinal)
     {
+        ["bee"] = 24f,
         ["zombie"] = 35f,
         ["husk"] = 35f,
         ["drowned"] = 35f,

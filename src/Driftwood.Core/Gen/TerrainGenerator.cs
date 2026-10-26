@@ -2244,6 +2244,17 @@ public sealed class TerrainGenerator
             PlaceIntoAir(canvas, tree.X + dx, tree.BaseY, tree.Z + dz, tree.LogOf(_ids));
         }
 
+        // ⛳ A bee nest (2026-10-26): one tree in fourteen carries one on its trunk, under the
+        // crown — a cherry one in seven, the blossom being what bees want — with however much honey
+        // its own roll says it has made.
+        if (Noise.Value2(tree.X, tree.Z, tree.Seed + 91) < (tree.Cherry ? 0.14f : 0.07f))
+        {
+            var f = (int)(Noise.Value2(tree.X, tree.Z, tree.Seed + 93) * 3.999f);
+            var (nx, _, nz) = Faces.Normals[Placeable.Facings[f]];
+            var level = (int)(Noise.Value2(tree.X, tree.Z, tree.Seed + 97) * (StarterBlocks.HoneyFull + 0.999f));
+            PlaceIntoAir(canvas, tree.X + nx, tree.TopY - 2, tree.Z + nz, _ids.BeeNests[level]);
+        }
+
         // ⛳ Cocoa (2026-10-26): a driftoak in warm, wet country hangs a ripe pod or two on its
         // trunk, low enough to reach, on whichever sides its own rolls pick.
         if (tree.Cherry || !CocoaClimate(tree.X, tree.Z)) return;

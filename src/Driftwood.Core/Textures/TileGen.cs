@@ -1742,6 +1742,94 @@ public static class TileGen
         return t;
     }
 
+    /// <summary>
+    /// A bee house's flank: a nest's woven straw-gold bands, or a hive's planks, with the dark mouth
+    /// of the entrance low in the middle — and, when it is full, honey running out of it.
+    /// </summary>
+    public static byte[] BeeHouse(int seed, bool nest, bool honey)
+    {
+        var t = new byte[BytesPerTile];
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var d = (int)((Noise(x, y, seed) * 2f - 1f) * 10f);
+            int r, g, b;
+            if (nest)
+            {
+                // Woven bands, alternate rows offset, a seam every third row.
+                var seam = y % 3 == 2 || (x + (y / 3 & 1) * 2) % 5 == 4;
+                (r, g, b) = seam ? (150, 108, 44) : (206, 162, 74);
+            }
+            else
+            {
+                var seam = y % 4 == 3;
+                (r, g, b) = seam ? (130, 98, 56) : (184, 146, 86);
+                if (y is 5 or 6) (r, g, b) = (118, 86, 48);   // the hive's lip, a darker band
+            }
+
+            // The entrance: a dark slot low in the middle.
+            if (y is >= 9 and <= 11 && x is >= 6 and <= 9) (r, g, b) = (38, 28, 18);
+
+            // Honey welling out of the mouth and running down the face when it is full.
+            if (honey && ((y is >= 8 and <= 12 && x is >= 5 and <= 10 && !(y is >= 9 and <= 11 && x is >= 6 and <= 9))
+                          || (y > 12 && (x == 6 || x == 9) && y < 12 + (x == 6 ? 3 : 2))))
+                (r, g, b) = (238, 170, 36);
+
+            Put(t, x, y, Clamp(r + d), Clamp(g + d), Clamp(b + d / 2), 255);
+        }
+
+        return t;
+    }
+
+    /// <summary>Honey set solid, or a block of comb: amber either way, comb in its six-sided cells.</summary>
+    public static byte[] Honey(int seed, bool comb)
+    {
+        var t = new byte[BytesPerTile];
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var d = (int)((Noise(x, y, seed) * 2f - 1f) * 8f);
+            int r, g, b;
+            if (comb)
+            {
+                // Cells four across, alternate rows shifted half a cell: the walls are the darker ink.
+                var row = y / 4;
+                var cx = (x + (row & 1) * 2) % 4;
+                var wall = cx == 0 || y % 4 == 0;
+                (r, g, b) = wall ? (184, 112, 22) : (234, 168, 46);
+            }
+            else
+            {
+                // Clear honey, lighter toward the middle where the light comes through it.
+                var glow = 18 - (Math.Abs(x - 8) + Math.Abs(y - 8));
+                (r, g, b) = (226 + glow / 2, 150 + glow, 34 + glow / 2);
+            }
+
+            Put(t, x, y, Clamp(r + d), Clamp(g + d), Clamp(b + d / 2), 255);
+        }
+
+        return t;
+    }
+
+    /// <summary>A candle's wax: cream with a darker wick showing at the top.</summary>
+    public static byte[] Candle(int seed)
+    {
+        var t = new byte[BytesPerTile];
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var d = (int)((Noise(x, y, seed) * 2f - 1f) * 8f);
+            var wick = y < 2 && x is 7 or 8;
+            var (r, g, b) = wick ? (52, 40, 30) : (236, 222, 176);
+            Put(t, x, y, Clamp(r + d), Clamp(g + d), Clamp(b + d), 255);
+        }
+
+        return t;
+    }
+
     /// <summary>A cookie: a round golden biscuit with dark chips pressed into it.</summary>
     public static byte[] IconCookie(int seed)
     {

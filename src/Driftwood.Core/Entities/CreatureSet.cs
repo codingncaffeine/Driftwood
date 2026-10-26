@@ -123,6 +123,10 @@ public static class CreatureSet
         new("bat", "bat", CreatureFamily.Cave, "bat",
             ["textures/entity/bat.png", "textures/entity/bat/bat.png"]),
 
+        // ⛳ The bee (2026-10-26): kept by its nest or hive, never spawned by the land.
+        new("bee", "bee", CreatureFamily.Beast, "bee",
+            ["textures/entity/bee/bee.png"]),
+
         // ── Hostiles. Plain English words stay; coined ones become ours. ──
         new("zombie", "zombie", CreatureFamily.Hostile, "zombie",
             ["textures/entity/zombie/zombie.png"]),
@@ -221,6 +225,7 @@ public static class CreatureSet
     {
         ["slime"] = CreatureMove.Hop,
         ["bat"] = CreatureMove.Fly,
+        ["bee"] = CreatureMove.Fly,
         ["squid"] = CreatureMove.Swim,
         ["phantom"] = CreatureMove.Fly,
         ["cinderwisp"] = CreatureMove.Fly,
@@ -256,6 +261,10 @@ public static class CreatureSet
         ["rabbit"] = 0.6f,
         ["cat"] = 0.8f,
         ["bat"] = 0.35f,
+
+        // The reference draws its bee at its authored size; ours is a touch smaller still, so a
+        // swarm round a nest reads as bees and not as a flight of birds.
+        ["bee"] = 0.8f,
 
         // The reference draws its cave spider at seven tenths of the spider.
         ["cave_spider"] = 0.7f,

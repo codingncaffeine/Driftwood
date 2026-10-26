@@ -109,6 +109,13 @@ public sealed class PlayerAilments
         left = MathF.Max(left, seconds);
     }
 
+    /// <summary>One of them gone — what honey does for poison (2026-10-26).</summary>
+    public void Cure(Ailment ailment)
+    {
+        _left[(int)ailment] = 0f;
+        _level[(int)ailment] = 0;
+    }
+
     /// <summary>All of it gone — a death, or a cure.</summary>
     public void Clear()
     {

@@ -95,6 +95,18 @@ public sealed class Creature
     /// crossed stays crossed, which is what gives striking one a price worth thinking about.</summary>
     public bool Provoked { get; set; }
 
+    /// <summary>
+    /// The cell a bee lives in (2026-10-26): its nest or hive, which it keeps near by day and goes
+    /// back into at night. Null for everything else, and for a bee whose house is gone.
+    /// </summary>
+    public (int X, int Y, int Z)? Home { get; set; }
+
+    /// <summary>Whether a bee is making for its house — dusk, or rain on the way. The client says.</summary>
+    public bool Homing { get; set; }
+
+    /// <summary>Seconds a bee that has used its sting has left; zero for one that has not.</summary>
+    public float Stung { get; set; }
+
     /// <summary>Blocks a second it is falling at, when the ground has gone from under it.</summary>
     public float FallSpeed { get; set; }
 
@@ -1130,6 +1142,10 @@ public sealed class CreatureHerd
         {
             if (!creature.Alive) continue;
 
+            // ⚠ Bees are their house's, not the save's (2026-10-26): the hive brings them back out
+            // on load, and one saved without its house would hover where it was for ever.
+            if (creature.Kind == "bee") continue;
+
             saved.Add(new SavedCreature(
                 creature.Kind, creature.Position, creature.Yaw, creature.Health,
                 creature.Shorn, creature.Regrows, creature.Provoked, creature.Grown, creature.Bulk));
@@ -1392,6 +1408,13 @@ public sealed class CreatureHerd
             if (creature.Kind is "guardian" or "elder_guardian")
             {
                 if (magicMovement > 0f) Watch(creature, dt * magicMovement, player, solid, water);
+                continue;
+            }
+
+            // ⛳ The bees (2026-10-26): round their house by day, into it at dusk, at you if angered.
+            if (creature.Kind == "bee")
+            {
+                if (magicMovement > 0f) Buzz(creature, dt * magicMovement, player, solid);
                 continue;
             }
 
@@ -2124,6 +2147,79 @@ public sealed class CreatureHerd
 
         creature.Targeting = false;
         FlyTo(creature, Idle(creature, dt, 0f), 3f * dt, solid);
+    }
+
+    /// <summary>How long a bee lives on once it has stung: the reference's, near enough.</summary>
+    public const float StungSeconds = 12f;
+
+    /// <summary>
+    /// A bee's flight: loops round its house a few blocks out, drifting up and down as it goes,
+    /// and back to the door when it is told to go home. Angered, it flies straight at the target
+    /// and stings once; a bee that has stung droops, wanders, and dies.
+    /// </summary>
+    private void Buzz(Creature creature, float dt, Vector3? player, Func<int, int, int, bool> solid)
+    {
+        creature.Moving = true;
+        creature.Orbit += dt;
+        creature.Swings = MathF.Max(0f, creature.Swings - dt);
+
+        if (creature.Stung > 0f)
+        {
+            creature.Stung -= dt;
+            creature.Provoked = false;
+            FlyTo(creature, Idle(creature, dt, -1f), 1.2f * dt, solid);
+            if (creature.Stung <= 0f) Hurt(creature, creature.Health, creature.Position);
+            return;
+        }
+
+        if (creature.Provoked && player is { } target
+            && Vector3.Distance(target, creature.Position) < CreatureVitals.FollowRange(creature.Kind))
+        {
+            creature.Targeting = true;
+            var chest = target + new Vector3(0f, 1.2f, 0f);
+            var toward = chest - creature.Middle;
+            if (toward.LengthSquared() > 1e-4f)
+                creature.Yaw = creature.WantsYaw = float.RadiansToDegrees(MathF.Atan2(toward.Z, toward.X));
+
+            FlyTo(creature, chest + new Vector3(0f, MathF.Sin(creature.Orbit * 9f) * 0.25f, 0f), 5f * dt, solid);
+
+            if (toward.Length() < 1.3f && creature.Swings <= 0f)
+            {
+                creature.Swings = 1f;
+                _attacks.Add(new CreatureAttack(creature.Kind, creature.Middle, CreatureVitals.DamageFor(creature.Kind)));
+                creature.Stung = StungSeconds;
+            }
+
+            return;
+        }
+
+        creature.Targeting = false;
+        if (creature.Home is not { } home)
+        {
+            FlyTo(creature, Idle(creature, dt, MathF.Sin(creature.Orbit)), 1.8f * dt, solid);
+            return;
+        }
+
+        var door = new Vector3(home.X + 0.5f, home.Y + 0.5f, home.Z + 0.5f);
+        Vector3 goal;
+        if (creature.Homing)
+        {
+            goal = door;
+        }
+        else
+        {
+            // Each bee loops at its own radius and pace, read off its own id, so a swarm spreads
+            // round the house rather than flying as one.
+            var own = (creature.RuntimeId.GetHashCode() & 0xFF) / 255f;
+            var radius = 2.5f + own * 3f;
+            var turn = creature.Orbit * (0.5f + own * 0.4f) + own * MathF.Tau;
+            goal = door + new Vector3(MathF.Cos(turn) * radius, MathF.Sin(creature.Orbit * 0.7f + own * 5f) * 1.4f, MathF.Sin(turn) * radius);
+        }
+
+        var to = goal - creature.Position;
+        to.Y = 0f;
+        if (to.LengthSquared() > 1e-4f) creature.Yaw = creature.WantsYaw = float.RadiansToDegrees(MathF.Atan2(to.Z, to.X));
+        FlyTo(creature, goal, (creature.Homing ? 3f : 2.2f) * dt, solid);
     }
 
     /// <summary>How long a guardian holds its beam before it lands: the reference's eighty ticks, an

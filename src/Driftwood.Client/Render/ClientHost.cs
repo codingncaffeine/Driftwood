@@ -10264,6 +10264,9 @@ public sealed class ClientHost : IDisposable
                 // The cave spider's bite is the reference's poison: seven seconds of it.
                 if (blow.Kind == "cave_spider") Ail(Ailment.Poison, 7f);
 
+                // And a bee's sting, ten (2026-10-26).
+                if (blow.Kind == "bee") Ail(Ailment.Poison, 10f);
+
                 // And the charred skeleton's blade is its wither: ten seconds.
                 if (blow.Kind == "charred_skeleton") Ail(Ailment.Withering, 10f);
             }
@@ -10319,6 +10322,7 @@ public sealed class ClientHost : IDisposable
         StepWyrm(dt);
         StepAshwraith();
         StepBeacons(dt);
+        StepHives(dt);
 
         // A blink is a soft pop and a wisp at both ends — the departure matters as much as the
         // arrival, because "where did it go" starts from where it was.
@@ -11171,6 +11175,151 @@ public sealed class ClientHost : IDisposable
     private readonly HashSet<(int X, int Y, int Z)> _beacons = [];
     private float _beaconClock;
 
+    private Hives? _hives;
+    private float _hiveClock;
+
+    /// <summary>
+    /// Keeps the bees at every nest and hive near the player (2026-10-26): out by day, a few to a
+    /// house, looping round it; at dusk they make for the door and go in. A bee whose house is gone
+    /// is homeless and wanders, and any bee left far behind is let go.
+    /// </summary>
+    private void StepHives(float dt)
+    {
+        if (_herd is null || !_walking) return;
+        _hiveClock -= dt;
+        if (_hiveClock > 0f) return;
+        _hiveClock = 2f;
+
+        _hives ??= new Hives(_registry);
+        var world = _streamer.World;
+        _hives.Sweep(world, _player.Position);
+        var night = Daylight < 0.2f;
+
+        var homed = new Dictionary<(int, int, int), int>();
+        foreach (var bee in _herd.All.Where(one => one.Alive && one.Kind == "bee").ToArray())
+        {
+            if (Vector3.Distance(bee.Position, _player.Position) > Hives.Reach * 2f)
+            {
+                _herd.Remove(bee);
+                continue;
+            }
+
+            if (bee.Home is not { } home) continue;
+            if (!_hives.IsHouse(world.GetBlock(home.X, home.Y, home.Z)))
+            {
+                bee.Home = null;
+                continue;
+            }
+
+            bee.Homing = night && !bee.Provoked;
+            if (bee.Homing && Vector3.Distance(bee.Position, new Vector3(home.X + 0.5f, home.Y + 0.5f, home.Z + 0.5f)) < 1.3f)
+            {
+                _herd.Remove(bee);
+                continue;
+            }
+
+            homed[home] = homed.GetValueOrDefault(home) + 1;
+        }
+
+        if (night || KindFor("bee") is not { } kind) return;
+
+        foreach (var house in _hives.Found)
+        {
+            if (homed.GetValueOrDefault(house) >= Hives.BeesPerHouse) continue;
+            if (DoorOf(house) is not { } door) continue;
+
+            var bee = _herd.SpawnAt(kind, door, (float)(Random.Shared.NextDouble() * 360.0));
+            bee.Home = house;
+        }
+    }
+
+    /// <summary>Where a bee comes out of a house: the middle of an open cell beside it.</summary>
+    private Vector3? DoorOf((int X, int Y, int Z) house)
+    {
+        foreach (var face in Placeable.Facings)
+        {
+            var (nx, _, nz) = Faces.Normals[face];
+            if (_streamer.World.GetBlock(house.X + nx, house.Y, house.Z + nz).IsAir)
+                return new Vector3(house.X + nx + 0.5f, house.Y + 0.15f, house.Z + nz + 0.5f);
+        }
+
+        return null;
+    }
+
+    /// <summary>Whether a lit campfire stands within five below a house, smoking its bees calm.</summary>
+    private bool Smoked(int x, int y, int z)
+    {
+        for (var down = 1; down <= 5; down++)
+        {
+            var below = _registry[_streamer.World.GetBlock(x, y - down, z)];
+            if (below.Use == BlockUse.Campfire) return below.Name.EndsWith("_lit", StringComparison.Ordinal);
+            if (below.Solid && below.Model.IsFullCube) return false;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Turns a house's bees on the player (2026-10-26) — every one out, and the rest of the house
+    /// pouring after them — unless a campfire's smoke has them calm.
+    /// </summary>
+    private void RouseBees(int x, int y, int z)
+    {
+        if (_herd is null || Smoked(x, y, z)) return;
+
+        var house = (x, y, z);
+        var middle = new Vector3(x + 0.5f, y + 0.5f, z + 0.5f);
+        var out_ = 0;
+        foreach (var bee in _herd.All)
+        {
+            if (!bee.Alive || bee.Kind != "bee") continue;
+            if (bee.Home == house) out_++;
+            else if (Vector3.Distance(bee.Position, middle) > CreatureHerd.PackAggroRange) continue;
+            bee.Provoked = true;
+        }
+
+        if (KindFor("bee") is not { } kind) return;
+        for (var i = out_; i < Hives.BeesPerHouse; i++)
+        {
+            var bee = _herd.SpawnAt(kind, DoorOf(house) ?? middle + Vector3.UnitY, (float)(Random.Shared.NextDouble() * 360.0));
+            bee.Home = house;
+            bee.Provoked = true;
+        }
+    }
+
+    /// <summary>
+    /// Takes a full house's honey (2026-10-26): shears cut three combs, a bottle fills with honey, and
+    /// the house goes back to empty — rousing the bees unless a campfire smokes under it.
+    /// </summary>
+    private bool HarvestHive(int x, int y, int z)
+    {
+        var name = _registry[_streamer.World.GetBlock(x, y, z)].Name;
+        var nest = name.StartsWith("bee_nest", StringComparison.Ordinal);
+        if (name != StarterBlocks.HiveName(nest, StarterBlocks.HoneyFull)) return false;
+
+        var at = new Vector3(x + 0.5f, y + 0.5f, z + 0.5f);
+        switch (_inventory.HeldType?.Name)
+        {
+            case "shears":
+                _drops.Drop(_items.Stack("honeycomb", 3), at);
+                WearHeld();
+                break;
+
+            case "glass_bottle":
+                _inventory.SpendHeld();
+                Spill(_items.Stack("honey_bottle", 1));
+                break;
+
+            default:
+                return false;
+        }
+
+        _streamer.EditBlock(x, y, z, _registry.ByName(StarterBlocks.HiveName(nest, 0)).Id);
+        _audio?.Play(Pick(ActionSounds.BucketFillWater), at, 0.5f, 0.8f);
+        RouseBees(x, y, z);
+        return true;
+    }
+
     /// <summary>
     /// Three charred skulls on a T of four ashsand — three across with one under the middle — raise
     /// the Ashwraith: the reference's wither, built the reference's way. The T is consumed.
@@ -11671,6 +11820,9 @@ public sealed class ClientHost : IDisposable
 
         // A spider's eye fills a little and sickens more: the reference's five seconds of poison.
         if (food.Name == "spider_eye") _ailments.Apply(Ailment.Poison, 5f);
+
+        // Honey draws poison out, a bee's sting included (2026-10-26).
+        if (food.Name == "honey_bottle") _ailments.Cure(Ailment.Poison);
 
         if (_vitals.Eat(food.Feeds) == 0 && food.Name != "golden_apple")
         {
@@ -13769,6 +13921,10 @@ public sealed class ClientHost : IDisposable
             }
             foreach (var stack in _harvested) _drops.Drop(stack, centre);
 
+            // ⛳ A house broken open turns its bees out angry (2026-10-26), smoke or no smoke
+            // being the one thing that spares the one breaking it.
+            if (target.Use == BlockUse.Hive) RouseBees(broken.Item1, broken.Item2, broken.Item3);
+
             // A ripe crop coming up sounds like a harvest, on top of the plant's own rustle.
             if (_growth.IsRipe(target.Id))
                 _audio?.Play(Pick(ActionSounds.Harvest), centre, 0.6f, Wobble());
@@ -15090,12 +15246,12 @@ public sealed class ClientHost : IDisposable
     }
 
     /// <summary>
-    /// Strikes flint and steel at a cold campfire or a cask (2026-10-26).
+    /// Strikes flint and steel at a cold campfire, a candle or a cask (2026-10-26).
     /// </summary>
     /// <remarks>
-    /// ⛳ There is no loose fire in this world to start, so the striker lights the two things that
-    /// burn on purpose: a smothered campfire comes back alight, and a cask's fuse starts — the
-    /// reference's own two uses that make sense here. A strike that lights nothing costs nothing.
+    /// ⛳ There is no loose fire in this world to start, so the striker lights the things that burn
+    /// on purpose: a smothered campfire comes back alight, a candle catches, and a cask's fuse
+    /// starts. A strike that lights nothing costs nothing.
     /// </remarks>
     private bool Kindle(RayHit hit)
     {
@@ -15111,6 +15267,10 @@ public sealed class ClientHost : IDisposable
             _streamer.EditBlock(hit.X, hit.Y, hit.Z, lit);
             _audio?.Play(Pick(ActionSounds.CampfireCrackle), here, 0.8f, Wobble());
         }
+        else if (name == "candle")
+        {
+            _streamer.EditBlock(hit.X, hit.Y, hit.Z, _registry.ByName("candle_lit").Id);
+        }
         else if (name == Blastcask.Cold)
         {
             _streamer.EditBlock(hit.X, hit.Y, hit.Z, _litCask);
@@ -15123,6 +15283,17 @@ public sealed class ClientHost : IDisposable
 
         _particles.DeathPuff(here, 0.3f, StarterBlocks.LayerFlint, 4);
         WearHeld();
+        return true;
+    }
+
+    /// <summary>Pinches a lit candle out, whatever is in hand; only flint and steel lights it again.</summary>
+    private bool SnuffCandle(RayHit hit)
+    {
+        if (_registry[_streamer.World.GetBlock(hit.X, hit.Y, hit.Z)].Name != "candle_lit") return false;
+        if (_inventory.HeldType is { Name: "flint_and_steel" }) return false;
+
+        _streamer.EditBlock(hit.X, hit.Y, hit.Z, _registry.ByName("candle").Id);
+        _audio?.Play(Pick(ActionSounds.FireOut), new Vector3(hit.X + 0.5f, hit.Y + 0.5f, hit.Z + 0.5f), 0.4f, 1.4f);
         return true;
     }
 
@@ -15462,7 +15633,7 @@ public sealed class ClientHost : IDisposable
         // and bone meal hurries what is growing there. All asked before the block's own Use,
         // because the ground has no Use of its own and would otherwise fall through to being
         // built on.
-        if (UseHoe(hit) || SmotherFire(hit) || Kindle(hit) || PlantSeed(hit) || PlantBush(hit) || HangPod(hit)
+        if (UseHoe(hit) || SmotherFire(hit) || Kindle(hit) || SnuffCandle(hit) || PlantSeed(hit) || PlantBush(hit) || HangPod(hit)
             || CarvePumpkin(hit) || UseBonemeal(hit))
             return true;
 
@@ -15486,6 +15657,9 @@ public sealed class ClientHost : IDisposable
 
             case BlockUse.Helm:
                 TakeHelm(hit.X, hit.Y, hit.Z);
+                return true;
+
+            case BlockUse.Hive when HarvestHive(hit.X, hit.Y, hit.Z):
                 return true;
 
             case BlockUse.Chest:

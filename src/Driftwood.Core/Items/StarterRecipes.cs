@@ -329,6 +329,11 @@ public static class StarterRecipes
         Shaped("flint arrows", "arrow", 6, ["f", "S", "H"], station: CraftStation.Bench);
         LooseAt("flint and steel", "flint_and_steel", 1, CraftStation.Bench, "iron_ingot", "flint");
         Shaped("cookies", "cookie", 8, ["hoh"], station: CraftStation.Bench);
+        Shaped("beehive", "beehive_0", 1, ["PPP", "yyy", "PPP"], station: CraftStation.Bench);
+        Shaped("honey block", "honey_block", 1, ["vv", "vv"], station: CraftStation.Bench);
+        Shaped("honeycomb block", "honeycomb_block", 1, ["yy", "yy"], station: CraftStation.Bench);
+        Shaped("candle", "candle", 1, ["J", "y"], station: CraftStation.Bench);
+        LooseAt("sugar from honey", "sugar", 3, CraftStation.Bench, "honey_bottle");
         LooseAt("brown dye from cocoa", "dye_brown", 1, CraftStation.Bench, "cocoa_beans");
         LooseAt("melon seeds", "melon_seeds", 1, CraftStation.Bench, "melon_slice");
         LooseAt("pumpkin seeds", "pumpkin_seeds", 4, CraftStation.Bench, "pumpkin");
@@ -777,6 +782,8 @@ public static class StarterRecipes
         'f' => "flint",
         'n' => "melon_slice",
         'o' => "cocoa_beans",
+        'y' => "honeycomb",
+        'v' => "honey_bottle",
         's' => "ember_star",
         'c' => "tide_crystals",
         'M' => material ?? throw new InvalidOperationException($"recipe '{recipe}' uses M with no material"),

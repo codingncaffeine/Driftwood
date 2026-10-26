@@ -3491,6 +3491,14 @@ public static class WorldAudit
                 changed |= Gain(items.ByName(crop).Id);
             }
 
+            // ⛳ HONEY (2026-10-26). A wild nest somewhere in this world, filled by its bees, and the
+            // shears to cut its comb or a bottle to take its honey — an act on the block, as the
+            // carve is.
+            var nests = Enumerable.Range(0, StarterBlocks.HoneyFull + 1)
+                .Sum(level => counts[registry.ByName(StarterBlocks.HiveName(true, level)).Id.Value]);
+            if (nests > 0 && Held(items.ByName("shears").Id)) changed |= Gain(items.ByName("honeycomb").Id);
+            if (nests > 0 && Held(items.ByName("glass_bottle").Id)) changed |= Gain(items.ByName("honey_bottle").Id);
+
             // ⛳ CARVE. The seventh source: shears on a standing pumpkin is an act on the world,
             // not a recipe, so the walk has to know it the way it knows the hoe. The pumpkin
             // itself arrives as a dig out of the wild patches, exactly like a first carrot.
@@ -9408,7 +9416,8 @@ public static class WorldAudit
         (StarterBlocks.LayerFermentedSpiderEye, "fermented_spider_eye"),
         (StarterBlocks.LayerDriedKelpSide, "dried_kelp_side"),
         ((ushort)(StarterBlocks.LayerFirstStem + StarterBlocks.StemStages - 1), "stem_3"),
-        ((ushort)(StarterBlocks.LayerCount - 1), "cookie"),
+        (StarterBlocks.LayerCookie, "cookie"),
+        ((ushort)(StarterBlocks.LayerCount - 1), "candle"),
     ];
 
     /// <summary>

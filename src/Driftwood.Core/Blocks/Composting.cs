@@ -45,6 +45,7 @@ public static class Composting
         ["melon_slice"] = 0.5f,
         ["cocoa_beans"] = 0.65f,
         ["cookie"] = 0.85f,
+        ["honeycomb"] = 0.3f,
         ["melon"] = 0.65f,
         ["melon_seeds"] = 0.3f,
         ["pumpkin_seeds"] = 0.3f,

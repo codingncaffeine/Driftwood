@@ -831,6 +831,19 @@ public static class BlockTextureSet
         new("cocoa_2", "", false),
         new("cocoa_beans", "textures/item/cocoa_beans.png", true, "textures/items/dye_powder_brown.png"),
         new("cookie", "textures/item/cookie.png", true, "textures/items/cookie.png"),
+
+        // ⚠ Modern paths only: the bees postdate the flattening, so no legacy names exist.
+        new("bee_nest_top", "textures/block/bee_nest_top.png", false),
+        new("bee_nest_side", "textures/block/bee_nest_front.png", false),
+        new("bee_nest_honey", "textures/block/bee_nest_front_honey.png", false),
+        new("beehive_top", "textures/block/beehive_end.png", false),
+        new("beehive_side", "textures/block/beehive_front.png", false),
+        new("beehive_honey", "textures/block/beehive_front_honey.png", false),
+        new("honeycomb", "textures/item/honeycomb.png", true),
+        new("honey_bottle", "textures/item/honey_bottle.png", true),
+        new("honey_block", "textures/block/honey_block_side.png", false),
+        new("honeycomb_block", "textures/block/honeycomb_block.png", false),
+        new("candle", "textures/block/candle.png", false),
     ];
 
     /// <summary>
@@ -2009,6 +2022,17 @@ public static class BlockTextureSet
                 TileGen.CocoaPod(1498, layer - StarterBlocks.LayerFirstCocoa),
             StarterBlocks.LayerCocoaBeans => TileGen.IconLump(1499, 108, 62, 34),
             StarterBlocks.LayerCookie => TileGen.IconCookie(1500),
+            StarterBlocks.LayerNestTop => TileGen.Rings(1501, 196, 156, 74),
+            StarterBlocks.LayerNestSide => TileGen.BeeHouse(1502, nest: true, honey: false),
+            StarterBlocks.LayerNestHoney => TileGen.BeeHouse(1503, nest: true, honey: true),
+            StarterBlocks.LayerHiveTop => TileGen.Planks(1504, 184, 146, 86),
+            StarterBlocks.LayerHiveSide => TileGen.BeeHouse(1505, nest: false, honey: false),
+            StarterBlocks.LayerHiveHoney => TileGen.BeeHouse(1506, nest: false, honey: true),
+            StarterBlocks.LayerHoneycomb => TileGen.IconGem(1507, 226, 160, 40),
+            StarterBlocks.LayerHoneyBottle => TileGen.IconPotion(1508, 236, 168, 40, splash: false, empty: false),
+            StarterBlocks.LayerHoneyBlock => TileGen.Honey(1509, comb: false),
+            StarterBlocks.LayerHoneycombBlock => TileGen.Honey(1510, comb: true),
+            StarterBlocks.LayerCandle => TileGen.Candle(1511),
             _ => Wheat(layer) ?? Crop(layer) ?? CropIcon(layer) ?? PotionIcon(layer) ?? StainedGlass(layer)
                  ?? MetalBlock(layer) ?? Wool(layer) ?? Meat(layer) ?? Dye(layer)
                  ?? Armour(layer) ?? Shield(layer) ?? Tool(layer),

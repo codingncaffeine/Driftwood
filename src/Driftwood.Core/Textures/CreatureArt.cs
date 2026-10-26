@@ -152,6 +152,9 @@ public static class CreatureArt
         // Dusk-brown, wings going darker through the Wing mark — most of a bat IS wing.
         ["bat"] = new((96, 78, 66), (58, 48, 44), (70, 56, 50), (64, 52, 46), 0.30f, 0.09f),
 
+        // The bee (2026-10-26): gold fur banded in near-black, the bands the blotching's to lay.
+        ["bee"] = new((226, 178, 46), (52, 38, 26), (44, 32, 24), (40, 30, 22), 0.42f, 0.08f),
+
         // Slate-blue, mottled the way wet skin is; the tentacle tips shade through the leg rule.
         ["squid"] = new((96, 108, 132), (76, 88, 112), (66, 76, 98), (66, 76, 98), 0.22f, 0.08f),
 
@@ -652,7 +655,7 @@ public static class CreatureArt
     }
 
     /// <summary>The kinds allowed to have no head bone. Each is a decision, not an oversight.</summary>
-    private static readonly HashSet<string> Faceless = new(StringComparer.Ordinal) { "slime", "squid", "ember_slime", "guardian", "elder_guardian" };
+    private static readonly HashSet<string> Faceless = new(StringComparer.Ordinal) { "slime", "squid", "ember_slime", "guardian", "elder_guardian", "bee" };
 
     /// <summary>For a headless kind with eye boxes: are the eyes actually drawn on?</summary>
     private static string EyeFault(CreatureModel model, Image sheet)

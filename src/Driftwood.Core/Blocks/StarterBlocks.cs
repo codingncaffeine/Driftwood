@@ -829,7 +829,27 @@ public static class StarterBlocks
     public const ushort LayerCocoaBeans = LayerFirstCocoa + CocoaStages;
     public const ushort LayerCookie = LayerCocoaBeans + 1;
 
-    public const int LayerCount = LayerCookie + 1;
+
+    /// <summary>The bees' work (2026-10-26): nest and hive, honey, comb, and the candle.</summary>
+    public const ushort LayerNestTop = LayerCookie + 1;
+    public const ushort LayerNestSide = LayerCookie + 2;
+    public const ushort LayerNestHoney = LayerCookie + 3;
+    public const ushort LayerHiveTop = LayerCookie + 4;
+    public const ushort LayerHiveSide = LayerCookie + 5;
+    public const ushort LayerHiveHoney = LayerCookie + 6;
+    public const ushort LayerHoneycomb = LayerCookie + 7;
+    public const ushort LayerHoneyBottle = LayerCookie + 8;
+    public const ushort LayerHoneyBlock = LayerCookie + 9;
+    public const ushort LayerHoneycombBlock = LayerCookie + 10;
+    public const ushort LayerCandle = LayerCookie + 11;
+
+    public const int LayerCount = LayerCandle + 1;
+
+    /// <summary>The fullest a nest or hive gets: honey to take at this level and no other.</summary>
+    public const int HoneyFull = 5;
+
+    /// <summary>A nest or hive at one honey level, as a block name.</summary>
+    public static string HiveName(bool nest, int level) => $"{(nest ? "bee_nest" : "beehive")}_{level}";
 
     /// <summary>How many sizes a cocoa pod swells through.</summary>
     public const int CocoaStages = 3;
@@ -1133,7 +1153,10 @@ public static class StarterBlocks
         /// The ripe cocoa pod, one per side of its cell in <see cref="Placeable.Facings"/> order —
         /// how one is found on a warm wood's trunks (2026-10-26).
         /// </summary>
-        BlockId[] CocoaRipe)
+        BlockId[] CocoaRipe,
+
+        /// <summary>The wild bee nest at every honey level, emptiest first (2026-10-26).</summary>
+        BlockId[] BeeNests)
     {
         /// <summary>Every log a canopy counts as its tree, for the decay rule.</summary>
         public BlockId[] Logs => [Log, CherryLog];
@@ -1584,6 +1607,47 @@ public static class StarterBlocks
             HarvestClass = ToolClass.Axe,
             TopLayer = LayerMelonTop, SideLayer = LayerMelonSide, BottomLayer = LayerMelonTop,
         });
+
+        // ⛳ The bees' houses (2026-10-26): a wild nest and a built hive, each one id per honey
+        // level, the crops' rule — a filling hive is already in the save. Full shows the honey.
+        var nests = new BlockId[HoneyFull + 1];
+        foreach (var nest in (ReadOnlySpan<bool>)[true, false])
+        for (var level = 0; level <= HoneyFull; level++)
+        {
+            var full = level == HoneyFull;
+            var id = registry.Register(new BlockType
+            {
+                Name = HiveName(nest, level), Hardness = nest ? 0.3f : 0.6f, Crafted = true, Derived = level > 0,
+                Sounds = SoundMaterial.Wood, HarvestClass = ToolClass.Axe, Use = BlockUse.Hive,
+                TopLayer = nest ? LayerNestTop : LayerHiveTop,
+                SideLayer = nest ? full ? LayerNestHoney : LayerNestSide : full ? LayerHiveHoney : LayerHiveSide,
+                BottomLayer = nest ? LayerNestTop : LayerHiveTop,
+            });
+            if (nest) nests[level] = id;
+        }
+
+        registry.Register(new BlockType
+        {
+            Name = "honey_block", Hardness = 0.5f, Crafted = true, Sounds = SoundMaterial.Grass,
+            LightAttenuation = 1, Opaque = false,
+            TopLayer = LayerHoneyBlock, SideLayer = LayerHoneyBlock, BottomLayer = LayerHoneyBlock,
+        });
+        registry.Register(new BlockType
+        {
+            Name = "honeycomb_block", Hardness = 0.6f, Crafted = true, Sounds = SoundMaterial.Wood,
+            TopLayer = LayerHoneycombBlock, SideLayer = LayerHoneycombBlock, BottomLayer = LayerHoneycombBlock,
+        });
+
+        // The candle: a stub of wax on a floor, lit by flint and steel and pinched out by hand.
+        foreach (var lit in (ReadOnlySpan<bool>)[false, true])
+            registry.Register(new BlockType
+            {
+                Name = lit ? "candle_lit" : "candle", Hardness = 0.1f, Solid = false, Opaque = false,
+                Crafted = true, Derived = lit, Sounds = SoundMaterial.Wood, SupportFace = Faces.NegY,
+                LightEmission = lit ? LightValue.PackBlock(12, 9, 5) : default,
+                FlameScale = lit ? 0.16f : 0f, FlameHeight = 0.5f,
+                Model = BlockModel.Lantern(LayerCandle, hanging: false),
+            });
 
         // ⛳ Cocoa (2026-10-26): a pod hung off the side of a log, one id per size per side —
         // the stage is the block, as every crop's is. The ripe ones are what a warm wood grows.
@@ -2463,7 +2527,7 @@ public static class StarterBlocks
             registry.ByName("tidestone").Id, registry.ByName("tidestone_bricks").Id,
             registry.ByName("dark_tidestone").Id, registry.ByName("deeplight").Id,
             registry.ByName("sponge").Id, registry.ByName("wet_sponge").Id,
-            kelp, melon, cocoaRipe);
+            kelp, melon, cocoaRipe, nests);
     }
 
     /// <summary>The saplings and the placed leaves, by name, for the rows that speak of them.</summary>

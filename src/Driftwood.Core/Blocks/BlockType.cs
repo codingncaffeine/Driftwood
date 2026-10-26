@@ -94,6 +94,11 @@ public enum BlockUse
 
     /// <summary>Takes the helm (2026-10-25): lifts the ship it stands on off the world and sails it.</summary>
     Helm,
+
+    /// <summary>
+    /// A bee nest or hive (2026-10-26): shears take the comb and a bottle the honey from a full one.
+    /// </summary>
+    Hive,
 }
 
 /// <summary>Which fluid a block is, when it is one.</summary>

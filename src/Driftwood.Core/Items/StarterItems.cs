@@ -759,6 +759,19 @@ public static class StarterItems
         {
             Name = "cookie", Label = "cookie", IconLayer = StarterBlocks.LayerCookie, Feeds = 2,
         });
+        // ⛳ The bees' work (2026-10-26). Comb sheared from a full nest, honey bottled out of one; a
+        // hive is built from comb and planks so the bees can be kept. Honey is a big meal that also
+        // draws poison out, comb and string make a candle, and both press into blocks.
+        Loose(items, "honeycomb", "honeycomb", StarterBlocks.LayerHoneycomb);
+        items.Register(new ItemType
+        {
+            Name = "honey_bottle", Label = "honey bottle", IconLayer = StarterBlocks.LayerHoneyBottle,
+            Feeds = 6, MaxStack = 16, Remains = "glass_bottle",
+        });
+        Block(items, blocks, StarterBlocks.HiveName(false, 0), "beehive", StarterBlocks.LayerHiveSide);
+        Block(items, blocks, "honey_block", "honey block", StarterBlocks.LayerHoneyBlock);
+        Block(items, blocks, "honeycomb_block", "honeycomb block", StarterBlocks.LayerHoneycombBlock);
+        Block(items, blocks, "candle", "candle", StarterBlocks.LayerCandle);
         Loose(items, "glistering_melon_slice", "glistering melon slice", StarterBlocks.LayerGlisteringMelon);
         Block(items, blocks, "bookshelf", "bookshelf", StarterBlocks.LayerBookshelf, burn: 15f);
 
@@ -1493,6 +1506,15 @@ public static class StarterItems
         from stage in Enumerable.Range(0, StarterBlocks.StemStages)
         select new BlockDrops.Rule(StarterBlocks.StemName(pair.Fruit, stage), pair.Seeds);
 
+    /// <summary>
+    /// A wild nest comes apart into nothing — the reference's rule, so bees are kept by building a
+    /// hive, not by carrying their nest off — and a hive at any level is one empty hive.
+    /// </summary>
+    private static IEnumerable<BlockDrops.Rule> HiveDropRules() =>
+        from level in Enumerable.Range(0, StarterBlocks.HoneyFull + 1)
+        from nest in (bool[])[true, false]
+        select new BlockDrops.Rule(StarterBlocks.HiveName(nest, level), nest ? null : StarterBlocks.HiveName(false, 0));
+
     /// <summary>A young pod gives its bean back; a ripe one two, and a coin for a third.</summary>
     private static IEnumerable<BlockDrops.Rule> CocoaDropRules() =>
         from stage in Enumerable.Range(0, StarterBlocks.CocoaStages)
@@ -1574,6 +1596,8 @@ public static class StarterItems
         new BlockDrops.Rule("melon", "melon_slice", 3),
         .. StemDropRules(),
         .. CocoaDropRules(),
+        .. HiveDropRules(),
+        new BlockDrops.Rule("candle_lit", "candle"),
 
         // ⚠ Tilled ground digs up as the dirt it was made from. Farmland has an item nowhere and
         // needs none — it is a state of the ground rather than a thing to carry.
