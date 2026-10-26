@@ -25,6 +25,12 @@
   <ItemGroup>
     <EmbeddedResource Include="..\..\assets\recipe_book.png" LogicalName="Driftwood.Core.recipe-book.png" />
 
+    <!-- The user's pixel-art pointers (2026-10-26), cut from their sheets: see CursorArt. -->
+    <EmbeddedResource Include="..\..\assets\cursors\cursor_blue.png" LogicalName="Driftwood.Core.cursor-blue.png" />
+    <EmbeddedResource Include="..\..\assets\cursors\cursor_red.png" LogicalName="Driftwood.Core.cursor-red.png" />
+    <EmbeddedResource Include="..\..\assets\cursors\cursor_green.png" LogicalName="Driftwood.Core.cursor-green.png" />
+    <EmbeddedResource Include="..\..\assets\cursors\cursor_purple.png" LogicalName="Driftwood.Core.cursor-purple.png" />
+
     <!-- ⛳ The health bar's heart, the user's own drawing, for the same reason the book is here: it
          is one small shape seen at one size whose whole job is to be recognised instantly, and a
          procedural heart is a blob that can never be argued into being a better heart.

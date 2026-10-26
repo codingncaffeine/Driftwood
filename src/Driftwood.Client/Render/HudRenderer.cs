@@ -130,6 +130,12 @@ public enum GameTab
 
     /// <summary>The local skin shelf, player lookup, and recent-public community feed.</summary>
     Skins,
+
+    /// <summary>
+    /// Back to the title menu (2026-10-26), behind one "are you sure". Last, so every other tab
+    /// keeps its number, and left off the list when the options are opened from the title menu.
+    /// </summary>
+    Menu,
 }
 
 /// <summary>
@@ -691,6 +697,23 @@ public sealed class HudRenderer : IDisposable
     private readonly List<float> _blocksOver = new(512);
     private readonly List<float> _iconQuads = new(2048);
     private readonly List<float> _cursorQuads = new(64);
+
+    /// <summary>The drawn pointers' own batch and texture (2026-10-26) — see <see cref="CursorArt"/>.</summary>
+    private readonly List<float> _artCursorQuads = new(64);
+    private readonly BlockTextureArray _cursorArt;
+    private readonly byte[][] _cursorTiles;
+
+    /// <summary>Which pointer to draw: an index into <see cref="CursorArt.Names"/>, zero the classic.</summary>
+    public int CursorStyle { get; set; } = CursorArt.IndexOf(CursorArt.Default);
+
+    /// <summary>The pointer in use, as RGBA, for the interface check to read back.</summary>
+    public byte[] CursorPixels => CursorStyle <= 0 ? TileGen.Cursor() : _cursorTiles[CursorStyle - 1];
+
+    /// <summary>The side of the tile <see cref="CursorPixels"/> is laid out on.</summary>
+    public int CursorTileSize => CursorStyle <= 0 ? TileGen.Size : CursorArt.Tile;
+
+    /// <summary>Overlay units to screen pixels, this frame.</summary>
+    private float _pixelScale = 1f;
     private readonly List<float> _text = new(8192);
     private readonly List<float> _skinQuads = new(256);
     private readonly List<float> _previewQuads = new(512);
@@ -803,6 +826,8 @@ public sealed class HudRenderer : IDisposable
         _icons = new BlockTextureArray(gl, [.. icons], TileGen.Size);
 
         _font = new BlockTextureArray(gl, TileGen.Font(), TileGen.Size);
+        _cursorTiles = CursorArt.Tiles();
+        _cursorArt = new BlockTextureArray(gl, _cursorTiles, CursorArt.Tile);
         _advance = TileGen.FontAdvance();
 
         _vao = _gl.GenVertexArray();
@@ -880,6 +905,8 @@ public sealed class HudRenderer : IDisposable
         _blocksOver.Clear();
         _iconQuads.Clear();
         _cursorQuads.Clear();
+        _artCursorQuads.Clear();
+        _pixelScale = ScaleFor(screenHeight);
         _text.Clear();
         _skinQuads.Clear();
         _previewQuads.Clear();
@@ -1091,6 +1118,7 @@ public sealed class HudRenderer : IDisposable
         // final flush on purpose: carried items, their counts, tooltips and all pack chrome stay
         // beneath the one thing somebody must never lose against the screen.
         Flush(_cursorQuads, textured: true, _icons);
+        Flush(_artCursorQuads, textured: true, _cursorArt);
 
         _gl.BindVertexArray(0);
         _gl.Disable(EnableCap.Blend);
@@ -1673,9 +1701,7 @@ public sealed class HudRenderer : IDisposable
 
     private void SpellPointer(HudScreen screen)
     {
-        const float size = TileGen.Size;
-        screen.CursorBox = new Vector4(screen.Pointer.X, screen.Pointer.Y, size, size);
-        Rect(_cursorQuads, screen.Pointer.X, screen.Pointer.Y, size, size, Vector4.One, IconCursor);
+        DrawCursor(screen, screen.Pointer, TileGen.Size);
     }
 
     private void SkinnedHotbar(ItemRegistry catalogue, Inventory inventory, float w, float h)
@@ -1689,8 +1715,11 @@ public sealed class HudRenderer : IDisposable
         var top = MathF.Round(h - height - 8f);
         Rect(_guiUnder, left, top, width, height, Vector4.One, (int)GuiTextureSet.Layer.Hotbar);
 
+        // ⚠ Under the items, as the reference draws it (2026-10-26): a pack's selection frame may
+        // be filled — Alacrity's is near-opaque inside — and laid over the item it greyed out the
+        // very thing in hand.
         if (HasGui(GuiTextureSet.Layer.HotbarSelection))
-            Rect(_guiOver, left - 1f + inventory.Selected * pitch, top - 1f, 24f, 23f,
+            Rect(_guiUnder, left - 1f + inventory.Selected * pitch, top - 1f, 24f, 23f,
                 Vector4.One, (int)GuiTextureSet.Layer.HotbarSelection);
 
         for (var i = 0; i < Inventory.HotbarSlots; i++)
@@ -5479,8 +5508,11 @@ public sealed class HudRenderer : IDisposable
 
         // Below and right of the point by default — the corner a cursor's own arrow leaves free —
         // and flipped to the other side of it rather than clamped when that would run off.
-        var x = screen.Pointer.X + 12f;
-        var y = screen.Pointer.Y + 10f;
+        // ⛳ Clear of the drawn arrows (2026-10-26), whose body and sparkle trail run down and to
+        // the right: the box starts past the whole of the pointer rather than under its tail.
+        var (reachX, reachY) = CursorReach(layout);
+        var x = screen.Pointer.X + MathF.Max(12f, reachX + 2f);
+        var y = screen.Pointer.Y + MathF.Max(10f, reachY * 0.25f);
 
         if (x + boxWidth > w - 2f) x = screen.Pointer.X - boxWidth - 4f;
         if (y + boxHeight > h - 2f) y = screen.Pointer.Y - boxHeight - 2f;
@@ -5521,8 +5553,39 @@ public sealed class HudRenderer : IDisposable
                 Number(screen.Carried.Count, hx + held, hy + held - 6f, MathF.Max(5f, held * 0.42f));
         }
 
+        DrawCursor(screen, at, size);
+    }
+
+    /// <summary>How far right and down of its tip the pointer's art reaches, in overlay units.</summary>
+    private (float X, float Y) CursorReach(ScreenLayout layout)
+    {
+        var classic = TileGen.Size * MathF.Max(1f, MathF.Ceiling(layout.Zoom * 0.5f));
+        if (CursorStyle <= 0) return (classic * 0.6f, classic);
+        var perArt = MathF.Max(1f, MathF.Round(classic * _pixelScale * 1.25f / CursorArt.Height));
+        return (CursorArt.Width * perArt / _pixelScale, CursorArt.Height * perArt / _pixelScale);
+    }
+
+    /// <summary>
+    /// The pointer itself, whichever one is chosen, with its tip at <paramref name="at"/>.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ The drawn arrows are about a quarter taller than the classic one at <paramref name="classic"/>
+    /// units, and each of their pixels covers a whole number of screen pixels — the classic arrow's
+    /// own rule, so neither ever comes out with columns of two widths.
+    /// </remarks>
+    private void DrawCursor(HudScreen screen, Vector2 at, float classic)
+    {
+        if (CursorStyle <= 0)
+        {
+            screen.CursorBox = new Vector4(at.X, at.Y, classic, classic);
+            Rect(_cursorQuads, at.X, at.Y, classic, classic, Vector4.One, IconCursor);
+            return;
+        }
+
+        var perArt = MathF.Max(1f, MathF.Round(classic * _pixelScale * 1.25f / CursorArt.Height));
+        var size = CursorArt.Tile * perArt / _pixelScale;
         screen.CursorBox = new Vector4(at.X, at.Y, size, size);
-        Rect(_cursorQuads, at.X, at.Y, size, size, Vector4.One, IconCursor);
+        Rect(_artCursorQuads, at.X, at.Y, size, size, Vector4.One, CursorStyle - 1);
     }
 
     // The interface's own palette. Named rather than written out at each use, so the whole thing
@@ -6189,28 +6252,46 @@ public sealed class HudRenderer : IDisposable
         // Lifted a little while it is up, which is the smallest gesture that reads as raised.
         var top = MathF.Round(h - Slot - 8f) - (vitals.ShieldRaised ? 4f : 0f);
 
-        if (HasGui(GuiTextureSet.Layer.OffhandLeft))
+        // ⛳ A pack's slot is the pack's geometry (2026-10-26): its 29x24 sprite puts the pocket at
+        // its left, centred eleven across and twelve down, and the reference lays a sixteen-unit
+        // item three across and four down from the sprite's corner — dead centre. Ours drew an
+        // eighteen-unit icon centred fourteen across, three right of the pocket, which is the
+        // lopsided shield the user saw. Our own bevel keeps its own, already centred, numbers.
+        var skinned = HasGui(GuiTextureSet.Layer.OffhandLeft);
+        float iconX, iconY, icon;
+        if (skinned)
+        {
             Rect(_guiUnder, left - 3f, top - 1f, 29f, 24f, Vector4.One,
                 (int)GuiTextureSet.Layer.OffhandLeft);
+            (iconX, iconY, icon) = (left, top + 3f, 16f);
+            if (vitals.ShieldRaised) Select(left - 2f, top + 1f, 20f, 20f);
+        }
         else
         {
             Bevel(left - 3f, top - 3f, Slot + 6f, Slot + 6f, raised: true, PanelFill);
             Bevel(left + 1f, top + 1f, Slot - 2f, Slot - 2f, raised: false, SlotFill);
+            (iconX, iconY, icon) = (left + Pad, top + Pad, Slot - Pad * 2f);
+            if (vitals.ShieldRaised) Select(left + 1f, top + 1f, Slot - 2f, Slot - 2f);
         }
-        if (vitals.ShieldRaised) Select(left + 1f, top + 1f, Slot - 2f, Slot - 2f);
 
-        SlotIcon(catalogue, stack, left + Pad, top + Pad, Slot - Pad * 2f, Vector4.One);
+        SlotIcon(catalogue, stack, iconX, iconY, icon, Vector4.One);
 
+        // Wear and count where the bar puts them for its own slots, in the same frame of reference.
         var type = catalogue[stack.Item];
         if (type.Durability > 0 && stack.Damage > 0)
         {
             var life = 1f - stack.Damage / (float)type.Durability;
-            Rect(_plain, left + Pad, top + Slot - 4f, Slot - Pad * 2f, 2f, new Vector4(0f, 0f, 0f, 0.8f));
-            Rect(_plain, left + Pad, top + Slot - 4f, (Slot - Pad * 2f) * life, 2f,
+            var barY = skinned ? iconY + 16f : top + Slot - 4f;
+            Rect(_plain, iconX, barY, icon, 2f, new Vector4(0f, 0f, 0f, 0.8f));
+            Rect(_plain, iconX, barY, icon * life, 2f,
                 new Vector4(1f - life, 0.25f + life * 0.65f, 0.2f, 1f));
         }
 
-        if (stack.Count > 1) Number(stack.Count, left + Slot - 1.5f, top + Slot - 8.5f);
+        if (stack.Count > 1)
+        {
+            if (skinned) Number(stack.Count, iconX + icon + 1f, iconY + 11f);
+            else Number(stack.Count, left + Slot - 1.5f, top + Slot - 8.5f);
+        }
     }
 
     /// <summary>Breath, shown only while it is worth knowing about.</summary>
@@ -6841,6 +6922,7 @@ public sealed class HudRenderer : IDisposable
         _gl.DeleteVertexArray(_vao);
         _icons.Dispose();
         _font.Dispose();
+        _cursorArt.Dispose();
         _skin?.Dispose();
         _previewSkin?.Dispose();
         _packIcons?.Dispose();

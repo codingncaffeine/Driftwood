@@ -150,6 +150,9 @@ public sealed class GameSettings
     /// </remarks>
     public bool RecipeNotices { get; set; } = true;
 
+    /// <summary>Which pointer the menus draw (2026-10-26): a name from <see cref="Textures.CursorArt.Names"/>.</summary>
+    public string Cursor { get; set; } = Textures.CursorArt.Default;
+
     /// <summary>Movable magic panels begin unlocked so their decorated grips work on first use.</summary>
     public bool CompanionWindowLocked { get; set; }
 
@@ -301,6 +304,9 @@ public sealed class GameSettings
                 case "controller.targetassist": settings.ControllerTargetAssist = Int(value, 0, 100, settings.ControllerTargetAssist); break;
                 case "controller.rumble": settings.ControllerRumble = Int(value, 0, 100, settings.ControllerRumble); break;
                 case "ui.recipenotices": settings.RecipeNotices = Bool(value, settings.RecipeNotices); break;
+                case "ui.cursor":
+                    settings.Cursor = Textures.CursorArt.Names[Textures.CursorArt.IndexOf(value)];
+                    break;
                 case "ui.companionwindow.locked":
                     settings.CompanionWindowLocked = Bool(value, settings.CompanionWindowLocked); break;
                 case "ui.companionwindow.x":
@@ -443,6 +449,7 @@ public sealed class GameSettings
         text.AppendLine($"controller.rumble={ControllerRumble}");
         text.AppendLine();
         text.AppendLine($"ui.recipenotices={Text(RecipeNotices)}");
+        text.AppendLine($"ui.cursor={Cursor}");
         text.AppendLine($"ui.companionwindow.locked={Text(CompanionWindowLocked)}");
         text.AppendLine($"ui.companionwindow.x={CompanionWindowX}");
         text.AppendLine($"ui.companionwindow.y={CompanionWindowY}");

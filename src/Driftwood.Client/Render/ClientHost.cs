@@ -1309,6 +1309,7 @@ public sealed class ClientHost : IDisposable
         _particleRenderer = new ParticleRenderer(_gl);
         _itemRenderer = new ItemRenderer(_gl);
         _hud = new HudRenderer(_gl);
+        _hud.CursorStyle = CursorArt.IndexOf(_settings.Cursor);
         _startup.Mark("shaders");
 
         // The benchmark opens no device at all. It flies a scripted path and hears nothing worth
@@ -3273,6 +3274,33 @@ public sealed class ClientHost : IDisposable
         ShowSelectedRow();
     }
 
+    private const string MainMenuRow = "main menu";
+    private const string MainMenuYesRow = "yes, return to the main menu";
+    private const string MainMenuNoRow = "no, keep playing";
+
+    /// <summary>Whether the menu tab is asking its question rather than offering the way out.</summary>
+    private bool _menuArmed;
+
+    /// <summary>The interface check's two answers about the menu tab: it asked, and "no" kept them.</summary>
+    private bool _uiMenuAsked;
+    private bool _uiMenuKept;
+
+    /// <summary>
+    /// Leaves the world for the title menu (2026-10-26): out of any boat, the ship moored, the world
+    /// saved, and the title menu flying over this same world — where carry on picks up from the
+    /// spot the player left, and the saves list can open another.
+    /// </summary>
+    private void ReturnToMainMenu()
+    {
+        _menuArmed = false;
+        if (_ridingBoat is not null) LeaveBoat();
+
+        _spawnPoint = _player.Position;
+        SaveWorld("for the main menu");
+        SetMouseCaptured(false);
+        OpenStartScreen(_terrain, _viewRadius);
+    }
+
     /// <summary>Hands the world over: the menu goes, the body wakes up, the mouse looks again.</summary>
     private void StartPlaying()
     {
@@ -3925,6 +3953,7 @@ public sealed class ClientHost : IDisposable
         if (OnTab(GameTab.Packs)) CancelPackBrowsing();
         if (_hudScreen.Kind == HudScreenKind.Game) _tabRow[_hudScreen.Tab] = _hudScreen.Selected;
         _hudScreen.Tab = (_hudScreen.Tab + Math.Sign(by) + count) % count;
+        _menuArmed = false;
         if (_hudScreen.Kind == HudScreenKind.Game) _hudScreen.Selected = _tabRow[_hudScreen.Tab];
         _hudScreen.Scroll = 0;
 
@@ -4007,6 +4036,7 @@ public sealed class ClientHost : IDisposable
                 if (leavingPacks) CancelPackBrowsing();
                 if (_hudScreen.Kind == HudScreenKind.Game) _tabRow[_hudScreen.Tab] = _hudScreen.Selected;
                 _hudScreen.Tab = at.Value.Index;
+                _menuArmed = false;
                 if (_hudScreen.Kind == HudScreenKind.Game) _hudScreen.Selected = _tabRow[_hudScreen.Tab];
                 _hudScreen.Scroll = 0;
                 if (OnTab(GameTab.Saves)) ReadSavesFolder();
@@ -4781,7 +4811,9 @@ public sealed class ClientHost : IDisposable
     private void OpenGame(GameTab tab)
     {
         _hudScreen.Kind = HudScreenKind.Game;
-        _hudScreen.TabNames = GameTabNames;
+        _hudScreen.TabNames = _atStartScreen ? GameTabNames[..^1] : GameTabNames;
+        if (_atStartScreen && tab == GameTab.Menu) tab = GameTab.Controls;
+        _menuArmed = false;
         _hudScreen.Tab = (int)tab;
         _hudScreen.Selected = _tabRow[(int)tab];
         _hudScreen.Grid = null;
@@ -5941,6 +5973,10 @@ public sealed class ClientHost : IDisposable
                     Note: "eight-sample jitter with reprojected, neighborhood-clamped history",
                     Control: MenuControl.Checkbox, ControlAmount: _settings.TemporalAntialiasing ? 1f : 0f));
 
+                _hudScreen.Rows.Add(new MenuRow("pointer", Heading: true));
+                _hudScreen.Rows.Add(new MenuRow("cursor", _settings.Cursor,
+                    Note: "left and right try each one; classic is the original graphite arrow"));
+
                 _hudScreen.Rows.Add(new MenuRow("notices", Heading: true));
                 _hudScreen.Rows.Add(new MenuRow(
                     "new recipe notices", OnOff(_settings.RecipeNotices),
@@ -6031,6 +6067,22 @@ public sealed class ClientHost : IDisposable
 
             case GameTab.Skins:
                 BuildSkinRows();
+                break;
+
+            // ⛳ The way home (2026-10-26, the user's ask): one row, and then the question.
+            case GameTab.Menu:
+                if (!_menuArmed)
+                {
+                    _hudScreen.Rows.Add(new MenuRow("leave this world", Heading: true));
+                    _hudScreen.Rows.Add(new MenuRow(MainMenuRow, "",
+                        Note: "this world is saved first, and carry on brings you back where you stand"));
+                }
+                else
+                {
+                    _hudScreen.Rows.Add(new MenuRow("are you sure you want to return to the main menu?", Heading: true));
+                    _hudScreen.Rows.Add(new MenuRow(MainMenuYesRow, "", Note: "the world is saved on the way out"));
+                    _hudScreen.Rows.Add(new MenuRow(MainMenuNoRow, "", Note: "back to the game as it was"));
+                }
                 break;
 
             default:
@@ -6512,6 +6564,17 @@ public sealed class ClientHost : IDisposable
                         break;
 
                     case "new recipe notices": _settings.RecipeNotices = !_settings.RecipeNotices; break;
+
+                    // ⛳ The pointer (2026-10-26): every press steps to the next one, and it is on
+                    // screen the moment it is picked, so the choice is made by looking.
+                    case "cursor":
+                    {
+                        var count = CursorArt.Names.Length;
+                        var next = ((CursorArt.IndexOf(_settings.Cursor) + (by == 0 ? 1 : by)) % count + count) % count;
+                        _settings.Cursor = CursorArt.Names[next];
+                        _hud.CursorStyle = next;
+                        break;
+                    }
                     // Enter only. A direction is how a player browses, not how they throw
                     // something away that cannot be got back.
                     case "forget what has been said":
@@ -6544,6 +6607,27 @@ public sealed class ClientHost : IDisposable
                 {
                     case SkinModelRow: ChangeSkinModel(by); return;
                     case SkinAngleRow: TurnSkinPreview(by); return;
+                    default: return;
+                }
+
+            // Enter only, every one: a direction key is browsing, and none of these is a dial.
+            case GameTab.Menu:
+                if (!activated) return;
+                switch (label)
+                {
+                    case MainMenuRow:
+                        _menuArmed = true;
+                        RefreshScreen();
+                        _hudScreen.Selected = Math.Min(2, _hudScreen.Rows.Count - 1);
+                        ShowSelectedRow();
+                        return;
+                    case MainMenuNoRow:
+                        _menuArmed = false;
+                        CloseScreen();
+                        return;
+                    case MainMenuYesRow:
+                        ReturnToMainMenu();
+                        return;
                     default: return;
                 }
 
@@ -18543,6 +18627,21 @@ public sealed class ClientHost : IDisposable
                 SampleUi(size, "audio");
                 ProbeAudioTab();
                 CloseScreen();
+                OpenGame(GameTab.Menu);
+                break;
+
+            // ⛳ The way back to the title menu (2026-10-26): its row asks before it acts, and "no"
+            // puts the player straight back in the game — the yes is not taken, because the rest of
+            // the check is still standing in this world.
+            case 381:
+                SampleUi(size, "menu");
+                _hudScreen.Selected = Array.FindIndex(_hudScreen.Rows.ToArray(), row => row.Label == MainMenuRow);
+                ActivateRow();
+                _uiMenuAsked = _hudScreen.Rows.Any(row => row.Label == MainMenuYesRow)
+                    && _hudScreen.Rows.Any(row => row.Label == MainMenuNoRow);
+                _hudScreen.Selected = Array.FindIndex(_hudScreen.Rows.ToArray(), row => row.Label == MainMenuNoRow);
+                ActivateRow();
+                _uiMenuKept = _hudScreen.Kind == HudScreenKind.None && !_atStartScreen;
                 PrepareTradeUiCheck();
                 break;
 
@@ -19803,15 +19902,19 @@ public sealed class ClientHost : IDisposable
 
         if (glyphCellX < 0) return;
 
-        var cursor = TileGen.Cursor();
+        // ⛳ Whichever pointer is in use (2026-10-26): its first opaque dark texel below the tip —
+        // the classic arrow's graphite, a drawn arrow's outline — so the white glyph under it and
+        // the texel over it can never be mistaken for each other.
+        var cursor = _hud.CursorPixels;
+        var tile = _hud.CursorTileSize;
         var cursorX = -1;
         var cursorY = -1;
-        for (var y = 3; y < TileGen.Size && cursorX < 0; y++)
-        for (var x = 0; x < TileGen.Size; x++)
+        for (var y = 3; y < tile && cursorX < 0; y++)
+        for (var x = 0; x < tile; x++)
         {
-            var at = (y * TileGen.Size + x) * 4;
-            if (cursor[at] != 18 || cursor[at + 1] != 20 || cursor[at + 2] != 24
-                || cursor[at + 3] != 255) continue;
+            var at = (y * tile + x) * 4;
+            if (cursor[at + 3] != 255 || Math.Max(cursor[at], Math.Max(cursor[at + 1], cursor[at + 2])) > 90)
+                continue;
 
             cursorX = x;
             cursorY = y;
@@ -19823,7 +19926,7 @@ public sealed class ClientHost : IDisposable
         if (cursorX < 0 || cursorSize <= 0f) return;
 
         var scale = (int)HudRenderer.ScaleFor(size.Y);
-        var cursorCell = (int)MathF.Round(cursorSize * scale / TileGen.Size);
+        var cursorCell = (int)MathF.Round(cursorSize * scale / tile);
         if (scale <= 0 || cursorCell <= 0) return;
 
         // Text() rounds its origin before emitting the quad. Work in physical pixels from here so
@@ -19849,25 +19952,26 @@ public sealed class ClientHost : IDisposable
         if (!_uiCursorAimed || box.Z <= 0f || box.W <= 0f) return;
 
         var scale = (int)HudRenderer.ScaleFor(size.Y);
-        var cell = (int)MathF.Round(box.Z * scale / TileGen.Size);
+        var cursor = _hud.CursorPixels;
+        var tile = _hud.CursorTileSize;
+        var cell = (int)MathF.Round(box.Z * scale / tile);
         var left = (int)MathF.Round(box.X * scale);
         var top = (int)MathF.Round(box.Y * scale);
-        var cursor = TileGen.Cursor();
 
         _uiCursorOpaque = 0;
         _uiCursorMatched = 0;
         _uiCursorCellPixels = cell;
         _uiCursorIntegerGrid = cell > 0
-            && MathF.Abs(box.Z / TileGen.Size - MathF.Round(box.Z / TileGen.Size)) < 0.001f
-            && MathF.Abs(box.W / TileGen.Size - MathF.Round(box.W / TileGen.Size)) < 0.001f
+            && MathF.Abs(box.Z * scale / tile - MathF.Round(box.Z * scale / tile)) < 0.001f
+            && MathF.Abs(box.W * scale / tile - MathF.Round(box.W * scale / tile)) < 0.001f
             && MathF.Abs(box.X * scale - left) < 0.001f
             && MathF.Abs(box.Y * scale - top) < 0.001f;
         _uiCursorCarried = _hudScreen.Carried.Count == 37;
 
-        for (var y = 0; y < TileGen.Size; y++)
-        for (var x = 0; x < TileGen.Size; x++)
+        for (var y = 0; y < tile; y++)
+        for (var x = 0; x < tile; x++)
         {
-            var at = (y * TileGen.Size + x) * 4;
+            var at = (y * tile + x) * 4;
             if (cursor[at + 3] == 0) continue;
 
             _uiCursorOpaque++;
@@ -21124,6 +21228,11 @@ public sealed class ClientHost : IDisposable
             faults.Add($"resident trading drew {_uiTradeButtons} controls instead of −, +, max, confirm and close");
         if (!_uiTradeSettled)
             faults.Add("the trade screen's MAX and confirm controls did not settle one atomic quantity");
+
+        if (!_uiMenuAsked)
+            faults.Add("the main menu row did not ask before leaving the world");
+        if (!_uiMenuKept)
+            faults.Add("answering no to the main menu question did not put the player back in the game");
 
         if (_uiSettingsChrome.Count != Enum.GetValues<GameTab>().Length)
             faults.Add(
