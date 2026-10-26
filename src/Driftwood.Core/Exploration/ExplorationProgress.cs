@@ -171,6 +171,14 @@ public static class WorldLoot
 
         // The reference's fortress chest, by what this world has: gold and iron, diamonds now and
         // then, ashcap to start a bed with, and a fire charge or two.
+        // The Deepwatch's heart (2026-10-25): what the reference keeps in gold blocks, as ingots,
+        // with the sea's own stone and a sponge or two to dry.
+        [StructureKind.Deepwatch] =
+        [
+            new("gold_ingot", 6, 14), new("tide_crystals", 2, 6), new("tide_shard", 4, 10),
+            new("sponge", 1, 3), new("diamond", 1, 2, 0.3f),
+        ],
+
         [StructureKind.Emberhold] =
         [
             new("gold_ingot", 1, 3), new("iron_ingot", 1, 5), new("diamond", 1, 3, 0.2f),

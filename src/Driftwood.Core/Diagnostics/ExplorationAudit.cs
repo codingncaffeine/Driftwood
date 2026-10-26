@@ -117,6 +117,7 @@ internal static class ExplorationAudit
             [BlockId.Air, ids.Rubble, ids.Moss, ids.Bricks, ids.Chest, ids.Lantern],
         StructureKind.StarfallCrown => [ids.Rubble, ids.Moss, ids.Bricks, ids.Chest, ids.Lantern],
         StructureKind.Emberhold => [BlockId.Air, ids.EmberBricks, ids.Ashsand, ids.AshcapRipe, ids.CinderCage, ids.Chest],
+        StructureKind.Deepwatch => [ids.Water, ids.Tidestone, ids.TidestoneBricks, ids.DarkTidestone, ids.Deeplight, ids.WetSponge, ids.Chest],
         StructureKind.Sanctum => [BlockId.Air, ids.DeepstoneBricks, ids.PolishedDeepstone, ids.SanctumSocket, ids.Bookshelf, ids.Chest],
         _ => [],
     };

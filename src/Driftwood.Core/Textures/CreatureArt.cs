@@ -79,6 +79,11 @@ public static class CreatureArt
         // the roster — but painted through the same brush as everything else that moves.
         ["cart"] = new((104, 106, 112), (134, 136, 142), (62, 64, 70), (122, 96, 60), 0.18f, 0.05f),
 
+        // The guardians (2026-10-25): tidestone-teal plates, a pale belly, amber spikes and an eye
+        // that reads from across a hall; the elder bleached the colour of old bone.
+        ["guardian"] = new((84, 150, 138), (180, 196, 170), (214, 132, 62), (226, 150, 74), 0.35f, 0.08f),
+        ["elder_guardian"] = new((206, 204, 186), (170, 164, 150), (176, 120, 144), (186, 104, 120), 0.3f, 0.07f),
+
         // The boats (2026-10-25): plank-coloured hulls, a heartwood prow and an amber lantern.
         ["boat"] = new((150, 118, 76), (128, 98, 62), (236, 176, 74), (96, 70, 44), 0f, 0.07f),
         ["cherry_boat"] = new((222, 168, 164), (196, 140, 138), (236, 176, 74), (128, 74, 80), 0f, 0.06f),
@@ -644,7 +649,7 @@ public static class CreatureArt
     }
 
     /// <summary>The kinds allowed to have no head bone. Each is a decision, not an oversight.</summary>
-    private static readonly HashSet<string> Faceless = new(StringComparer.Ordinal) { "slime", "squid", "ember_slime" };
+    private static readonly HashSet<string> Faceless = new(StringComparer.Ordinal) { "slime", "squid", "ember_slime", "guardian", "elder_guardian" };
 
     /// <summary>For a headless kind with eye boxes: are the eyes actually drawn on?</summary>
     private static string EyeFault(CreatureModel model, Image sheet)

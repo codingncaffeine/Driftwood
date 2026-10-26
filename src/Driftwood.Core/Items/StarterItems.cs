@@ -328,6 +328,17 @@ public static class StarterItems
 
         // The Emberhold's (2026-10-25). The cage is not one a player can carry — it leaves nothing.
         Block(items, blocks, "ember_bricks", "ember bricks", StarterBlocks.LayerEmberBricks);
+
+        // ⛳ The Deepwatch's (2026-10-25): tidestone three ways, the deeplight, the sponges, and what
+        // the guardians leave.
+        Block(items, blocks, "tidestone", "tidestone", StarterBlocks.LayerTidestone);
+        Block(items, blocks, "tidestone_bricks", "tidestone bricks", StarterBlocks.LayerTidestoneBricks);
+        Block(items, blocks, "dark_tidestone", "dark tidestone", StarterBlocks.LayerDarkTidestone);
+        Block(items, blocks, "deeplight", "deeplight", StarterBlocks.LayerDeeplight);
+        Block(items, blocks, "sponge", "sponge", StarterBlocks.LayerSponge);
+        Block(items, blocks, "wet_sponge", "wet sponge", StarterBlocks.LayerWetSponge);
+        Loose(items, "tide_shard", "tide shard", StarterBlocks.LayerTideShard);
+        Loose(items, "tide_crystals", "tide crystals", StarterBlocks.LayerTideCrystals);
         Block(items, blocks, "ashsand", "ashsand", StarterBlocks.LayerAshsand);
         Loose(items, "ashcap", "ashcap", StarterBlocks.LayerAshcapItem);
         Block(items, blocks, "coal_block", "block of coal", StarterBlocks.LayerCoalBlock);
@@ -1326,6 +1337,15 @@ public static class StarterItems
         // The Emberdeep's (2026-10-25). The ember slime's cream comes off the bigger ones only —
         // the host passes over the smallest, as the reference's does.
         new CreatureDrops.Rule("cinderwisp", DropTrigger.Killed, "cinder_rod", 0, 1),
+
+        // The Deepwatch's keepers (2026-10-25), the reference's: shards, sometimes crystals, a
+        // fish; an elder always leaves its wet sponge.
+        new CreatureDrops.Rule("guardian", DropTrigger.Killed, "tide_shard", 0, 2),
+        new CreatureDrops.Rule("guardian", DropTrigger.Killed, "tide_crystals", 0, 1, Chance: 0.4f),
+        new CreatureDrops.Rule("guardian", DropTrigger.Killed, "raw_cod", 0, 1),
+        new CreatureDrops.Rule("elder_guardian", DropTrigger.Killed, "wet_sponge", 1, 1),
+        new CreatureDrops.Rule("elder_guardian", DropTrigger.Killed, "tide_shard", 0, 2),
+        new CreatureDrops.Rule("elder_guardian", DropTrigger.Killed, "tide_crystals", 0, 1, Chance: 0.5f),
 
         // The phantom at last leaves something: the membrane that mends a pair of wings.
         new CreatureDrops.Rule("phantom", DropTrigger.Killed, "phantom_membrane", 0, 1),

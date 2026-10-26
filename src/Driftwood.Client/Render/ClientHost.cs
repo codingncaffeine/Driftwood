@@ -1846,6 +1846,106 @@ public sealed class ClientHost : IDisposable
         }
     }
 
+    /// <summary>The Deepwatches near enough to matter (2026-10-25), and their keepers' clocks.</summary>
+    private readonly List<StructureSite> _nearWatches = [];
+    private float _watchScan;
+    private float _guardianRest;
+    private float _curseClock = 30f;
+    private float _beamSpark;
+
+    /// <summary>
+    /// The Deepwatch's keepers: its three elders placed once, guardians kept about its halls, the
+    /// elders' curse laid on anyone near them once a minute, and every locked beam drawn.
+    /// </summary>
+    /// <remarks>
+    /// The reference's monument: guardians spawn in its water and nowhere else, its elders are there
+    /// from the start and never come back once killed, and each elder within fifty blocks curses the
+    /// player with mining fatigue every minute for five.
+    /// </remarks>
+    private void StepDeepwatch(float dt)
+    {
+        if (_herd is null || !_walking) return;
+
+        _watchScan -= dt;
+        if (_watchScan <= 0f)
+        {
+            _watchScan = 1f;
+            _nearWatches.Clear();
+            var px = (int)MathF.Floor(_player.Position.X);
+            var pz = (int)MathF.Floor(_player.Position.Z);
+            if (_player.Position.Y < TerrainGenerator.SeaLevel + 24)
+                foreach (var site in _terrain.Exploration.SitesAffecting(px - 96, px + 96, pz - 96, pz + 96, 0))
+                    if (site.Kind == StructureKind.Deepwatch) _nearWatches.Add(site);
+        }
+
+        foreach (var site in _nearWatches)
+        {
+            var heart = new Vector3(site.X + 0.5f, site.Y + 8f, site.Z + 0.5f);
+            var near = Vector3.Distance(heart, _player.Position);
+            if (near > 56f) continue;
+
+            // The elders, once — killed, they stay killed.
+            if (_exploration.CanClaim(site.Id, "elders", "world") && KindFor("elder_guardian") is { } elderKind)
+            {
+                foreach (var room in _terrain.Exploration.ElderRooms(site))
+                    _herd.SpawnAt(elderKind, room, (float)(Random.Shared.NextDouble() * 360.0));
+                _exploration.Claim(site.Id, "elders", "world");
+            }
+
+            // Guardians in the halls: one every six to twelve seconds while fewer than six are about.
+            _guardianRest -= dt;
+            if (_guardianRest <= 0f && near < 40f && KindFor("guardian") is { } guardianKind)
+            {
+                _guardianRest = 6f + (float)Random.Shared.NextDouble() * 6f;
+                var about = _herd.All.Count(one => one.Alive && one.Kind == "guardian"
+                                                   && Vector3.DistanceSquared(one.Position, heart) < 26f * 26f);
+                for (var tries = 0; tries < 12 && about < 6; tries++)
+                {
+                    int x = site.X + Random.Shared.Next(-17, 18), y = site.Y + Random.Shared.Next(0, 7),
+                        z = site.Z + Random.Shared.Next(-17, 18);
+                    if (!ExplorationGenerator.InDeepwatch(site, x, y, z)) continue;
+                    if (_streamer.World.GetBlock(x, y, z) != _ids.Water || _streamer.World.GetBlock(x, y + 1, z) != _ids.Water) continue;
+                    _herd.SpawnAt(guardianKind, new Vector3(x + 0.5f, y + 0.1f, z + 0.5f), (float)(Random.Shared.NextDouble() * 360.0));
+                    break;
+                }
+            }
+        }
+
+        // The curse: once a minute, from any elder within fifty.
+        _curseClock -= dt;
+        if (_curseClock <= 0f)
+        {
+            _curseClock = 60f;
+            var cursing = _herd.All.Any(one => one.Alive && one.Kind == "elder_guardian"
+                                               && Vector3.Distance(one.Position, _player.Position) <= 50f);
+            if (cursing)
+            {
+                _ailments.Apply(Ailment.MiningFatigue, 300f);
+                Notice("the elder's curse is on you", _items.ByName("tide_crystals"));
+                _audio?.Play(Pick(ActionSounds.SwimStroke), _player.EyePosition, 1f, 0.35f);
+                Achieve(AchievementEvents.Ride, "elder_curse");
+            }
+        }
+
+        // Every locked beam, drawn as a thread of light from the eye to the target.
+        _beamSpark -= dt;
+        if (_beamSpark > 0f) return;
+        _beamSpark = 0.06f;
+        foreach (var one in _herd.All)
+        {
+            if (!one.Alive || one.Beam <= 0f || one.Kind is not ("guardian" or "elder_guardian")) continue;
+            var from = one.Middle;
+            var to = _player.EyePosition - new Vector3(0f, 0.3f, 0f);
+            var length = Vector3.Distance(from, to);
+            if (length > 32f) continue;
+            var charged = one.Beam / CreatureHerd.BeamCharge(one.Kind);
+            var steps = (int)(length * 1.5f);
+            for (var i = 1; i < steps; i++)
+                _particles.Flame(Vector3.Lerp(from, to, i / (float)steps), 0.12f + 0.12f * charged,
+                    charged > 0.75f ? StarterBlocks.LayerDeeplight : StarterBlocks.LayerTideCrystals);
+        }
+    }
+
     /// <summary>Each Emberhold's cages, found once by walking its plan.</summary>
     private readonly Dictionary<string, IReadOnlyList<(int X, int Y, int Z)>> _holdCages = new(StringComparer.Ordinal);
 
@@ -10182,6 +10282,7 @@ public sealed class ClientHost : IDisposable
 
         StepPhantoms(dt);
         StepEmberholds(dt);
+        StepDeepwatch(dt);
         StepGate(dt);
         StepWyrm(dt);
 
@@ -11428,6 +11529,9 @@ public sealed class ClientHost : IDisposable
 
         // Still ringing from the last blow, so nothing happened and nothing should be heard.
         if (quarry.Health == before) return;
+
+        // ⛳ A guardian's spikes (2026-10-25): struck while it holds still, it pricks back.
+        if (quarry.Kind is "guardian" or "elder_guardian" && !quarry.Moving) HurtPlayer(2);
         _playerContributions.Add(quarry.RuntimeId);
         Rumble(0.22f, 0.72f, 75);
 
@@ -13435,7 +13539,8 @@ public sealed class ClientHost : IDisposable
             }
         }
 
-        if (!_mining.Update(dt, target, cell, !blocking && _holdingBreak, _inventory.HeldType)) return;
+        // ⛳ Under the elder's curse rock barely gives (2026-10-25): the dig's clock runs that slowly.
+        if (!_mining.Update(dt * _ailments.DigScale, target, cell, !blocking && _holdingBreak, _inventory.HeldType)) return;
 
         // The burst goes before the block does. Reading the type after BreakTarget gets air.
         if (target is not null && cell is { } broken)
@@ -15355,6 +15460,15 @@ public sealed class ClientHost : IDisposable
         }
 
         _progress.Placed(1 + (tall ? 1 : 0) + (flat ? 1 : 0));
+
+        // ⛳ A sponge put down by water drinks it (2026-10-25), and is a wet sponge from then on.
+        if (block == _ids.Sponge
+            && Sponges.Soak(_streamer.World, x, y, z, id => _registry[id].Fluid == FluidKind.Water,
+                (wx, wy, wz, id) => _streamer.EditBlock(wx, wy, wz, id)) > 0)
+        {
+            _streamer.EditBlock(x, y, z, _ids.WetSponge);
+            Achieve(AchievementEvents.Ride, "sponge_soaked");
+        }
 
         if (fromOffhand) SpendOffhand();
         else _inventory.SpendHeld();

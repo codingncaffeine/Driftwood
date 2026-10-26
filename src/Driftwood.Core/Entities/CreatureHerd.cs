@@ -131,6 +131,9 @@ public sealed class Creature
     /// <summary>Seconds the target has been out of view while still being hunted.</summary>
     public float Unseen { get; set; }
 
+    /// <summary>A guardian's beam (2026-10-25): seconds it has held its eye on the target; 0 is none.</summary>
+    public float Beam { get; set; }
+
     /// <summary>Sitting in a boat (2026-10-25): the boat carries it, and it neither thinks nor walks.</summary>
     public bool Seated { get; set; }
 
@@ -1373,6 +1376,13 @@ public sealed class CreatureHerd
                 continue;
             }
 
+            // ⛳ The Deepwatch's keepers (2026-10-25): they swim their halls and fix the eye.
+            if (creature.Kind is "guardian" or "elder_guardian")
+            {
+                if (magicMovement > 0f) Watch(creature, dt * magicMovement, player, solid, water);
+                continue;
+            }
+
             if (creature.Kind == "core_wyrm")
             {
                 if (magicMovement > 0f) Rage(creature, dt * magicMovement, player);
@@ -2022,6 +2032,97 @@ public sealed class CreatureHerd
     /// The reference's blaze: it bobs in the air, rises to fight, flares for a moment and fires three
     /// small fireballs a third of a second apart, then rests. With nobody to fight it drifts, bobbing.
     /// </remarks>
+    /// <summary>How long a guardian holds its beam before it lands: the reference's eighty ticks, an
+    /// elder's sixty.</summary>
+    public static float BeamCharge(string kind) => kind == "elder_guardian" ? 3f : 4f;
+
+    /// <summary>Furthest a guardian's eye reaches.</summary>
+    public const float BeamRange = 15f;
+
+    /// <summary>
+    /// A guardian's watch: the reference's, ours in feel. In water it swims its halls; on sight of
+    /// the player within fifteen it holds still, turns its eye on them and keeps it there — the beam
+    /// lands when the charge is full, and any break in the sight line drops the lock. Beached, it
+    /// can only fall and flop. An elder keeps its room rather than roaming.
+    /// </summary>
+    private void Watch(Creature creature, float dt, Vector3? player, Func<int, int, int, bool> solid,
+        Func<int, int, int, bool>? water)
+    {
+        bool Wet(Vector3 p) => water?.Invoke((int)MathF.Floor(p.X), (int)MathF.Floor(p.Y), (int)MathF.Floor(p.Z)) == true;
+
+        if (!Wet(creature.Middle))
+        {
+            creature.Beam = 0f;
+            Fall(creature, dt, solid);
+            return;
+        }
+
+        creature.Swings = MathF.Max(0f, creature.Swings - dt);
+        var elder = creature.Kind == "elder_guardian";
+
+        if (player is { } target && Vector3.Distance(target, creature.Middle) <= BeamRange)
+        {
+            creature.SightCheck -= dt;
+            if (creature.SightCheck <= 0f)
+            {
+                creature.SightCheck = 0.25f;
+                creature.SeesTarget = LineOfSight(solid, creature.Middle, target + new Vector3(0f, 1.2f, 0f));
+            }
+
+            if (creature.SeesTarget)
+            {
+                creature.Targeting = true;
+                var to = target - creature.Position;
+                creature.Yaw = creature.WantsYaw = float.RadiansToDegrees(MathF.Atan2(to.Z, to.X));
+
+                if (creature.Swings <= 0f)
+                {
+                    creature.Beam += dt;
+                    if (creature.Beam >= BeamCharge(creature.Kind))
+                    {
+                        _attacks.Add(new CreatureAttack(creature.Kind, creature.Middle, CreatureVitals.DamageFor(creature.Kind)));
+                        creature.Beam = 0f;
+                        creature.Swings = 2f + (float)_random.NextDouble() * 2f;
+                        creature.Spoke = true;
+                    }
+
+                    creature.Moving = false;
+                    return;
+                }
+
+                // Between beams it keeps off: closer than six it backs away, further than ten it comes on.
+                var range = to.Length();
+                if (!elder && range > 0.01f)
+                {
+                    var hold = range > 10f ? to / range : range < 6f ? -to / range : Vector3.Zero;
+                    SwimTo(creature, creature.Position + hold * 2f, SwimSpeed * 1.4f * dt, water);
+                }
+
+                return;
+            }
+        }
+
+        creature.Beam = 0f;
+        creature.Targeting = false;
+        if (!elder) Glide(creature, dt, solid, water);
+    }
+
+    /// <summary>Swims straight toward a point, but only ever into water.</summary>
+    private static void SwimTo(Creature creature, Vector3 goal, float step, Func<int, int, int, bool>? water)
+    {
+        var to = goal - creature.Position;
+        var length = to.Length();
+        if (length < 0.01f || water is null) return;
+        var next = creature.Position + to / length * MathF.Min(step, length);
+        var top = next.Y + creature.Size.Y * creature.Scale;
+        if (water((int)MathF.Floor(next.X), (int)MathF.Floor(next.Y), (int)MathF.Floor(next.Z))
+            && water((int)MathF.Floor(next.X), (int)MathF.Floor(top), (int)MathF.Floor(next.Z)))
+        {
+            creature.Position = next;
+            creature.Moving = true;
+        }
+    }
+
     private void Kindle(Creature creature, float dt, Vector3? player, Func<int, int, int, bool> solid)
     {
         creature.Swings = MathF.Max(0f, creature.Swings - dt);

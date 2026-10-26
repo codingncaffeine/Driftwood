@@ -272,6 +272,14 @@ public static class StarterRecipes
         Shaped("emberite ingot", "emberite_ingot", 1, ["VYV", "YVY"]);
         Shaped("brewing stand", "brewing_stand", 1, [" X ", "RRR"]);
         LooseAt("ember bricks", "ember_bricks", 2, CraftStation.Bench, "emberstone", "emberstone");
+
+        // ⛳ The Deepwatch's (2026-10-25), the reference's prismarine family at its own counts: four
+        // shards a block, nine a brick, eight round an ink sac for the dark; the deeplight is shards
+        // and crystals; a wet sponge dries in a furnace.
+        Shaped("tidestone", "tidestone", 1, ["MM", "MM"], "tide_shard", station: CraftStation.Bench);
+        Shaped("tidestone bricks", "tidestone_bricks", 1, ["MMM", "MMM", "MMM"], "tide_shard", station: CraftStation.Bench);
+        Shaped("dark tidestone", "dark_tidestone", 1, ["MMM", "MbM", "MMM"], "tide_shard", station: CraftStation.Bench);
+        Shaped("deeplight", "deeplight", 1, ["McM", "ccc", "McM"], "tide_shard", station: CraftStation.Bench);
         LooseAt("ember cream", "ember_cream", 1, CraftStation.Bench, "slimeball", "cinder_dust");
 
         // The reference's eye: its pearl lit with its rod's dust.
@@ -587,6 +595,7 @@ public static class StarterRecipes
         // given is the one place the smelter is a shaping tool rather than a refiner, and it is
         // what makes a second pass through the fire worth doing.
         Smelt("stone", "smooth_stone");
+        Smelt("wet_sponge", "sponge");
         Smelt("sandstone", "cut_sandstone");
 
         Smelt("sand", "glass");
@@ -708,6 +717,8 @@ public static class StarterRecipes
     /// <summary>Which ingredient a letter in a pattern stands for.</summary>
     private static string KeyOf(char key, string recipe, string? material) => key switch
     {
+        'b' => "ink_sac",
+        'c' => "tide_crystals",
         'M' => material ?? throw new InvalidOperationException($"recipe '{recipe}' uses M with no material"),
         'P' => "#planks",
         'S' => "stick",

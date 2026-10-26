@@ -1,3 +1,4 @@
+using System.Numerics;
 using System.Collections.Concurrent;
 using Driftwood.Core.Blocks;
 using Driftwood.Core.Gen;
@@ -19,6 +20,9 @@ public enum StructureKind : byte
 
     /// <summary>The Sanctum (2026-10-25): the reference's stronghold — the gate down to the Core.</summary>
     Sanctum,
+
+    /// <summary>The sea's own (2026-10-25): the reference's ocean monument, ours — the Deepwatch.</summary>
+    Deepwatch,
 }
 
 /// <summary>A structure's identity and bounds. The id survives block-id and palette changes.</summary>
@@ -79,6 +83,7 @@ public sealed class ExplorationGenerator
         StructureKind.StarfallCrown => 960,
         StructureKind.Emberhold => 384,
         StructureKind.Sanctum => 768,
+        StructureKind.Deepwatch => 640,
         _ => 320,
     };
 
@@ -112,6 +117,7 @@ public sealed class ExplorationGenerator
             StructureKind.StarfallCrown => 0.52f,
             StructureKind.Emberhold => 0.7f,
             StructureKind.Sanctum => 0.8f,
+            StructureKind.Deepwatch => 0.85f,
             _ => 0f,
         };
         if (Noise.Value2(cellX, cellZ, salt) >= chance) return null;
@@ -136,6 +142,33 @@ public sealed class ExplorationGenerator
                 var px = x + offset.X;
                 var pz = z + offset.Z;
                 if (_surface(px, pz) > TerrainGenerator.SeaLevel - 3) continue;
+                x = px;
+                z = pz;
+                found = true;
+                break;
+            }
+            if (!found) return null;
+        }
+
+        // ⛳ The Deepwatch wants the deep sea: a seabed at least eighteen down under its middle and
+        // twelve under each corner, looked for on a wide rosette inside its own cell.
+        if (kind == StructureKind.Deepwatch)
+        {
+            var found = false;
+            ReadOnlySpan<(int X, int Z)> offsets =
+            [
+                (0, 0), (60, 0), (-60, 0), (0, 60), (0, -60),
+                (60, 60), (-60, 60), (60, -60), (-60, -60),
+            ];
+            foreach (var offset in offsets)
+            {
+                var px = x + offset.X;
+                var pz = z + offset.Z;
+                if (_surface(px, pz) > TerrainGenerator.SeaLevel - 18) continue;
+                var deep = true;
+                foreach (var (cx, cz) in (ReadOnlySpan<(int, int)>)[(16, 16), (-16, 16), (16, -16), (-16, -16)])
+                    deep &= _surface(px + cx, pz + cz) <= TerrainGenerator.SeaLevel - 12;
+                if (!deep) continue;
                 x = px;
                 z = pz;
                 found = true;
@@ -175,6 +208,9 @@ public sealed class ExplorationGenerator
 
             // The Sanctum sits in the hollows, between the deep and the Emberdeep.
             StructureKind.Sanctum => TerrainGenerator.HollowsTop - 26,
+
+            // Its floor a fixed depth down, so its crown stands five under the surface.
+            StructureKind.Deepwatch => TerrainGenerator.SeaLevel - 24,
             _ => surface + 1,
         };
         var radius = kind switch
@@ -186,6 +222,7 @@ public sealed class ExplorationGenerator
             StructureKind.StarfallCrown => 18,
             StructureKind.Emberhold => 20,
             StructureKind.Sanctum => 18,
+            StructureKind.Deepwatch => 20,
             _ => MaxRadius,
         };
 
@@ -198,6 +235,7 @@ public sealed class ExplorationGenerator
             StructureKind.StarfallCrown => y,
             StructureKind.Emberhold => y - HoldPillars - 1,
             StructureKind.Sanctum => y - 2,
+            StructureKind.Deepwatch => y - DeepwatchFooting - 1,
             _ => y,
         };
         var maxY = kind switch
@@ -209,6 +247,7 @@ public sealed class ExplorationGenerator
             StructureKind.StarfallCrown => y + 14,
             StructureKind.Emberhold => y + 8,
             StructureKind.Sanctum => y + 8,
+            StructureKind.Deepwatch => y + 19,
             _ => y,
         };
 
@@ -325,6 +364,7 @@ public sealed class ExplorationGenerator
             case StructureKind.StormVault: WalkVault(site, emit); break;
             case StructureKind.StarfallCrown: WalkCrown(site, emit); break;
             case StructureKind.Emberhold: WalkHold(site, emit); break;
+            case StructureKind.Deepwatch: WalkDeepwatch(site, emit); break;
             case StructureKind.Sanctum: WalkSanctum(site, emit); break;
         }
     }
@@ -334,6 +374,115 @@ public sealed class ExplorationGenerator
         var cells = new List<(int X, int Y, int Z)>();
         Walk(site, (x, y, z, block) => { if (block == _ids.Chest) cells.Add((x, y, z)); });
         return cells.Distinct().ToArray();
+    }
+
+    /// <summary>Where a Deepwatch's three elders keep: its two wings and its crown.</summary>
+    public IReadOnlyList<Vector3> ElderRooms(StructureSite site) => site.Kind != StructureKind.Deepwatch
+        ? []
+        : [
+            new Vector3(site.X - 14.5f, site.Y + 1f, site.Z + 0.5f),
+            new Vector3(site.X + 15.5f, site.Y + 1f, site.Z + 0.5f),
+            new Vector3(site.X + 0.5f, site.Y + 16.5f, site.Z + 0.5f),
+        ];
+
+    /// <summary>True for a cell inside a Deepwatch's walls, where its guardians keep.</summary>
+    public static bool InDeepwatch(StructureSite site, int x, int y, int z)
+    {
+        if (site.Kind != StructureKind.Deepwatch || y < site.Y || y > site.Y + 18) return false;
+        var tier = (y - site.Y) / 4;
+        var half = 20 - 4 * tier - 1;
+        return Math.Abs(x - site.X) <= half && Math.Abs(z - site.Z) <= half;
+    }
+
+    /// <summary>How far a Deepwatch's footings reach down to whatever seabed is under it.</summary>
+    private const int DeepwatchFooting = 6;
+
+    /// <summary>
+    /// The Deepwatch: five stepped tiers of tidestone on the deep seabed, flooded inside — a pillared
+    /// hall, a sponge room in the west wing, the treasure at its heart, and a room for each elder.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ The reference's ocean monument shaped to the radius every site here keeps. Every cell
+    /// inside the walls is written as water, so a monument laid across a rise in the seabed is
+    /// hollowed through it rather than filled with sand.</para>
+    /// <para>Dark tidestone marks the corners and the tier lips, tidestone bricks the floors, and a
+    /// deeplight every few cells along each wall lights the halls the way the sea lanterns do.</para>
+    /// </remarks>
+    private void WalkDeepwatch(StructureSite s, Action<int, int, int, BlockId> emit)
+    {
+        var (x0, y0, z0) = (s.X, s.Y, s.Z);
+        var stone = _ids.Tidestone;
+        var bricks = _ids.TidestoneBricks;
+        var dark = _ids.DarkTidestone;
+        var light = _ids.Deeplight;
+        var water = _ids.Water;
+
+        // The floor, and its footings down to the seabed.
+        for (var dz = -20; dz <= 20; dz++)
+        for (var dx = -20; dx <= 20; dx++)
+        {
+            emit(x0 + dx, y0 - 1, z0 + dz, bricks);
+            if ((Math.Abs(dx) == 20 || Math.Abs(dz) == 20) && (dx + dz) % 4 == 0)
+                for (var y = y0 - 2; y >= y0 - 1 - DeepwatchFooting; y--)
+                    emit(x0 + dx, y, z0 + dz, dark);
+        }
+
+        for (var tier = 0; tier < 5; tier++)
+        {
+            var half = 20 - 4 * tier;
+            var yb = y0 + 4 * tier;
+            for (var y = yb; y <= yb + 3; y++)
+            for (var dz = -half; dz <= half; dz++)
+            for (var dx = -half; dx <= half; dx++)
+            {
+                var edge = Math.Abs(dx) == half || Math.Abs(dz) == half;
+                var roof = y == yb + 3 && tier == 4;
+                var lip = y == yb + 3 && !edge && (Math.Abs(dx) > half - 4 || Math.Abs(dz) > half - 4);
+
+                // The gate: five wide and three tall in the south face of the first tier.
+                if (tier == 0 && dz == half && Math.Abs(dx) <= 2 && y <= yb + 2)
+                {
+                    emit(x0 + dx, y, z0 + dz, water);
+                    continue;
+                }
+
+                if (edge)
+                {
+                    var corner = Math.Abs(dx) == half && Math.Abs(dz) == half;
+                    var lamp = y == yb + 1 && (dx + dz) % 6 == 0 && !corner;
+                    emit(x0 + dx, y, z0 + dz, corner || y == yb + 3 ? dark : lamp ? light : stone);
+                }
+                else if (roof || lip)
+                    emit(x0 + dx, y, z0 + dz, tier == 4 ? dark : bricks);
+                else
+                    emit(x0 + dx, y, z0 + dz, water);
+            }
+        }
+
+        // The hall's pillars, each crowned with a light.
+        foreach (var (px, pz) in (ReadOnlySpan<(int, int)>)[(-8, -8), (8, -8), (-8, 8), (8, 8), (0, 12), (0, -12)])
+        {
+            for (var y = y0; y <= y0 + 2; y++) emit(x0 + px, y, z0 + pz, bricks);
+            emit(x0 + px, y0 + 3, z0 + pz, light);
+        }
+
+        // The sponge room, in the west wing: wet sponges hung in the water.
+        foreach (var (px, py, pz) in (ReadOnlySpan<(int, int, int)>)
+                 [(-17, 2, -3), (-17, 1, 2), (-16, 2, 4), (-18, 1, -1), (-16, 1, -4), (-18, 2, 3)])
+            emit(x0 + px, y0 + py, z0 + pz, _ids.WetSponge);
+
+        // The heart: a dark chamber on the second tier with the treasure in it.
+        for (var y = y0 + 4; y <= y0 + 7; y++)
+        for (var dz = -3; dz <= 3; dz++)
+        for (var dx = -3; dx <= 3; dx++)
+        {
+            var wall = Math.Abs(dx) == 3 || Math.Abs(dz) == 3 || y == y0 + 7;
+            var door = dz == 3 && dx == 0 && y <= y0 + 5;
+            emit(x0 + dx, y, z0 + dz, wall && !door ? dark : water);
+        }
+
+        emit(x0, y0 + 4, z0, _ids.Chest);
+        emit(x0, y0 + 6, z0, light);
     }
 
     /// <summary>Where an Emberhold's cinder cages stand — the cells the cinderwisps come out of.</summary>

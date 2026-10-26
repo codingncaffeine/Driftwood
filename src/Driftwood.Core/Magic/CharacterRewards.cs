@@ -51,6 +51,7 @@ public static class CharacterRewards
         StructureKind.StarfallCrown => new(420, 2_600, "first Starfall Crown discovery"),
         StructureKind.Emberhold => new(400, 2_200, "first Emberhold discovery"),
         StructureKind.Sanctum => new(380, 2_000, "first Sanctum discovery"),
+        StructureKind.Deepwatch => new(420, 2_400, "first Deepwatch discovery"),
         _ => default,
     };
 
@@ -67,6 +68,7 @@ public static class CharacterRewards
             StructureKind.StarfallCrown => 1_100,
             StructureKind.Emberhold => 900,
             StructureKind.Sanctum => 800,
+            StructureKind.Deepwatch => 950,
             _ => 0,
         };
         return new(0, baseCoins + roll % (uint)Math.Max(1, baseCoins), "personal generated-chest coin cache");
@@ -85,7 +87,7 @@ public static class CharacterRewards
             StructureKind.BuriedGallery or StructureKind.Driftstead => 1,
             StructureKind.Tidewreck => 2,
             StructureKind.StormVault => 3,
-            StructureKind.StarfallCrown or StructureKind.Emberhold or StructureKind.Sanctum => 4,
+            StructureKind.StarfallCrown or StructureKind.Emberhold or StructureKind.Sanctum or StructureKind.Deepwatch => 4,
             _ => 0,
         };
         if (rank == 0) return default;

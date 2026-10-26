@@ -32,6 +32,12 @@ public enum Ailment : byte
 
     /// <summary>Instant: a potion of it hurts at once.</summary>
     Harming,
+
+    /// <summary>
+    /// The elder guardian's curse (2026-10-25): the reference's mining fatigue at its third level,
+    /// under which rock barely gives at all — a Deepwatch is not quarried while its elders live.
+    /// </summary>
+    MiningFatigue,
 }
 
 /// <summary>What a shot carries besides its damage. Rides on the projectile from loosing to landing.</summary>
@@ -119,6 +125,9 @@ public sealed class PlayerAilments
         * (1f + 0.2f * Level(Ailment.Swiftness));
 
     /// <summary>What is taken off a blow while weakened, net of the reference's three a level strength adds.</summary>
+    /// <summary>What digging is worth while cursed: the reference's 0.3 cubed, then again — its 0.0027.</summary>
+    public float DigScale => Has(Ailment.MiningFatigue) ? 0.0027f : 1f;
+
     public int BlowPenalty => (Has(Ailment.Weakness) ? WeaknessPenalty : 0) - 3 * Level(Ailment.Strength);
 
     /// <summary>Half hearts the last <see cref="Step"/> mended by regeneration.</summary>

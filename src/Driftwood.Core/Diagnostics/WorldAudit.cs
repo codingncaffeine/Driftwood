@@ -9382,7 +9382,9 @@ public static class WorldAudit
         (StarterBlocks.LayerWyrmEgg, "wyrm_egg"),
         (StarterBlocks.LayerMembrane, "phantom_membrane"),
         (StarterBlocks.LayerBoatIcon, "boat"),
-        ((ushort)(StarterBlocks.LayerCount - 1), "cherry_boat"),
+        (StarterBlocks.LayerCherryBoatIcon, "cherry_boat"),
+        (StarterBlocks.LayerTidestone, "tidestone"),
+        ((ushort)(StarterBlocks.LayerCount - 1), "tide_crystals"),
     ];
 
     /// <summary>

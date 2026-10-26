@@ -772,6 +772,14 @@ public static class BlockTextureSet
         new("phantom_membrane", "textures/item/phantom_membrane.png", true, "textures/items/phantom_membrane.png"),
         new("boat", "textures/item/oak_boat.png", true, "textures/items/boat.png"),
         new("cherry_boat", "textures/item/cherry_boat.png", true),
+        new("tidestone", "textures/block/prismarine.png", false, "textures/blocks/prismarine_rough.png"),
+        new("tidestone_bricks", "textures/block/prismarine_bricks.png", false, "textures/blocks/prismarine_bricks.png"),
+        new("dark_tidestone", "textures/block/dark_prismarine.png", false, "textures/blocks/prismarine_dark.png"),
+        new("deeplight", "", false),
+        new("sponge", "textures/block/sponge.png", false, "textures/blocks/sponge.png"),
+        new("wet_sponge", "textures/block/wet_sponge.png", false, "textures/blocks/sponge_wet.png"),
+        new("tide_shard", "", true),
+        new("tide_crystals", "textures/item/prismarine_crystals.png", true, "textures/items/prismarine_crystals.png"),
     ];
 
     /// <summary>
@@ -1904,6 +1912,14 @@ public static class BlockTextureSet
             StarterBlocks.LayerMembrane => TileGen.IconLeather(1454, 176, 170, 152),
             StarterBlocks.LayerBoatIcon => TileGen.IconBoat(1455, 150, 118, 76),
             StarterBlocks.LayerCherryBoatIcon => TileGen.IconBoat(1456, 222, 168, 164),
+            StarterBlocks.LayerTidestone => TileGen.Strata(1457, 92, 156, 144),
+            StarterBlocks.LayerTidestoneBricks => TileGen.Bricks(1458, 104, 172, 158, 62),
+            StarterBlocks.LayerDarkTidestone => TileGen.Bricks(1459, 46, 88, 76, 28),
+            StarterBlocks.LayerDeeplight => TileGen.Lamp(1460, 206, 238, 230),
+            StarterBlocks.LayerSponge => TileGen.GravelTile(1461, 204, 190, 82),
+            StarterBlocks.LayerWetSponge => TileGen.GravelTile(1462, 150, 146, 62),
+            StarterBlocks.LayerTideShard => TileGen.IconGem(1463, 104, 176, 162),
+            StarterBlocks.LayerTideCrystals => TileGen.IconGem(1464, 200, 236, 222),
             _ => Wheat(layer) ?? Crop(layer) ?? CropIcon(layer) ?? PotionIcon(layer) ?? StainedGlass(layer)
                  ?? MetalBlock(layer) ?? Wool(layer) ?? Meat(layer) ?? Dye(layer)
                  ?? Armour(layer) ?? Shield(layer) ?? Tool(layer),

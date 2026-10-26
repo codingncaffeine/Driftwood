@@ -78,6 +78,8 @@ public static class CreatureVitals
         // size; a bigger one is this times its size squared, as the reference's is.
         ["cinderwisp"] = 40,
         ["ashwail"] = 20,
+        ["guardian"] = 60,
+        ["elder_guardian"] = 160,
         ["ember_slime"] = 2,
         ["charred_skeleton"] = 40,
 
@@ -119,6 +121,8 @@ public static class CreatureVitals
         ["starwarden"] = 8,
         ["cinderwisp"] = 6,
         ["ember_slime"] = 3,
+        ["guardian"] = 6,
+        ["elder_guardian"] = 8,
         ["charred_skeleton"] = 8,
         ["core_wyrm"] = 12,
 
@@ -197,6 +201,8 @@ public static class CreatureVitals
         ["farwalker"] = 64f,
         ["cinderwisp"] = 32f,
         ["ashwail"] = 48f,
+        ["guardian"] = 16f,
+        ["elder_guardian"] = 16f,
     };
 
     public static float FollowRange(string kind) => Follow.GetValueOrDefault(kind, 16f);

@@ -179,6 +179,13 @@ public static class CreatureSet
         new("charred_skeleton", "charred skeleton", CreatureFamily.Hostile, "skeleton.wither",
             ["textures/entity/skeleton/wither_skeleton.png"]),
 
+        // ⛳ The Deepwatch's keepers (2026-10-25): the reference's guardian and elder guardian, on
+        // its net, so a pack's guardian art dresses both. These names are plain words and stay.
+        new("guardian", "guardian", CreatureFamily.Hostile, "guardian",
+            ["textures/entity/guardian.png"]),
+        new("elder_guardian", "elder guardian", CreatureFamily.Hostile, "guardian",
+            ["textures/entity/guardian_elder.png"]),
+
         // ⛳ The Core Hollow's own (2026-10-25): fought, never spawned by the dark's rules.
         new("core_wyrm", "the Core Wyrm", CreatureFamily.Encounter, "core_wyrm", []),
 
@@ -213,6 +220,8 @@ public static class CreatureSet
         ["squid"] = CreatureMove.Swim,
         ["phantom"] = CreatureMove.Fly,
         ["cinderwisp"] = CreatureMove.Fly,
+        ["guardian"] = CreatureMove.Swim,
+        ["elder_guardian"] = CreatureMove.Swim,
         ["ashwail"] = CreatureMove.Fly,
         ["ember_slime"] = CreatureMove.Hop,
         ["core_wyrm"] = CreatureMove.Fly,
@@ -253,6 +262,10 @@ public static class CreatureSet
         ["charred_skeleton"] = 1.2f,
         ["ember_slime"] = 1f,
         ["ashwail"] = 2.4f,
+
+        // The reference draws its elder at two and a third of the guardian.
+        ["guardian"] = 0.9f,
+        ["elder_guardian"] = 2.1f,
         ["core_wyrm"] = 1.6f,
     };
 

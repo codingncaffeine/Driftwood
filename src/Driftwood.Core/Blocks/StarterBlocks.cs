@@ -760,7 +760,18 @@ public static class StarterBlocks
     public const ushort LayerBoatIcon = LayerMembrane + 1;
     public const ushort LayerCherryBoatIcon = LayerMembrane + 2;
 
-    public const int LayerCount = LayerCherryBoatIcon + 1;
+    /// <summary>The Deepwatch's (2026-10-25): tidestone in three dressings, the deeplight, the
+    /// sponge wet and dry, and the guardians' shard and crystals.</summary>
+    public const ushort LayerTidestone = LayerCherryBoatIcon + 1;
+    public const ushort LayerTidestoneBricks = LayerCherryBoatIcon + 2;
+    public const ushort LayerDarkTidestone = LayerCherryBoatIcon + 3;
+    public const ushort LayerDeeplight = LayerCherryBoatIcon + 4;
+    public const ushort LayerSponge = LayerCherryBoatIcon + 5;
+    public const ushort LayerWetSponge = LayerCherryBoatIcon + 6;
+    public const ushort LayerTideShard = LayerCherryBoatIcon + 7;
+    public const ushort LayerTideCrystals = LayerCherryBoatIcon + 8;
+
+    public const int LayerCount = LayerTideCrystals + 1;
 
     /// <summary>One stage of the ashcap, as a block name.</summary>
     public static string AshcapName(int stage) => $"ashcap_{stage}";
@@ -1015,7 +1026,13 @@ public static class StarterBlocks
         BlockId EmberCrystal,
         BlockId PolishedDeepstone,
         BlockId DeepstoneBricks,
-        BlockId Bookshelf)
+        BlockId Bookshelf,
+        BlockId Tidestone,
+        BlockId TidestoneBricks,
+        BlockId DarkTidestone,
+        BlockId Deeplight,
+        BlockId Sponge,
+        BlockId WetSponge)
     {
         /// <summary>Every log a canopy counts as its tree, for the decay rule.</summary>
         public BlockId[] Logs => [Log, CherryLog];
@@ -1359,6 +1376,29 @@ public static class StarterBlocks
                 Derived = open,
                 Sounds = SoundMaterial.Wood, Use = BlockUse.Toggle, HarvestClass = ToolClass.Axe,
                 Model = BlockModel.FenceGate(LayerPlanks, Placeable.Facings[i], open),
+            });
+
+        // ⛳ The Deepwatch's stone (2026-10-25): the reference's prismarine, its bricks and its dark
+        // form, the sea lantern as the deeplight, and the sponge, wet and dry.
+        foreach (var (name, layer) in (ReadOnlySpan<(string, ushort)>)
+                 [("tidestone", LayerTidestone), ("tidestone_bricks", LayerTidestoneBricks), ("dark_tidestone", LayerDarkTidestone)])
+            registry.Register(new BlockType
+            {
+                Name = name, Hardness = 1.5f, Crafted = true,
+                HarvestClass = ToolClass.Pickaxe, HarvestTier = 1, Sounds = SoundMaterial.Stone,
+                TopLayer = layer, SideLayer = layer, BottomLayer = layer,
+            });
+        registry.Register(new BlockType
+        {
+            Name = "deeplight", Hardness = 0.3f, Crafted = true, Sounds = SoundMaterial.Glass,
+            LightEmission = LightValue.PackBlock(13, 15, 15),
+            TopLayer = LayerDeeplight, SideLayer = LayerDeeplight, BottomLayer = LayerDeeplight,
+        });
+        foreach (var (name, layer) in (ReadOnlySpan<(string, ushort)>)[("sponge", LayerSponge), ("wet_sponge", LayerWetSponge)])
+            registry.Register(new BlockType
+            {
+                Name = name, Hardness = 0.6f, Crafted = true, Sounds = SoundMaterial.Plant,
+                TopLayer = layer, SideLayer = layer, BottomLayer = layer,
             });
 
         // ⛳ The helm (2026-10-25): a ship's wheel on a post, four facings. Taking it lifts whatever
@@ -2226,7 +2266,10 @@ public static class StarterBlocks
             emberBricks, ashsand, ashcapRipe, cinderCage, emberiteDebris,
             socket, socketFilled, coreGate, emberCrystal,
             registry.ByName("polished_deepstone").Id, registry.ByName("deepstone_bricks").Id,
-            registry.ByName("bookshelf").Id);
+            registry.ByName("bookshelf").Id,
+            registry.ByName("tidestone").Id, registry.ByName("tidestone_bricks").Id,
+            registry.ByName("dark_tidestone").Id, registry.ByName("deeplight").Id,
+            registry.ByName("sponge").Id, registry.ByName("wet_sponge").Id);
     }
 
     /// <summary>The saplings and the placed leaves, by name, for the rows that speak of them.</summary>

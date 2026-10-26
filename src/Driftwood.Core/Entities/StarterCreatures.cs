@@ -136,6 +136,39 @@ public static class StarterCreatures
             ]),
         ]);
 
+    /// <summary>
+    /// The guardian (2026-10-25), on the reference's guardian net: a plated cube with one great eye,
+    /// spikes at its corners and edges, and a three-part tail ending in a fin. The elder is the same
+    /// body drawn larger and paler.
+    /// </summary>
+    /// <remarks>The spikes are named <c>comb</c> for the brush, which gives them the hard colour.</remarks>
+    public static CreatureModel Guardian(string name) => new(
+        name, 64, 64,
+        [
+            Bone("body", "", new Vector3(0f, 8f, 0f),
+                Box(-6f, 2f, -8f, 12f, 12f, 16f, 0, 0),
+                Box(-8f, 2f, -6f, 2f, 12f, 12f, 0, 28),
+                Box(6f, 2f, -6f, 2f, 12f, 12f, 0, 28, mirror: true),
+                Box(-6f, 0f, -6f, 12f, 2f, 12f, 16, 40),
+                Box(-6f, 14f, -6f, 12f, 2f, 12f, 16, 40)),
+            Bone("comb", "body", new Vector3(0f, 8f, 0f),
+                Box(-7f, 15f, -9f, 2f, 5f, 2f, 0, 0),
+                Box(5f, 15f, -9f, 2f, 5f, 2f, 0, 0),
+                Box(-7f, 15f, 7f, 2f, 5f, 2f, 0, 0),
+                Box(5f, 15f, 7f, 2f, 5f, 2f, 0, 0),
+                Box(-1f, 16f, -1f, 2f, 5f, 2f, 0, 0),
+                Box(-12f, 7f, -1f, 5f, 2f, 2f, 0, 0),
+                Box(7f, 7f, -1f, 5f, 2f, 2f, 0, 0),
+                Box(-1f, 7f, -13f, 2f, 2f, 5f, 0, 0)),
+            Bone("eye0", "body", new Vector3(0f, 8f, -8f),
+                Box(-1.5f, 6.5f, -8.25f, 3f, 3f, 1f, 8, 0)),
+            Bone("tail", "body", new Vector3(0f, 8f, 8f),
+                Box(-2f, 6f, 8f, 4f, 4f, 8f, 40, 0),
+                Box(-1.5f, 6.5f, 16f, 3f, 3f, 7f, 0, 54),
+                Box(-1f, 7f, 23f, 2f, 2f, 6f, 41, 32),
+                Box(-0.5f, 3.5f, 25f, 1f, 9f, 9f, 25, 19)),
+        ]);
+
     public static CreatureModel Cow() => new(
         "cow", 64, 32,
         [
@@ -1021,7 +1054,8 @@ public static class StarterCreatures
          Stray(), Bogged(), ZombieVillager(), Witch(), CaveSpider(), Silverfish(), Phantom(),
          Shorewright(), Forager(), Waykeeper(), Lorekeeper(), StormSentinel(), Starwarden(),
          SummonedSkeleton(), SummonedZombie(), SpiritWolf(), EarthElemental(),
-         Cinderwisp(), Ashwail(), EmberSlime(), CharredSkeleton(), CoreWyrm()];
+         Cinderwisp(), Ashwail(), EmberSlime(), CharredSkeleton(), CoreWyrm(),
+         Guardian("guardian"), Guardian("elder_guardian")];
 
     /// <summary>Kinds excused the height band because they are flat on purpose.</summary>
     private static readonly HashSet<string> Flat = new(StringComparer.Ordinal) { "phantom" };
