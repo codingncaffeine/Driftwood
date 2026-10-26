@@ -234,7 +234,7 @@ public static class StarterBlocks
     public const int ToolShapeCount = 4;
 
     /// <summary>Palettes a head comes in — wood, stone, copper, gold, iron, stormglass, diamond.</summary>
-    public const int ToolTierCount = 7;
+    public const int ToolTierCount = 8;
 
     /// <summary>
     /// How hard an ore of each tier is, indexed by <see cref="BlockType.HarvestTier"/>.
@@ -329,7 +329,7 @@ public static class StarterBlocks
     public const int ArmourPieceCount = 4;
 
     /// <summary>Leather, copper, gold, iron, stormglass, diamond.</summary>
-    public const int ArmourMaterialCount = 6;
+    public const int ArmourMaterialCount = 7;
 
     /// <summary>
     /// The shields, which are the only things in the game carried in the other hand rather than worn.
@@ -733,7 +733,12 @@ public static class StarterBlocks
     public const ushort LayerFirstPotion = LayerGlassBottle + 1;
     public const ushort LayerBrewingStand = LayerFirstPotion + 24;
 
-    public const int LayerCount = LayerBrewingStand + 1;
+    /// <summary>Emberite (2026-10-25): the debris it is dug as, its scrap, and the ingot.</summary>
+    public const ushort LayerEmberiteDebris = LayerBrewingStand + 1;
+    public const ushort LayerEmberiteScrap = LayerBrewingStand + 2;
+    public const ushort LayerEmberiteIngot = LayerBrewingStand + 3;
+
+    public const int LayerCount = LayerEmberiteIngot + 1;
 
     /// <summary>One stage of the ashcap, as a block name.</summary>
     public static string AshcapName(int stage) => $"ashcap_{stage}";
@@ -980,7 +985,8 @@ public static class StarterBlocks
         BlockId EmberBricks,
         BlockId Ashsand,
         BlockId AshcapRipe,
-        BlockId CinderCage)
+        BlockId CinderCage,
+        BlockId EmberiteDebris)
     {
         /// <summary>Every log a canopy counts as its tree, for the decay rule.</summary>
         public BlockId[] Logs => [Log, CherryLog];
@@ -2105,6 +2111,15 @@ public static class StarterBlocks
             Model = BlockModel.Cross(LayerBrewingStand, tinted: false),
         });
 
+        // Emberite debris: the hardest thing in the ground, wanting a diamond pickaxe — the
+        // reference's ancient debris, which is the last thing a diamond pick is for.
+        var emberiteDebris = registry.Register(new BlockType
+        {
+            Name = "emberite_debris", Hardness = OreHardness[5] * 1.3f, Crafted = true,
+            HarvestClass = ToolClass.Pickaxe, HarvestTier = 6, Sounds = SoundMaterial.Deepstone,
+            TopLayer = LayerEmberiteDebris, SideLayer = LayerEmberiteDebris, BottomLayer = LayerEmberiteDebris,
+        });
+
         var cinderCage = registry.Register(new BlockType
         {
             Name = "cinder_cage", Hardness = 5f, Opaque = false, Crafted = true,
@@ -2129,7 +2144,7 @@ public static class StarterBlocks
             registry.ByName("rail_x").Id,
             registry.ByName("lantern").Id,
             sapling, cherrySapling, leavesPlaced, cherryLeavesPlaced,
-            emberBricks, ashsand, ashcapRipe, cinderCage);
+            emberBricks, ashsand, ashcapRipe, cinderCage, emberiteDebris);
     }
 
     /// <summary>The saplings and the placed leaves, by name, for the rows that speak of them.</summary>

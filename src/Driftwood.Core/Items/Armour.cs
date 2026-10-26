@@ -119,6 +119,11 @@ public static class Armour
         // deliberately a long way off stormglass's teal: the two are the last two rungs and a player
         // has to be able to tell a full set of one from a full set of the other across a room.
         new("diamond", "diamond", "diamond", DiamondR, DiamondG, DiamondB, [4, 9, 7, 4], 900),
+
+        // ⛳ Emberite (2026-10-25): diamond's protection, a third more wear, and fireproof as a full
+        // suit — the Emberdeep's own reward. ⚠ Its pack name is its own: packs paint netherite for
+        // the reference's top set and stormglass already wears that, so this one keeps our art.
+        new("emberite", "emberite_ingot", "emberite", 74, 58, 62, [4, 9, 7, 4], 1200),
     ];
 
     /// <summary>

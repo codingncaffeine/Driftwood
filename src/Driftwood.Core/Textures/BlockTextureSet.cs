@@ -404,6 +404,13 @@ public static class BlockTextureSet
         new("diamond_shovel", "textures/item/diamond_shovel.png", true),
         new("diamond_sword", "textures/item/diamond_sword.png",   true),
 
+        // ⛳ Emberite's four (2026-10-25), our own art: packs paint netherite for the reference's top
+        // tier, and stormglass already wears that.
+        new("emberite_pickaxe", "", true),
+        new("emberite_axe", "", true),
+        new("emberite_shovel", "", true),
+        new("emberite_sword", "", true),
+
         // ⛳ The fluids, last in the array because THIS ARRAY'S ORDER IS THE LAYER NUMBERING and a
         // face inserted beside water would move every constant after it — see
         // StarterBlocks.LayerFirstFluid; the sixteen dyes cost this project that lesson once already.
@@ -751,6 +758,9 @@ public static class BlockTextureSet
         new("potion_icon_22", "", true),
         new("potion_icon_23", "", true),
         new("brewing_stand", "textures/item/brewing_stand.png", true, "textures/items/brewing_stand.png"),
+        new("emberite_debris", "textures/block/ancient_debris_side.png", false, "textures/blocks/ancient_debris_side.png"),
+        new("emberite_scrap", "textures/item/netherite_scrap.png", true, "textures/items/netherite_scrap.png"),
+        new("emberite_ingot", "textures/item/netherite_ingot.png", true, "textures/items/netherite_ingot.png"),
     ];
 
     /// <summary>
@@ -1869,6 +1879,9 @@ public static class BlockTextureSet
 
             StarterBlocks.LayerGlassBottle => TileGen.IconPotion(1403, 0, 0, 0, splash: false, empty: true),
             StarterBlocks.LayerBrewingStand => TileGen.BrewingStand(1404),
+            StarterBlocks.LayerEmberiteDebris => TileGen.Ember(1440, TileGen.Speckle(1441, 88, 64, 58, 22, 0.7f), 186, 120, 92),
+            StarterBlocks.LayerEmberiteScrap => TileGen.IconLump(1442, 92, 72, 70),
+            StarterBlocks.LayerEmberiteIngot => TileGen.IconIngot(1443, 78, 62, 66),
             _ => Wheat(layer) ?? Crop(layer) ?? CropIcon(layer) ?? PotionIcon(layer) ?? StainedGlass(layer)
                  ?? MetalBlock(layer) ?? Wool(layer) ?? Meat(layer) ?? Dye(layer)
                  ?? Armour(layer) ?? Shield(layer) ?? Tool(layer),
@@ -2064,6 +2077,7 @@ public static class BlockTextureSet
         (226, 228, 234),    // iron
         (86, 238, 212),     // stormglass
         (Items.Armour.DiamondR, Items.Armour.DiamondG, Items.Armour.DiamondB),
+        (78, 62, 66),       // emberite: near-black, warm
     ];
 
     /// <summary>One tool icon, or the loud magenta that says a layer has no art behind it.</summary>

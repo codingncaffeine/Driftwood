@@ -10429,6 +10429,17 @@ public sealed class ClientHost : IDisposable
         return true;
     }
 
+    /// <summary>True when all four armour slots hold one material's pieces.</summary>
+    private bool WearingFullSuit(string material)
+    {
+        for (var slot = 0; slot < 4; slot++)
+        {
+            var worn = _equipment.At(slot);
+            if (worn.IsEmpty || !_items[worn.Item].Name.StartsWith(material + "_", StringComparison.Ordinal)) return false;
+        }
+        return true;
+    }
+
     /// <summary>The brightness the world is drawn at: the setting's, or close to full seeing in the dark.</summary>
     private float ViewBrightness => _ailments.Has(Ailment.NightVision) ? 2.6f : _settings.Brightness / 100f;
 
@@ -13080,7 +13091,7 @@ public sealed class ClientHost : IDisposable
         _player.SpeedScale = _ailments.SpeedScale;
 
         // The potions' standing effects: fire and water held off, and regeneration's half hearts.
-        _vitals.FireProof = _ailments.Has(Ailment.FireResistance);
+        _vitals.FireProof = _ailments.Has(Ailment.FireResistance) || WearingFullSuit("emberite");
         _vitals.BreathesWater = _ailments.Has(Ailment.WaterBreathing);
         if (_ailments.Mended > 0) _vitals.Heal(_ailments.Mended);
         _awake += dt;

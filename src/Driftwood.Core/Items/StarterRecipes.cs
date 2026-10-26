@@ -269,6 +269,7 @@ public static class StarterRecipes
         // Brewing's two makes: three glass in a V for three bottles, and a cinder rod over three
         // rough stone for the stand — the reference's own shapes.
         Shaped("glass bottle", "glass_bottle", 3, ["G G", " G "]);
+        Shaped("emberite ingot", "emberite_ingot", 1, ["VYV", "YVY"]);
         Shaped("brewing stand", "brewing_stand", 1, [" X ", "RRR"]);
         LooseAt("ember bricks", "ember_bricks", 2, CraftStation.Bench, "emberstone", "emberstone");
         LooseAt("ember cream", "ember_cream", 1, CraftStation.Bench, "slimeball", "cinder_dust");
@@ -579,6 +580,9 @@ public static class StarterRecipes
         Smelt("sandstone", "cut_sandstone");
 
         Smelt("sand", "glass");
+
+        // Emberite (2026-10-25): debris smelts to scrap, and scrap set in gold is the ingot.
+        Smelt("emberite_debris", "emberite_scrap", work: SmeltWork.Ore);
         Smelt("clay_lump", "brick");
         Smelt("#logs", "charcoal");
         // ⛳ The three that are ORE, which is what a blast furnace will take and the only thing it
@@ -719,6 +723,7 @@ public static class StarterRecipes
         'Q' => "leather",
         'H' => "feather",
         'X' => "cinder_rod",
+        'V' => "emberite_scrap",
         _ => throw new InvalidOperationException($"recipe '{recipe}' uses unknown key '{key}'"),
     };
 }

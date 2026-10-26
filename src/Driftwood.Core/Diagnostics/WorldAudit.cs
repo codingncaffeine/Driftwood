@@ -6211,7 +6211,7 @@ public static class WorldAudit
 
         // The ladder, pinned as a literal — gold absent is the claim, not a consequence.
         var ladder = string.Join(" ", Smithing.Ladder.Select(t => t.Name));
-        if (ladder != "wood stone copper iron stormglass diamond")
+        if (ladder != "wood stone copper iron stormglass diamond emberite")
             faults.Add($"the ladder reads '{ladder}'");
 
         // Half-worn wood pickaxe: 30 of 60 up to stone must be exactly 66 of 132.
@@ -6239,7 +6239,7 @@ public static class WorldAudit
             faults.Add("gold is on the ladder");
 
         // The top refuses; a non-tool answers nothing at all.
-        if (Smithing.NextOf(items.ByName("diamond_pickaxe")) is not null)
+        if (Smithing.NextOf(items.ByName("emberite_pickaxe")) is not null)
             faults.Add("the top of the ladder was offered a next rung");
         if (Smithing.RungOf(items.ByName("stick")) is not null)
             faults.Add("a stick stands on a tool rung");
@@ -9118,7 +9118,8 @@ public static class WorldAudit
         (StarterBlocks.LayerFirstDye, "dye_white"),
         (StarterBlocks.LayerBone, "bone"),
         (StarterBlocks.LayerFirstTool, "wood_pickaxe"),
-        ((ushort)(StarterBlocks.LayerFirstFluid - 1), "diamond_sword"),
+        ((ushort)(StarterBlocks.LayerFirstFluid - 5), "diamond_sword"),
+        ((ushort)(StarterBlocks.LayerFirstFluid - 1), "emberite_sword"),
         (StarterBlocks.LayerWaterFlow, "water_flow"),
         (StarterBlocks.LayerLava, "lava"),
         (StarterBlocks.LayerLavaFlow, "lava_flow"),
@@ -9141,7 +9142,8 @@ public static class WorldAudit
         // twenty-one rows went on the end. Both ends of every run are pinned by their own constant
         // now, so "the last one" is a fact about the shield rather than about whatever is newest.
         (StarterBlocks.LayerFirstArmour, "leather_helmet"),
-        ((ushort)(StarterBlocks.LayerFirstShield - 1), "diamond_boots"),
+        ((ushort)(StarterBlocks.LayerFirstShield - 5), "diamond_boots"),
+        ((ushort)(StarterBlocks.LayerFirstShield - 1), "emberite_boots"),
         (StarterBlocks.LayerFirstShield, "shield"),
         ((ushort)(StarterBlocks.LayerFirstShield + StarterBlocks.ShieldCount - 1), "diamond_shield"),
 
@@ -9281,7 +9283,8 @@ public static class WorldAudit
         (StarterBlocks.LayerFireCharge, "fire_charge"),
         (StarterBlocks.LayerEmberBricks, "ember_bricks"),
         (StarterBlocks.LayerCinderCage, "cinder_cage"),
-        ((ushort)(StarterBlocks.LayerCount - 1), "brewing_stand"),
+        (StarterBlocks.LayerBrewingStand, "brewing_stand"),
+        ((ushort)(StarterBlocks.LayerCount - 1), "emberite_ingot"),
     ];
 
     /// <summary>

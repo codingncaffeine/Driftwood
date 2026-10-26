@@ -138,6 +138,7 @@ public sealed class TerrainGenerator
     private readonly int _seedForest;
     private readonly int _seedCherry;
     private readonly int _seedDiamondOre;
+    private readonly int _seedDebris;
     private readonly int _seedCopper;
     private readonly int _seedGold;
     private readonly int _seedDiamond;
@@ -219,6 +220,7 @@ public sealed class TerrainGenerator
         // world that already exists. The real diamond gets a stream of its own.
         _seedDiamond = seed.Derive("ore.diamond");
         _seedDiamondOre = seed.Derive("ore.deepdiamond");
+        _seedDebris = seed.Derive("ore.emberite");
         _seedAzurite = seed.Derive("ore.azurite");
         _seedGranite = seed.Derive("rock.granite");
         _seedAndesite = seed.Derive("rock.andesite");
@@ -596,6 +598,9 @@ public sealed class TerrainGenerator
         // at the deep floor, so it is not "stormglass but rarer" — it is somewhere else, and the way
         // you meet it is by going down far enough that the rock is already glowing.
         new(ids.DiamondOre, "diamond", WorldBottom, DiamondTop),
+
+        // ⛳ Rarer than diamond and lower still: the debris lies only within fifty of the floor.
+        new(ids.EmberiteDebris, "emberite", WorldBottom, DebrisTop),
         new(ids.Emberstone, "emberstone", WorldBottom, 40),
     ];
 
@@ -608,6 +613,9 @@ public sealed class TerrainGenerator
     /// around y −84, so this is where the rock starts being lit from below.
     /// </remarks>
     public const int DiamondTop = -150;
+
+    /// <summary>The highest emberite debris forms (2026-10-25).</summary>
+    public const int DebrisTop = -206;
 
     private ushort OreAt(int x, int y, int z, ushort rock)
     {
@@ -679,6 +687,10 @@ public sealed class TerrainGenerator
         // Its own gradient measured from ITS OWN band rather than from the deep floor: gated at
         // DiamondTop, a seam near the ceiling of the Emberdeep would otherwise be as common as one
         // on the molten floor, and the whole point of it is that you go all the way down.
+        // ⛳ Emberite first, the rarest of all: small single knots near the floor of the world.
+        if (y <= DebrisTop && Noise.Fbm3(x / 5.5f, y / 5.5f, z / 5.5f, _seedDebris, 2) > 0.6f)
+            return _ids.EmberiteDebris;
+
         if (y <= DiamondTop)
         {
             var emberness = Math.Clamp(

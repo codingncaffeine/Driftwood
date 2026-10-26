@@ -53,6 +53,11 @@ public static class StarterItems
         // durability. Half again as quick as stormglass and it lasts more than twice as long, which
         // is what makes the trip to the lava worth making after you already have the gem.
         new("diamond", "diamond", 6, 14f, 3400, 6),
+
+        // ⛳ Above the top (2026-10-25): emberite, the reference's netherite, smithed onto diamond
+        // with an ingot won from the debris at the floor of the Emberdeep. It gates nothing either;
+        // it is quicker and outlasts diamond by a third — and a full suit of it is fireproof.
+        new("emberite", "emberite_ingot", 7, 16f, 4400, 7),
     ];
 
     /// <summary>The four heads a tier comes in, in <see cref="Textures.TileGen.ToolShapes"/> order.</summary>
@@ -863,6 +868,9 @@ public static class StarterItems
         // rod burns two minutes in a furnace as the reference's does, and grinds to dust; the
         // charge is thrown as a fireball.
         Loose(items, "cinder_rod", "cinder rod", StarterBlocks.LayerCinderRod, burn: 120f);
+        Block(items, blocks, "emberite_debris", "emberite debris", StarterBlocks.LayerEmberiteDebris);
+        Loose(items, "emberite_scrap", "emberite scrap", StarterBlocks.LayerEmberiteScrap);
+        Loose(items, "emberite_ingot", "emberite ingot", StarterBlocks.LayerEmberiteIngot);
         Loose(items, "cinder_dust", "cinder dust", StarterBlocks.LayerCinderDust);
         Loose(items, "wail_tear", "wail tear", StarterBlocks.LayerWailTear);
         Loose(items, "ember_cream", "ember cream", StarterBlocks.LayerEmberCream);
