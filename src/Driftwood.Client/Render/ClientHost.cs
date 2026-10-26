@@ -1526,8 +1526,27 @@ public sealed class ClientHost : IDisposable
     }
 
     /// <summary>Whether a cell would hold an animal up. The herd's whole view of the world.</summary>
+    /// <remarks>
+    /// ⛳ A fence or wall stands a block and a half (M1, 2026-10-25), so the cell over one counts as
+    /// solid too: the creatures' one-block step can no longer take them over a pen's fence, which is
+    /// the reference's whole reason for the half block.
+    /// </remarks>
     private bool SolidForCreature(int x, int y, int z) =>
-        _registry[_streamer.World.GetBlock(x, y, z)].Solid;
+        _registry[_streamer.World.GetBlock(x, y, z)].Solid
+        || (_overTall ??= OverTallTable())[_streamer.World.GetBlock(x, y - 1, z).Value];
+
+    private bool[]? _overTall;
+
+    /// <summary>Every block whose collision rises past the top of its cell.</summary>
+    private bool[] OverTallTable()
+    {
+        var boxes = _registry.BuildCollisionTable(out _);
+        var tall = new bool[_registry.Count];
+        for (var id = 1; id < _registry.Count; id++)
+            foreach (var (_, max) in boxes[id])
+                if (max.Y > 1.01f) tall[id] = true;
+        return tall;
+    }
 
     /// <summary>
     /// Collision answers whether a block stops a body; spawn support answers whether a body may be

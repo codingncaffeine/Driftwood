@@ -1904,8 +1904,11 @@ public sealed class CreatureHerd
     /// that had climbed to the lip of a wall and stepped a hand's width onto the top was still
     /// "over" the drop it had just climbed, and fell straight back down it.
     /// </remarks>
-    private static float Footing(Func<int, int, int, bool> solid, Vector3 at)
+    private static float Footing(Func<int, int, int, bool> solid, Vector3 at) => Footing(solid, at, BodyHalf);
+
+    private static float Footing(Func<int, int, int, bool> solid, Vector3 at, float half)
     {
+        var BodyHalf = half;
         const float hair = 1e-3f;
         var from = (int)MathF.Floor(at.Y) + 1;
         var best = float.NegativeInfinity;
@@ -2749,6 +2752,7 @@ public sealed class CreatureHerd
         var yaw = float.DegreesToRadians(creature.WantsYaw);
         var move = new Vector3(MathF.Cos(yaw), 0f, MathF.Sin(yaw)) * distance;
         var tall = Tall(creature);
+        var half = HalfOf(creature);
         var start = creature.Position;
         var at = start;
 
@@ -2757,7 +2761,7 @@ public sealed class CreatureHerd
             var next = axis == 0 ? at with { X = at.X + move.X } : at with { Z = at.Z + move.Z };
             if (axis == 0 ? MathF.Abs(move.X) < 1e-6f : MathF.Abs(move.Z) < 1e-6f) continue;
 
-            if (Fits(solid, next, tall))
+            if (Fits(solid, next, tall, half))
             {
                 at = next;
                 continue;
@@ -2765,7 +2769,7 @@ public sealed class CreatureHerd
 
             // A one-block step: the same move, a block up, with the head room to rise into.
             var lifted = next with { Y = MathF.Floor(at.Y + 0.01f) + 1f };
-            if (Fits(solid, lifted, tall) && Fits(solid, at with { Y = lifted.Y }, tall))
+            if (Fits(solid, lifted, tall, half) && Fits(solid, at with { Y = lifted.Y }, tall, half))
                 at = lifted;
         }
 
@@ -2778,7 +2782,7 @@ public sealed class CreatureHerd
 
         foreach (var only in (ReadOnlySpan<Vector3>)[at with { Z = start.Z }, at with { X = start.X }])
         {
-            if (Vector3.DistanceSquared(only, start) < 1e-8f || !Fits(solid, only, tall)) continue;
+            if (Vector3.DistanceSquared(only, start) < 1e-8f || !Fits(solid, only, tall, half)) continue;
             if (!Floored(solid, start, only, maxDrop)) continue;
             creature.Position = only;
             return true;
@@ -2833,8 +2837,23 @@ public sealed class CreatureHerd
     }
 
     /// <summary>Whether a body of this height fits with its feet at this point.</summary>
-    private static bool Fits(Func<int, int, int, bool> solid, Vector3 at, int tall)
+    private static bool Fits(Func<int, int, int, bool> solid, Vector3 at, int tall) =>
+        Fits(solid, at, tall, BodyHalf);
+
+    /// <summary>
+    /// A creature's own half-width (M1, 2026-10-25), from its size: a cow is wider than a chicken.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ Capped under half a block, because the paths are still found a cell wide: a spider at its
+    /// true width would be handed a path through a gap it cannot fit and stand at it. Capped, a big
+    /// body no longer sinks into a wall it walks along, and every path it is given still fits.
+    /// </remarks>
+    public static float HalfOf(Creature creature) =>
+        Math.Clamp(MathF.Max(creature.Size.X, creature.Size.Z) * creature.Scale * 0.5f, BodyHalf, 0.45f);
+
+    private static bool Fits(Func<int, int, int, bool> solid, Vector3 at, int tall, float half)
     {
+        var BodyHalf = half;
         // ⚠ Shaved by a hair. A body slid flush against a wall sits at 5.700006 against a face at
         // 6, and unshaved its own position overlaps the wall — every move from there, the climb
         // included, was refused, and the first spider stood against its wall for good.
@@ -3010,7 +3029,7 @@ public sealed class CreatureHerd
         // ⛔ Nothing found is a fall, not a floor at nought. The search used to give up at y 1 and
         // the answer was "the ground is at 0", so anything in a cave below the zero line was put
         // back up inside the rock the first frame it stood there.
-        var ground = Footing(solid, creature.Position);
+        var ground = Footing(solid, creature.Position, HalfOf(creature));
 
         // Out of the bottom of the world: gone, with nothing left behind — there is nowhere for it.
         if (creature.Position.Y < Gen.TerrainGenerator.WorldBottom - 8)
