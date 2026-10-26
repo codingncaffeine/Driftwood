@@ -770,6 +770,8 @@ public static class BlockTextureSet
         new("wyrm_egg", "textures/block/dragon_egg.png", false, "textures/blocks/dragon_egg.png"),
         new("driftwings", "textures/item/elytra.png", true, "textures/items/elytra.png"),
         new("phantom_membrane", "textures/item/phantom_membrane.png", true, "textures/items/phantom_membrane.png"),
+        new("boat", "textures/item/oak_boat.png", true, "textures/items/boat.png"),
+        new("cherry_boat", "textures/item/cherry_boat.png", true),
     ];
 
     /// <summary>
@@ -1900,6 +1902,8 @@ public static class BlockTextureSet
             StarterBlocks.LayerWyrmEgg => TileGen.Ember(1451, TileGen.Speckle(1452, 40, 28, 34, 18, 0.6f), 210, 80, 40),
             StarterBlocks.LayerDriftwings => TileGen.IconWings(1453, 132, 120, 150),
             StarterBlocks.LayerMembrane => TileGen.IconLeather(1454, 176, 170, 152),
+            StarterBlocks.LayerBoatIcon => TileGen.IconBoat(1455, 150, 118, 76),
+            StarterBlocks.LayerCherryBoatIcon => TileGen.IconBoat(1456, 222, 168, 164),
             _ => Wheat(layer) ?? Crop(layer) ?? CropIcon(layer) ?? PotionIcon(layer) ?? StainedGlass(layer)
                  ?? MetalBlock(layer) ?? Wool(layer) ?? Meat(layer) ?? Dye(layer)
                  ?? Armour(layer) ?? Shield(layer) ?? Tool(layer),

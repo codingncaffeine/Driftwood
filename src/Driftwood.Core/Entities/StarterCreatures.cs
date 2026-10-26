@@ -96,6 +96,46 @@ public static class StarterCreatures
                 Box(-4f, 3f, -5f, 8f, 6f, 10f, 0, 48)),       // the chest in the tub
         ]);
 
+    /// <summary>
+    /// The boat (2026-10-25): a clinker hull with a cross bench, a carved scroll rising from the bow
+    /// and a lantern hung from it, and a pair of oars shipped in their locks.
+    /// </summary>
+    /// <remarks>
+    /// Ours rather than the reference's flat tray: the prow post and its lantern are what make one
+    /// read as a boat at a distance across the water. The bones are named for the brush — the hull
+    /// takes the plank colour, the carved scroll (<c>comb</c>) the darker heartwood, and the lantern
+    /// (<c>nose</c>) the warm amber. Bow is −z, as every model's front is.
+    /// </remarks>
+    public static CreatureModel Boat(string name) => new(
+        name, 128, 128,
+        [
+            Bone("hull", "", Vector3.Zero,
+                Box(-8f, 0f, -14f, 16f, 3f, 28f, 0, 0),        // floor
+                Box(-10f, 1f, -14f, 2f, 8f, 28f, 0, 31),       // port side
+                Box(8f, 1f, -14f, 2f, 8f, 28f, 60, 31, mirror: true),
+                Box(-8f, 1f, -16f, 16f, 8f, 2f, 0, 67),        // bow
+                Box(-8f, 1f, 14f, 16f, 8f, 2f, 36, 67),        // stern
+                Box(-8f, 5f, -2f, 16f, 1f, 3f, 72, 67),        // the bench
+                Box(-7f, 2f, 12f, 14f, 3f, 2f, 72, 71)),       // the stern seat
+            Bone("comb", "hull", Vector3.Zero,
+                Box(-1f, 3f, -19f, 2f, 12f, 3f, 0, 77),        // the prow post
+                Box(-1f, 13f, -22f, 2f, 2f, 3f, 10, 77),       // its scroll, curling forward
+                Box(-1f, 3f, 16f, 2f, 9f, 2f, 104, 67)),       // the stern post
+            Bone("nose", "comb", Vector3.Zero,
+                Box(-1.5f, 9f, -22.5f, 3f, 3f, 3f, 20, 77)),   // the lantern, hung from the scroll
+            // The oars rest in their locks with the blades dipped and trailing a little aft.
+            new CreatureBone("oar_port", "hull", new Vector3(-10f, 8f, 0f), Vector3.Zero, new Vector3(0f, -18f, -28f),
+            [
+                Box(-28f, 7f, -1f, 18f, 2f, 2f, 32, 77),
+                Box(-29f, 4f, -0.5f, 7f, 6f, 1f, 72, 77),
+            ]),
+            new CreatureBone("oar_starboard", "hull", new Vector3(10f, 8f, 0f), Vector3.Zero, new Vector3(0f, 18f, 28f),
+            [
+                Box(10f, 7f, -1f, 18f, 2f, 2f, 32, 81, mirror: true),
+                Box(22f, 4f, -0.5f, 7f, 6f, 1f, 88, 77, mirror: true),
+            ]),
+        ]);
+
     public static CreatureModel Cow() => new(
         "cow", 64, 32,
         [

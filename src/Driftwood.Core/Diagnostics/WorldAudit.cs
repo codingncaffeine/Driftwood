@@ -739,6 +739,10 @@ public static class WorldAudit
         Check("the track joins up and the cart obeys it", railFaults.Count == 0,
             railFaults.Count == 0 ? railDetail : string.Join("; ", railFaults));
 
+        var boatFaults = BoatFaults(registry, ids, out var boatDetail);
+        Check("a boat floats, rows, turns and beaches", boatFaults.Count == 0,
+            boatFaults.Count == 0 ? boatDetail : string.Join("; ", boatFaults));
+
         var spawnFaults = SpawnBandFaults(out var spawnDetail);
         Check("where a thing lives takes two questions", spawnFaults.Count == 0,
             spawnFaults.Count == 0 ? spawnDetail : string.Join("; ", spawnFaults));
@@ -5072,6 +5076,8 @@ public static class WorldAudit
         // and the two-slot hold exercises the different-size read the chests already allow.
         state.Carts.Add((5, 65, 5, 0.5f, 0f, null));
         state.Carts.Add((6, 65, 5, 0.25f, -2f, [items.Stack("brick", 19), items.Stack("paper", 3)]));
+        state.Boats.Add((7.25f, 62.52f, -3.5f, 271.5f, false));
+        state.Boats.Add((9f, 62.52f, -3.5f, 12f, true));
 
         // Two signs, one with a blank line in the middle and one at a negative cell, so SIGN proves
         // the lines come back in order and to the right board.
@@ -5160,6 +5166,10 @@ public static class WorldAudit
 
             if (into.BedSpawn is not { } wake || Vector3.Distance(wake, new Vector3(3.5f, 65.6f, 1.5f)) > 0.01f)
                 faults.Add("the bed spawn did not come back where it was");
+
+            if (into.Boats.Count != 2 || into.Boats[0] != (7.25f, 62.52f, -3.5f, 271.5f, false)
+                || into.Boats[1] != (9f, 62.52f, -3.5f, 12f, true))
+                faults.Add($"the boats came back as {string.Join(", ", into.Boats)}");
 
             if (into.Carts.Count != 2)
             {
@@ -9366,7 +9376,9 @@ public static class WorldAudit
         (StarterBlocks.LayerEmberiteIngot, "emberite_ingot"),
         (StarterBlocks.LayerSeekerEye, "seeker_eye"),
         (StarterBlocks.LayerWyrmEgg, "wyrm_egg"),
-        ((ushort)(StarterBlocks.LayerCount - 1), "phantom_membrane"),
+        (StarterBlocks.LayerMembrane, "phantom_membrane"),
+        (StarterBlocks.LayerBoatIcon, "boat"),
+        ((ushort)(StarterBlocks.LayerCount - 1), "cherry_boat"),
     ];
 
     /// <summary>
@@ -12991,6 +13003,128 @@ public static class WorldAudit
         detail = $"{wet.Pairs} dry/wet pairs + seagrass; a wet fence leaks 7 and is never "
                + "overwritten, shed cells keep their sea, the bucket scoops through a block, and "
                + "a wet slab meshes its own quads plus exactly the water faces its seat exposes";
+        return faults;
+    }
+
+    /// <summary>
+    /// The boat (2026-10-25) against the reference's handling, in a pool with a stone shore.
+    /// </summary>
+    /// <remarks>
+    /// Every claim has its control: it floats at the waterline AND one dropped from the sky ends there
+    /// too; it reaches the reference's top speed AND stops when the oars do; it beaches at the shore
+    /// AND has rowed far enough to have reached it; it glides on ice AND drags on stone.
+    /// </remarks>
+    private static List<string> BoatFaults(BlockRegistry registry, StarterBlocks.Ids ids, out string detail)
+    {
+        var faults = new List<string>();
+        var world = FluidBox(registry, ids, 0, 0, 0);
+
+        // Water three deep west of x 11, a stone shore from there, its top at y 4.
+        for (var z = -20; z <= 20; z++)
+        for (var x = -20; x <= 20; x++)
+        for (var y = 1; y <= 3; y++)
+            Put(world, x, y, z, x >= 11 ? ids.Stone : ids.Water);
+
+        var boats = new BoatSystem(registry, ids);
+        var surface = 3f + 8f / 9f;
+        const float East = 270f;   // forward (−sin, cos) is +x at 270
+
+        void Run(Boat boat, Oars oars, float seconds)
+        {
+            boat.Rowed = oars.Any;
+            boat.Oars = oars;
+            for (var t = 0f; t < seconds; t += 0.05f) boats.Step(world, 0.05f);
+        }
+
+        // Floats at rest a third of a block under the surface, the reference's equilibrium.
+        var still = boats.Place(new Vector3(-10.5f, 3.6f, -10.5f), 0f, false);
+        Run(still, default, 6f);
+        var draft = surface - still.Position.Y;
+        if (still.Status != BoatStatus.InWater || draft is < 0.25f or > 0.45f)
+            faults.Add($"a boat at rest sits {draft:F2} under the surface, {still.Status} (want 0.25-0.45 in water)");
+
+        var dropped = boats.Place(new Vector3(-10.5f, 9f, 10.5f), 0f, false);
+        Run(dropped, default, 8f);
+        if (MathF.Abs(dropped.Position.Y - still.Position.Y) > 0.05f)
+            faults.Add($"a boat dropped from y 9 came to rest at {dropped.Position.Y:F2}, not the waterline's {still.Position.Y:F2}");
+        boats.All.Clear();
+
+        // Rows east to the reference's top speed, then beaches against the shore.
+        var rower = boats.Place(new Vector3(-15f, still.Position.Y, 0.5f), East, false);
+        Run(rower, new Oars(true, false, false, false), 3f);
+        var top = rower.Speed;
+        if (top is < 6.5f or > 9f) faults.Add($"rowing tops out at {top:F1} b/s (want the reference's ~8)");
+        if (rower.Velocity.X <= 0f || MathF.Abs(rower.Velocity.Z) > 0.01f)
+            faults.Add($"rowing with the bow east moves ({rower.Velocity.X:F2}, {rower.Velocity.Z:F2}) a tick");
+        Run(rower, new Oars(true, false, false, false), 5f);
+        var beached = rower.Position.X;
+        if (beached < 9.5f || beached + BoatSystem.Width / 2f > 11.001f)
+            faults.Add($"a boat rowed at the shore stopped at x {beached:F2} (want against the stone at 11)");
+
+        // Coasts to a stop when the oars stop.
+        boats.All.Clear();
+        var coaster = boats.Place(new Vector3(-15f, still.Position.Y, -5.5f), East, false);
+        Run(coaster, new Oars(true, false, false, false), 2f);
+        var from = coaster.Position.X;
+        Run(coaster, default, 6f);
+        if (coaster.Speed > 0.05f) faults.Add($"a boat left alone still makes {coaster.Speed:F2} b/s after six seconds");
+        var glide = coaster.Position.X - from;
+
+        // Turns on the spot, creeping forward only a little.
+        var turner = boats.Place(new Vector3(-5f, still.Position.Y, 12.5f), 0f, false);
+        var start = turner.Position;
+        Run(turner, new Oars(false, false, false, true), 2f);
+        var swung = turner.Yaw;
+        var crept = Vector3.Distance(start, turner.Position);
+        if (swung is < 90f or > 359f) faults.Add($"two seconds of D swung the bow {swung:F0}° (want over 90)");
+        if (crept > 4f) faults.Add($"a turn on the spot travelled {crept:F1} blocks");
+
+        // On land: stone drags it to a stop, ice barely does.
+        float Slide(BlockId top)
+        {
+            for (var z = -20; z <= 20; z++)
+            for (var x = 11; x <= 20; x++)
+                Put(world, x, 3, z, top);
+            boats.All.Clear();
+            var sled = boats.Place(new Vector3(12f, 4f, 0.5f), East, false);
+            Run(sled, default, 0.2f);
+            sled.Velocity = new Vector3(0.3f, 0f, 0f);
+            var x0 = sled.Position.X;
+            Run(sled, default, 3f);
+            return sled.Position.X - x0;
+        }
+
+        var onStone = Slide(ids.Stone);
+        var onIce = Slide(ids.Ice);
+        if (onStone > 1.5f) faults.Add($"a shove on stone carried a boat {onStone:F2} blocks (it should drag)");
+        if (onIce < onStone * 3f) faults.Add($"a shove on ice carried a boat {onIce:F2} blocks against stone's {onStone:F2}");
+
+        // A creature bumped by a moving hull takes the second seat and rides there.
+        boats.All.Clear();
+        var ferry = boats.Place(new Vector3(-5f, still.Position.Y, -12.5f), East, false);
+        Run(ferry, new Oars(true, false, false, false), 1f);
+        var sheep = new Creature
+        {
+            Kind = "sheep", Size = new Vector3(0.9f, 1.3f, 0.9f), Hostile = false, MaxHealth = 8, Health = 8,
+            Position = ferry.Position + new Vector3(0.6f, 0.2f, 0f),
+        };
+        var still2 = boats.Place(new Vector3(-5f, still.Position.Y, 5.5f), 0f, false);
+        var refused = boats.TryBoard(still2, new Creature
+        {
+            Kind = "sheep", Size = new Vector3(0.9f, 1.3f, 0.9f), Hostile = false, MaxHealth = 8, Health = 8,
+            Position = still2.Position,
+        });
+        if (refused) faults.Add("a creature boarded a boat sitting still — only a moving hull scoops one up");
+        if (!boats.TryBoard(ferry, sheep)) faults.Add("a sheep beside a moving boat did not take the free seat");
+        Run(ferry, new Oars(true, false, false, false), 1f);
+        if (Vector3.Distance(sheep.Position, ferry.PassengerSeat) > 0.01f || !sheep.Seated)
+            faults.Add("the passenger was not carried in its seat");
+        boats.Unseat(ferry);
+        if (sheep.Seated || ferry.Passenger is not null) faults.Add("the passenger could not be let out");
+
+        detail = $"floats {draft:F2} under, tops out at {top:F1} b/s, beached at x {beached:F2}, coasts {glide:F1} "
+               + $"blocks, swings {swung:F0}° in two seconds; a shove slides {onStone:F2} on stone and {onIce:F1} on ice; "
+               + "a passenger boards, rides and leaves";
         return faults;
     }
 

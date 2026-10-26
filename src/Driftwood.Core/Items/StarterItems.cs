@@ -285,6 +285,18 @@ public static class StarterItems
             MaxStack = 1, PlacesEntity = true,
         });
 
+        // ⛳ The boats (2026-10-25): put down on water, rowed, and broken back into themselves.
+        items.Register(new ItemType
+        {
+            Name = "boat", Label = "boat", IconLayer = StarterBlocks.LayerBoatIcon,
+            MaxStack = 1, PlacesEntity = true, BurnSeconds = 60f,
+        });
+        items.Register(new ItemType
+        {
+            Name = "cherry_boat", Label = "cherry boat", IconLayer = StarterBlocks.LayerCherryBoatIcon,
+            MaxStack = 1, PlacesEntity = true, BurnSeconds = 60f,
+        });
+
         // And the cart with a hold (#97): a chest on axles, the cart item's own consumer.
         items.Register(new ItemType
         {

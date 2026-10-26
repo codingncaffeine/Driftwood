@@ -109,6 +109,10 @@ public sealed record WorldState(
     /// sections carry their length, so an old build skips the holds and still reads the carts.
     /// </remarks>
     public List<(int X, int Y, int Z, float T, float Velocity, ItemStack[]? Cargo)> Carts { get; } = [];
+
+    /// <summary>The boats (2026-10-25): where each floats, the way its bow points, and its wood.</summary>
+    /// <remarks>Its own section, BOAT, so a build from before boats skips them and opens the world.</remarks>
+    public List<(float X, float Y, float Z, float Yaw, bool Cherry)> Boats { get; } = [];
 }
 
 /// <summary>
@@ -469,6 +473,19 @@ public static class WorldSave
                     }
                 }));
 
+                SaveSection.Write(into, "BOAT", Bytes(boats =>
+                {
+                    boats.Write(state.Boats.Count);
+                    foreach (var (x, y, z, yaw, cherry) in state.Boats)
+                    {
+                        boats.Write(x);
+                        boats.Write(y);
+                        boats.Write(z);
+                        boats.Write(yaw);
+                        boats.Write(cherry);
+                    }
+                }));
+
                 // ⛳ The cargo carts' holds, as their OWN section rather than new fields in CART:
                 // fields are positional and sections carry their length, so a build from before
                 // cargo skips the holds and still reads every cart as a plain one.
@@ -690,6 +707,17 @@ public static class WorldSave
                             into.Carts.Add((
                                 carts.ReadInt32(), carts.ReadInt32(), carts.ReadInt32(),
                                 carts.ReadSingle(), carts.ReadSingle(), null));
+                        break;
+                    }
+
+                    case "BOAT":
+                    {
+                        using var boats = Reader(payload);
+                        var count = boats.ReadInt32();
+                        for (var i = 0; i < count; i++)
+                            into.Boats.Add((
+                                boats.ReadSingle(), boats.ReadSingle(), boats.ReadSingle(),
+                                boats.ReadSingle(), boats.ReadBoolean()));
                         break;
                     }
 

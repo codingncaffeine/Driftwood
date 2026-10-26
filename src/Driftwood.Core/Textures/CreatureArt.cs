@@ -79,6 +79,10 @@ public static class CreatureArt
         // the roster — but painted through the same brush as everything else that moves.
         ["cart"] = new((104, 106, 112), (134, 136, 142), (62, 64, 70), (122, 96, 60), 0.18f, 0.05f),
 
+        // The boats (2026-10-25): plank-coloured hulls, a heartwood prow and an amber lantern.
+        ["boat"] = new((150, 118, 76), (128, 98, 62), (236, 176, 74), (96, 70, 44), 0f, 0.07f),
+        ["cherry_boat"] = new((222, 168, 164), (196, 140, 138), (236, 176, 74), (128, 74, 80), 0f, 0.06f),
+
         // The cargo cart (#97): the same iron, warmed by the timber of the hold riding in it.
         ["cargo_cart"] = new((110, 104, 96), (140, 132, 118), (64, 60, 54), (146, 112, 64), 0.2f, 0.06f),
 

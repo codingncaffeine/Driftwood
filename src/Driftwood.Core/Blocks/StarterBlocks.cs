@@ -756,7 +756,11 @@ public static class StarterBlocks
     public const ushort LayerDriftwings = LayerWyrmEgg + 1;
     public const ushort LayerMembrane = LayerWyrmEgg + 2;
 
-    public const int LayerCount = LayerMembrane + 1;
+    /// <summary>The boats (2026-10-25), one for each plank.</summary>
+    public const ushort LayerBoatIcon = LayerMembrane + 1;
+    public const ushort LayerCherryBoatIcon = LayerMembrane + 2;
+
+    public const int LayerCount = LayerCherryBoatIcon + 1;
 
     /// <summary>One stage of the ashcap, as a block name.</summary>
     public static string AshcapName(int stage) => $"ashcap_{stage}";

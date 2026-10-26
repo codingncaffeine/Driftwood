@@ -131,6 +131,9 @@ public sealed class Creature
     /// <summary>Seconds the target has been out of view while still being hunted.</summary>
     public float Unseen { get; set; }
 
+    /// <summary>Sitting in a boat (2026-10-25): the boat carries it, and it neither thinks nor walks.</summary>
+    public bool Seated { get; set; }
+
     /// <summary>Seconds of walking that went nowhere. A path that is not working is replaced.</summary>
     public float Stuck { get; set; }
 
@@ -1291,6 +1294,8 @@ public sealed class CreatureHerd
                     (int)MathF.Floor(creature.Position.Y),
                     (int)MathF.Floor(creature.Position.Z)))
                 continue;
+
+            if (creature.Seated) continue;
 
             creature.Spoke = false;
             creature.Shed = false;

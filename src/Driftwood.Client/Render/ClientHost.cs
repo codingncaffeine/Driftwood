@@ -1491,6 +1491,12 @@ public sealed class ClientHost : IDisposable
                 new CreatureKind("cargo_cart", "cargo_cart", default, "cargo_cart", []),
                 StarterCreatures.CargoCart(), "ours", "", 0, 0));
 
+            // ⛳ The boats (2026-10-25), on the same pipeline: one hull, a sheet for each wood.
+            foreach (var hull in (string[])["boat", "cherry_boat"])
+                resolved.Add(new CreatureSet.Resolved(
+                    new CreatureKind(hull, hull, default, hull, []),
+                    StarterCreatures.Boat(hull), "ours", "", 0, 0));
+
             // Commanded summons are presentation-only additions here: they never join the natural
             // creature census, spawn tables, drops or XP identities.
             foreach (var model in new[]
@@ -2051,6 +2057,7 @@ public sealed class ClientHost : IDisposable
         _signalTable = _streamer.Signals!.Table;
         _railTable = _streamer.Rails!;
         _cartSystem = new CartSystem(_railTable);
+        _boatSystem = new BoatSystem(registry, _ids);
 
         var reach = viewRadius * Chunk.Size;
         _fogEnd = MathF.Min(reach * 0.90f, 700f);
@@ -2315,6 +2322,12 @@ public sealed class ClientHost : IDisposable
             _cartSystem.All.Add(cart);
         }
 
+        // The boats float back where they were, empty — nobody was aboard when the world was written.
+        _boatSystem.All.Clear();
+        _ridingBoat = null;
+        foreach (var (bx, by, bz, yaw, cherry) in state.Boats)
+            _boatSystem.Place(new Vector3(bx, by, bz), yaw, cherry);
+
         // ⚠ Brought up to date rather than left to work itself out. Poll announces everything the
         // pockets can pay for that has not been announced, so a world loaded with a full inventory
         // fires a notice for every one of them in the first frame unless it is primed first.
@@ -2375,6 +2388,9 @@ public sealed class ClientHost : IDisposable
             state.Carts.Add((
                 cart.X, cart.Y, cart.Z, cart.T, cart.Velocity,
                 cart.Cargo is { } hold ? [.. hold.Contents] : null));
+
+        foreach (var boat in _boatSystem.All)
+            state.Boats.Add((boat.Position.X, boat.Position.Y, boat.Position.Z, boat.Yaw, boat.Cherry));
 
         return state;
     }
@@ -2537,6 +2553,16 @@ public sealed class ClientHost : IDisposable
     /// <summary>The cart under the player, or null on foot. The first ridden thing in the game.</summary>
     private Cart? _ridingCart;
 
+    /// <summary>Every boat, and the one the player is rowing (2026-10-25).</summary>
+    private BoatSystem _boatSystem = null!;
+    private Boat? _ridingBoat;
+
+    /// <summary>What a boat being put down stops at: anything targetable, and water.</summary>
+    private bool[]? _boatStops;
+
+    /// <summary>Spray thrown at the bow, rationed by time rather than by frame.</summary>
+    private float _spray;
+
     private float _signalClock;
 
     /// <summary>A plain accumulating clock for the button springs. Never wraps in a session.</summary>
@@ -2688,6 +2714,169 @@ public sealed class ClientHost : IDisposable
         if (form == RailForm.None) return;
 
         _player.Teleport(riding.Position(form) + new Vector3(0f, 0.35f, 0f));
+    }
+
+    /// <summary>
+    /// Floats and rows the boats, seats whatever a moving hull bumps into, and keeps the rower in
+    /// the seat with the view swinging round as the bow does.
+    /// </summary>
+    private void StepBoats(float dt)
+    {
+        if (!_walking || !_spawned) return;
+
+        // The oars are read in the movement step; a boat nobody sits in has none.
+        foreach (var boat in _boatSystem.All)
+            if (boat != _ridingBoat) { boat.Rowed = false; boat.Oars = default; }
+
+        var turnedFrom = _ridingBoat?.Yaw ?? 0f;
+        var strokes = _ridingBoat is { } r ? (r.LeftOar, r.RightOar) : (0f, 0f);
+        _boatSystem.Step(_streamer.World, dt);
+
+        if (_herd is not null)
+            foreach (var boat in _boatSystem.All)
+            {
+                if (boat.Passenger is not null || boat.Speed < 1f) continue;
+                foreach (var creature in _herd.All)
+                {
+                    if (!_boatSystem.TryBoard(boat, creature)) continue;
+                    if (boat == _ridingBoat) Achieve(AchievementEvents.Ride, "boat_passenger");
+                    break;
+                }
+            }
+
+        if (_ridingBoat is not { } riding) return;
+
+        // ⛳ The view turns with the hull, as the reference's rider does — a boat steered round
+        // a headland brings the headland round with it rather than leaving the camera behind.
+        var turned = riding.Yaw - turnedFrom;
+        if (turned > 180f) turned -= 360f;
+        if (turned < -180f) turned += 360f;
+        _camera.Yaw += turned;
+
+        _player.Teleport(riding.RowerSeat);
+
+        if (riding.Status == BoatStatus.InWater)
+        {
+            // A stroke's splash each time an oar comes round, and spray off the bow at speed.
+            var (left, right) = strokes;
+            if (riding.LeftOar < left || riding.RightOar < right)
+                _audio?.Play(Pick(ActionSounds.SwimStroke), riding.Position, 0.25f, 1.1f + Wobble() * 0.1f);
+
+            if (riding.Speed > 4f)
+            {
+                _spray += dt * riding.Speed;
+                if (_spray >= 1.5f)
+                {
+                    _spray = 0f;
+                    InteractionParticleEffects.WaterSplash(
+                        _particles, riding.Position + riding.Forward * 1.1f + new Vector3(0f, 0.35f, 0f), 3);
+                }
+            }
+        }
+
+        if (riding.RowedDistance >= 1000f) Achieve(AchievementEvents.Ride, "boat_long_haul");
+    }
+
+    /// <summary>
+    /// Boards the boat under the crosshair, or puts the held one down on the water. True when it did.
+    /// </summary>
+    /// <remarks>
+    /// A boat goes down on water or on ground — the reference allows both, and a boat dragged across
+    /// a beach is how a player gets one to the sea. Its bow faces the way the player does.
+    /// </remarks>
+    private bool TryBoatUse()
+    {
+        if (_ridingBoat is not null || _ridingCart is not null) return false;
+
+        var eye = _camera.Position;
+        var forward = _camera.Forward;
+        var picked = _boatSystem.Pick(eye, forward, 5f);
+
+        if (_inventory.HeldType is not { Name: "boat" or "cherry_boat" } held)
+        {
+            if (picked is null) return false;
+            _ridingBoat = picked;
+            _ridingBoat.RowedDistance = 0f;
+            Achieve(AchievementEvents.Ride, "boat");
+            return true;
+        }
+
+        if (picked is not null)
+        {
+            _ridingBoat = picked;
+            _ridingBoat.RowedDistance = 0f;
+            Achieve(AchievementEvents.Ride, "boat");
+            return true;
+        }
+
+        if (_boatStops is null)
+        {
+            _boatStops = (bool[])_targetable.Clone();
+            for (var id = 1; id < _registry.Count; id++)
+                if (_registry[(ushort)id].Fluid == FluidKind.Water) _boatStops[id] = true;
+        }
+
+        if (!BlockRay.TryCast(_streamer.World, _boatStops, eye, forward, 5f, out var hit)) return false;
+
+        var struck = _streamer.World.GetBlock(hit.X, hit.Y, hit.Z);
+        var point = eye + Vector3.Normalize(forward) * hit.Distance;
+        Vector3 at;
+        if (_registry[struck].Fluid == FluidKind.Water)
+            at = new Vector3(point.X, hit.Y + 0.52f, point.Z);
+        else if (hit.Face == Faces.PosY)
+            at = new Vector3(point.X, hit.Y + 1f, point.Z);
+        else
+            return false;
+
+        var yaw = _camera.Yaw - 90f;
+        if (_boatSystem.Collides(_streamer.World, at)) return false;
+
+        _boatSystem.Place(at, yaw, cherry: held.Name == "cherry_boat");
+        _inventory.SpendHeld();
+        _audio?.Play(Pick(ActionSounds.SwimStroke), at, 0.6f, 0.9f);
+        if (_registry[struck].Fluid == FluidKind.Water)
+            InteractionParticleEffects.WaterSplash(_particles, at + new Vector3(0f, 0.3f, 0f));
+        return true;
+    }
+
+    /// <summary>
+    /// A knock on a boat: three in quick succession break it back into its item, the reference's way —
+    /// so a stray swing in a fight does not sink the way home.
+    /// </summary>
+    private bool TryKnockBoat()
+    {
+        if (_boatSystem.Pick(_camera.Position, _camera.Forward, Combat.Reach) is not { } boat) return false;
+        if (boat == _ridingBoat) return false;
+
+        boat.Damage += 1.4f;
+        boat.Hurt = 1f;
+        Rumble(0.3f, 0.15f, 60);
+        if (boat.Damage < 3.5f) return true;
+
+        _boatSystem.Unseat(boat);
+        _boatSystem.All.Remove(boat);
+        _drops.Drop(new ItemStack(_items.ByName(boat.Cherry ? "cherry_boat" : "boat").Id, 1),
+            boat.Position + new Vector3(0f, 0.5f, 0f));
+        return true;
+    }
+
+    /// <summary>Climbs out beside the hull, onto whatever is there.</summary>
+    private void LeaveBoat()
+    {
+        if (_ridingBoat is not { } boat) return;
+        _ridingBoat = null;
+        boat.Rowed = false;
+        boat.Oars = default;
+
+        // The first side with room for a body, port then starboard, else straight up out of it.
+        var side = Vector3.Cross(boat.Forward, Vector3.UnitY);
+        foreach (var offer in (Vector3[])[-side * 1.3f, side * 1.3f, boat.Forward * 1.6f, -boat.Forward * 1.6f])
+        {
+            var to = boat.Position + offer + new Vector3(0f, 0.6f, 0f);
+            if (!_player.Collides(_streamer.World, to)) { _player.Teleport(to); return; }
+        }
+
+        _player.Teleport(boat.Position + new Vector3(0f, 1.2f, 0f));
     }
 
     private void StepAutosave(double dt)
@@ -12224,6 +12413,7 @@ public sealed class ClientHost : IDisposable
         StepProgressionRewards((float)dt);
         StepAchievements((float)dt);
         StepCarts((float)dt);
+        StepBoats((float)dt);
         StepToasts((float)dt);
         StepAmbience((float)dt);
         StepRain((float)dt);
@@ -13661,6 +13851,9 @@ public sealed class ClientHost : IDisposable
     /// <summary>Removes the targeted block, and empties it first if it was holding anything.</summary>
     private void BreakTarget()
     {
+        // A boat under the crosshair takes the knock before any block behind it, as a cart does.
+        if (TryKnockBoat()) return;
+
         // A cart under the crosshair comes apart before any block behind it — it is nearer.
         if (_cartSystem.Pick(_streamer.World, _camera.Position, _camera.Forward, Combat.Reach) is { } cart)
         {
@@ -14699,6 +14892,7 @@ public sealed class ClientHost : IDisposable
         // ⛳ The cart, before everything: using one is boarding it, whatever is in hand, and a
         // cart in hand aimed at a rail becomes a cart on it. Both reach past the crosshair the
         // way the bucket does, because neither a cart nor the rail under water is a full block.
+        if (TryBoatUse()) return true;
         if (TryCartUse()) return true;
 
         // A bucket is used on the world rather than placed into it, and it reaches things the
@@ -15117,6 +15311,31 @@ public sealed class ClientHost : IDisposable
             _player.Step(_streamer.World, dt, Vector3.Zero, false, false, false);
             _camera.Position = _player.EyePosition;
             return;
+        }
+
+        // ⛳ Rowing (2026-10-25): the boat owns the body and the keys are the oars — W pulls, S backs
+        // water, A and D swing the bow — while the look stays free. Sneak climbs out.
+        if (_ridingBoat is { } rowing)
+        {
+            var pad = _settings.ControllerEnabled ? _controllerMove : default;
+            if (_keys.Held(_input, GameAction.Sneak)
+                || (_settings.ControllerEnabled
+                    && _spellControllerBank == 0
+                    && _controller.Held(ControllerAction.Sneak, _settings.Pad)))
+            {
+                LeaveBoat();
+            }
+            else
+            {
+                rowing.Rowed = true;
+                rowing.Oars = new Oars(
+                    _keys.Held(_input, GameAction.MoveForward) || pad.Y > 0.3f,
+                    _keys.Held(_input, GameAction.MoveBack) || pad.Y < -0.3f,
+                    _keys.Held(_input, GameAction.MoveLeft) || pad.X < -0.3f,
+                    _keys.Held(_input, GameAction.MoveRight) || pad.X > 0.3f);
+                _camera.Position = _player.EyePosition;
+                return;
+            }
         }
 
         // ⛳ Riding: the cart owns the body's position and the keys mean the cart. Forward pushes
@@ -15760,6 +15979,10 @@ public sealed class ClientHost : IDisposable
         // ⛳ T1b's cliffs and overhangs (2026-10-25): a sheer face with a hollow cut under its lip,
         // from the ground in front of it, so the overhang is seen the way a walker meets it.
         new(2900, "44-cliffs", "stick", ViewMode.First, false, Visit: "cliffs"),
+
+        // ⛳ S1's boats (2026-10-25): a driftoak and a cherry hull afloat off the nearest shore,
+        // seen from the water's edge — the prow scroll, the lantern and the oars at rest.
+        new(3200, "45-boats", "boat", ViewMode.First, false, Visit: "boats"),
     ];
 
     /// <summary>
@@ -16179,6 +16402,37 @@ public sealed class ClientHost : IDisposable
                 eye = new Vector3(bestX + 0.5f, foot + 3.5f, bestZ + 14.5f);
                 pitch = 14f;
                 Console.WriteLine($"shot visit  cliff at {bestX},{bestZ}, {drop} high over y {foot}");
+                break;
+            }
+
+            case "boats":
+            {
+                // The nearest open water three deep, with the boats a few blocks out from the eye.
+                var found = false;
+                var (wx, wz) = (sx, sz);
+                for (var r = 0; r <= 400 && !found; r += 4)
+                for (var a = 0; a < 32 && !found; a++)
+                {
+                    var t = a / 32f * MathF.Tau;
+                    int x = sx + (int)(MathF.Cos(t) * r), z = sz + (int)(MathF.Sin(t) * r);
+                    if (_terrain.SurfaceHeight(x, z) > TerrainGenerator.SeaLevel - 3
+                        || _terrain.SurfaceHeight(x, z - 8) > TerrainGenerator.SeaLevel - 3) continue;
+                    (wx, wz, found) = (x, z, true);
+                }
+
+                if (!found)
+                {
+                    Console.WriteLine("shot visit  no open water in reach");
+                    return;
+                }
+
+                var water = TerrainGenerator.SeaLevel + 0.52f;
+                _boatSystem.All.Clear();
+                _boatSystem.Place(new Vector3(wx - 1.6f, water, wz - 5f), 30f, cherry: false);
+                _boatSystem.Place(new Vector3(wx + 1.8f, water, wz - 7.5f), 300f, cherry: true);
+                eye = new Vector3(wx + 0.5f, TerrainGenerator.SeaLevel + 3.2f, wz + 0.5f);
+                pitch = -22f;
+                Console.WriteLine($"shot visit  boats off {wx},{wz}");
                 break;
             }
 
@@ -20971,6 +21225,28 @@ public sealed class ClientHost : IDisposable
                     viewProj, _viewPosition, sky,
                     SampleLight(at + new Vector3(0f, 0.4f, 0f)),
                     cart.Cargo is null ? "cart" : "cargo_cart", at, yawDeg);
+            }
+
+            // ⛳ The boats, riding the swell: a slow bob and a roll on the water, more of both the
+            // faster it goes, and a jolt to one side when struck.
+            var swell = (float)_elapsed;
+            foreach (var boat in _boatSystem.All)
+            {
+                var f = boat.Forward;
+                var yawDeg = float.RadiansToDegrees(MathF.Atan2(f.Z, f.X));
+                var at = boat.Position;
+                var roll = boat.Hurt * 8f * MathF.Sin(boat.Hurt * 20f);
+                if (boat.Status == BoatStatus.InWater)
+                {
+                    var phase = swell * 1.3f + boat.Position.X * 0.3f + boat.Position.Z * 0.2f;
+                    at.Y += MathF.Sin(phase) * 0.035f;
+                    roll += MathF.Sin(phase * 0.7f) * (2f + boat.Speed * 0.4f);
+                }
+
+                _creatureRenderer.Draw(
+                    viewProj, _viewPosition, sky,
+                    SampleLight(at + new Vector3(0f, 0.5f, 0f)),
+                    boat.Cherry ? "cherry_boat" : "boat", at, yawDeg, boat.Hurt * 0.6f, roll: roll);
             }
         }
 

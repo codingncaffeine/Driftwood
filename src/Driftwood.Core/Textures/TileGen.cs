@@ -4071,6 +4071,44 @@ public static class TileGen
         return Outline(t);
     }
 
+    /// <summary>
+    /// A boat side on (2026-10-25): the hull's sweep, its prow scroll with the lantern hung from it,
+    /// and an oar crossing behind.
+    /// </summary>
+    public static byte[] IconBoat(int seed, int r, int g, int b)
+    {
+        var t = new byte[BytesPerTile];
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var grain = (int)((Noise(x, y, seed) * 2f - 1f) * 9f);
+
+            // The oar first, so the hull is drawn over it: a shaft from top right to the water.
+            if (x - y is >= 3 and <= 4 && y is >= 1 and <= 10)
+                Put(t, x, y, Clamp(r - 40 + grain), Clamp(g - 34 + grain), Clamp(b - 24 + grain), 255);
+
+            // The hull: a band that sweeps up toward the bow at the left.
+            var keel = 12 - (x < 5 ? (5 - x) / 2 : 0);
+            var gunwale = 8 - (x < 4 ? (4 - x) : 0);
+            if (x is >= 1 and <= 14 && y >= gunwale && y <= keel)
+            {
+                var strake = (y - gunwale) % 2 == 0 ? 14 : -6;   // the overlapping planks
+                Put(t, x, y, Clamp(r + strake + grain), Clamp(g + strake + grain), Clamp(b + strake + grain), 255);
+            }
+
+            // The prow post and its scroll, darker heartwood.
+            if ((x == 1 && y is >= 3 and <= 8) || (y == 3 && x is 0 or 1) || (x == 0 && y == 4))
+                Put(t, x, y, Clamp(r - 54 + grain), Clamp(g - 48 + grain), Clamp(b - 34 + grain), 255);
+
+            // The lantern under the scroll.
+            if (x == 0 && y is 5 or 6)
+                Put(t, x, y, 246, 190, 84, 255);
+        }
+
+        return Outline(t);
+    }
+
     /// <summary>A sheet of flame, transparent around it — what stands in a campfire.</summary>
     /// <remarks>
     /// Tapering as it rises and eaten into at the edges, so the two crossed planes it is drawn on

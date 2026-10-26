@@ -226,10 +226,11 @@ public sealed class CreatureRenderer : IDisposable
     /// <param name="tipped">
     /// 0 standing, 1 lying on its side. What a death looks like on the way down.
     /// </param>
+    /// <param name="roll">Degrees either way about the model's own forward axis — a boat on the swell.</param>
     public unsafe void Draw(
         Matrix4x4 viewProj, Vector3 cameraPos, in SkyParams sky, EntityLight light,
         string kind, Vector3 feet, float yawDegrees, float hurt = 0f, float tipped = 0f,
-        float scale = 1f)
+        float scale = 1f, float roll = 0f)
     {
         if (!_kinds.TryGetValue(kind, out var found)) return;
 
@@ -277,6 +278,8 @@ public sealed class CreatureRenderer : IDisposable
             root = Matrix4x4.CreateRotationZ(float.DegreesToRadians(88f * Math.Clamp(tipped, 0f, 1f)))
                  * root;
         }
+
+        if (roll != 0f) root = Matrix4x4.CreateRotationZ(float.DegreesToRadians(roll)) * root;
 
         var pose = found.Mesh.Pose(root);
 
