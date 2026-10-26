@@ -11,12 +11,15 @@ magic, command companions, and return to the same persistent procedurally genera
 
 ## What is in the game?
 
-- Seeded 384-block-tall worlds with biomes, caves, ore seams, ruins, settlements, weather, flowing
-  water and lava, and a deep molten Emberdeep region.
-- Destructible terrain, building, storage, crafting, smelting, farming, rails, signals, armour,
-  shields, bows, thrown items, hunger, breath, fire, and dozens of creatures.
-- Five authored exploration-site families, persistent discoveries and encounters, resident trading,
-  treasure routes, an explored-world map, and saved waypoints.
+- Seeded worlds with mountains, rivers and wide seas, biomes, caves, ore seams, ruins, settlements,
+  weather, flowing water and lava, and a deep molten Emberdeep region.
+- Destructible terrain, building, storage, nearly 400 crafting recipes, smelting, brewing, farming,
+  beekeeping, fishing, rails, signals, armour, shields, bows, thrown items, hunger, breath and fire.
+- Boats, and ships you build, steer and moor as one body.
+- Forty kinds of creature, from farm animals and bees to the Deepwatch's guardians, the Emberdeep's
+  monsters, and two bosses: the Core Wyrm and the Ashwraith.
+- Eight authored exploration-site families, persistent discoveries and encounters, resident trading,
+  treasure routes, an explored-world map, saved waypoints, and an achievement tree.
 - Classless progression to level 20 with four attributes, gold, a character sheet, 19 spells, four
   automatic spell ranks, eight prepared slots, three loadouts, and four commanded companions.
 - Cascaded shadows, ambient occlusion, HDR and bloom, temporal antialiasing, pack-aware weather and
@@ -58,10 +61,11 @@ packs, skins and settings live in `%APPDATA%\Driftwood`.
 
 On a first day:
 
-1. Break a log with empty hands and collect it.
-2. Open the inventory and make planks, sticks, and basic tools.
-3. Build a bench for the full crafting grid, then make storage and a furnace.
-4. Find food and shelter, set a bed after dark, and begin exploring.
+1. Choose **Play** on the title menu, or **Create New World** to name one and pick a seed.
+2. Break a log with empty hands and collect it.
+3. Open the inventory and make planks, sticks, and basic tools.
+4. Build a bench for the full crafting grid, then make storage and a furnace.
+5. Find food and shelter, set a bed after dark, and begin exploring.
 
 The [Getting Started guide](https://github.com/codingncaffeine/Driftwood/wiki/Getting-Started)
 continues from there.
@@ -77,7 +81,7 @@ continues from there.
 | `B` | Fold the recipe book in or out |
 | `M` | Open or close the explored-world map |
 | Hold `R` | Release mouse-look and click a prepared spell |
-| `Esc` | Options, controls, packs, skins, saves, and exit |
+| `Esc` | Pause, options, packs, skins, and back to the main menu |
 
 Every key and discrete controller action is rebindable. See
 [Controls and Controller](https://github.com/codingncaffeine/Driftwood/wiki/Controls-and-Controller)
@@ -90,8 +94,13 @@ documentation, organized by subject:
 
 - [Survival](https://github.com/codingncaffeine/Driftwood/wiki/Survival),
   [gathering and mining](https://github.com/codingncaffeine/Driftwood/wiki/Gathering,-Tools-and-Mining),
-  [crafting](https://github.com/codingncaffeine/Driftwood/wiki/Crafting,-Stations-and-Recipes), and
+  [crafting](https://github.com/codingncaffeine/Driftwood/wiki/Crafting,-Stations-and-Recipes),
+  the full [recipe list](https://github.com/codingncaffeine/Driftwood/wiki/Recipe-List),
+  [brewing](https://github.com/codingncaffeine/Driftwood/wiki/Brewing-and-Potions), and
   [combat](https://github.com/codingncaffeine/Driftwood/wiki/Combat,-Equipment-and-Projectiles)
+- [Boats and ships](https://github.com/codingncaffeine/Driftwood/wiki/Boats-and-Ships),
+  [the Emberdeep and the Core](https://github.com/codingncaffeine/Driftwood/wiki/The-Emberdeep-and-the-Core),
+  and [achievements](https://github.com/codingncaffeine/Driftwood/wiki/Achievements)
 - [World, biomes, and fluids](https://github.com/codingncaffeine/Driftwood/wiki/World,-Biomes-and-Fluids),
   [creatures and spawning](https://github.com/codingncaffeine/Driftwood/wiki/Creatures-and-Spawning),
   [exploration and trading](https://github.com/codingncaffeine/Driftwood/wiki/Exploration-and-Trading),
