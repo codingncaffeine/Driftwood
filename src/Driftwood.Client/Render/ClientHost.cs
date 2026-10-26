@@ -302,6 +302,18 @@ public sealed class ClientHost : IDisposable
     /// <summary>Whether the title menu is showing its Create New World page (2026-10-26).</summary>
     private bool _startCreating;
 
+    /// <summary>The world whose own page the title menu is showing — Play, Rename, Delete — or null.</summary>
+    private string? _startWorld;
+
+    /// <summary>Whether that page is asking "delete it?" rather than offering its rows.</summary>
+    private bool _startDeleting;
+
+    /// <summary>Whether the world page was opened from the full list, so Back returns there.</summary>
+    private bool _startWorldFromList;
+
+    /// <summary>What went wrong with the last rename, said on the Rename row until the next try.</summary>
+    private string? _renameFault;
+
     /// <summary>The row that leaves the settings when they were opened from the menu.</summary>
     private const string BackToMenu = "back to the menu";
 
@@ -386,6 +398,9 @@ public sealed class ClientHost : IDisposable
     /// </remarks>
     private readonly TextField _seedBox =
         new(32, TextAllows.FileSafe) { Placeholder = "random" };
+
+    /// <summary>A world's new name, filled with its current one when its page opens.</summary>
+    private readonly TextField _renameBox = new(32, TextAllows.FileSafe) { Placeholder = "a new name" };
 
     /// <summary>What a new world's save is called, filled with a free name when the page opens.</summary>
     private readonly TextField _nameBox = new(32, TextAllows.FileSafe) { Placeholder = "a new name" };
@@ -3285,6 +3300,8 @@ public sealed class ClientHost : IDisposable
         _hudScreen.Scroll = 0;
         _startListing = false;
         _startCreating = false;
+        _startWorld = null;
+        _startDeleting = false;
 
         TakeThePointer();
         RefreshScreen();
@@ -3300,7 +3317,11 @@ public sealed class ClientHost : IDisposable
     private const string PlayRow = "Play";
     private const string CreateWorldRow = "Create New World";
     private const string LoadWorldRow = "Load World";
-    private const string MoreWorldsRow = "More Worlds";
+    private const string MoreWorldsRow = "All Worlds";
+    private const string RenameRow = "Rename";
+    private const string DeleteRow = "Delete";
+    private const string DeleteYesRow = "Yes, delete it";
+    private const string DeleteNoRow = "No, keep it";
 
     /// <summary>How many other worlds the main menu shows itself, before More Worlds.</summary>
     private const int MenuWorlds = 4;
@@ -5350,6 +5371,21 @@ public sealed class ClientHost : IDisposable
         // way out is the row, and WakeUp clears the kind itself before coming through here.
         // ⛳ Except from one of its pages (2026-10-26): Escape on the world list or on Create New
         // World goes back to the main menu, the way Back and Cancel do.
+        if (_hudScreen.Kind == HudScreenKind.Start && _startWorld is not null)
+        {
+            if (_startDeleting)
+            {
+                _startDeleting = false;
+                SelectStartRow(DeleteRow);
+            }
+            else
+            {
+                LeaveWorldPage();
+            }
+
+            return;
+        }
+
         if (_hudScreen.Kind == HudScreenKind.Start && (_startListing || _startCreating))
         {
             BackToStartMenu(_startListing ? MoreWorldsRow : CreateWorldRow);
@@ -5680,7 +5716,7 @@ public sealed class ClientHost : IDisposable
         return _hudScreen.Kind switch
         {
             // No "closes" — there is nothing behind it to go back to yet.
-            HudScreenKind.Start when _startListing || _startCreating =>
+            HudScreenKind.Start when _startListing || _startCreating || _startWorld is not null =>
                 $"up and down pick, enter chooses{wheel}, {close} goes back",
             HudScreenKind.Start => $"up and down pick, enter chooses{wheel}",
             HudScreenKind.Game when _atStartScreen =>
@@ -5720,6 +5756,42 @@ public sealed class ClientHost : IDisposable
     /// </remarks>
     private void BuildStartRows()
     {
+        _startWorldRows.Clear();
+
+        // ⛳ One world's own page (2026-10-26, the user: "an intuitive way to rename and delete
+        // worlds"): everything that can be done to a world, in one place, reached by choosing it.
+        if (_startWorld is { } paged)
+        {
+            var world = paged;
+            var header = _saved.Where(w => w.Name == world).Select(w => (SaveHeader?)w).FirstOrDefault();
+            var open = world == _worldName;
+
+            if (_startDeleting)
+            {
+                _hudScreen.Rows.Add(new MenuRow($"Delete {world}?", Heading: true));
+                _hudScreen.Rows.Add(new MenuRow(DeleteNoRow, "", Note: "Back to the world, as it was"));
+                _hudScreen.Rows.Add(new MenuRow(DeleteYesRow, "",
+                    Note: $"{world} and its backups are removed for good. This can't be undone"));
+                return;
+            }
+
+            _hudScreen.Rows.Add(new MenuRow(open ? $"{world} (current)" : world, Heading: true));
+            _hudScreen.Rows.Add(new MenuRow(
+                PlayRow,
+                header is { } h ? $"{h.PlayedFor} · {h.Saved.ToLocalTime():d MMM HH:mm}" : "",
+                Note: header is { } seen ? $"Seed {seen.Seed}, {seen.Edits} changes" : ""));
+            _hudScreen.Rows.Add(new MenuRow(
+                RenameRow, Edits: _renameBox,
+                Note: _renameFault ?? "Enter, type the new name, then Enter again"));
+            _hudScreen.Rows.Add(new MenuRow(
+                DeleteRow, open ? "open now" : "",
+                Note: open
+                    ? "This is the world that's open. Play another one first to delete this one"
+                    : "Asks first. The world and its backups are removed for good"));
+            _hudScreen.Rows.Add(new MenuRow(BackRow, "", Note: _startWorldFromList ? "Back to all worlds" : "Back to the main menu"));
+            return;
+        }
+
         if (_startListing)
         {
             _hudScreen.Rows.Add(new MenuRow(
@@ -5734,12 +5806,13 @@ public sealed class ClientHost : IDisposable
             {
                 var when = world.Saved.ToLocalTime();
                 var current = world.Name == _worldName;
+                _startWorldRows[_hudScreen.Rows.Count] = world.Name;
                 _hudScreen.Rows.Add(new MenuRow(
                     current ? world.Name + CurrentMark : world.Name,
                     $"{world.PlayedFor} · {when:d MMM HH:mm}",
                     Note: current
-                        ? "This world is open now. Enter to keep playing it"
-                        : $"Seed {world.Seed}, {world.Edits} changes. Enter to play it"));
+                        ? "This world is open now. Enter to play, rename or delete it"
+                        : $"Seed {world.Seed}, {world.Edits} changes. Enter to play, rename or delete it"));
             }
 
             // ⛔ On the screen, not only in a log. A file that will not read is somebody's world and
@@ -5774,7 +5847,6 @@ public sealed class ClientHost : IDisposable
         }
 
         _hudScreen.Rows.Add(new MenuRow($"Driftwood v{ProductVersion}", Heading: true));
-        _startWorldRows.Clear();
 
         // ⛳ Play is the world played last (2026-10-26) — the one this launch opened, which is the
         // most recent save — and it is the row the menu starts on. A world that would not load is
@@ -5800,19 +5872,18 @@ public sealed class ClientHost : IDisposable
                 _startWorldRows[_hudScreen.Rows.Count] = world.Name;
                 _hudScreen.Rows.Add(new MenuRow(
                     world.Name, $"{world.PlayedFor} · {world.Saved.ToLocalTime():d MMM}",
-                    Note: $"Seed {world.Seed}. Enter to play it — {_worldName} is saved first"));
+                    Note: $"Seed {world.Seed}. Enter to play, rename or delete it"));
             }
-
-            if (others.Count > MenuWorlds || _unreadable.Count > 0)
-                _hudScreen.Rows.Add(new MenuRow(
-                    MoreWorldsRow,
-                    others.Count > MenuWorlds ? $"{others.Count - MenuWorlds} more" : $"{_unreadable.Count} can't be read",
-                    Note: "Every saved world, and any file that couldn't be read"));
         }
-        else if (_unreadable.Count > 0)
+
+        // Every world, the open one too, so any of them can be renamed or deleted from here.
+        if (_saved.Count > 0 || _unreadable.Count > 0)
         {
+            if (others.Count == 0) _hudScreen.Rows.Add(new MenuRow("Your Worlds", Heading: true));
             _hudScreen.Rows.Add(new MenuRow(
-                MoreWorldsRow, $"{_unreadable.Count} can't be read", Note: "Files in the saves folder that couldn't be read"));
+                MoreWorldsRow,
+                $"{_saved.Count} saved" + (_unreadable.Count > 0 ? $", {_unreadable.Count} can't be read" : ""),
+                Note: "Every saved world, to play, rename or delete"));
         }
 
         _hudScreen.Rows.Add(new MenuRow("", Heading: true));
@@ -5838,6 +5909,102 @@ public sealed class ClientHost : IDisposable
         _hudScreen.Scroll = 0;
         RefreshScreen();
         ShowSelectedRow();
+    }
+
+    /// <summary>Opens one world's page, with Play picked so Enter twice still plays it.</summary>
+    private void OpenWorldPage(string world, bool fromList)
+    {
+        _startWorld = world;
+        _startDeleting = false;
+        _startWorldFromList = fromList;
+        _renameFault = null;
+        _renameBox.Text = world;
+        _startListing = false;
+        _startCreating = false;
+        SelectStartRow(PlayRow);
+    }
+
+    /// <summary>Back from a world's page to wherever it was opened from, with that world picked.</summary>
+    private void LeaveWorldPage()
+    {
+        var world = _startWorld;
+        var fromList = _startWorldFromList;
+        _startWorld = null;
+        _startDeleting = false;
+        _renameFault = null;
+
+        if (fromList)
+        {
+            ShowStartPage(listing: true, creating: false);
+            if (world is not null) SelectStartRow(world, CurrentMark);
+            return;
+        }
+
+        BackToStartMenu(world ?? PlayRow);
+    }
+
+    /// <summary>Rebuilds the menu and picks the first row with these words (or these plus a suffix).</summary>
+    private void SelectStartRow(string label, string? orWithSuffix = null)
+    {
+        _hudScreen.Scroll = 0;
+        RefreshScreen();
+        var at = _hudScreen.Rows.FindIndex(row => !row.Heading
+            && (row.Label == label || (orWithSuffix is not null && row.Label == label + orWithSuffix)));
+        if (at >= 0) _hudScreen.Selected = at;
+        RefreshScreen();
+        ShowSelectedRow();
+    }
+
+    /// <summary>
+    /// Renames a world from its page (2026-10-26). The open world can be renamed too: the game's own
+    /// name for it moves with the files, so the next save lands under the new name.
+    /// </summary>
+    private void RenameWorldFromMenu(string world)
+    {
+        var wanted = _renameBox.Text.Trim();
+        if (wanted.Length == 0 || WorldSave.Sanitised(wanted) == world)
+        {
+            _renameBox.Text = world;
+            SelectStartRow(RenameRow);
+            return;
+        }
+
+        if (WorldSave.Rename(world, wanted) is { } fault)
+        {
+            _renameFault = $"Couldn't rename it: {fault}";
+            _renameBox.Text = world;
+            SelectStartRow(RenameRow);
+            return;
+        }
+
+        var renamed = WorldSave.Sanitised(wanted);
+        Console.WriteLine($"saves       renamed {world} to {renamed}");
+        if (world == _worldName) _worldName = renamed;
+
+        ReadSavesFolder();
+        _startWorld = renamed;
+        _renameBox.Text = renamed;
+        _renameFault = $"Renamed from {world}";
+        SelectStartRow(RenameRow);
+    }
+
+    /// <summary>Deletes a world from its page, after its question was answered yes, and goes back.</summary>
+    private void DeleteWorldFromMenu(string world)
+    {
+        // ⛔ Asked again here, not only by the row: the open world is never thrown away under it.
+        if (world == _worldName) return;
+
+        var removed = WorldSave.Delete(world);
+        Console.WriteLine(removed < 0
+            ? $"saves       {world} was already gone"
+            : $"saves       deleted {world} and {removed - 1} of its backups");
+
+        ReadSavesFolder();
+        var fromList = _startWorldFromList;
+        _startWorld = null;
+        _startDeleting = false;
+        if (fromList) ShowStartPage(listing: true, creating: false);
+        else BackToStartMenu(MoreWorldsRow);
     }
 
     /// <summary>
@@ -9791,6 +9958,50 @@ public sealed class ClientHost : IDisposable
         var row = _hudScreen.Rows[_hudScreen.Selected];
         if (row.Heading) return;
 
+        if (_startWorld is { } world)
+        {
+            if (_startDeleting)
+            {
+                if (row.Label == DeleteYesRow)
+                {
+                    DeleteWorldFromMenu(world);
+                    return;
+                }
+
+                // No, or anything else: back to the world's page, Delete still picked.
+                _startDeleting = false;
+                SelectStartRow(DeleteRow);
+                return;
+            }
+
+            switch (row.Label)
+            {
+                case PlayRow:
+                    if (world == _worldName) StartPlaying();
+                    else OpenAnotherWorld(world);
+                    return;
+                case RenameRow:
+                    _renameFault = null;
+                    StartTyping(_renameBox, accepted => { if (accepted) RenameWorldFromMenu(world); });
+                    return;
+                case DeleteRow:
+                    if (world == _worldName)
+                    {
+                        ShowSelectedRow();
+                        return;
+                    }
+
+                    _startDeleting = true;
+                    SelectStartRow(DeleteNoRow);
+                    return;
+                case BackRow:
+                    LeaveWorldPage();
+                    return;
+            }
+
+            return;
+        }
+
         if (_startListing)
         {
             if (row.Label is BackRow or NoWorldsRow)
@@ -9799,21 +10010,17 @@ public sealed class ClientHost : IDisposable
                 return;
             }
 
-            // The mark the open world's row carries is not part of its name.
-            var chosen = row.Label.Replace(CurrentMark, "");
-
-            // ⛔ Asked of the list, not of the row's words. The rows for files that would not open
-            // carry a file name rather than a world name, and enter on one of those used to reach
-            // OpenAnotherWorld — which would relaunch the game pointed at a world of that name and
-            // quietly make a new one. A row is openable when there is a header behind it.
-            if (chosen != _worldName && !_saved.Any(w => w.Name == chosen))
+            // ⛔ Asked of the rows built from the list, not of the row's words. The rows for files
+            // that would not open carry a file name rather than a world name, and enter on one of
+            // those used to reach OpenAnotherWorld — which would relaunch the game pointed at a
+            // world of that name and quietly make a new one. A row is a world when a header made it.
+            if (_startWorldRows.TryGetValue(_hudScreen.Selected, out var picked))
             {
-                ShowSelectedRow();
+                OpenWorldPage(picked, fromList: true);
                 return;
             }
 
-            if (chosen == _worldName) StartPlaying();
-            else OpenAnotherWorld(chosen);
+            ShowSelectedRow();
             return;
         }
 
@@ -9845,8 +10052,7 @@ public sealed class ClientHost : IDisposable
         // is still a world.
         if (_startWorldRows.TryGetValue(_hudScreen.Selected, out var listed))
         {
-            if (listed == _worldName) StartPlaying();
-            else OpenAnotherWorld(listed);
+            OpenWorldPage(listed, fromList: false);
             return;
         }
 
@@ -18236,6 +18442,14 @@ public sealed class ClientHost : IDisposable
     /// <summary>Worlds the check writes to disk so the menu has something real to go and find.</summary>
     private static readonly string[] CheckWorlds = ["ui-check-alpha", "ui-check-beta"];
 
+    /// <summary>What the check renames a planted world to, before deleting it through its question.</summary>
+    private const string RenamedWorld = "ui-check-gamma";
+
+    /// <summary>The check's answers about managing worlds from the title menu (2026-10-26).</summary>
+    private bool _uiWorldRenamed;
+    private bool _uiWorldAsked;
+    private bool _uiWorldDeleted;
+
     /// <summary>True once the menu has found both of them by itself.</summary>
     private bool _foundPlanted;
 
@@ -18292,7 +18506,7 @@ public sealed class ClientHost : IDisposable
 
     private static void RemovePlantedWorlds()
     {
-        foreach (var name in CheckWorlds.Append(BrokenWorld))
+        foreach (var name in CheckWorlds.Append(BrokenWorld).Append(RenamedWorld))
         {
             try { File.Delete(WorldSave.PathFor(name)); } catch (Exception) { }
             for (var slot = 1; slot <= WorldSave.Backups; slot++)
@@ -18624,6 +18838,26 @@ public sealed class ClientHost : IDisposable
                     $"ui-check    saves folder {_saved.Count} readable, {_unreadable.Count} not"
                     + (_unreadable.Count > 0 ? $" ({string.Join(", ", _unreadable.Select(u => u.File))})" : ""));
                 Console.Out.Flush();
+
+                // ⛳ Rename and delete, through the menu's own doors (2026-10-26): a planted world's
+                // page, a new name typed and accepted, then Delete — which must ask — and yes.
+                OpenWorldPage(CheckWorlds[0], fromList: true);
+                _hudScreen.Selected = _hudScreen.Rows.FindIndex(row => row.Label == RenameRow);
+                ChooseOnStartScreen();
+                _renameBox.Text = RenamedWorld;
+                StopTyping(accept: true);
+                _uiWorldRenamed = File.Exists(WorldSave.PathFor(RenamedWorld))
+                    && !File.Exists(WorldSave.PathFor(CheckWorlds[0]))
+                    && _saved.Any(w => w.Name == RenamedWorld)
+                    && _startWorld == RenamedWorld;
+
+                _hudScreen.Selected = _hudScreen.Rows.FindIndex(row => row.Label == DeleteRow);
+                ChooseOnStartScreen();
+                _uiWorldAsked = _startDeleting && _hudScreen.Rows.Any(row => row.Label == DeleteYesRow)
+                    && File.Exists(WorldSave.PathFor(RenamedWorld));
+                _hudScreen.Selected = _hudScreen.Rows.FindIndex(row => row.Label == DeleteYesRow);
+                ChooseOnStartScreen();
+                _uiWorldDeleted = !File.Exists(WorldSave.PathFor(RenamedWorld)) && _startWorld is null;
 
                 RemovePlantedWorlds();
                 break;
@@ -21381,6 +21615,13 @@ public sealed class ClientHost : IDisposable
             faults.Add($"resident trading drew {_uiTradeButtons} controls instead of −, +, max, confirm and close");
         if (!_uiTradeSettled)
             faults.Add("the trade screen's MAX and confirm controls did not settle one atomic quantity");
+
+        if (!_uiWorldRenamed)
+            faults.Add("renaming a world from its page did not move its save to the new name and list it there");
+        if (!_uiWorldAsked)
+            faults.Add("Delete on a world's page did not ask first, or deleted before it was answered");
+        if (!_uiWorldDeleted)
+            faults.Add("answering yes to the delete question did not remove the world");
 
         if (!_uiMenuAsked)
             faults.Add("the main menu row did not ask before leaving the world");

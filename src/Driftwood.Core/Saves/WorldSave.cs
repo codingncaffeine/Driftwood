@@ -254,6 +254,49 @@ public static class WorldSave
     }
 
     /// <summary>
+    /// Gives a world a new name (2026-10-26): its save and every backup move to the new name's files.
+    /// </summary>
+    /// <returns>Null when it moved, or why it did not.</returns>
+    /// <remarks>
+    /// <para>⛔ <b>Never over anything.</b> A name with a save or a backup already under it is
+    /// refused before a single file moves — a rename that landed on another world would be a delete
+    /// of that world under a friendlier word.</para>
+    /// <para>⚠ The name inside the file's header is left as it was. <see cref="List"/> names each
+    /// world by its file, which is what every open and save goes by, and the next save of the world
+    /// writes the new name into its header anyway.</para>
+    /// <para>Like <see cref="Delete"/>, it does not know which world is open; the caller does, and
+    /// carries its own name over when the open one is the one renamed.</para>
+    /// </remarks>
+    public static string? Rename(string from, string to)
+    {
+        var oldName = Sanitised(from);
+        var newName = Sanitised(to);
+        if (oldName == newName) return null;
+
+        var source = PathFor(oldName);
+        if (!File.Exists(source)) return $"{oldName} is not in the saves folder any more";
+
+        if (File.Exists(PathFor(newName))) return $"a world called {newName} already exists";
+        for (var slot = 1; slot <= Backups; slot++)
+            if (File.Exists(BackupPath(newName, slot)))
+                return $"there are backups called {newName} in the saves folder already";
+
+        try
+        {
+            File.Move(source, PathFor(newName));
+            for (var slot = 1; slot <= Backups; slot++)
+                if (File.Exists(BackupPath(oldName, slot)))
+                    File.Move(BackupPath(oldName, slot), BackupPath(newName, slot));
+        }
+        catch (Exception fault)
+        {
+            return fault.Message;
+        }
+
+        return null;
+    }
+
+    /// <summary>
     /// Moves the world's previous states down a slot and takes a copy of the current one.
     /// </summary>
     /// <remarks>
@@ -585,7 +628,10 @@ public static class WorldSave
 
         foreach (var path in Directory.EnumerateFiles(Folder, "*.dws"))
         {
-            if (TryReadHeader(path, out var header, out var why)) found.Add(header);
+            // ⛳ Named by its file (2026-10-26), which is what opening and saving it go by — so a
+            // world renamed on disk is listed under its new name before it is next saved.
+            if (TryReadHeader(path, out var header, out var why))
+                found.Add(header with { Name = Path.GetFileNameWithoutExtension(path) });
             else unreadable.Add(new UnreadableSave(Path.GetFileName(path), why ?? "unreadable"));
         }
 
