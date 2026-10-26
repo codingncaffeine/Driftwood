@@ -15178,7 +15178,10 @@ public sealed class ClientHost : IDisposable
 
         // A body that has fallen out of the world goes back to where it started rather than
         // falling forever. It can only happen where the ground has not streamed in yet.
-        if (_player.Position.Y < -8f)
+        // ⛔ Out of the WORLD, which is the bedrock at WorldBottom. This read −8 from the days the
+        // world stopped at 0, and outlived the world growing down: a player who went below y −8 —
+        // into the deep, the hollows, the Emberdeep — was sent back to the spawn.
+        if (_player.Position.Y < TerrainGenerator.WorldBottom - 8f)
         {
             _player.Teleport(_spawnPoint);
             _spawned = false;
