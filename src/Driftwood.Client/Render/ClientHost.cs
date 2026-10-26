@@ -1763,6 +1763,66 @@ public sealed class ClientHost : IDisposable
     /// what time it is. Using the scaled value would put bats in fields at night, which is precisely
     /// the fault this exists to fix.
     /// </remarks>
+    /// <summary>How far a creature's own sounds carry: the reference's sixteen blocks.</summary>
+    private const float HearingRange = 16f;
+
+    /// <summary>Within this, a creature is heard through anything — it is at your elbow.</summary>
+    private const float HearingTouch = 2f;
+
+    /// <summary>The share of its volume a creature's sound has at the edge of hearing.</summary>
+    private const float HearingFloor = 0.3f;
+
+    /// <summary>
+    /// How loud a creature's own sound reaches the player (2026-10-26), as a multiplier on its
+    /// volume, or zero when it does not reach them at all: within sixteen blocks, with nothing solid
+    /// between it and the player's head, and 30% at the edge rising steadily to full at the elbow.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>The user's report: "I'm hearing monsters through walls"</b> — underground, calls came
+    /// through the rock from anywhere inside the mixer's forty-eight blocks. A line is walked from
+    /// the head to the sound a quarter block at a time, and any full opaque block on it stops the
+    /// sound; leaves, glass, doors and the like do not. Something at the player's elbow is always
+    /// heard. Blows that land on the player and explosions are not asked — those are the world
+    /// happening to them, not a voice somewhere else.
+    /// <para>⛳ <b>And quieter the further off (the user: "have that volume start at like 30% and
+    /// gradually increase as they get closer").</b> The mixer's own falloff is gentle — still 71%
+    /// at sixteen blocks — so it is divided back out here and the sound lands on the user's curve
+    /// exactly: 30% at sixteen, full within two.</para>
+    /// </remarks>
+    private float Heard(Vector3 at)
+    {
+        var from = _viewPosition;
+        var span = at - from;
+        var distance = span.Length();
+        if (distance > HearingRange) return 0f;
+
+        var near = Math.Clamp((HearingRange - distance) / (HearingRange - HearingTouch), 0f, 1f);
+        var wanted = HearingFloor + (1f - HearingFloor) * near;
+        var gain = wanted / MathF.Max(0.05f, AudioEngine.Falloff(distance));
+        if (distance <= HearingTouch) return gain;
+
+        var step = span / distance * 0.25f;
+        var world = _streamer.World;
+        var (lastX, lastY, lastZ) = (int.MinValue, int.MinValue, int.MinValue);
+        var walked = 0.5f;
+        var point = from + step * 2f;
+        while (walked < distance - 0.5f)
+        {
+            var (x, y, z) = ((int)MathF.Floor(point.X), (int)MathF.Floor(point.Y), (int)MathF.Floor(point.Z));
+            if ((x, y, z) != (lastX, lastY, lastZ))
+            {
+                var block = _registry[world.GetBlock(x, y, z)];
+                if (block.Solid && block.Opaque && block.Model.IsFullCube) return 0f;
+                (lastX, lastY, lastZ) = (x, y, z);
+            }
+
+            point += step;
+            walked += 0.25f;
+        }
+
+        return gain;
+    }
+
     private bool Buried(int x, int y, int z) =>
         SpawnRules.Buried(_streamer.World.GetLight(x, y, z));
 
@@ -10812,7 +10872,8 @@ public sealed class ClientHost : IDisposable
         // arrival, because "where did it go" starts from where it was.
         foreach (var blink in _herd.TakeBlinks())
         {
-            _audio?.Play(Pick(CreatureSounds.Blinks), blink.To, 0.6f, Wobble());
+            if (Heard(blink.To) is > 0f and var blinkHeard)
+                _audio?.Play(Pick(CreatureSounds.Blinks), blink.To, 0.6f * blinkHeard, Wobble());
             _particles.DeathPuff(blink.From + new Vector3(0f, 1.4f, 0f), 1.1f, StarterBlocks.LayerSmoke, 6);
             _particles.DeathPuff(blink.To + new Vector3(0f, 1.4f, 0f), 1.1f, StarterBlocks.LayerSmoke, 6);
         }
@@ -10822,7 +10883,8 @@ public sealed class ClientHost : IDisposable
         {
             Achieve(AchievementEvents.Breed, birth.Kind);
             var voice = CreatureSounds.VoicesFor(birth.Kind);
-            if (voice.Length > 0) _audio?.Play(Pick(voice), birth.Position, 0.7f, 1.3f);
+            if (voice.Length > 0 && Heard(birth.Position) is > 0f and var birthHeard)
+                _audio?.Play(Pick(voice), birth.Position, 0.7f * birthHeard, 1.3f);
 
             _particles.Puff(_registry[_ids.Emberbloom], birth.Position + new Vector3(0f, 0.4f, 0f), 12);
         }
@@ -10831,8 +10893,8 @@ public sealed class ClientHost : IDisposable
         {
             // The hiss, on the frame the fuse catches. The pack's fuse recording runs longer than
             // the fuse itself, which is the right way round: the blast interrupts it.
-            if (creature.FuseLit)
-                _audio?.Play(Pick(CreatureSounds.Fuses), creature.Middle, 0.9f, 1f);
+            if (creature.FuseLit && Heard(creature.Middle) is > 0f and var fuseHeard)
+                _audio?.Play(Pick(CreatureSounds.Fuses), creature.Middle, 0.9f * fuseHeard, 1f);
 
             // ⛳ The sun's work made visible: one that has stood in daylight past most of its
             // grace is alight, flame licking over the whole of its box with a wisp of smoke —
@@ -10864,28 +10926,35 @@ public sealed class ClientHost : IDisposable
                 }
 
                 var lay = CreatureSounds.ShedFor(creature.Kind);
-                if (lay.Length > 0) _audio?.Play(Pick(lay), creature.Position, 0.5f, Wobble());
+                if (lay.Length > 0 && Heard(creature.Position) is > 0f and var layHeard)
+                    _audio?.Play(Pick(lay), creature.Position, 0.5f * layHeard, Wobble());
             }
 
-            if (creature.Drank)
-                _audio?.Play(Pick(ActionSounds.Burp), creature.Middle, 0.5f, 1.2f);
+            if (creature.Drank && Heard(creature.Middle) is > 0f and var burpHeard)
+                _audio?.Play(Pick(ActionSounds.Burp), creature.Middle, 0.5f * burpHeard, 1.2f);
 
             if (!creature.Spoke) continue;
 
             var voices = CreatureSounds.VoicesFor(creature.Kind);
             if (voices.Length == 0) continue;
 
+            // ⛳ Only what is near and in the open (2026-10-26, the user: "I'm hearing monsters
+            // through walls"). See CanHear.
+            var voiceHeard = Heard(creature.Position + new Vector3(0f, 0.8f, 0f));
+            if (voiceHeard <= 0f) continue;
+
             // ⚠ From the animal's own head rather than its feet, and pitched a little differently
             // every time. Six animals of one kind playing one recording in unison is the tell that
             // it is one recording; a few percent of pitch either way is what makes them individuals.
             _audio?.Play(
-                Pick(voices), creature.Position + new Vector3(0f, 0.8f, 0f), 0.7f,
+                Pick(voices), creature.Position + new Vector3(0f, 0.8f, 0f), 0.7f * voiceHeard,
                 0.92f + (float)Random.Shared.NextDouble() * 0.16f);
         }
 
         foreach (var death in _herd.TakeDead())
         {
-            _audio?.Play(Pick(CreatureSounds.Deaths), death.Position, 0.68f, Wobble());
+            var heard = Heard(death.Position);
+            if (heard > 0f) _audio?.Play(Pick(CreatureSounds.Deaths), death.Position, 0.68f * heard, Wobble());
 
             var contributed = _playerContributions.Remove(death.RuntimeId);
             if (death.Kind == "core_wyrm") WyrmSlain(death);
@@ -10925,12 +10994,12 @@ public sealed class ClientHost : IDisposable
             var lastCry = CreatureSounds.DeathCryFor(death.Kind);
             if (lastCry.Length > 0)
             {
-                _audio?.Play(Pick(lastCry), death.Position, 0.9f, Wobble());
+                if (heard > 0f) _audio?.Play(Pick(lastCry), death.Position, 0.9f * heard, Wobble());
             }
             else
             {
                 var voice = CreatureSounds.VoicesFor(death.Kind);
-                if (voice.Length > 0) _audio?.Play(Pick(voice), death.Position, 0.9f, 0.72f);
+                if (voice.Length > 0 && heard > 0f) _audio?.Play(Pick(voice), death.Position, 0.9f * heard, 0.72f);
             }
 
             // ⛳ And a puff where it was, sized off the animal's own model rather than a constant —

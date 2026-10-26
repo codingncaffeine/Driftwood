@@ -36,7 +36,17 @@ public sealed unsafe class AudioEngine : IDisposable
     private const int OneShotVoices = Voices - LoopVoices;
 
     /// <summary>How far away a sound falls to nothing.</summary>
-    private const float MaxDistance = 48f;
+    public const float MaxDistance = 48f;
+
+    /// <summary>Within this, a sound plays at its full volume.</summary>
+    public const float ReferenceDistance = 3f;
+
+    /// <summary>
+    /// The share of its volume the mixer leaves a sound at this distance — its own linear, clamped
+    /// falloff — so a caller that wants a curve of its own can divide this back out.
+    /// </summary>
+    public static float Falloff(float distance) =>
+        1f - Math.Clamp((distance - ReferenceDistance) / (MaxDistance - ReferenceDistance), 0f, 1f);
 
     private readonly SoundLibrary _library;
     private readonly Dictionary<string, uint> _buffers = new(StringComparer.OrdinalIgnoreCase);
@@ -86,7 +96,7 @@ public sealed unsafe class AudioEngine : IDisposable
             fixed (uint* p = _sources) _al.GenSources(Voices, p);
             for (var i = 0; i < Voices; i++)
             {
-                _al.SetSourceProperty(_sources[i], SourceFloat.ReferenceDistance, 3f);
+                _al.SetSourceProperty(_sources[i], SourceFloat.ReferenceDistance, ReferenceDistance);
                 _al.SetSourceProperty(_sources[i], SourceFloat.MaxDistance, MaxDistance);
                 _al.SetSourceProperty(_sources[i], SourceFloat.RolloffFactor, 1f);
             }
