@@ -3410,7 +3410,10 @@ public static class WorldAudit
             // ⛳ THE GATE AND THE WYRM. Seeker's eyes open a Sanctum's gate; beyond it the wyrm,
             // and when it falls its egg. Asked of the eye, which is everything the gate wants.
             if (Held(items.ByName("seeker_eye").Id))
+            {
                 changed |= Gain(items.ByName("wyrm_egg").Id);
+                changed |= Gain(items.ByName("driftwings").Id);
+            }
 
             if (Held(items.ByName("brewing_stand").Id) && Held(items.ByName("cinder_dust").Id))
                 foreach (var bottle in Potions.All)
@@ -9291,7 +9294,8 @@ public static class WorldAudit
         (StarterBlocks.LayerBrewingStand, "brewing_stand"),
         (StarterBlocks.LayerEmberiteIngot, "emberite_ingot"),
         (StarterBlocks.LayerSeekerEye, "seeker_eye"),
-        ((ushort)(StarterBlocks.LayerCount - 1), "wyrm_egg"),
+        (StarterBlocks.LayerWyrmEgg, "wyrm_egg"),
+        ((ushort)(StarterBlocks.LayerCount - 1), "phantom_membrane"),
     ];
 
     /// <summary>

@@ -871,6 +871,15 @@ public static class StarterItems
         Block(items, blocks, "emberite_debris", "emberite debris", StarterBlocks.LayerEmberiteDebris);
         Loose(items, "emberite_scrap", "emberite scrap", StarterBlocks.LayerEmberiteScrap);
         Block(items, blocks, "wyrm_egg", "wyrm egg", StarterBlocks.LayerWyrmEgg);
+
+        // ⛳ Driftwings (2026-10-25): the reference's elytra, from the wyrm — worn where a chestplate
+        // goes, opened by jumping in the air, worn out by flying and mended with phantom membrane.
+        items.Register(new ItemType
+        {
+            Name = "driftwings", Label = "driftwings", IconLayer = StarterBlocks.LayerDriftwings,
+            MaxStack = 1, Durability = 432, Wears = EquipSlot.Chest,
+        });
+        Loose(items, "phantom_membrane", "phantom membrane", StarterBlocks.LayerMembrane);
         items.Register(new ItemType
         {
             Name = "seeker_eye", Label = "seeker's eye", IconLayer = StarterBlocks.LayerSeekerEye,
@@ -1292,6 +1301,9 @@ public static class StarterItems
         // The Emberdeep's (2026-10-25). The ember slime's cream comes off the bigger ones only —
         // the host passes over the smallest, as the reference's does.
         new CreatureDrops.Rule("cinderwisp", DropTrigger.Killed, "cinder_rod", 0, 1),
+
+        // The phantom at last leaves something: the membrane that mends a pair of wings.
+        new CreatureDrops.Rule("phantom", DropTrigger.Killed, "phantom_membrane", 0, 1),
         new CreatureDrops.Rule("ashwail", DropTrigger.Killed, "wail_tear", 0, 1),
         new CreatureDrops.Rule("ashwail", DropTrigger.Killed, "gunpowder", 0, 2),
         new CreatureDrops.Rule("ember_slime", DropTrigger.Killed, "ember_cream", 0, 1),

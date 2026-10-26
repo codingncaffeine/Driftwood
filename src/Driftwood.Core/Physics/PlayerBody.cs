@@ -159,6 +159,17 @@ public sealed class PlayerBody
     public Vector3 Position;
     public Vector3 Velocity;
 
+    /// <summary>
+    /// Gliding on driftwings (2026-10-25): the host sets it when a player with wings on opens them in
+    /// the air, and the body clears it on landing or in water.
+    /// </summary>
+    public bool Gliding { get; set; }
+
+    /// <summary>Where the player is looking, which is where a glide steers. Set by the host each frame.</summary>
+    public Vector3 Look { get; set; } = -Vector3.UnitZ;
+
+    private float _glideTick;
+
     public bool OnGround { get; private set; }
     public bool Sneaking { get; private set; }
 
@@ -247,6 +258,15 @@ public sealed class PlayerBody
 
         // Nothing has caught this frame's fall yet; a web or a bouncy landing below will say so.
         FallCaught = false;
+
+        if (Gliding && (OnGround || InWater || InLava)) Gliding = false;
+        if (Gliding)
+        {
+            Glide(dt);
+            MoveWithCollisions(world, Velocity * dt);
+            if (OnGround) Gliding = false;
+            return;
+        }
 
         var wishLength = new Vector2(wish.X, wish.Z).Length();
         if (wishLength > 1f) wish /= wishLength;
@@ -357,6 +377,59 @@ public sealed class PlayerBody
     /// ⚠ The WHOLE box, unlike <see cref="Steeped"/>'s lower half: buoyancy comes from the waist
     /// down, but a web across the face holds a person exactly as well as one round the ankles.
     /// </remarks>
+    /// <summary>
+    /// The reference's elytra flight, tick for tick at its twenty a second: lift from how level the
+    /// look is, a dive turned into speed, a climb paid for with it, the velocity swung round toward
+    /// where the player looks, and drag.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ Ported rather than invented, so gliding feels like gliding to anyone who has done it there:
+    /// pitch down to gather speed, level out to carry it, pull up to trade it for height.
+    /// </remarks>
+    private void Glide(float dt)
+    {
+        const float Tick = 1f / 20f;
+        const float TickGravity = 0.08f;
+        _glideTick += dt;
+        var v = Velocity * Tick;
+
+        while (_glideTick >= Tick)
+        {
+            _glideTick -= Tick;
+            var look = Look.LengthSquared() > 1e-6f ? Vector3.Normalize(Look) : -Vector3.UnitZ;
+            var pitchDown = MathF.Asin(Math.Clamp(-look.Y, -1f, 1f));
+            var flat = MathF.Sqrt(look.X * look.X + look.Z * look.Z);
+            var speed = MathF.Sqrt(v.X * v.X + v.Z * v.Z);
+            var level = MathF.Cos(pitchDown);
+            level *= level;
+
+            v.Y += TickGravity * (-1f + level * 0.75f);
+
+            if (v.Y < 0f && flat > 0f)
+            {
+                var gained = v.Y * -0.1f * level;
+                v += new Vector3(look.X * gained / flat, gained, look.Z * gained / flat);
+            }
+
+            if (pitchDown < 0f && flat > 0f)
+            {
+                var climbed = speed * -MathF.Sin(pitchDown) * 0.04f;
+                v += new Vector3(-look.X * climbed / flat, climbed * 3.2f, -look.Z * climbed / flat);
+            }
+
+            if (flat > 0f)
+            {
+                v.X += (look.X / flat * speed - v.X) * 0.1f;
+                v.Z += (look.Z / flat * speed - v.Z) * 0.1f;
+            }
+
+            v *= new Vector3(0.99f, 0.98f, 0.99f);
+        }
+
+        Velocity = v / Tick;
+        FallDistance = 0f;
+    }
+
     private bool Webbed(VoxelWorld world)
     {
         var half = Width * 0.5f;

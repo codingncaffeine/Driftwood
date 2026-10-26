@@ -4987,6 +4987,28 @@ public static class TileGen
         return t;
     }
 
+    /// <summary>A pair of wings folded, seen from behind: two long membranes over their bones.</summary>
+    public static byte[] IconWings(int seed, byte r, byte g, byte b)
+    {
+        var t = new byte[BytesPerTile];
+        foreach (var side in (ReadOnlySpan<int>)[-1, 1])
+        for (var y = 1; y <= 14; y++)
+        {
+            // Wide at the shoulder, tapering to a point at the bottom, with a gap between the two.
+            var reach = y < 4 ? 3 + y : 7 - (y - 4) * 0.55f;
+            for (var d = 1; d <= (int)reach; d++)
+            {
+                var x = (int)(7.5f + side * (d - 0.5f));
+                if (x is < 0 or >= Size) continue;
+                var bone = d == 1 || y == 1 + d / 2;
+                var n = (int)((Noise(x, y, seed) * 2f - 1f) * 8f);
+                if (bone) Put(t, x, y, Clamp(r - 50 + n), Clamp(g - 50 + n), Clamp(b - 40 + n), 255);
+                else Put(t, x, y, Clamp(r + n + (8 - y)), Clamp(g + n), Clamp(b + n), 255);
+            }
+        }
+        return t;
+    }
+
     /// <summary>A single drop, point up — the ashwail's tear.</summary>
     public static byte[] IconTear(int seed, byte r, byte g, byte b)
     {

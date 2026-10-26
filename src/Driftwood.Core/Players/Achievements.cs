@@ -119,6 +119,9 @@ public static class AchievementEvents
     /// <summary>The Sanctum's gate: <c>open</c> when the twelfth eye goes in, <c>enter</c> when stepped through.</summary>
     public const string Gate = "gate";
 
+    /// <summary>A second's flight on driftwings. Subject: <c>wings</c>.</summary>
+    public const string Glide = "glide";
+
     /// <summary>An ember crystal broken. Subject: <c>crystal</c>.</summary>
     public const string Shatter = "shatter";
 
@@ -271,6 +274,8 @@ public sealed class AchievementBook
                 "wyrm_egg", goal, Any(O, "wyrm_egg")),
             new("back_up", AchievementTab.Core, "free_the_core", "Back Up Again", "Take the gate home from the Core",
                 "seeker_eye", task, Any(AchievementEvents.Gate, "home")),
+            new("sky_is_the_limit", AchievementTab.Core, "free_the_core", "Sky's the Limit", "Glide on driftwings",
+                "driftwings", goal, Any(AchievementEvents.Glide, "wings")),
 
             // ── The Emberdeep ──
             new("emberdeep", deep, "", "Emberdeep", "Below the hollows, where the rock runs molten",

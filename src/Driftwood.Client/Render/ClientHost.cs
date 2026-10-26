@@ -10457,16 +10457,21 @@ public sealed class ClientHost : IDisposable
         return true;
     }
 
-    /// <summary>True when all four armour slots hold one material's pieces.</summary>
+    /// <summary>True when all four armour slots hold one material's pieces — by whole name, as WornMaterials asks.</summary>
     private bool WearingFullSuit(string material)
     {
+        var suit = Armour.Materials.FirstOrDefault(one => one.Name == material);
         for (var slot = 0; slot < 4; slot++)
         {
             var worn = _equipment.At(slot);
-            if (worn.IsEmpty || !_items[worn.Item].Name.StartsWith(material + "_", StringComparison.Ordinal)) return false;
+            if (worn.IsEmpty || _items[worn.Item].Name != Armour.ItemName(suit, Armour.Pieces[slot])) return false;
         }
         return true;
     }
+
+    /// <summary>The jump as it was last frame, so opening the wings takes a fresh press.</summary>
+    private bool _jumpWasHeld;
+    private float _glideWear;
 
     /// <summary>
     /// A seeker's eye in hand: set in a gate socket when one is under the crosshair, otherwise thrown
@@ -10642,6 +10647,7 @@ public sealed class ClientHost : IDisposable
         SettleCharacterReward($"wyrm:{LocalPlayerId}", new CharacterReward(1500, 25_000, "the Core Wyrm"),
             XpSource.Encounter, "the Core Wyrm falls", StarterBlocks.LayerWyrmEgg);
         Notice("the Core is free — a gate home stands open by the podium", _items.ByName("wyrm_egg"));
+        _drops.Drop(_items.Stack("driftwings", 1), death.Position);
         SaveWorld("after the wyrm");
     }
 
@@ -15168,8 +15174,31 @@ public sealed class ClientHost : IDisposable
                 && _spellControllerBank == 0
                 && _controller.Held(ControllerAction.Sprint, _settings.Pad))) && !sneak;
 
+        // ⛳ Driftwings (2026-10-25): a jump pressed in the air, falling, with the wings on, opens
+        // them; the body glides on where the camera looks until it lands. A second's flight wears
+        // them by one, and a pair worn to its last will not open.
+        _player.Look = _camera.Forward;
+        var wings = _equipment[EquipSlot.Chest];
+        var winged = !wings.IsEmpty && _items[wings.Item].Name == "driftwings"
+                     && wings.Damage < _items[wings.Item].Durability - 1;
+        if (jump && !_jumpWasHeld && winged && !_player.OnGround && !_player.InWater && _player.Velocity.Y < 0f)
+            _player.Gliding = !_player.Gliding;
+        if (!winged) _player.Gliding = false;
+        _jumpWasHeld = jump;
+
+        if (_player.Gliding)
+        {
+            _glideWear += dt;
+            if (_glideWear >= 1f)
+            {
+                _glideWear -= 1f;
+                _equipment.Restore(EquipSlot.Chest, wings with { Damage = wings.Damage + 1 });
+                Achieve(AchievementEvents.Glide, "wings");
+            }
+        }
+
         var before = _player.Position;
-        _player.Step(_streamer.World, dt, wish, jump, sneak, sprint);
+        _player.Step(_streamer.World, dt, wish, jump && !_player.Gliding, sneak, sprint);
 
         var walked = new Vector2(_player.Position.X - before.X, _player.Position.Z - before.Z).Length();
         if (walked > 0f) _progress.Walked(walked);

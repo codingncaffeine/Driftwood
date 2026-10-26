@@ -768,6 +768,8 @@ public static class BlockTextureSet
         new("ember_crystal", "", true),
         new("seeker_eye", "textures/item/ender_eye.png", true, "textures/items/ender_eye.png"),
         new("wyrm_egg", "textures/block/dragon_egg.png", false, "textures/blocks/dragon_egg.png"),
+        new("driftwings", "textures/item/elytra.png", true, "textures/items/elytra.png"),
+        new("phantom_membrane", "textures/item/phantom_membrane.png", true, "textures/items/phantom_membrane.png"),
     ];
 
     /// <summary>
@@ -1896,6 +1898,8 @@ public static class BlockTextureSet
             StarterBlocks.LayerEmberCrystal => TileGen.EmberCrystal(1449),
             StarterBlocks.LayerSeekerEye => TileGen.IconSeekerEye(1450),
             StarterBlocks.LayerWyrmEgg => TileGen.Ember(1451, TileGen.Speckle(1452, 40, 28, 34, 18, 0.6f), 210, 80, 40),
+            StarterBlocks.LayerDriftwings => TileGen.IconWings(1453, 132, 120, 150),
+            StarterBlocks.LayerMembrane => TileGen.IconLeather(1454, 176, 170, 152),
             _ => Wheat(layer) ?? Crop(layer) ?? CropIcon(layer) ?? PotionIcon(layer) ?? StainedGlass(layer)
                  ?? MetalBlock(layer) ?? Wool(layer) ?? Meat(layer) ?? Dye(layer)
                  ?? Armour(layer) ?? Shield(layer) ?? Tool(layer),

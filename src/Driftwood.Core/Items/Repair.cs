@@ -43,6 +43,10 @@ public static class Repair
     /// </remarks>
     public static ItemId MaterialFor(ItemRegistry items, ItemType worn)
     {
+        // Driftwings are mended with what the phantoms leave, as the reference's elytra are.
+        if (worn.Name == "driftwings")
+            return items.TryByName("phantom_membrane", out var membrane) ? membrane.Id : ItemId.None;
+
         foreach (var material in Armour.Materials)
         foreach (var piece in Armour.Pieces)
             if (string.Equals(Armour.ItemName(material, piece), worn.Name, StringComparison.Ordinal))

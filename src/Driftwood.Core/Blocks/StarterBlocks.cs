@@ -752,7 +752,11 @@ public static class StarterBlocks
     /// <summary>The wyrm's egg (2026-10-25), left on the podium when it falls.</summary>
     public const ushort LayerWyrmEgg = LayerSeekerEye + 1;
 
-    public const int LayerCount = LayerWyrmEgg + 1;
+    /// <summary>Driftwings and what mends them (2026-10-25).</summary>
+    public const ushort LayerDriftwings = LayerWyrmEgg + 1;
+    public const ushort LayerMembrane = LayerWyrmEgg + 2;
+
+    public const int LayerCount = LayerMembrane + 1;
 
     /// <summary>One stage of the ashcap, as a block name.</summary>
     public static string AshcapName(int stage) => $"ashcap_{stage}";
