@@ -131,6 +131,10 @@ public sealed class Creature
     /// <summary>Seconds the target has been out of view while still being hunted.</summary>
     public float Unseen { get; set; }
 
+    /// <summary>The Ashwraith's waking (2026-10-25): seconds left before it bursts free; while it wakes
+    /// nothing touches it.</summary>
+    public float Awaken { get; set; }
+
     /// <summary>A guardian's beam (2026-10-25): seconds it has held its eye on the target; 0 is none.</summary>
     public float Beam { get; set; }
 
@@ -280,7 +284,7 @@ public readonly record struct CreatureBlink(string Kind, Vector3 From, Vector3 T
 /// <param name="Wail">An ashwail's bolt: slow, and it bursts where it lands — unless it is struck back.</param>
 public readonly record struct CreatureShot(
     string Kind, Vector3 From, Vector3 Direction, int HalfHearts, ShotTag Tag = ShotTag.None, bool Flask = false,
-    bool Ember = false, bool Wail = false);
+    bool Ember = false, bool Wail = false, bool Skull = false);
 
 /// <summary>
 /// What each creature sounds like: our name for it against a clip's name.
@@ -852,6 +856,7 @@ public sealed class CreatureHerd
     public bool Hurt(Creature creature, int halfHearts, Vector3 from)
     {
         if (halfHearts <= 0 || !creature.Alive) return false;
+        if (creature.Awaken > 0f) return false;
 
         // Still ringing from the last one. Reading the flash rather than keeping a second clock:
         // they measure the same thing and two of them is one that can disagree.
@@ -1373,6 +1378,13 @@ public sealed class CreatureHerd
             if (creature.Kind == "ashwail")
             {
                 if (magicMovement > 0f) Wail(creature, dt * magicMovement, player, solid);
+                continue;
+            }
+
+            // ⛳ The Ashwraith (2026-10-25): wakes, bursts free, and hunts from the air.
+            if (creature.Kind == "ashwraith")
+            {
+                if (magicMovement > 0f) Haunt(creature, dt * magicMovement, player, solid);
                 continue;
             }
 
@@ -2032,6 +2044,85 @@ public sealed class CreatureHerd
     /// The reference's blaze: it bobs in the air, rises to fight, flares for a moment and fires three
     /// small fireballs a third of a second apart, then rests. With nobody to fight it drifts, bobbing.
     /// </remarks>
+    /// <summary>How long the Ashwraith takes to wake: the reference's ten seconds.</summary>
+    public const float AwakenSeconds = 10f;
+
+    /// <summary>Whether the Ashwraith has its armour on — below half, as the reference's does.</summary>
+    public static bool Armoured(Creature creature) =>
+        creature.Kind == "ashwraith" && creature.Health * 2 <= creature.MaxHealth;
+
+    /// <summary>
+    /// The Ashwraith, the reference's wither: it wakes for ten seconds, filling with health and
+    /// untouchable, then bursts free. After that it keeps above and off from its target, three skulls
+    /// looking every way, and throws a withering skull bolt every second and a bit — three at once now
+    /// and then — mending itself all the while. Armoured below half, it comes in lower and faster.
+    /// </summary>
+    private void Haunt(Creature creature, float dt, Vector3? player, Func<int, int, int, bool> solid)
+    {
+        creature.Moving = true;
+        creature.Orbit += dt;
+
+        if (creature.Awaken > 0f)
+        {
+            creature.Awaken -= dt;
+            creature.Health = Math.Min(creature.MaxHealth,
+                (int)MathF.Ceiling(creature.MaxHealth * (1f - creature.Awaken / AwakenSeconds)));
+            creature.Yaw += 90f * dt;
+            if (creature.Awaken <= 0f)
+            {
+                creature.Awaken = 0f;
+                creature.Health = creature.MaxHealth;
+                _blasts.Add(new CreatureBlast(creature.Kind, creature.Middle));
+                creature.Spoke = true;
+            }
+
+            return;
+        }
+
+        // Its mending: a half heart a second, the reference's.
+        creature.VolleyIn += dt;
+        if (creature.VolleyIn >= 1f)
+        {
+            creature.VolleyIn -= 1f;
+            if (creature.Health < creature.MaxHealth) creature.Health++;
+        }
+
+        creature.Swings = MathF.Max(0f, creature.Swings - dt);
+        var armoured = Armoured(creature);
+
+        if (player is { } target && Vector3.Distance(target, creature.Position) < CreatureVitals.FollowRange(creature.Kind))
+        {
+            creature.Targeting = true;
+            var flat = target - creature.Position;
+            flat.Y = 0f;
+            var range = flat.Length();
+            var keep = armoured ? 5f : 9f;
+            var circle = new Vector3(MathF.Cos(creature.Orbit * 0.4f), 0f, MathF.Sin(creature.Orbit * 0.4f)) * keep;
+            var goal = target + circle;
+            goal.Y = target.Y + (armoured ? 2.5f : 5f) + MathF.Sin(creature.Orbit * 1.3f) * 0.8f;
+            if (range > 0.01f) creature.Yaw = creature.WantsYaw = float.RadiansToDegrees(MathF.Atan2(flat.Z, flat.X));
+            FlyTo(creature, goal, (armoured ? 7f : 5f) * dt, solid);
+
+            if (creature.Swings <= 0f && LineOfSight(solid, creature.Middle, target + new Vector3(0f, 1.4f, 0f)))
+            {
+                creature.Swings = armoured ? 0.9f : 1.3f;
+                var volley = _random.NextDouble() < 0.25 ? 3 : 1;
+                for (var i = 0; i < volley; i++)
+                {
+                    var from = creature.Middle + new Vector3(0f, creature.Size.Y * creature.Scale * 0.35f, 0f)
+                               + new Vector3((i - (volley - 1) * 0.5f) * 0.9f, 0f, 0f);
+                    var aim = Vector3.Normalize(target + new Vector3(0f, 1.2f, 0f) - from);
+                    _shots.Add(new CreatureShot(creature.Kind, from, aim, CreatureVitals.DamageFor(creature.Kind), Skull: true));
+                }
+            }
+
+            return;
+        }
+
+        creature.Targeting = false;
+        FlyTo(creature, Idle(creature, dt, 0f), 3f * dt, solid);
+    }
+
     /// <summary>How long a guardian holds its beam before it lands: the reference's eighty ticks, an
     /// elder's sixty.</summary>
     public static float BeamCharge(string kind) => kind == "elder_guardian" ? 3f : 4f;

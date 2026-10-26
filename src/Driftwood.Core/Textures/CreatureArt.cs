@@ -79,6 +79,9 @@ public static class CreatureArt
         // the roster — but painted through the same brush as everything else that moves.
         ["cart"] = new((104, 106, 112), (134, 136, 142), (62, 64, 70), (122, 96, 60), 0.18f, 0.05f),
 
+        // The Ashwraith (2026-10-25): charred bone and soot, its empty sockets lit like coals.
+        ["ashwraith"] = new((52, 46, 44), (84, 72, 64), (30, 26, 24), (236, 124, 44), 0.25f, 0.09f, FaceKind.Grim),
+
         // The guardians (2026-10-25): tidestone-teal plates, a pale belly, amber spikes and an eye
         // that reads from across a hall; the elder bleached the colour of old bone.
         ["guardian"] = new((84, 150, 138), (180, 196, 170), (214, 132, 62), (226, 150, 74), 0.35f, 0.08f),

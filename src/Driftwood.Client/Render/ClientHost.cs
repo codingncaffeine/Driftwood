@@ -2430,6 +2430,9 @@ public sealed class ClientHost : IDisposable
         foreach (var (bx, by, bz, yaw, cherry) in state.Boats)
             _boatSystem.Place(new Vector3(bx, by, bz), yaw, cherry);
 
+        _beacons.Clear();
+        foreach (var beacon in state.Beacons) _beacons.Add(beacon);
+
         // ⚠ Brought up to date rather than left to work itself out. Poll announces everything the
         // pockets can pay for that has not been announced, so a world loaded with a full inventory
         // fires a notice for every one of them in the first frame unless it is primed first.
@@ -2493,6 +2496,7 @@ public sealed class ClientHost : IDisposable
 
         foreach (var boat in _boatSystem.All)
             state.Boats.Add((boat.Position.X, boat.Position.Y, boat.Position.Z, boat.Yaw, boat.Cherry));
+        state.Beacons.AddRange(_beacons);
 
         return state;
     }
@@ -10257,6 +10261,15 @@ public sealed class ClientHost : IDisposable
         // they test the player and never the herd.
         foreach (var shot in _herd.TakeShots())
         {
+            // ⛳ The Ashwraith's skulls (2026-10-25): quick, bursting, withering.
+            if (shot.Skull)
+            {
+                if (_projectiles.Spawn(ProjectileKind.SkullBolt, ProjectileOwner.Creature, shot.From, shot.Direction,
+                        ProjectileSystem.SkullBoltSpeed, 0f, shot.HalfHearts))
+                    _audio?.Play(Pick(CreatureSounds.Fireballs), shot.From, 0.9f, 0.6f);
+                continue;
+            }
+
             // The Emberdeep's fire: a cinderwisp's quick fireball, an ashwail's slow bolt.
             if (shot.Ember || shot.Wail)
             {
@@ -10285,6 +10298,8 @@ public sealed class ClientHost : IDisposable
         StepDeepwatch(dt);
         StepGate(dt);
         StepWyrm(dt);
+        StepAshwraith();
+        StepBeacons(dt);
 
         // A blink is a soft pop and a wisp at both ends — the departure matters as much as the
         // arrival, because "where did it go" starts from where it was.
@@ -10663,6 +10678,7 @@ public sealed class ClientHost : IDisposable
         StructureKind.StormVault => "a storm vault",
         StructureKind.Emberhold => "an Emberhold",
         StructureKind.Sanctum => "a Sanctum",
+        StructureKind.Deepwatch => "a Deepwatch",
         _ => "the Starfall Crown",
     };
 
@@ -10673,7 +10689,8 @@ public sealed class ClientHost : IDisposable
         {
             if (!_projectiles.ActiveAt(i)) continue;
             var shot = _projectiles.SnapshotAt(i);
-            if (shot.Kind is not (ProjectileKind.FireBolt or ProjectileKind.Ember or ProjectileKind.WailBolt)) continue;
+            if (shot.Kind is not (ProjectileKind.FireBolt or ProjectileKind.Ember or ProjectileKind.WailBolt
+                or ProjectileKind.SkullBolt)) continue;
             SpellParticleEffects.Emit(
                 _particles, SpellParticleId.FireBolt, SpellParticlePhase.Travel,
                 shot.Position - shot.Velocity * MathF.Min(dt, 0.05f), shot.Position, _character.Rank);
@@ -10707,6 +10724,20 @@ public sealed class ClientHost : IDisposable
                     _particles.DeathPuff(at, 0.7f, StarterBlocks.LayerSeekerEye, 10);
                     _audio?.Play(Pick(CreatureSounds.ArrowMisses), at, 0.6f, 1.6f);
                 }
+                continue;
+            }
+
+            // ⛳ A skull bolt bursts where it lands and leaves whoever it found withering.
+            if (impact.Kind == ProjectileKind.SkullBolt)
+            {
+                if (impact.Creature is { } scorched && _herd is not null && scorched.Kind != "ashwraith")
+                    _herd.Hurt(scorched, impact.Damage, impact.Position - impact.Velocity);
+                if (impact.Player)
+                {
+                    HurtPlayer(impact.Damage);
+                    Ail(Ailment.Withering, 10f);
+                }
+                Detonate(impact.Position - Vector3.Normalize(impact.Velocity) * 0.3f, Explosion.WailStrength * 0.8f);
                 continue;
             }
 
@@ -10784,6 +10815,14 @@ public sealed class ClientHost : IDisposable
 
             if (impact.Creature is { } creature && _herd is not null)
             {
+                // ⛳ The Ashwraith's armour (2026-10-25): below half, arrows glance off it.
+                if (impact.Kind == ProjectileKind.Arrow && CreatureHerd.Armoured(creature))
+                {
+                    _particles.DeathPuff(impact.Position, 0.4f, StarterBlocks.LayerSmoke, 4);
+                    _audio?.Play(Pick(CreatureSounds.ArrowMisses), impact.Position, 0.7f, 0.7f);
+                    continue;
+                }
+
                 var before = creature.Health;
                 _herd.Hurt(creature, impact.Damage, impact.Position - impact.Velocity);
                 if (creature.Health == before) continue;
@@ -11106,6 +11145,115 @@ public sealed class ClientHost : IDisposable
             if (wyrm.Health < wyrm.MaxHealth) wyrm.Health = Math.Min(wyrm.MaxHealth, wyrm.Health + 3);
             for (var step = 1; step <= 4; step++)
                 _particles.DeathPuff(Vector3.Lerp(from, wyrm.Middle, step / 5f), 0.3f, StarterBlocks.LayerEmberCrystal, 2);
+        }
+    }
+
+    /// <summary>The starbeacons this world has (2026-10-25), and the clock their gifts run on.</summary>
+    private readonly HashSet<(int X, int Y, int Z)> _beacons = [];
+    private float _beaconClock;
+
+    /// <summary>
+    /// Three charred skulls on a T of four ashsand — three across with one under the middle — raise
+    /// the Ashwraith: the reference's wither, built the reference's way. The T is consumed.
+    /// </summary>
+    private void TryRaiseAshwraith(int x, int y, int z)
+    {
+        if (_herd is null || KindFor("ashwraith") is not { } kind) return;
+        var world = _streamer.World;
+        var skull = _registry.ByName("charred_skull_block").Id;
+        var sand = _ids.Ashsand;
+
+        foreach (var (ax, az) in (ReadOnlySpan<(int, int)>)[(1, 0), (0, 1)])
+        for (var mid = -1; mid <= 1; mid++)
+        {
+            // The middle skull of three along this axis, with the struck one somewhere in the row.
+            var (cx, cz) = (x - ax * mid, z - az * mid);
+            var whole = true;
+            for (var d = -1; d <= 1 && whole; d++)
+            {
+                whole &= world.GetBlock(cx + ax * d, y, cz + az * d) == skull;
+                whole &= world.GetBlock(cx + ax * d, y - 1, cz + az * d) == sand;
+            }
+
+            whole &= world.GetBlock(cx, y - 2, cz) == sand;
+            if (!whole) continue;
+
+            for (var d = -1; d <= 1; d++)
+            {
+                _streamer.EditBlock(cx + ax * d, y, cz + az * d, BlockId.Air);
+                _streamer.EditBlock(cx + ax * d, y - 1, cz + az * d, BlockId.Air);
+            }
+
+            _streamer.EditBlock(cx, y - 2, cz, BlockId.Air);
+            var raised = _herd.SpawnAt(kind, new Vector3(cx + 0.5f, y - 2f, cz + 0.5f), 0f);
+            raised.Awaken = CreatureHerd.AwakenSeconds;
+            raised.Health = 1;
+            Notice("the Ashwraith wakes", _items.ByName("charred_skull"));
+            PlayMagicUi(MagicSounds.RankUp, 0.9f, 0.35f);
+            Achieve(AchievementEvents.Ride, "ashwraith_raised");
+            return;
+        }
+    }
+
+    /// <summary>The Ashwraith's bar while one is near.</summary>
+    private void StepAshwraith()
+    {
+        if (_herd is null || !_walking) return;
+        foreach (var one in _herd.All)
+        {
+            if (!one.Alive || one.Kind != "ashwraith" || Vector3.Distance(one.Position, _player.Position) > 64f) continue;
+            _hud.BossName = "the Ashwraith";
+            _hud.BossFraction = one.Health / (float)one.MaxHealth;
+            return;
+        }
+    }
+
+    /// <summary>
+    /// The starbeacons' gifts, every four seconds: the pyramid of metal blocks under each one decides
+    /// how far it reaches and what it gives — swiftness from the first tier, strength from the second,
+    /// mending from the third, and quicker feet still from a full four.
+    /// </summary>
+    private void StepBeacons(float dt)
+    {
+        if (!_walking || _beacons.Count == 0) return;
+        _beaconClock -= dt;
+        if (_beaconClock > 0f) return;
+        _beaconClock = 4f;
+
+        var world = _streamer.World;
+        var metals = new HashSet<ushort>();
+        foreach (var (name, _, _, _, _, _) in StarterBlocks.MetalBlocks) metals.Add(_registry.ByName(name).Id.Value);
+
+        foreach (var (bx, by, bz) in _beacons.ToArray())
+        {
+            if (!world.TryGetChunk(ChunkPos.FromWorld(bx, by, bz), out _)) continue;
+            if (_registry[world.GetBlock(bx, by, bz)].Name != "starbeacon")
+            {
+                _beacons.Remove((bx, by, bz));
+                continue;
+            }
+
+            var tier = 0;
+            for (var k = 1; k <= 4; k++)
+            {
+                var whole = true;
+                for (var dz = -k; dz <= k && whole; dz++)
+                for (var dx = -k; dx <= k && whole; dx++)
+                    whole = metals.Contains(world.GetBlock(bx + dx, by - k, bz + dz).Value);
+                if (!whole) break;
+                tier = k;
+            }
+
+            if (tier == 0) continue;
+            if (tier == 4) Achieve(AchievementEvents.Ride, "beacon_full");
+
+            var reach = 10f + 10f * tier;
+            var flat = new Vector2(_player.Position.X - bx - 0.5f, _player.Position.Z - bz - 0.5f).Length();
+            if (flat > reach) continue;
+
+            _ailments.Apply(Ailment.Swiftness, 9f, tier == 4 ? 2 : 1);
+            if (tier >= 2) _ailments.Apply(Ailment.Strength, 9f);
+            if (tier >= 3) _ailments.Apply(Ailment.Regeneration, 9f);
         }
     }
 
@@ -15460,6 +15608,14 @@ public sealed class ClientHost : IDisposable
         }
 
         _progress.Placed(1 + (tall ? 1 : 0) + (flat ? 1 : 0));
+
+        // ⛳ A charred skull set down may complete the Ashwraith's T; a starbeacon starts to shine.
+        if (_registry[block].Name == "charred_skull_block") TryRaiseAshwraith(x, y, z);
+        if (_registry[block].Name == "starbeacon")
+        {
+            _beacons.Add((x, y, z));
+            Achieve(AchievementEvents.Ride, "beacon_lit");
+        }
 
         // ⛳ A sponge put down by water drinks it (2026-10-25), and is a wet sponge from then on.
         if (block == _ids.Sponge

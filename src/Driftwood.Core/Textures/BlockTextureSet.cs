@@ -780,6 +780,8 @@ public static class BlockTextureSet
         new("wet_sponge", "textures/block/wet_sponge.png", false, "textures/blocks/sponge_wet.png"),
         new("tide_shard", "", true),
         new("tide_crystals", "textures/item/prismarine_crystals.png", true, "textures/items/prismarine_crystals.png"),
+        new("ember_star", "textures/item/nether_star.png", true, "textures/items/nether_star.png"),
+        new("starbeacon", "textures/block/beacon.png", false, "textures/blocks/beacon.png"),
     ];
 
     /// <summary>
@@ -1920,6 +1922,8 @@ public static class BlockTextureSet
             StarterBlocks.LayerWetSponge => TileGen.GravelTile(1462, 150, 146, 62),
             StarterBlocks.LayerTideShard => TileGen.IconGem(1463, 104, 176, 162),
             StarterBlocks.LayerTideCrystals => TileGen.IconGem(1464, 200, 236, 222),
+            StarterBlocks.LayerEmberStar => TileGen.IconGem(1465, 252, 214, 150),
+            StarterBlocks.LayerStarbeacon => TileGen.Lamp(1466, 214, 246, 244),
             _ => Wheat(layer) ?? Crop(layer) ?? CropIcon(layer) ?? PotionIcon(layer) ?? StainedGlass(layer)
                  ?? MetalBlock(layer) ?? Wool(layer) ?? Meat(layer) ?? Dye(layer)
                  ?? Armour(layer) ?? Shield(layer) ?? Tool(layer),

@@ -925,7 +925,19 @@ public static class StarterItems
         Loose(items, "cinder_dust", "cinder dust", StarterBlocks.LayerCinderDust);
         Loose(items, "wail_tear", "wail tear", StarterBlocks.LayerWailTear);
         Loose(items, "ember_cream", "ember cream", StarterBlocks.LayerEmberCream);
-        Loose(items, "charred_skull", "charred skull", StarterBlocks.LayerCharredSkull);
+        // ⛳ Set down on top of something since the second boss (2026-10-25): three on a T of ashsand.
+        items.Register(new ItemType
+        {
+            Name = "charred_skull", Label = "charred skull", IconLayer = StarterBlocks.LayerCharredSkull,
+            Places = new Placeable
+            {
+                Label = "charred skull",
+                Kind = PlacementKind.Standing,
+                Variants = [blocks.ByName("charred_skull_block").Id],
+            },
+        });
+        Loose(items, "ember_star", "ember star", StarterBlocks.LayerEmberStar);
+        Block(items, blocks, "starbeacon", "starbeacon", StarterBlocks.LayerStarbeacon);
         items.Register(new ItemType
         {
             Name = "fire_charge", Label = "fire charge", IconLayer = StarterBlocks.LayerFireCharge,
@@ -1344,6 +1356,7 @@ public static class StarterItems
         new CreatureDrops.Rule("guardian", DropTrigger.Killed, "tide_crystals", 0, 1, Chance: 0.4f),
         new CreatureDrops.Rule("guardian", DropTrigger.Killed, "raw_cod", 0, 1),
         new CreatureDrops.Rule("elder_guardian", DropTrigger.Killed, "wet_sponge", 1, 1),
+        new CreatureDrops.Rule("ashwraith", DropTrigger.Killed, "ember_star", 1, 1),
         new CreatureDrops.Rule("elder_guardian", DropTrigger.Killed, "tide_shard", 0, 2),
         new CreatureDrops.Rule("elder_guardian", DropTrigger.Killed, "tide_crystals", 0, 1, Chance: 0.5f),
 

@@ -169,6 +169,28 @@ public static class StarterCreatures
                 Box(-0.5f, 3.5f, 25f, 1f, 9f, 9f, 25, 19)),
         ]);
 
+    /// <summary>
+    /// The Ashwraith (2026-10-25), on the reference's wither net: three skulls along a shoulder bar,
+    /// a spine with its ribs, and a tail trailing to nothing.
+    /// </summary>
+    public static CreatureModel Ashwraith() => new(
+        "ashwraith", 64, 64,
+        [
+            Bone("body", "", new Vector3(0f, 16f, 0f),
+                Box(-10f, 17f, -1.5f, 20f, 3f, 3f, 0, 16),     // the shoulders
+                Box(-1.5f, 6f, -1.5f, 3f, 11f, 3f, 0, 22),     // the spine
+                Box(-4f, 14f, -1f, 8f, 1f, 2f, 24, 22),        // ribs
+                Box(-4f, 11.5f, -1f, 8f, 1f, 2f, 24, 22),
+                Box(-4f, 9f, -1f, 8f, 1f, 2f, 24, 22),
+                Box(-1.5f, 0f, -1.5f, 3f, 6f, 3f, 12, 22)),    // the tail
+            Bone("head", "body", new Vector3(0f, 20f, 0f),
+                Box(-4f, 20f, -4f, 8f, 8f, 8f, 0, 0)),
+            Bone("head_port", "body", new Vector3(-10f, 18f, 0f),
+                Box(-13f, 18f, -3f, 6f, 6f, 6f, 32, 0)),
+            Bone("head_starboard", "body", new Vector3(10f, 18f, 0f),
+                Box(7f, 18f, -3f, 6f, 6f, 6f, 32, 0, mirror: true)),
+        ]);
+
     public static CreatureModel Cow() => new(
         "cow", 64, 32,
         [
@@ -1055,7 +1077,7 @@ public static class StarterCreatures
          Shorewright(), Forager(), Waykeeper(), Lorekeeper(), StormSentinel(), Starwarden(),
          SummonedSkeleton(), SummonedZombie(), SpiritWolf(), EarthElemental(),
          Cinderwisp(), Ashwail(), EmberSlime(), CharredSkeleton(), CoreWyrm(),
-         Guardian("guardian"), Guardian("elder_guardian")];
+         Guardian("guardian"), Guardian("elder_guardian"), Ashwraith()];
 
     /// <summary>Kinds excused the height band because they are flat on purpose.</summary>
     private static readonly HashSet<string> Flat = new(StringComparer.Ordinal) { "phantom" };

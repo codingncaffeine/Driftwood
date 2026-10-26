@@ -897,6 +897,12 @@ public sealed class BlockModel
     /// busier top texture would need walking up to. The fill is its own box rather than a repaint
     /// of the floor, which is what lets the level rise without another wall texture per stage.
     /// </remarks>
+    /// <summary>A skull set on whatever is under it (2026-10-25): a half-block head.</summary>
+    public static BlockModel Skull(ushort layer) => new(
+    [
+        Box(new Vector3(4f, 0f, 4f), new Vector3(12f, 8f, 12f), layer, layer, layer),
+    ]);
+
     /// <summary>
     /// A ship's wheel on its post (2026-10-25): the rim and its spoke handles stand square to the
     /// way the helm faces, so whoever steers stands behind it looking over it.

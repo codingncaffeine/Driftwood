@@ -279,6 +279,8 @@ public static class StarterRecipes
         Shaped("tidestone", "tidestone", 1, ["MM", "MM"], "tide_shard", station: CraftStation.Bench);
         Shaped("tidestone bricks", "tidestone_bricks", 1, ["MMM", "MMM", "MMM"], "tide_shard", station: CraftStation.Bench);
         Shaped("dark tidestone", "dark_tidestone", 1, ["MMM", "MbM", "MMM"], "tide_shard", station: CraftStation.Bench);
+        // ⛳ The starbeacon (2026-10-25): glass round the ember star on a polished deepstone foot.
+        Shaped("starbeacon", "starbeacon", 1, ["GGG", "GsG", "MMM"], "polished_deepstone", station: CraftStation.Bench);
         Shaped("deeplight", "deeplight", 1, ["McM", "ccc", "McM"], "tide_shard", station: CraftStation.Bench);
         LooseAt("ember cream", "ember_cream", 1, CraftStation.Bench, "slimeball", "cinder_dust");
 
@@ -718,6 +720,7 @@ public static class StarterRecipes
     private static string KeyOf(char key, string recipe, string? material) => key switch
     {
         'b' => "ink_sac",
+        's' => "ember_star",
         'c' => "tide_crystals",
         'M' => material ?? throw new InvalidOperationException($"recipe '{recipe}' uses M with no material"),
         'P' => "#planks",

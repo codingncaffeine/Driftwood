@@ -113,6 +113,9 @@ public sealed record WorldState(
     /// <summary>The boats (2026-10-25): where each floats, the way its bow points, and its wood.</summary>
     /// <remarks>Its own section, BOAT, so a build from before boats skips them and opens the world.</remarks>
     public List<(float X, float Y, float Z, float Yaw, bool Cherry)> Boats { get; } = [];
+
+    /// <summary>Where the starbeacons stand (2026-10-25), so they keep working after a reload.</summary>
+    public List<(int X, int Y, int Z)> Beacons { get; } = [];
 }
 
 /// <summary>
@@ -473,6 +476,17 @@ public static class WorldSave
                     }
                 }));
 
+                SaveSection.Write(into, "BEAC", Bytes(beacons =>
+                {
+                    beacons.Write(state.Beacons.Count);
+                    foreach (var (x, y, z) in state.Beacons)
+                    {
+                        beacons.Write(x);
+                        beacons.Write(y);
+                        beacons.Write(z);
+                    }
+                }));
+
                 SaveSection.Write(into, "BOAT", Bytes(boats =>
                 {
                     boats.Write(state.Boats.Count);
@@ -707,6 +721,15 @@ public static class WorldSave
                             into.Carts.Add((
                                 carts.ReadInt32(), carts.ReadInt32(), carts.ReadInt32(),
                                 carts.ReadSingle(), carts.ReadSingle(), null));
+                        break;
+                    }
+
+                    case "BEAC":
+                    {
+                        using var beacons = Reader(payload);
+                        var count = beacons.ReadInt32();
+                        for (var i = 0; i < count; i++)
+                            into.Beacons.Add((beacons.ReadInt32(), beacons.ReadInt32(), beacons.ReadInt32()));
                         break;
                     }
 

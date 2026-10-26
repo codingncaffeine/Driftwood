@@ -771,7 +771,11 @@ public static class StarterBlocks
     public const ushort LayerTideShard = LayerCherryBoatIcon + 7;
     public const ushort LayerTideCrystals = LayerCherryBoatIcon + 8;
 
-    public const int LayerCount = LayerTideCrystals + 1;
+    /// <summary>The second boss's (2026-10-25): the ember star it leaves, and the starbeacon.</summary>
+    public const ushort LayerEmberStar = LayerTideCrystals + 1;
+    public const ushort LayerStarbeacon = LayerTideCrystals + 2;
+
+    public const int LayerCount = LayerStarbeacon + 1;
 
     /// <summary>One stage of the ashcap, as a block name.</summary>
     public static string AshcapName(int stage) => $"ashcap_{stage}";
@@ -1400,6 +1404,22 @@ public static class StarterBlocks
                 Name = name, Hardness = 0.6f, Crafted = true, Sounds = SoundMaterial.Plant,
                 TopLayer = layer, SideLayer = layer, BottomLayer = layer,
             });
+
+        // ⛳ The charred skull set down (2026-10-25): three on a T of ashsand raise the Ashwraith.
+        registry.Register(new BlockType
+        {
+            Name = "charred_skull_block", Hardness = 1f, Opaque = false, Crafted = true,
+            Sounds = SoundMaterial.Stone, SupportFace = Faces.NegY,
+            Model = BlockModel.Skull(LayerCharredSkull),
+        });
+
+        // ⛳ The starbeacon (2026-10-25): the reference's beacon, lit by the ember star.
+        registry.Register(new BlockType
+        {
+            Name = "starbeacon", Hardness = 3f, Crafted = true, Sounds = SoundMaterial.Glass,
+            LightEmission = LightValue.PackBlock(15, 15, 14),
+            TopLayer = LayerStarbeacon, SideLayer = LayerStarbeacon, BottomLayer = LayerStarbeacon,
+        });
 
         // ⛳ The helm (2026-10-25): a ship's wheel on a post, four facings. Taking it lifts whatever
         // it is built into off the world and sails it — see Ships.

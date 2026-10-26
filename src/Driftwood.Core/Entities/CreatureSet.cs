@@ -186,6 +186,10 @@ public static class CreatureSet
         new("elder_guardian", "elder guardian", CreatureFamily.Hostile, "guardian",
             ["textures/entity/guardian_elder.png"]),
 
+        // ⛳ The second boss (2026-10-25): the reference's wither, raised from three charred skulls.
+        new("ashwraith", "Ashwraith", CreatureFamily.Hostile, "wither",
+            ["textures/entity/wither/wither.png"]),
+
         // ⛳ The Core Hollow's own (2026-10-25): fought, never spawned by the dark's rules.
         new("core_wyrm", "the Core Wyrm", CreatureFamily.Encounter, "core_wyrm", []),
 
@@ -221,6 +225,7 @@ public static class CreatureSet
         ["phantom"] = CreatureMove.Fly,
         ["cinderwisp"] = CreatureMove.Fly,
         ["guardian"] = CreatureMove.Swim,
+        ["ashwraith"] = CreatureMove.Fly,
         ["elder_guardian"] = CreatureMove.Swim,
         ["ashwail"] = CreatureMove.Fly,
         ["ember_slime"] = CreatureMove.Hop,
@@ -265,6 +270,7 @@ public static class CreatureSet
 
         // The reference draws its elder at two and a third of the guardian.
         ["guardian"] = 0.9f,
+        ["ashwraith"] = 1.9f,
         ["elder_guardian"] = 2.1f,
         ["core_wyrm"] = 1.6f,
     };

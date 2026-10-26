@@ -24,6 +24,9 @@ public enum ProjectileKind : byte
 
     /// <summary>A seeker's eye, flying toward the Sanctum for a moment and then coming down.</summary>
     Seeker,
+
+    /// <summary>The Ashwraith's skull (2026-10-25): quick, bursting where it lands, and withering.</summary>
+    SkullBolt,
 }
 
 /// <summary>Who launched a projectile. Spells and creature shots can extend this without a new pool.</summary>
@@ -83,6 +86,7 @@ public sealed class ProjectileSystem
     /// <summary>The Emberdeep's fire: the reference's small fireball is quick, the ghast's slow.</summary>
     public const float EmberSpeed = 16f;
     public const float WailBoltSpeed = 9f;
+    public const float SkullBoltSpeed = 12f;
 
     /// <summary>How near a bolt has to pass the point of a swing for the swing to send it back.</summary>
     public const float DeflectRadius = 1.1f;

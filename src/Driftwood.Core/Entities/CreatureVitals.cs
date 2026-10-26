@@ -80,6 +80,7 @@ public static class CreatureVitals
         ["ashwail"] = 20,
         ["guardian"] = 60,
         ["elder_guardian"] = 160,
+        ["ashwraith"] = 300,
         ["ember_slime"] = 2,
         ["charred_skeleton"] = 40,
 
@@ -123,6 +124,7 @@ public static class CreatureVitals
         ["ember_slime"] = 3,
         ["guardian"] = 6,
         ["elder_guardian"] = 8,
+        ["ashwraith"] = 8,
         ["charred_skeleton"] = 8,
         ["core_wyrm"] = 12,
 
@@ -203,6 +205,7 @@ public static class CreatureVitals
         ["ashwail"] = 48f,
         ["guardian"] = 16f,
         ["elder_guardian"] = 16f,
+        ["ashwraith"] = 48f,
     };
 
     public static float FollowRange(string kind) => Follow.GetValueOrDefault(kind, 16f);

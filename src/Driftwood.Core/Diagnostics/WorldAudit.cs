@@ -9384,7 +9384,8 @@ public static class WorldAudit
         (StarterBlocks.LayerBoatIcon, "boat"),
         (StarterBlocks.LayerCherryBoatIcon, "cherry_boat"),
         (StarterBlocks.LayerTidestone, "tidestone"),
-        ((ushort)(StarterBlocks.LayerCount - 1), "tide_crystals"),
+        (StarterBlocks.LayerTideCrystals, "tide_crystals"),
+        ((ushort)(StarterBlocks.LayerCount - 1), "starbeacon"),
     ];
 
     /// <summary>
@@ -10420,6 +10421,7 @@ public static class WorldAudit
     private static readonly (string Item, string Why)[] FlatOnPurpose =
     [
         ("torch", "a cut-out on crossed planes: a solid of it is a solid of black"),
+        ("charred_skull", "a trophy first and a block second: the skull's face is the picture a player hunts for"),
         ("ladder", "a cut-out on one sheet, with nothing behind it to shade"),
         ("rail", "a film on the floor with no solid in it; its tile is the picture"),
         ("powered_rail", "the same film as the rail, with a third rail drawn in"),

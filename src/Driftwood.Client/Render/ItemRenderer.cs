@@ -304,6 +304,7 @@ public sealed class ItemRenderer : IDisposable
                 ProjectileKind.Arrow => arrow,
                 ProjectileKind.Ember or ProjectileKind.WailBolt => charge,
                 ProjectileKind.Seeker => seeker,
+                ProjectileKind.SkullBolt => catalogue.ByName("charred_skull"),
                 ProjectileKind.Flask => catalogue.ByName(shot.Tag switch
                 {
                     ShotTag.SlownessFlask => "splash_potion_slowness",
@@ -332,6 +333,7 @@ public sealed class ItemRenderer : IDisposable
                 model = Matrix4x4.CreateScale(shot.Kind switch
                         {
                             ProjectileKind.WailBolt => 1f,
+                            ProjectileKind.SkullBolt => 0.5f,
                             ProjectileKind.Ember => 0.36f,
                             _ => 0.28f,
                         })
