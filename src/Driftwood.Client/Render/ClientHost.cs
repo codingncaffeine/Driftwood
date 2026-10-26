@@ -19774,17 +19774,11 @@ public sealed class ClientHost : IDisposable
     /// </summary>
     private void AimCursorProbe(Vector2D<int> size)
     {
-        var tab = _layout.Zones.FirstOrDefault(zone => zone.Kind == ZoneKind.Tab && zone.Index == 0);
-        if (tab.W <= 0f || _hudScreen.TabNames.Length == 0 || _hudScreen.TabNames[0].Length == 0)
-            return;
-
-        // A sidebar of categories (every tab at one x) draws its labels capitalised, fourteen units
-        // in and six down; the compact rail centres them four down.
-        var tabZones = _layout.Zones.Where(zone => zone.Kind == ZoneKind.Tab).ToArray();
-        var sidebar = tabZones.Length > 1 && tabZones.All(zone => MathF.Abs(zone.X - tab.X) < 0.1f);
-        var label = sidebar
-            ? char.ToUpperInvariant(_hudScreen.TabNames[0][0]) + _hudScreen.TabNames[0][1..]
-            : _hudScreen.TabNames[0];
+        // ⛳ Aimed at the letters where the renderer says it wrote them (2026-10-26), whichever tab
+        // style drew them — sidebar, column, strip, or the open bookmark's name — rather than at a
+        // position re-derived here from one style's spacing.
+        if (_hud.FirstTabLabel is not { } written || written.Text.Length == 0) return;
+        var label = written.Text;
 
         var glyphLayer = TileGen.GlyphOf(label[0]);
         if (glyphLayer < 0) return;
@@ -19834,10 +19828,8 @@ public sealed class ClientHost : IDisposable
 
         // Text() rounds its origin before emitting the quad. Work in physical pixels from here so
         // both the glyph cell and cursor texel begin on the same exact framebuffer pixel.
-        var textX = sidebar
-            ? (int)(MathF.Round(tab.X + 14f) * scale)
-            : (int)(MathF.Round(tab.CentreX - _hud.TextWidth(label, 8f) * 0.5f) * scale);
-        var textY = (int)(MathF.Round(tab.Y + (sidebar ? 6f : 4f)) * scale);
+        var textX = (int)(MathF.Round(written.X) * scale);
+        var textY = (int)(MathF.Round(written.Y) * scale);
         var targetX = textX + glyphCellX * scale;
         var targetY = textY + glyphCellY * scale;
         var pointerX = targetX - cursorX * cursorCell;

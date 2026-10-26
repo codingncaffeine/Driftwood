@@ -1381,27 +1381,86 @@ public sealed class HudRenderer : IDisposable
         }
     }
 
+    /// <summary>
+    /// Level, experience, focus and coin, over the spell bar (2026-10-26): a glass plate in the
+    /// settings menus' own dress, with the level on an amber badge and every number labelled.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ <b>The user's report:</b> it was two hair-thin bars under "L1 0c", the focus count
+    /// written over its own bar and the experience not counted at all. Now the level is a badge,
+    /// experience reads as so-much of so-much, focus is named, coin carries its mark, and the bars
+    /// are bevelled tracks — experience marked off in quarters so progress reads at a glance.</para>
+    /// <para>⚠ <b>The same band as before</b>, top − 12 to top + 10, so the seven-unit gutter over the
+    /// spell frame and every layout check that stands on it are unchanged.</para>
+    /// </remarks>
     private void CharacterMeters(HudScreen screen, float w, float h, int maximumHealth)
     {
         if (screen.Character is not { } character) return;
         const float width = 174f;
+        const float badge = 20f;
+        const float label = 6f;
         var left = MathF.Round((w - width) * 0.5f);
-        // Travels above the movable spell frame as one compact stack, seventeen units over the
-        // frame's default top, leaving a clean seven-unit gutter below these two bars.
         var top = MathF.Round(h - VitalBars.SpellBarFromBottom(maximumHealth) - 17f);
         var stats = character.Statistics;
-        var xp = character.Level >= CharacterProgression.MaximumLevel
-            ? 1f : character.Experience / (float)Math.Max(1, character.ExperienceNeeded);
+        var maxed = character.Level >= CharacterProgression.MaximumLevel;
+        var xp = maxed ? 1f : character.Experience / (float)Math.Max(1, character.ExperienceNeeded);
         var focus = character.Focus / (float)Math.Max(1, stats.MaximumFocus);
-        Rect(_plain, left, top, width, 3f, new Vector4(0.02f, 0.025f, 0.03f, 0.88f));
-        Rect(_plain, left, top, width * Math.Clamp(xp, 0f, 1f), 3f,
-            new Vector4(0.72f, 0.86f, 0.38f, 0.96f));
-        Rect(_plain, left, top + 5f, width, 3f, new Vector4(0.02f, 0.025f, 0.03f, 0.88f));
-        Rect(_plain, left, top + 5f, width * Math.Clamp(focus, 0f, 1f), 3f,
-            new Vector4(0.30f, 0.58f, 0.95f, 0.96f));
-        Text($"L{character.Level}  {CharacterProgression.CoinsText(character.Coins)}",
-            left, top - 8f, 6f, Vector4.One);
-        Text($"{character.Focus}/{stats.MaximumFocus}", left + width - 36f, top + 3f, 5f, Vector4.One);
+
+        var xpInk = new Vector4(0.72f, 0.86f, 0.38f, 1f);
+        var focusInk = new Vector4(0.44f, 0.68f, 1f, 1f);
+
+        // The plate: the menus' glass, edged top and bottom.
+        Rect(_plain, left - 3f, top - 12f, width + 6f, 22f, MenuGlass with { W = 0.72f });
+        Rect(_plain, left - 3f, top - 12f, width + 6f, 1f, MenuEdge);
+        Rect(_plain, left - 3f, top + 9f, width + 6f, 1f, MenuEdge);
+
+        // The badge: the level in amber on the sidebar's dark, ringed in amber.
+        var bx = left;
+        var by = top - 11f;
+        Rect(_plain, bx, by, badge, badge, MenuSide);
+        Rect(_plain, bx, by, badge, 1f, MenuAmber);
+        Rect(_plain, bx, by + badge - 1f, badge, 1f, MenuAmber with { W = 0.6f });
+        Rect(_plain, bx, by, 1f, badge, MenuAmber with { W = 0.8f });
+        Rect(_plain, bx + badge - 1f, by, 1f, badge, MenuAmber with { W = 0.6f });
+        TextCentred($"{character.Level}", bx + badge * 0.5f, by + 6f, 8f, MenuAmber);
+
+        // The words, over the bars: experience at the left, coin in the middle, focus at the right.
+        var x0 = left + badge + 4f;
+        var span = width - badge - 4f;
+        var xpWords = maxed ? "max level" : $"{character.Experience:N0}/{character.ExperienceNeeded:N0} xp";
+        Text(xpWords, x0, top - 11f, label, xpInk);
+
+        var focusWords = $"{character.Focus}/{stats.MaximumFocus} focus";
+        Text(focusWords, x0 + span - TextWidth(focusWords, label), top - 11f, label, focusInk);
+
+        var coins = CharacterProgression.CoinsText(character.Coins);
+        var coinWidth = TextWidth(coins, label) + 5f;
+        var coinX = MathF.Round(x0 + (span - coinWidth) * 0.5f);
+        Rect(_plain, coinX, top - 10f, 3f, 4f, MenuAmber);
+        Rect(_plain, coinX + 1f, top - 10f, 1f, 1f, new Vector4(1f, 0.92f, 0.70f, 1f));
+        Text(coins, coinX + 5f, top - 11f, label, MenuAmber);
+
+        // The bars: a sunk track, the fill with a lit top row, experience marked in quarters.
+        Meter(x0, top - 3f, span, 5f, xp, xpInk, quarters: true);
+        Meter(x0, top + 4f, span, 4f, focus, focusInk, quarters: false);
+    }
+
+    /// <summary>One bar of the character meters: a sunk track, its fill, and a lit top row.</summary>
+    private void Meter(float x, float y, float width, float height, float share, Vector4 ink, bool quarters)
+    {
+        Rect(_plain, x, y, width, height, new Vector4(0.02f, 0.025f, 0.03f, 0.92f));
+        Rect(_plain, x, y + height - 1f, width, 1f, new Vector4(1f, 1f, 1f, 0.07f));
+        var filled = MathF.Round(width * Math.Clamp(share, 0f, 1f));
+        if (filled > 0f)
+        {
+            Rect(_plain, x, y, filled, height, ink with { W = 0.92f });
+            Rect(_plain, x, y, filled, 1f, Vector4.Lerp(ink, Vector4.One, 0.45f));
+            Rect(_plain, x, y + height - 1f, filled, 1f, ink * new Vector4(0.6f, 0.6f, 0.6f, 1f));
+        }
+
+        if (!quarters) return;
+        for (var q = 1; q < 4; q++)
+            Rect(_plain, MathF.Round(x + width * q / 4f), y, 1f, height, new Vector4(0f, 0f, 0f, 0.45f));
     }
 
     private void CompanionPanel(HudScreen screen, ScreenLayout layout, float w, float h)
@@ -2987,6 +3046,7 @@ public sealed class HudRenderer : IDisposable
         var tall = bottom - top;
 
         // The categories.
+        FirstTabLabel = null;
         if (!ThemedPanel(left, top, MenuSideWidth, tall, GuiTextureSet.Layer.MenuBackground))
             Rect(_plain, left, top, MenuSideWidth, tall, MenuSide);
         Rect(_plain, left + MenuSideWidth - 1f, top, 1f, tall, MenuEdge);
@@ -3003,8 +3063,9 @@ public sealed class HudRenderer : IDisposable
             else if (open) Rect(_plain, left, y, MenuSideWidth - 1f, 20f, MenuLit);
             else if (hot) Rect(_plain, left, y, MenuSideWidth - 1f, 20f, MenuHot);
             if (open) Rect(_plain, left, y, 3f, 20f, Picked);
-            ShadowText(FitText(Capitalised(screen.TabNames[i]), MenuSideWidth - 24f, MenuGlyph),
-                left + 14f, y + 6f, open ? Vector4.One : hot ? Ink : InkDim, tabThemed);
+            var words = FitText(Capitalised(screen.TabNames[i]), MenuSideWidth - 24f, MenuGlyph);
+            ShadowText(words, left + 14f, y + 6f, open ? Vector4.One : hot ? Ink : InkDim, tabThemed);
+            if (i == 0) FirstTabLabel = (MathF.Round(left + 14f), y + 6f, words);
             layout.Add(ZoneKind.Tab, i, left, y, MenuSideWidth - 1f, 20f);
         }
 
@@ -3021,6 +3082,134 @@ public sealed class HudRenderer : IDisposable
         return true;
     }
 
+    /// <summary>One bookmark of the journal's rail: a square, with room round the icon.</summary>
+    private const float RailCell = 22f;
+
+    /// <summary>How far the open bookmark stands proud of the others.</summary>
+    private const float RailProud = 4f;
+
+    /// <summary>Whether this frame's journal tabs were drawn as icons, so a hover names them.</summary>
+    private bool _railShown;
+
+    /// <summary>
+    /// Where the first tab's words were last written, and what they said — so the interface check
+    /// aims at the drawn letters rather than re-deriving each tab style's geometry. Null when the
+    /// first tab drew no words.
+    /// </summary>
+    public (float X, float Y, string Text)? FirstTabLabel { get; private set; }
+
+    /// <summary>What each journal tab wears on its bookmark, by the tab's name.</summary>
+    private static string RailIcon(string tab) => tab switch
+    {
+        "items" => "chest",
+        "character" => "iron_helmet",
+        "spells" => "potion_regeneration",
+        "progress" => "bench",
+        "achievements" => "golden_apple",
+        "handbook" => "book",
+        "map" => "seeker_eye",
+        _ => "",
+    };
+
+    /// <summary>
+    /// The journal's tabs as bookmarks on the panel's edge (2026-10-26) — wherever the full column
+    /// will not fit, which is always while the recipe book is open.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛔ <b>This replaced the compact strip, and the strip's whole problem was words.</b> Seven
+    /// tab names across a panel 176 units wide came out "charac...", "progr...", "handb..." — the
+    /// user's report. A bookmark carries an icon and no word, so nothing is ever cut; hovering one
+    /// names it in a tooltip, and the open one stands proud and runs into the panel.</para>
+    /// <para>Down the panel's left side when the book is shut; down its right side when the book is
+    /// open, because the book's own shelf tabs hang off its left. Where a window is too narrow for
+    /// that, the same bookmarks sit in a row along the top of the panel.</para>
+    /// </remarks>
+    private void JournalRail(ItemRegistry catalogue, HudScreen screen, ScreenLayout layout, float w)
+    {
+        _railShown = true;
+        var panelLeft = layout.X(0f);
+        var panelRight = layout.X(ScreenLayout.PanelWidth);
+        var panelTop = layout.Y(0f);
+        var reach = RailCell + RailProud;
+
+        var right = layout.BookOut;
+        var vertical = right ? panelRight + reach <= w - 2f : panelLeft - reach >= 2f;
+        FirstTabLabel = null;
+
+        // ⛳ In a row there is room along the top for the page in front to say its name beside its
+        // icon — whole, or not at all: if the name would push the row past the panel it stays an icon.
+        var openName = screen.Tab >= 0 && screen.Tab < screen.TabNames.Length ? Capitalised(screen.TabNames[screen.Tab]) : "";
+        var named = TextWidth(openName, 8f) + 6f;
+        var rowRoom = panelRight - panelLeft - 8f - screen.TabNames.Length * (RailCell + 1f);
+        if (vertical || named > rowRoom) named = 0f;
+        var pen = panelLeft + 4f;
+
+        for (var i = 0; i < screen.TabNames.Length; i++)
+        {
+            var open = screen.Tab == i;
+            var hot = screen.Hovered is { Kind: ZoneKind.Tab } over && over.Index == i;
+            var length = RailCell + (open ? RailProud : 0f);
+
+            // Every bookmark is butted against the panel; the open one is longer, so it reaches out.
+            float cx, cy, cw, ch;
+            if (vertical)
+            {
+                cy = panelTop + 4f + i * (RailCell + 1f);
+                ch = RailCell;
+                cw = length;
+                cx = right ? panelRight : panelLeft - length;
+            }
+            else
+            {
+                cx = pen;
+                cw = RailCell + (open ? named : 0f);
+                ch = length;
+                cy = panelTop - length;
+                pen += cw + 1f;
+            }
+
+            var fill = open ? PanelFill
+                : hot ? new Vector4(0.30f, 0.30f, 0.32f, 0.97f)
+                : new Vector4(0.20f, 0.20f, 0.22f, 0.95f);
+            Rect(_plain, cx, cy, cw, ch, fill);
+
+            // A tab cut from the panel's own board: lit on its outer edges, shadowed underneath.
+            if (vertical)
+            {
+                Rect(_plain, cx, cy, cw, 1f, open ? PanelLight : PanelDark);
+                Rect(_plain, cx, cy + ch - 1f, cw, 1f, PanelDark);
+                Rect(_plain, right ? cx + cw - 1f : cx, cy, 1f, ch, open ? PanelLight : PanelDark);
+                if (open) Rect(_plain, right ? cx + cw - 3f : cx + 1f, cy + 3f, 2f, ch - 6f, Picked);
+            }
+            else
+            {
+                Rect(_plain, cx, cy, 1f, ch, open ? PanelLight : PanelDark);
+                Rect(_plain, cx + cw - 1f, cy, 1f, ch, PanelDark);
+                Rect(_plain, cx, cy, cw, 1f, open ? PanelLight : PanelDark);
+                if (open) Rect(_plain, cx + 3f, cy + 1f, cw - 6f, 2f, Picked);
+            }
+
+            // The icon sits in the bookmark's outer square, so the proud part carries it out.
+            var ix = vertical ? right ? cx + cw - RailCell + 3f : cx + 3f : cx + 3f;
+            var iy = vertical ? cy + 3f : cy + 3f;
+            if (catalogue.TryByName(RailIcon(screen.TabNames[i]), out var item))
+                Rect(_blocks, MathF.Round(ix), MathF.Round(iy), 16f, 16f,
+                    open || hot ? Vector4.One : new Vector4(0.70f, 0.70f, 0.72f, 1f), item.IconLayer);
+            else
+                TextCentred(Capitalised(screen.TabNames[i])[..1], ix + 8f, iy + 4f, 8f, open ? Highlight : InkFaint);
+
+            if (open && named > 0f)
+            {
+                var tx = MathF.Round(cx + RailCell);
+                var ty = MathF.Round(cy + (ch - 8f) * 0.5f + 1f);
+                Text(openName, tx, ty, 8f, Highlight);
+                if (i == 0) FirstTabLabel = (tx, ty, openName);
+            }
+
+            layout.Add(ZoneKind.Tab, i, cx, cy, cw, ch);
+        }
+    }
+
     /// <summary>How wide the items screen's column of journal tabs is.</summary>
     private const float JournalColumn = 112f;
 
@@ -3030,6 +3219,8 @@ public sealed class HudRenderer : IDisposable
     /// </summary>
     private void JournalTabs(HudScreen screen, ScreenLayout layout, float left, float top)
     {
+        _railShown = false;
+        FirstTabLabel = null;
         Text("DRIFTWOOD", left + 6f, top, MenuGlyph, MenuAmber);
         Text("journal", left + 6f, top + 12f, MenuGlyph, InkFaint);
 
@@ -3045,8 +3236,9 @@ public sealed class HudRenderer : IDisposable
                     open ? MenuLit with { W = 0.85f } : hot ? MenuHot : MenuSide with { W = 0.75f });
                 if (open) Rect(_plain, left, y, 3f, 20f, Picked);
             }
-            ShadowText(FitText(Capitalised(screen.TabNames[i]), JournalColumn - 24f, MenuGlyph),
-                left + 14f, y + 6f, open ? Vector4.One : hot ? Ink : InkDim, tabThemed);
+            var words = FitText(Capitalised(screen.TabNames[i]), JournalColumn - 24f, MenuGlyph);
+            ShadowText(words, left + 14f, y + 6f, open ? Vector4.One : hot ? Ink : InkDim, tabThemed);
+            if (i == 0) FirstTabLabel = (MathF.Round(left + 14f), y + 6f, words);
             layout.Add(ZoneKind.Tab, i, left, y, JournalColumn, 20f);
         }
     }
@@ -3712,6 +3904,7 @@ public sealed class HudRenderer : IDisposable
 
     private void Tabs(HudScreen screen, ScreenLayout layout, float left, float top, float panel)
     {
+        FirstTabLabel = null;
         var names = screen.TabNames;
         if (names.Length == 0) return;
 
@@ -3767,6 +3960,7 @@ public sealed class HudRenderer : IDisposable
             var shown = FitText(name, MathF.Max(1f, width - 8f), 8f);
             TextCentred(shown, pen + width * 0.5f, top + 4f, 8f,
                 open ? Highlight : InkFaint);
+            if (i == 0) FirstTabLabel = (MathF.Round(pen + width * 0.5f - TextWidth(shown, 8f) / 2f), top + 4f, shown);
 
             layout.Add(ZoneKind.Tab, i, pen, top, width, 18f);
             pen += width;
@@ -4507,10 +4701,11 @@ public sealed class HudRenderer : IDisposable
 
         // The player screen's tabs are a column at the left where it fits (see above), else the compact
         // strip over the panel; a station has none — a furnace is not where you look up your progress.
+        _railShown = false;
         if (column && !layout.BookOut)
             JournalTabs(screen, layout, 12f, layout.OriginY);
         else if (screen.TabNames.Length > 1)
-            Tabs(screen, layout, layout.X(0f), layout.Y(0f) - 18f, layout.Size(ScreenLayout.PanelWidth));
+            JournalRail(catalogue, screen, layout, w);
 
         // The button that folds the book out, on whichever panel has one.
         foreach (var zone in layout.Zones)
@@ -5238,6 +5433,12 @@ public sealed class HudRenderer : IDisposable
         if (zone.Kind == ZoneKind.Achievement)
         {
             told = AchievementTip(screen, zone.Index);
+        }
+        else if (zone.Kind == ZoneKind.Tab)
+        {
+            // A bookmark has no word on it, so hovering one says which page it is.
+            if (!_railShown || (uint)zone.Index >= (uint)screen.TabNames.Length) return;
+            told = new TooltipText(Capitalised(screen.TabNames[zone.Index]), "");
         }
         else if (zone.Kind == ZoneKind.TradeInventory
             && (uint)zone.Index < Inventory.Slots)
