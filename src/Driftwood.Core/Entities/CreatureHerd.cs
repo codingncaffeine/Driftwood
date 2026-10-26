@@ -114,6 +114,13 @@ public sealed class Creature
     /// <summary>Seconds until the path is looked at again whatever happens.</summary>
     public float Repath { get; set; }
 
+    /// <summary>
+    /// A wander's own route — somewhere picked and walked to, the reference's stroll — kept apart
+    /// from <see cref="Path"/>, which the hunt owns and clears whenever there is nothing to hunt.
+    /// </summary>
+    public List<PathStep>? Stroll { get; set; }
+    public int StrollAt { get; set; }
+
     /// <summary>True while it has someone to come at — acquired by sight, kept by memory.</summary>
     public bool Targeting { get; set; }
 
@@ -1371,6 +1378,15 @@ public sealed class CreatureHerd
                 {
                     creature.Moving = _random.NextDouble() < 0.6;
                     creature.WantsYaw = (float)(_random.NextDouble() * 360.0);
+                    creature.Stroll = null;
+
+                    // ⛳ The reference's stroll: a walker picks somewhere it can actually reach and
+                    // walks the route there, rather than setting off on a bearing and turning when
+                    // it meets a tree. Without a path to hand (none found, or this frame's budget
+                    // spent) it falls back to the bearing, as before.
+                    if (creature.Moving && creature.Move is CreatureMove.Walk && creature.FallSpeed == 0f
+                        && _pathBudget > 0)
+                        PlanStroll(creature, solid);
 
                     // A flier or swimmer also re-rolls which way is up. FallSpeed carries the
                     // vertical wander for the kinds gravity has let go of — down positive, the
@@ -1378,6 +1394,26 @@ public sealed class CreatureHerd
                     if (creature.Move is CreatureMove.Fly or CreatureMove.Swim)
                         creature.FallSpeed = ((float)_random.NextDouble() * 2f - 1f)
                             * (creature.Move == CreatureMove.Fly ? FlyLift : SwimSpeed * 0.6f);
+                }
+            }
+
+            // A stroll in hand steers the walk; one walked to its end is a walk over.
+            if (creature.Stroll is { } stroll)
+            {
+                if (hunting || courting || creature.FleeFor > 0f || creature.Stuck > 1f)
+                {
+                    creature.Stroll = null;
+                }
+                else
+                {
+                    var at = creature.StrollAt;
+                    var going = FollowPath(creature, stroll, ref at);
+                    creature.StrollAt = at;
+                    if (!going)
+                    {
+                        creature.Stroll = null;
+                        creature.Moving = false;
+                    }
                 }
             }
 
@@ -1862,6 +1898,39 @@ public sealed class CreatureHerd
     }
 
     /// <summary>Forgets the hunt: no target, no path.</summary>
+    /// <summary>
+    /// Picks somewhere up to ten blocks off that the body can stand, and the route to it.
+    /// </summary>
+    /// <remarks>The reference's random stroll: ten across, three up or down, a few tries.</remarks>
+    private void PlanStroll(Creature creature, Func<int, int, int, bool> solid)
+    {
+        var from = Cell(creature.Position);
+        var tall = Tall(creature);
+
+        for (var attempt = 0; attempt < 4; attempt++)
+        {
+            var x = from.X + _random.Next(-10, 11);
+            var z = from.Z + _random.Next(-10, 11);
+            if (Math.Abs(x - from.X) + Math.Abs(z - from.Z) < 3) continue;
+
+            for (var y = from.Y + 3; y >= from.Y - 3; y--)
+            {
+                if (!CreaturePaths.Stands(solid, x, y, z, tall, false)) continue;
+
+                _pathBudget--;
+                var route = _paths.Find(solid, from, new PathStep(x, y, z), tall, WanderDrop,
+                    budget: 250, near: 0.5f);
+                if (route is { Count: > 1 })
+                {
+                    creature.Stroll = route;
+                    creature.StrollAt = 1;
+                    creature.Stuck = 0f;
+                }
+                return;
+            }
+        }
+    }
+
     private static void LoseTarget(Creature creature)
     {
         creature.Targeting = false;
@@ -1931,27 +2000,10 @@ public sealed class CreatureHerd
 
         if (creature.Path is { } path)
         {
-            while (creature.PathAt < path.Count)
-            {
-                var step = path[creature.PathAt];
-                var dx = step.X + 0.5f - creature.Position.X;
-                var dz = step.Z + 0.5f - creature.Position.Z;
-
-                // Reached this one: in its column, near its height. Then aim at the next.
-                // ⚠ A climber's steps up a face share one column, and "face the next step" from
-                // directly under it has no direction at all — the first spider stood at the foot of
-                // its wall turning in circles. In the column is enough for it; pressing on toward
-                // the step after is what puts it against the wall, and the wall does the rest.
-                var level = MathF.Abs(step.Y - creature.Position.Y) < 1.2f || CreatureVitals.Climbs(creature.Kind);
-                if (dx * dx + dz * dz < 0.3f * 0.3f && level)
-                {
-                    creature.PathAt++;
-                    continue;
-                }
-
-                creature.WantsYaw = float.RadiansToDegrees(MathF.Atan2(dz, dx));
-                return;
-            }
+            var at = creature.PathAt;
+            var going = FollowPath(creature, path, ref at);
+            creature.PathAt = at;
+            if (going) return;
 
             // Walked it all and still not there: the path was partial. Look again soon.
             creature.Path = null;
@@ -1959,6 +2011,57 @@ public sealed class CreatureHerd
         }
 
         creature.WantsYaw = float.RadiansToDegrees(MathF.Atan2(toward.Z, toward.X));
+    }
+
+    /// <summary>
+    /// Aims a creature down a route, and says whether there is any of it left to walk.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ <b>The reference's waypoint rules, both of them.</b> A step counts as reached inside
+    /// 0.45 of its centre (the old 0.3 was smaller than one frame's turn at a run, so a hunter
+    /// overshot the ring, swung round and circled the corner it was meant to pass); and a step the
+    /// body is already past — nearer the step after it than that step is — is skipped rather than
+    /// walked back to.</para>
+    /// <para>⚠ A climber's steps up a face share one column, and "face the next step" from directly
+    /// under it has no direction at all — the first spider stood at the foot of its wall turning in
+    /// circles. In the column is enough for it; pressing on toward the step after is what puts it
+    /// against the wall, and the wall does the rest.</para>
+    /// </remarks>
+    private static bool FollowPath(Creature creature, List<PathStep> path, ref int at)
+    {
+        const float reach = 0.45f;
+        var climbs = CreatureVitals.Climbs(creature.Kind);
+
+        while (at < path.Count)
+        {
+            var step = path[at];
+            var dx = step.X + 0.5f - creature.Position.X;
+            var dz = step.Z + 0.5f - creature.Position.Z;
+            var level = MathF.Abs(step.Y - creature.Position.Y) < 1.2f || climbs;
+
+            if (level && dx * dx + dz * dz < reach * reach)
+            {
+                at++;
+                continue;
+            }
+
+            if (level && at + 1 < path.Count)
+            {
+                var after = path[at + 1];
+                var bodyToAfter = new Vector2(after.X + 0.5f - creature.Position.X, after.Z + 0.5f - creature.Position.Z).LengthSquared();
+                var stepToAfter = new Vector2(after.X - step.X, after.Z - step.Z).LengthSquared();
+                if (after.Y == step.Y && bodyToAfter < stepToAfter)
+                {
+                    at++;
+                    continue;
+                }
+            }
+
+            creature.WantsYaw = float.RadiansToDegrees(MathF.Atan2(dz, dx));
+            return true;
+        }
+
+        return false;
     }
 
     /// <summary>The cell a position's feet are in.</summary>
@@ -2004,7 +2107,11 @@ public sealed class CreatureHerd
     /// </remarks>
     private static bool Walk(Creature creature, float distance, Func<int, int, int, bool> solid, int maxDrop)
     {
-        var yaw = float.DegreesToRadians(creature.Yaw);
+        // ⛳ Along where it MEANS to go, not where its body happens to face. The body turns at a
+        // walking pace and used to carry the feet with it, so every corner was taken wide and every
+        // wall met mid-turn was pressed into until the turn came round. The reference moves to its
+        // waypoint and lets the body catch up; a turned head a step behind reads as natural.
+        var yaw = float.DegreesToRadians(creature.WantsYaw);
         var move = new Vector3(MathF.Cos(yaw), 0f, MathF.Sin(yaw)) * distance;
         var tall = Tall(creature);
         var start = creature.Position;
@@ -2030,28 +2137,34 @@ public sealed class CreatureHerd
         if (Vector3.DistanceSquared(at, start) < 1e-8f) return false;
 
         // ⚠ The edge, asked of the column the centre is about to be over. Floor within the drop it
-        // will take, or the step is not taken at all.
-        if (at.Y <= start.Y + 0.01f)
+        // will take, or that move is not taken — but each axis alone is offered before giving up,
+        // so a body walking along a cliff at an angle slides along its lip instead of freezing.
+        if (Floored(solid, start, at, maxDrop)) { creature.Position = at; return true; }
+
+        foreach (var only in (ReadOnlySpan<Vector3>)[at with { Z = start.Z }, at with { X = start.X }])
         {
-            var x = (int)MathF.Floor(at.X);
-            var z = (int)MathF.Floor(at.Z);
-            var feet = (int)MathF.Floor(at.Y + 0.01f);
-            var floor = false;
-
-            for (var d = 0; d <= maxDrop; d++)
-            {
-                if (solid(x, feet - 1 - d, z))
-                {
-                    floor = true;
-                    break;
-                }
-            }
-
-            if (!floor) return false;
+            if (Vector3.DistanceSquared(only, start) < 1e-8f || !Fits(solid, only, tall)) continue;
+            if (!Floored(solid, start, only, maxDrop)) continue;
+            creature.Position = only;
+            return true;
         }
 
-        creature.Position = at;
-        return true;
+        return false;
+    }
+
+    /// <summary>Whether a step from one point to another has ground within the drop it will take.</summary>
+    private static bool Floored(Func<int, int, int, bool> solid, Vector3 start, Vector3 at, int maxDrop)
+    {
+        if (at.Y > start.Y + 0.01f) return true;
+
+        var x = (int)MathF.Floor(at.X);
+        var z = (int)MathF.Floor(at.Z);
+        var feet = (int)MathF.Floor(at.Y + 0.01f);
+
+        for (var d = 0; d <= maxDrop; d++)
+            if (solid(x, feet - 1 - d, z)) return true;
+
+        return false;
     }
 
     /// <summary>Lifts a climber up the face in front of it, if there is room above.</summary>

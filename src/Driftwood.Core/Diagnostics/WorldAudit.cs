@@ -1931,6 +1931,13 @@ public static class WorldAudit
                 ? "two sheets pick two skeletons, jointed over flat, v2 over v1.8, never a namesake"
                 : $"{matchFaults.Count} faults: {matchFaults[0]}");
 
+        var trial = CreatureMovementTrial.Run();
+        Check("creatures cross awkward ground", trial.WanderStuckShare < 0.04f && trial.HuntersReached >= 10,
+            $"a herd wandering a grove of trunks, steps, a gapped wall and a ledge is stuck "
+            + $"{trial.WanderStuckShare:P1} of its walking time (want under 4%), {trial.WanderBlocksPerMinute:F0} blocks a minute; "
+            + $"{trial.HuntersReached} of {trial.Hunters} hunters reach a player across the wall (want 10), "
+            + $"in {trial.MeanSecondsToReach:F1} s on average");
+
         var achievementBook = new AchievementBook(items);
         var achievementFaults = achievementBook.Validate(items);
         achievementFaults.AddRange(AchievementLogFaults(achievementBook));
