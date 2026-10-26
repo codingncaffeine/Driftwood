@@ -4316,10 +4316,14 @@ public static class WorldAudit
                 var wantX = layout.BookX - ScreenLayout.BookTabReach * layout.Zoom;
                 var wantY = layout.Y(2 + shelf * ScreenLayout.BookTabHeight);
                 if (MathF.Abs(zone.X - wantX) > 0.01f || MathF.Abs(zone.Y - wantY) > 0.01f
-                    || MathF.Abs(zone.W / layout.Zoom - 35f) > 0.01f
-                    || MathF.Abs(zone.H / layout.Zoom - 27f) > 0.01f)
+                    || MathF.Abs(zone.W / layout.Zoom - ScreenLayout.BookTabWidth) > 0.01f
+                    || MathF.Abs(zone.H / layout.Zoom - ScreenLayout.BookTabHeight) > 0.01f)
                     faults.Add($"{kind}'s {((RecipeCategory)shelf).ToString().ToLowerInvariant()} shelf "
-                        + "is not on its 35x27 tab down the book's side");
+                        + $"is not on its {ScreenLayout.BookTabWidth}x{ScreenLayout.BookTabHeight} tab down the book's side");
+
+                if (2 + (shelf + 1) * ScreenLayout.BookTabHeight > ScreenLayout.BookHeight)
+                    faults.Add($"{kind}'s {((RecipeCategory)shelf).ToString().ToLowerInvariant()} shelf "
+                        + "hangs below the book");
 
                 if (layout.At(zone.CentreX, zone.CentreY) is not { Kind: ZoneKind.Button } hit
                     || hit.Index != zone.Index)

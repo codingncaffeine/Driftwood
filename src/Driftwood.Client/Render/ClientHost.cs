@@ -1341,6 +1341,7 @@ public sealed class ClientHost : IDisposable
         _itemRenderer = new ItemRenderer(_gl);
         _hud = new HudRenderer(_gl);
         _hud.CursorStyle = CursorArt.IndexOf(_settings.Cursor);
+        _hud.CursorTrail = _settings.CursorTrail;
         _startup.Mark("shaders");
 
         // The benchmark opens no device at all. It flies a scripted path and hears nothing worth
@@ -6376,6 +6377,9 @@ public sealed class ClientHost : IDisposable
                 _hudScreen.Rows.Add(new MenuRow("pointer", Heading: true));
                 _hudScreen.Rows.Add(new MenuRow("cursor", _settings.Cursor,
                     Note: "left and right try each one; classic is the original graphite arrow"));
+                _hudScreen.Rows.Add(new MenuRow("pointer trail", OnOff(_settings.CursorTrail),
+                    Note: "the drawn pointers' dust swings after the mouse",
+                    Control: MenuControl.Checkbox, ControlAmount: _settings.CursorTrail ? 1f : 0f));
 
                 _hudScreen.Rows.Add(new MenuRow("notices", Heading: true));
                 _hudScreen.Rows.Add(new MenuRow(
@@ -6975,6 +6979,10 @@ public sealed class ClientHost : IDisposable
                         _hud.CursorStyle = next;
                         break;
                     }
+                    case "pointer trail":
+                        _settings.CursorTrail = !_settings.CursorTrail;
+                        _hud.CursorTrail = _settings.CursorTrail;
+                        break;
                     // Enter only. A direction is how a player browses, not how they throw
                     // something away that cannot be got back.
                     case "forget what has been said":
@@ -13362,6 +13370,14 @@ public sealed class ClientHost : IDisposable
             else if (_controller.Pressed(ControllerControl.East)) StopTyping(accept: false);
             return;
         }
+
+        // ⛔ USER, 2026-10-26: "it keeps trying to revert to the controller pointing to a recipe ...
+        // it should stay in mouse mode unless i press something on the controller." This ran every
+        // frame a pad was connected, and in a container it snapped the pointer back onto the nearest
+        // square whenever the mouse rested anywhere else, such as the book's search box. Now the
+        // screen is the pad's only while the pad was the last thing touched; a pad press or stick
+        // push makes it so the same frame, and any mouse or key gives it back.
+        if (!_lastInputWasController) return;
 
         if (_controller.Pressed(ControllerControl.East)
             || _controller.Pressed(ControllerAction.OpenInventory, _settings.Pad)
@@ -20516,7 +20532,8 @@ public sealed class ClientHost : IDisposable
         for (var x = 0; x < tile; x++)
         {
             var at = (y * tile + x) * 4;
-            if (cursor[at + 3] == 0) continue;
+            // Only whole texels: a resampled arrow's soft edge is blended over what is beneath it.
+            if (cursor[at + 3] != 255) continue;
 
             _uiCursorOpaque++;
             var actual = ReadUiPixel(size, left + x * cell, top + y * cell);

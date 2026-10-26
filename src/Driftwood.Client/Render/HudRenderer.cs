@@ -700,17 +700,45 @@ public sealed class HudRenderer : IDisposable
 
     /// <summary>The drawn pointers' own batch and texture (2026-10-26) — see <see cref="CursorArt"/>.</summary>
     private readonly List<float> _artCursorQuads = new(64);
-    private readonly BlockTextureArray _cursorArt;
+    private BlockTextureArray _cursorArt;
     private readonly byte[][] _cursorTiles;
+
+    /// <summary>
+    /// The drawn arrows as they are on screen: every art tile (then every bare one) resampled to
+    /// <see cref="_cursorTexels"/> square, one texel to a screen pixel. Rebuilt when that changes.
+    /// </summary>
+    private byte[][] _shownCursorTiles;
+    private int _cursorTexels = CursorArt.Tile;
+
+    /// <summary>
+    /// ⚠ <b>USER: "let's decrease the size of these new cursors by 25%."</b> Three quarters of the
+    /// whole screen pixels per art pixel they were drawn at, which at the smaller window sizes is
+    /// less than one — so the art is resampled rather than drawn texel for pixel.
+    /// </summary>
+    private const float CursorShrink = 0.75f;
+
+    /// <summary>
+    /// The drawn pointers' live tail of dust (2026-10-26), see <see cref="PointerTrail"/>. While it
+    /// is on, the arrows are drawn from copies without their painted sparkles, which the string
+    /// replaces; its colours are those sparkles' own.
+    /// </summary>
+    private readonly PointerTrail _trail = new();
+    private readonly List<float> _trailQuads = new(256);
+    private readonly byte[][] _bareCursorTiles;
+    private readonly (float R, float G, float B)[][] _sparkles;
+
+    /// <summary>Whether the drawn pointers trail live dust rather than their painted sparkles.</summary>
+    public bool CursorTrail { get; set; } = true;
 
     /// <summary>Which pointer to draw: an index into <see cref="CursorArt.Names"/>, zero the classic.</summary>
     public int CursorStyle { get; set; } = CursorArt.IndexOf(CursorArt.Default);
 
     /// <summary>The pointer in use, as RGBA, for the interface check to read back.</summary>
-    public byte[] CursorPixels => CursorStyle <= 0 ? TileGen.Cursor() : _cursorTiles[CursorStyle - 1];
+    public byte[] CursorPixels => CursorStyle <= 0 ? TileGen.Cursor()
+        : _shownCursorTiles[CursorStyle - 1 + (CursorTrail ? _cursorTiles.Length : 0)];
 
     /// <summary>The side of the tile <see cref="CursorPixels"/> is laid out on.</summary>
-    public int CursorTileSize => CursorStyle <= 0 ? TileGen.Size : CursorArt.Tile;
+    public int CursorTileSize => CursorStyle <= 0 ? TileGen.Size : _cursorTexels;
 
     /// <summary>Overlay units to screen pixels, this frame.</summary>
     private float _pixelScale = 1f;
@@ -827,7 +855,10 @@ public sealed class HudRenderer : IDisposable
 
         _font = new BlockTextureArray(gl, TileGen.Font(), TileGen.Size);
         _cursorTiles = CursorArt.Tiles();
-        _cursorArt = new BlockTextureArray(gl, _cursorTiles, CursorArt.Tile);
+        _bareCursorTiles = [.. _cursorTiles.Select(CursorArt.WithoutSparkles)];
+        _sparkles = [.. _cursorTiles.Select(CursorArt.SparkleColours)];
+        _shownCursorTiles = [.. _cursorTiles, .. _bareCursorTiles];
+        _cursorArt = new BlockTextureArray(gl, _shownCursorTiles, CursorArt.Tile);
         _advance = TileGen.FontAdvance();
 
         _vao = _gl.GenVertexArray();
@@ -909,6 +940,7 @@ public sealed class HudRenderer : IDisposable
         _iconQuads.Clear();
         _cursorQuads.Clear();
         _artCursorQuads.Clear();
+        _trailQuads.Clear();
         _pixelScale = ScaleFor(screenHeight);
         _text.Clear();
         _skinQuads.Clear();
@@ -1120,6 +1152,7 @@ public sealed class HudRenderer : IDisposable
         // icon batch, a packed GUI overlay and every glyph were still painted over it. This is the
         // final flush on purpose: carried items, their counts, tooltips and all pack chrome stay
         // beneath the one thing somebody must never lose against the screen.
+        Flush(_trailQuads, textured: false, null);
         Flush(_cursorQuads, textured: true, _icons);
         Flush(_artCursorQuads, textured: true, _cursorArt);
 
@@ -4600,8 +4633,9 @@ public sealed class HudRenderer : IDisposable
                 RecipeCategory.Building => "build",
                 RecipeCategory.Materials => "raw",
                 RecipeCategory.Tools => "tools",
+                RecipeCategory.Gear => "gear",
                 RecipeCategory.Light => "light",
-                RecipeCategory.Machines => "work",
+                RecipeCategory.Machines => "stations",
                 _ => "all",
             };
             if (!craftable)
@@ -5663,8 +5697,26 @@ public sealed class HudRenderer : IDisposable
     {
         var classic = TileGen.Size * MathF.Max(1f, MathF.Ceiling(layout.Zoom * 0.5f));
         if (CursorStyle <= 0) return (classic * 0.6f, classic);
-        var perArt = MathF.Max(1f, MathF.Round(classic * _pixelScale * 1.25f / CursorArt.Height));
+        var perArt = CursorTexels(classic) / (float)CursorArt.Tile;
         return (CursorArt.Width * perArt / _pixelScale, CursorArt.Height * perArt / _pixelScale);
+    }
+
+    /// <summary>The side, in screen pixels, a drawn arrow's tile is shown at beside a classic one.</summary>
+    private int CursorTexels(float classic)
+    {
+        var perArt = MathF.Max(1f, MathF.Round(classic * _pixelScale * 1.25f / CursorArt.Height));
+        return Math.Max(8, (int)MathF.Round(CursorArt.Tile * perArt * CursorShrink));
+    }
+
+    /// <summary>Resamples every drawn arrow to <paramref name="texels"/> square, if it isn't already.</summary>
+    private void SizeCursors(int texels)
+    {
+        if (texels == _cursorTexels) return;
+
+        _shownCursorTiles = [.. _cursorTiles.Concat(_bareCursorTiles).Select(t => CursorArt.Resample(t, texels))];
+        _cursorArt.Dispose();
+        _cursorArt = new BlockTextureArray(_gl, _shownCursorTiles, texels);
+        _cursorTexels = texels;
     }
 
     /// <summary>
@@ -5672,8 +5724,7 @@ public sealed class HudRenderer : IDisposable
     /// </summary>
     /// <remarks>
     /// ⛳ The drawn arrows are about a quarter taller than the classic one at <paramref name="classic"/>
-    /// units, and each of their pixels covers a whole number of screen pixels — the classic arrow's
-    /// own rule, so neither ever comes out with columns of two widths.
+    /// units, less a quarter, resampled so each texel is one screen pixel — no columns of two widths.
     /// </remarks>
     private void DrawCursor(HudScreen screen, Vector2 at, float classic)
     {
@@ -5684,10 +5735,61 @@ public sealed class HudRenderer : IDisposable
             return;
         }
 
-        var perArt = MathF.Max(1f, MathF.Round(classic * _pixelScale * 1.25f / CursorArt.Height));
-        var size = CursorArt.Tile * perArt / _pixelScale;
+        SizeCursors(CursorTexels(classic));
+        var size = _cursorTexels / _pixelScale;
         screen.CursorBox = new Vector4(at.X, at.Y, size, size);
-        Rect(_artCursorQuads, at.X, at.Y, size, size, Vector4.One, CursorStyle - 1);
+        var bare = CursorTrail ? _cursorTiles.Length : 0;
+        Rect(_artCursorQuads, at.X, at.Y, size, size, Vector4.One, CursorStyle - 1 + bare);
+        if (CursorTrail) Trail(at, size / CursorArt.Tile);
+    }
+
+    /// <summary>
+    /// The live dust under a drawn arrow: the string hung from where its painted sparkles began,
+    /// and any loose motes it has shed, each one art pixel square on the arrow's own pixel grid.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ Points fade toward the end of the string and twinkle out of step with each other, cycling
+    /// through the sparkles' own colours, so at rest it reads as the scattered dust the user drew
+    /// rather than a solid line.
+    /// <para>⚠ <b>USER: "it's just really small versus the mouse cursor."</b> Each mote is two art
+    /// pixels square (one for the smaller loose dust), and the spray three pixels either side.</para>
+    /// </remarks>
+    private void Trail(Vector2 tip, float art)
+    {
+        var colours = _sparkles[CursorStyle - 1];
+        _trail.Advance(tip + new Vector2(CursorArt.SparkleLeft, CursorArt.SparkleTop) * art, art);
+        var origin = tip * _pixelScale;
+        var pixel = art * _pixelScale;
+        var time = _trail.Time;
+
+        void Mote(Vector2 at, int seed, float fade, float span = 2f)
+        {
+            var twinkle = 0.55f + 0.45f * MathF.Sin(time * 7f + seed * 2.3f);
+            var alpha = fade * twinkle;
+            if (alpha < 0.08f) return;
+
+            var (r, g, b) = colours[seed % colours.Length];
+            // On the screen's own pixels, since an art pixel may no longer be a whole number of them.
+            var side = MathF.Max(1f, MathF.Round(span * pixel));
+            var x = origin.X + MathF.Round((at.X - span * 0.5f) * pixel - origin.X);
+            var y = origin.Y + MathF.Round((at.Y - span * 0.5f) * pixel - origin.Y);
+            Rect(_trailQuads, x / _pixelScale, y / _pixelScale, side / _pixelScale, side / _pixelScale, new Vector4(r, g, b, alpha));
+        }
+
+        // Every other point sits a pixel off the string's line, alternately each side, so it reads
+        // as a spray of dust two pixels wide, as the art has it, and not a thread.
+        var chain = _trail.Chain;
+        for (var i = 1; i < chain.Length; i++)
+        {
+            var along = chain[i] - chain[i - 1];
+            var side = along.LengthSquared() > 1e-6f ? Vector2.Normalize(new Vector2(-along.Y, along.X)) : Vector2.Zero;
+            var offset = i % 2 == 0 ? side * ((i / 2) % 2 == 0 ? 3f : -3f) : Vector2.Zero;
+            Mote(chain[i] + offset, i, 1f - (i - 1) / (float)chain.Length * 0.6f);
+        }
+
+        var dust = _trail.Dust;
+        for (var i = 0; i < dust.Count; i++)
+            Mote(dust[i].At, i + 3, dust[i].Life / dust[i].Span, i % 3 == 0 ? 2f : 1f);
     }
 
     // The interface's own palette. Named rather than written out at each use, so the whole thing

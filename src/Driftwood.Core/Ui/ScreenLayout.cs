@@ -162,10 +162,11 @@ public enum ScreenButton
     PageBack,
     PageForward,
 
-    /// <summary>The six recipe shelves, kept consecutive so the category is the offset.</summary>
+    /// <summary>The seven recipe shelves, kept consecutive so the category is the offset.</summary>
     RecipeCategoryAll,
     RecipeCategoryBuilding,
     RecipeCategoryTools,
+    RecipeCategoryGear,
     RecipeCategoryMaterials,
     RecipeCategoryLight,
     RecipeCategoryMachines,
@@ -286,12 +287,13 @@ public sealed class ScreenLayout
     /// <summary>Between the book and the panel it hangs off.</summary>
     public const int BookGap = 4;
 
-    /// <summary>How far the 35x27 shelf tabs protrude past the book's left edge.</summary>
+    /// <summary>How far the 35x23 shelf tabs protrude past the book's left edge.</summary>
     public const int BookTabReach = 28;
 
     public const int BookTabWidth = 35;
 
-    public const int BookTabHeight = 27;
+    /// <summary>Seven to the book's height since the gear shelf (2026-10-26); six of them were 27.</summary>
+    public const int BookTabHeight = 23;
 
     /// <summary>A recipe in the book. Twenty five, which is what the pack's own slot sprite is.</summary>
     public const int BookCell = 25;

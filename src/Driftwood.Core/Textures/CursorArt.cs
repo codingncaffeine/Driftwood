@@ -22,6 +22,13 @@ public static class CursorArt
     public const int Width = 30;
     public const int Height = 39;
 
+    /// <summary>
+    /// Where the art's painted sparkles begin: every texel right of <see cref="SparkleLeft"/> and
+    /// below <see cref="SparkleTop"/> is dust, not arrow. The live trail hangs from here.
+    /// </summary>
+    public const int SparkleLeft = 22;
+    public const int SparkleTop = 33;
+
     /// <summary>Every choice, in the order the setting cycles them. The first is the original.</summary>
     public static readonly string[] Names = ["classic", "blue", "red", "green", "purple"];
 
@@ -60,5 +67,73 @@ public static class CursorArt
         }
 
         return tiles;
+    }
+
+    /// <summary>A copy of <paramref name="tile"/> with its painted sparkles cleared, for the live trail.</summary>
+    public static byte[] WithoutSparkles(byte[] tile)
+    {
+        var bare = (byte[])tile.Clone();
+        for (var y = SparkleTop; y < Tile; y++)
+        for (var x = SparkleLeft; x < Tile; x++)
+            bare[(y * Tile + x) * 4 + 3] = 0;
+        return bare;
+    }
+
+    /// <summary>The colours of <paramref name="tile"/>'s painted sparkles, 0–1, in reading order.</summary>
+    public static (float R, float G, float B)[] SparkleColours(byte[] tile)
+    {
+        var colours = new List<(float, float, float)>();
+        for (var y = SparkleTop; y < Tile; y++)
+        for (var x = SparkleLeft; x < Tile; x++)
+        {
+            var at = (y * Tile + x) * 4;
+            if (tile[at + 3] == 0) continue;
+            colours.Add((tile[at] / 255f, tile[at + 1] / 255f, tile[at + 2] / 255f));
+        }
+
+        return colours.Count == 0 ? [(1f, 1f, 1f)] : [.. colours];
+    }
+
+    /// <summary>
+    /// <paramref name="tile"/> resampled to <paramref name="size"/> square by area: each new texel
+    /// averages the art pixels it covers, weighted by how much of each, with alpha premultiplied so
+    /// clear texels don't darken an edge.
+    /// </summary>
+    public static byte[] Resample(byte[] tile, int size)
+    {
+        var scaled = new byte[size * size * 4];
+        var step = Tile / (float)size;
+        for (var oy = 0; oy < size; oy++)
+        for (var ox = 0; ox < size; ox++)
+        {
+            float r = 0, g = 0, b = 0, a = 0;
+            var y0 = oy * step;
+            var x0 = ox * step;
+            for (var sy = (int)y0; sy < Math.Min(Tile, (int)MathF.Ceiling(y0 + step)); sy++)
+            {
+                var wy = Math.Min(sy + 1, y0 + step) - Math.Max(sy, y0);
+                for (var sx = (int)x0; sx < Math.Min(Tile, (int)MathF.Ceiling(x0 + step)); sx++)
+                {
+                    var w = wy * (Math.Min(sx + 1, x0 + step) - Math.Max(sx, x0));
+                    if (w <= 0f) continue;
+                    var at = (sy * Tile + sx) * 4;
+                    var alpha = tile[at + 3] / 255f * w;
+                    r += tile[at] * alpha;
+                    g += tile[at + 1] * alpha;
+                    b += tile[at + 2] * alpha;
+                    a += alpha;
+                }
+            }
+
+            var to = (oy * size + ox) * 4;
+            var area = step * step;
+            if (a <= 0f) continue;
+            scaled[to] = (byte)Math.Clamp(MathF.Round(r / a), 0, 255);
+            scaled[to + 1] = (byte)Math.Clamp(MathF.Round(g / a), 0, 255);
+            scaled[to + 2] = (byte)Math.Clamp(MathF.Round(b / a), 0, 255);
+            scaled[to + 3] = (byte)Math.Clamp(MathF.Round(a / area * 255f), 0, 255);
+        }
+
+        return scaled;
     }
 }

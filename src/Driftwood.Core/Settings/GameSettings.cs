@@ -153,6 +153,9 @@ public sealed class GameSettings
     /// <summary>Which pointer the menus draw (2026-10-26): a name from <see cref="Textures.CursorArt.Names"/>.</summary>
     public string Cursor { get; set; } = Textures.CursorArt.Default;
 
+    /// <summary>Whether a drawn pointer trails live, swinging dust (2026-10-26) or keeps its painted sparkles.</summary>
+    public bool CursorTrail { get; set; } = true;
+
     /// <summary>Movable magic panels begin unlocked so their decorated grips work on first use.</summary>
     public bool CompanionWindowLocked { get; set; }
 
@@ -307,6 +310,7 @@ public sealed class GameSettings
                 case "ui.cursor":
                     settings.Cursor = Textures.CursorArt.Names[Textures.CursorArt.IndexOf(value)];
                     break;
+                case "ui.cursortrail": settings.CursorTrail = Bool(value, settings.CursorTrail); break;
                 case "ui.companionwindow.locked":
                     settings.CompanionWindowLocked = Bool(value, settings.CompanionWindowLocked); break;
                 case "ui.companionwindow.x":
@@ -453,6 +457,7 @@ public sealed class GameSettings
         text.AppendLine();
         text.AppendLine($"ui.recipenotices={Text(RecipeNotices)}");
         text.AppendLine($"ui.cursor={Cursor}");
+        text.AppendLine($"ui.cursortrail={Text(CursorTrail)}");
         text.AppendLine($"ui.companionwindow.locked={Text(CompanionWindowLocked)}");
         text.AppendLine($"ui.companionwindow.x={CompanionWindowX}");
         text.AppendLine($"ui.companionwindow.y={CompanionWindowY}");

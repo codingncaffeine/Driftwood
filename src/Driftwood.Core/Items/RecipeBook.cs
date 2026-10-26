@@ -6,6 +6,9 @@ public enum RecipeCategory
     All,
     Building,
     Tools,
+
+    /// <summary>Weapons, armour, shields and arrows (2026-10-26), off the tools shelf.</summary>
+    Gear,
     Materials,
     Light,
     Machines,
@@ -210,8 +213,13 @@ public sealed class RecipeBook
         var type = _items[recipe.Result.Item];
         var name = type.Name;
 
-        if (type.IsTool || type.Wears is not null || type.ShieldShare > 0f)
-            return RecipeCategory.Tools;
+        // ⛳ USER, 2026-10-26: weapons and armour on a shelf of their own, "to make it easier to get
+        // to those" — the tools shelf keeps what digs, chops, tills and shears.
+        if (type.Tool == ToolClass.Sword || type.Wears is not null || type.ShieldShare > 0f
+            || type.Use is ItemUse.Bow or ItemUse.BowAmmunition)
+            return RecipeCategory.Gear;
+
+        if (type.IsTool) return RecipeCategory.Tools;
 
         if (type.Glow.LengthSquared() > 0f) return RecipeCategory.Light;
 
