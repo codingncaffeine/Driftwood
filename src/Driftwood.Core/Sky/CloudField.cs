@@ -42,8 +42,13 @@ public sealed class CloudField
     /// <summary>How thick the slab is, in blocks.</summary>
     public const float Thickness = 4f;
 
-    /// <summary>Where the underside sits. Above the tallest terrain, and above the fog.</summary>
-    public const float Altitude = 168f;
+    /// <summary>Where the underside sits. Above nearly all terrain, and above the fog.</summary>
+    /// <remarks>
+    /// ⛔ 168 was over the tallest of the first terrain, and cut terrain version 2's mountains in half:
+    /// everything above it seen through the slab's haze. 192 is the reference's own answer to the same
+    /// change — only the rare peak goes through, and the sheet still reads at its size from the shore.
+    /// </remarks>
+    public const float Altitude = 192f;
 
     /// <summary>How far the sheet reaches before it repeats, in blocks.</summary>
     public const float Period = Size * CellBlocks;

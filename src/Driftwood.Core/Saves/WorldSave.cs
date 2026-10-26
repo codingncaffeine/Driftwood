@@ -13,8 +13,12 @@ namespace Driftwood.Core.Saves;
 /// <param name="Saved">When it was written, in real time.</param>
 /// <param name="Played">Seconds anybody has spent in it.</param>
 /// <param name="DayTime">Where the sun was, 0 to 1 through a day.</param>
+/// <param name="TerrainVersion">
+/// Which terrain the world was made of (2026-10-25). Written after the rest of the header, so a save
+/// from before it reads as 1 — the terrain it was made of — and an older build never sees it.
+/// </param>
 public readonly record struct SaveHeader(
-    string Name, string Seed, DateTime Saved, double Played, float DayTime, int Edits)
+    string Name, string Seed, DateTime Saved, double Played, float DayTime, int Edits, int TerrainVersion = 1)
 {
     /// <summary>Played time as a person would say it.</summary>
     public string PlayedFor
@@ -76,6 +80,9 @@ public sealed record WorldState(
 
     /// <summary>What is written on the world's signs.</summary>
     public SignBank Signs { get; set; } = new();
+
+    /// <summary>Which terrain this world is made of — see <see cref="SaveHeader.TerrainVersion"/>.</summary>
+    public int TerrainVersion { get; set; } = 1;
 
     /// <summary>True once the Core Wyrm has been brought down in this world (2026-10-25).</summary>
     public bool WyrmDefeated { get; set; }
@@ -340,6 +347,7 @@ public static class WorldSave
                     head.Write(state.Played);
                     head.Write(state.DayTime);
                     head.Write(state.World.Edits.Count);
+                    head.Write(state.TerrainVersion);
                 }));
 
                 SaveSection.Write(into, "PALB", Bytes(blocks.Write));
@@ -596,6 +604,8 @@ public static class WorldSave
                 head.ReadString(), head.ReadString(),
                 DateTime.FromBinary(head.ReadInt64()),
                 head.ReadDouble(), head.ReadSingle(), head.ReadInt32());
+            if (head.BaseStream.Position < head.BaseStream.Length)
+                header = header with { TerrainVersion = head.ReadInt32() };
 
             return true;
         }

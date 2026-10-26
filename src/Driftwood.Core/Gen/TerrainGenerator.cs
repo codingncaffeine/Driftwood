@@ -23,7 +23,7 @@ public sealed class TerrainGenerator
     public const int SeaLevel = 62;
 
     /// <summary>One past the highest cell there is.</summary>
-    public const int WorldTop = 128;
+    public const int WorldTop = 256;
 
     /// <summary>
     /// The lowest cell there is, and the floor the world is built on.
@@ -127,6 +127,12 @@ public sealed class TerrainGenerator
     private readonly int _seedContinent;
     private readonly int _seedHills;
     private readonly int _seedDetail;
+    private readonly int _seedErosion;
+    private readonly int _seedWeird;
+    private readonly int _seedRiver;
+
+    /// <summary>Version 2's heights by chunk column, each computed once — its height costs several fields.</summary>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<long, int[]> _columns = new();
     private readonly int _seedCaveA;
     private readonly int _seedCaveB;
     private readonly int _seedCavern;
@@ -194,11 +200,29 @@ public sealed class TerrainGenerator
     /// <summary>The ocean coverage this generator was calibrated to hit.</summary>
     public float OceanCoverage { get; }
 
-    public TerrainGenerator(WorldSeed seed, StarterBlocks.Ids ids, float oceanCoverage = DefaultOceanCoverage)
+    /// <summary>
+    /// The terrain a new world is made with (2026-10-25). A world keeps the version it was made with
+    /// for ever — its edits are a diff against exactly that terrain.
+    /// </summary>
+    public const int CurrentVersion = 2;
+
+    /// <summary>The sea's share for version 2: the reference's world is mostly ocean, and the ships want it.</summary>
+    public const float DefaultOceanCoverageV2 = 0.45f;
+
+    /// <summary>Which terrain this generator makes: 1, the original, or 2, mountains, rivers and wide seas.</summary>
+    public int Version { get; }
+
+    public TerrainGenerator(
+        WorldSeed seed, StarterBlocks.Ids ids, float oceanCoverage = DefaultOceanCoverage, int version = 1)
     {
         Seed = seed;
         _ids = ids;
+        Version = Math.Clamp(version, 1, CurrentVersion);
+        if (Version >= 2 && oceanCoverage == DefaultOceanCoverage) oceanCoverage = DefaultOceanCoverageV2;
         OceanCoverage = Math.Clamp(oceanCoverage, 0f, 0.9f);
+        _seedErosion = seed.Derive("terrain.v2.erosion");
+        _seedWeird = seed.Derive("terrain.v2.weirdness");
+        _seedRiver = seed.Derive("terrain.v2.rivers");
 
         _seedContinent = seed.Derive("terrain.continent");
         _seedHills = seed.Derive("terrain.hills");
@@ -244,6 +268,13 @@ public sealed class TerrainGenerator
         _climate = new ClimateField(seed);
 
         _heightBias = CalibrateHeightBias(OceanCoverage);
+
+        // ⚠ Version 2's rivers are cut after the sea is set, and they are water too: fitted on the
+        // land alone, the sea came out nine points over what was asked. One more fit, aimed short by
+        // exactly what the rivers added, lands it.
+        if (Version >= 2)
+            _heightBias = CalibrateHeightBias(Math.Max(0f, 2f * OceanCoverage - WaterShareV2()));
+
         Exploration = new ExplorationGenerator(seed, ids, SurfaceHeight, BiomeAt);
     }
 
@@ -278,6 +309,41 @@ public sealed class TerrainGenerator
         return SeaLevel - samples[index];
     }
 
+    /// <summary>
+    /// Where a new world starts: the nearest column of dry, level ground to the origin, searched
+    /// outward in rings — the reference's own spawn search.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ The origin itself was taken as given, and the spawn's own settle only looked sixty-four
+    /// blocks round it. With version 2's seas at nearly half the world the origin is open water as
+    /// often as not, and a world whose spawn is mid-ocean never finished arriving.
+    /// </remarks>
+    public (int X, int Z) SpawnColumn()
+    {
+        for (var ring = 0; ring <= 160; ring++)
+        for (var dz = -ring; dz <= ring; dz++)
+        for (var dx = -ring; dx <= ring; dx++)
+        {
+            if (ring > 0 && Math.Max(Math.Abs(dx), Math.Abs(dz)) != ring) continue;
+            var (x, z) = (dx * 16, dz * 16);
+            var h = SurfaceHeight(x, z);
+            if (h > SeaLevel + 1 && h < SeaLevel + 40 && !Steep(x, z, h)) return (x, z);
+        }
+
+        return (0, 0);
+    }
+
+    /// <summary>The share of version 2's surface under water, rivers and all, over the calibration's span.</summary>
+    private float WaterShareV2()
+    {
+        const int Span = 8192, Stride = 128;
+        int wet = 0, all = 0;
+        for (var z = -Span / 2; z < Span / 2; z += Stride)
+        for (var x = -Span / 2; x < Span / 2; x += Stride, all++)
+            if (HeightV2(x, z) < SeaLevel) wet++;
+        return wet / (float)all;
+    }
+
     /// <summary>Surface height for a world column: the Y of its topmost terrain block.</summary>
     /// <remarks>
     /// Three scales: continents set the broad land/sea shape, hills give it relief, detail keeps
@@ -290,8 +356,60 @@ public sealed class TerrainGenerator
     /// octave amplitudes leaves the output at roughly +/-0.4, not +/-1, so a constant that reads
     /// like "44 blocks of relief" would otherwise deliver about 17.</para>
     /// </remarks>
-    public int SurfaceHeight(int wx, int wz) =>
-        Math.Clamp((int)MathF.Round(RawHeight(wx, wz) + _heightBias), 1, WorldTop - 8);
+    public int SurfaceHeight(int wx, int wz)
+    {
+        if (Version < 2) return Math.Clamp((int)MathF.Round(RawHeight(wx, wz) + _heightBias), 1, WorldTop - 8);
+
+        var key = ((long)(wx >> Chunk.SizeLog2) << 32) ^ (uint)(wz >> Chunk.SizeLog2);
+        if (!_columns.TryGetValue(key, out var column))
+        {
+            if (_columns.Count > 16_384) _columns.Clear();
+            column = new int[Chunk.Size * Chunk.Size];
+            var (bx, bz) = ((wx >> Chunk.SizeLog2) << Chunk.SizeLog2, (wz >> Chunk.SizeLog2) << Chunk.SizeLog2);
+            for (var z = 0; z < Chunk.Size; z++)
+            for (var x = 0; x < Chunk.Size; x++)
+                column[z * Chunk.Size + x] = HeightV2(bx + x, bz + z);
+            _columns[key] = column;
+        }
+
+        return column[(wz & (Chunk.Size - 1)) * Chunk.Size + (wx & (Chunk.Size - 1))];
+    }
+
+    /// <summary>Version 2's height for one column: the shaped land, then the rivers cut into it.</summary>
+    private int HeightV2(int x, int z)
+    {
+        var height = RawHeight(x, z) + _heightBias;
+
+        // ⛳ Rivers, after the sea is set so they cut down to it: where the river field crosses
+        // zero, land above the sea is carved to a bed three under it, the banks sloping in. The
+        // generator floods anything at or under the sea, so the channel fills itself — a river is
+        // a long arm of the sea, which is what the reference's rivers are too.
+        if (height > SeaLevel + 0.5f)
+        {
+            var river = MathF.Abs(Noise.Fbm2(x / 640f, z / 640f, _seedRiver, 3));
+            const float Bed = 0.016f, Bank = 0.05f;
+            if (river < Bank)
+            {
+                var t = Math.Clamp((Bank - river) / (Bank - Bed), 0f, 1f);
+                t = t * t * (3f - 2f * t);
+                height = float.Lerp(height, SeaLevel - 3f, t);
+            }
+        }
+
+        return Math.Clamp((int)MathF.Round(height), 1, WorldTop - 8);
+    }
+
+    /// <summary>
+    /// Whether a column stands on a slope too steep to hold soil — version 2's bare rock faces.
+    /// </summary>
+    public bool Steep(int x, int z, int surface)
+    {
+        if (Version < 2 || surface <= SeaLevel + 2) return false;
+        var drop = Math.Max(
+            Math.Max(Math.Abs(SurfaceHeight(x + 1, z) - surface), Math.Abs(SurfaceHeight(x - 1, z) - surface)),
+            Math.Max(Math.Abs(SurfaceHeight(x, z + 1) - surface), Math.Abs(SurfaceHeight(x, z - 1) - surface)));
+        return drop >= 3;
+    }
 
     /// <summary>
     /// Surface height before the ocean-coverage bias is applied. Kept separate because the
@@ -299,6 +417,8 @@ public sealed class TerrainGenerator
     /// </summary>
     private float RawHeight(int wx, int wz)
     {
+        if (Version >= 2) return RawHeightV2(wx, wz);
+
         var x = wx;
         var z = wz;
 
@@ -338,6 +458,7 @@ public sealed class TerrainGenerator
             var wx = ox + x;
             var wz = oz + z;
             var beach = surface <= SeaLevel + 2;
+            var steep = Version >= 2 && surface >= oy - 4 && surface <= oy + Chunk.Size + 4 && Steep(wx, wz, surface);
 
             for (var y = 0; y < Chunk.Size; y++)
             {
@@ -367,7 +488,7 @@ public sealed class TerrainGenerator
                     var depth = surface - wy;
 
                     if (depth == 0) id = TopOf(wx, wz, surface, beach);
-                    else if (depth <= 3) id = beach ? SoftBeach(wx, wy, wz) : _ids.Dirt.Value;
+                    else if (depth <= 3) id = beach ? SoftBeach(wx, wy, wz) : steep ? RockAt(wx, wy, wz) : _ids.Dirt.Value;
                     else if (beach && depth <= 7) id = _ids.Sandstone;   // every beach stands on it
                     else id = RockAt(wx, wy, wz);
 
@@ -918,9 +1039,58 @@ public sealed class TerrainGenerator
     /// lapse rate is right for tinting, where the point is that a highland meadow is a slightly
     /// different green; it is wrong for snow, where the point is that a mountain has a white top.
     /// </remarks>
+    /// <summary>
+    /// Version 2's land (2026-10-25): the reference's shaping since its caves-and-cliffs update.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ Three slow fields instead of one. <b>Continentalness</b> says how far inland a place
+    /// is — deep sea, sea, coast, lowland, highland — through a stepped curve, so coasts are narrow
+    /// and the open sea is broad and deep. <b>Erosion</b> says how worn the land is: low erosion
+    /// inland is where mountains stand. <b>Peaks and valleys</b>, folded from a third field the
+    /// reference's way, puts ridges and summits on the mountains and valleys between them.</para>
+    /// <para>Mountains rise up to a hundred and fifty over the land under them — past the old top of
+    /// the world, which is why it moved to 256 — and their peaks wear snow by the climate's own
+    /// altitude rule. Rivers are cut afterwards, in <see cref="HeightV2"/>.</para>
+    /// </remarks>
+    private float RawHeightV2(int x, int z)
+    {
+        static float Smooth(float from, float to, float value)
+        {
+            var t = Math.Clamp((value - from) / (to - from), 0f, 1f);
+            return t * t * (3f - 2f * t);
+        }
+
+        var c = Math.Clamp(Noise.Fbm2(x / 1100f, z / 1100f, _seedContinent, 5) * 2.4f, -1f, 1f);
+        var e = Math.Clamp(Noise.Fbm2(x / 520f, z / 520f, _seedErosion, 4) * 2.4f, -1f, 1f);
+        var w = Math.Clamp(Noise.Fbm2(x / 300f, z / 300f, _seedWeird, 4) * 2.4f, -1f, 1f);
+        var pv = 1f - MathF.Abs(3f * MathF.Abs(w) - 2f);
+
+        // The continent's own height: deep sea, sea, coast, lowland, highland.
+        var ground = c switch
+        {
+            <= -0.55f => -45f,
+            <= -0.2f => float.Lerp(-45f, -18f, (c + 0.55f) / 0.35f),
+            <= -0.05f => float.Lerp(-18f, -2f, (c + 0.2f) / 0.15f),
+            <= 0.1f => float.Lerp(-2f, 6f, (c + 0.05f) / 0.15f),
+            _ => float.Lerp(6f, 30f, (c - 0.1f) / 0.9f),
+        };
+
+        var inland = Smooth(0f, 0.45f, c);
+        var rugged = 1f - Smooth(-0.6f, 0.2f, e);
+        var peaks = MathF.Max(0f, pv);
+        var mountain = inland * rugged * (36f + 114f * peaks * peaks);
+        var valley = inland * MathF.Min(0f, pv) * 14f;
+
+        var hills = Noise.Fbm2(x / 150f, z / 150f, _seedHills, 4) * 14f * (0.4f + 0.6f * inland);
+        var detail = Noise.Fbm2(x / 38f, z / 38f, _seedDetail, 3) * 3f;
+
+        return SeaLevel + ground + mountain + valley + hills + detail;
+    }
+
     private ushort TopOf(int x, int z, int surface, bool beach)
     {
         if (beach) return _ids.Sand;
+        if (Steep(x, z, surface) && SnowDepth(x, z, surface) <= 0f) return RockAt(x, surface, z);
         return SnowDepth(x, z, surface) > 0f ? _ids.Snow : _ids.Grass;
     }
 

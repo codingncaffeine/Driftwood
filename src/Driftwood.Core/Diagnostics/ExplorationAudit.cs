@@ -20,7 +20,7 @@ internal static class ExplorationAudit
         out string detail)
     {
         var faults = new List<string>();
-        var terrain = new TerrainGenerator(seed, ids);
+        var terrain = new TerrainGenerator(seed, ids, version: WorldAudit.TerrainVersion);
         var authored = terrain.Exploration;
         var sites = new Dictionary<StructureKind, StructureSite>();
 

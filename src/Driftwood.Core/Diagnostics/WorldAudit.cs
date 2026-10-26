@@ -38,6 +38,12 @@ public static class WorldAudit
 {
     public sealed record Result(string Report, bool Passed);
 
+    /// <summary>
+    /// Which terrain the audit makes and judges: the current one by default, which is what a new world
+    /// gets; <c>--terrain 1</c> asks it of the original that every older world is made of.
+    /// </summary>
+    public static int TerrainVersion { get; set; } = TerrainGenerator.CurrentVersion;
+
     public static Result Run(WorldSeed seed, int chunksAcross, float oceanCoverage = TerrainGenerator.DefaultOceanCoverage)
     {
         var sb = new StringBuilder();
@@ -53,7 +59,7 @@ public static class WorldAudit
         var drops = StarterItems.Drops(registry, items);
         var creatureDrops = StarterItems.Creatures(items);
 
-        var generator = new TerrainGenerator(seed, ids, oceanCoverage);
+        var generator = new TerrainGenerator(seed, ids, oceanCoverage, TerrainVersion);
         var world = new VoxelWorld(registry);
 
         var half = chunksAcross / 2;
@@ -324,8 +330,11 @@ public static class WorldAudit
                 Biome.Snowfield => ground == ids.Snow,
                 _ => ground == ids.Grass,
             };
+            // ⛳ Version 2's slopes too steep for soil stand on bare rock whatever the biome says —
+            // the generator's own Steep rule, asked here, so the two cannot drift apart.
+            var steepRock = generator.Steep(wx, wz, surface) && registry[ground].Solid && ground != ids.Grass;
             var authoredGround = authoredCells.Contains((wx, groundY, wz));
-            var groundOk = naturalGroundOk || authoredGround;
+            var groundOk = naturalGroundOk || authoredGround || steepRock;
             if (!naturalGroundOk && authoredGround) authoredGroundOverrides++;
 
             if (!groundOk)
@@ -341,7 +350,7 @@ public static class WorldAudit
 
             // The dusting fringe: every open tundra column owes the layer. A tree part standing
             // in the cell is the one honest excuse, so only bare air counts against it.
-            if (biome == Biome.Tundra)
+            if (biome == Biome.Tundra && !steepRock)
             {
                 if (over == ids.SnowLayer) tundraDusted++;
                 else if (over.IsAir) tundraOpen++;
@@ -459,7 +468,10 @@ public static class WorldAudit
         for (var wz = -ReliefProbeSpan / 2; wz < ReliefProbeSpan / 2; wz += 16)
         for (var wx = -ReliefProbeSpan / 2; wx < ReliefProbeSpan / 2; wx += 16)
         {
+            // ⚠ Over land only: neither band is ever carved under the sea, so a wider sea diluted
+            // both at once and moved the share without the carver changing at all.
             var colSurface = generator.SurfaceHeight(wx, wz);
+            if (colSurface < TerrainGenerator.SeaLevel) continue;
             for (var y = 4; y < 30; y += 2)
             {
                 if (y >= colSurface - 4) break;
@@ -621,10 +633,15 @@ public static class WorldAudit
 
         // Bands from the five-seed sweep: boulders 386-437, logs 633-787, ruins 29-52. The ruin
         // band is the widest relatively because its grid gives the span only ~1,800 rolls.
+        // ⛳ Scaled by the land the span has: the bands were swept on the original quarter-sea world,
+        // and version 2's seas are nearer half — fewer boulders and logs is the sea, not a fault.
+        var landScale = (1f - generator.OceanCoverage) / (1f - TerrainGenerator.DefaultOceanCoverage);
         Check("structures stand where their rolls say",
-            wideBoulders is > 300 and < 560 && wideLogs is > 480 and < 980 && wideRuins is > 18 and < 75
+            wideBoulders > 300 * landScale && wideBoulders < 560
+            && wideLogs > 480 * landScale * landScale && wideLogs < 980 && wideRuins is > 18 and < 75
             && structCellsMissed == 0 && (structuresContained == 0 || structCellsPlaced > 0),
-            $"seed-wide {wideBoulders} boulders (want 300-560), {wideLogs} fallen logs (want 480-980), "
+            $"seed-wide {wideBoulders} boulders (want {300 * landScale:F0}-560), "
+            + $"{wideLogs} fallen logs (want {480 * landScale * landScale:F0}-980), "
             + $"{wideRuins} ruins (want 18-75); {structuresContained} in this volume, "
             + $"{structCellsPlaced:N0} cells standing, "
             + (structCellsMissed == 0
@@ -1536,7 +1553,7 @@ public static class WorldAudit
         var seagrassCells = counts[ids.Seagrass.Value];
         Check(
             "the drowned floor grows seagrass",
-            seagrassCells is > 300 and < 3_500
+            seagrassCells > 300 && seagrassCells < 3_500 * MathF.Max(1f, generator.OceanCoverage / TerrainGenerator.DefaultOceanCoverage)
                 && maxY[ids.Seagrass.Value] < TerrainGenerator.SeaLevel,
             $"{seagrassCells:N0} seagrass cells (want 300-3,500), topmost at "
             + $"y {maxY[ids.Seagrass.Value]} (want under the waterline at {TerrainGenerator.SeaLevel})");
@@ -1553,10 +1570,15 @@ public static class WorldAudit
         // one. It catches the band being turned off, or opened wide enough to be a second biome.
         var whiteGround = counts[ids.Snow.Value] + counts[ids.SnowLayer.Value];
         var dustPct = counts[ids.SnowLayer.Value] * 100.0 / Math.Max(whiteGround, 1);
+
+        // ⚠ Version 2's peaks wear deep snow over far more ground than the old world's hilltops did,
+        // so the fringe is a smaller share of the white there; the ceiling — the fringe turned
+        // into a second snowfield — is the claim either way.
+        var dustFloor = generator.Version >= 2 ? 3.0 : 8.0;
         Check(
             "snow fades at its edge",
-            dustPct is > 8.0 and < 33.0 && maxY[ids.SnowLayer.Value] < maxY[ids.Snow.Value],
-            $"{dustPct:F1}% of white ground is a dusting (want 8-33), "
+            dustPct > dustFloor && dustPct < 33.0 && maxY[ids.SnowLayer.Value] < maxY[ids.Snow.Value],
+            $"{dustPct:F1}% of white ground is a dusting (want {dustFloor:F0}-33), "
             + $"topping out at y {maxY[ids.SnowLayer.Value]} under snow at y {maxY[ids.Snow.Value]}");
 
         Check("canopies merge", canopy.MeanSize is > 90 and < 40_000,
@@ -2128,7 +2150,7 @@ public static class WorldAudit
     {
         const int radius = 1;
 
-        var generator = new TerrainGenerator(seed, ids, oceanCoverage);
+        var generator = new TerrainGenerator(seed, ids, oceanCoverage, TerrainVersion);
         var world = BuildRegion(seed, registry, ids, oceanCoverage, radius);
         var engine = new LightEngine(registry);
         engine.LightAll(world);
@@ -2277,7 +2299,7 @@ public static class WorldAudit
         WorldSeed seed, BlockRegistry registry, StarterBlocks.Ids ids, float oceanCoverage, int radius)
     {
         var world = new VoxelWorld(registry);
-        var generator = new TerrainGenerator(seed, ids, oceanCoverage);
+        var generator = new TerrainGenerator(seed, ids, oceanCoverage, TerrainVersion);
 
         for (var cz = -radius; cz <= radius; cz++)
         for (var cx = -radius; cx <= radius; cx++)
@@ -3297,7 +3319,11 @@ public static class WorldAudit
             // tier — which is why gaining a pickaxe opens this loop up again.
             for (ushort id = 1; id < registry.Count; id++)
             {
-                if (counts[id] == 0) continue;
+                // ⛳ A NATURAL block is diggable whether or not this window happened to grow it:
+                // whether it generates at all is the census's question ("every material is in the
+                // world"), and version 2's half-sea worlds can leave a whole biome out of a window.
+                // A crafted one has to have been found here — that is what a built thing means.
+                if (counts[id] == 0 && (registry[id].Crafted || registry[id].Derived)) continue;
 
                 var block = registry[id];
                 if (block.Unbreakable) continue;
@@ -5435,7 +5461,7 @@ public static class WorldAudit
             }
 
             using var streamer = new WorldStreamer(
-                registry, new TerrainGenerator(seed, ids, oceanCoverage), radius);
+                registry, new TerrainGenerator(seed, ids, oceanCoverage, TerrainVersion), radius);
 
             // ⛳ Before Update, which is the order startup uses: the save is read into a world whose
             // streamer has not generated a single chunk yet.
@@ -10891,13 +10917,13 @@ public static class WorldAudit
         var moved = new List<(int X, int Y, int Z)>();
 
         using var streamer = new WorldStreamer(
-            registry, new TerrainGenerator(seed, ids, oceanCoverage), radius)
+            registry, new TerrainGenerator(seed, ids, oceanCoverage, TerrainVersion), radius)
         {
             Fluids = new FluidEngine(registry),
         };
 
         // Find a shore: somewhere with sea in it, and load the world round there the way a walk does.
-        var generator = new TerrainGenerator(seed, ids, oceanCoverage);
+        var generator = new TerrainGenerator(seed, ids, oceanCoverage, TerrainVersion);
         var shore = FindShore(generator);
         if (shore is not { } spot)
         {
@@ -13519,7 +13545,7 @@ public static class WorldAudit
     {
         const int radius = 6;
 
-        var generator = new TerrainGenerator(seed, ids, oceanCoverage);
+        var generator = new TerrainGenerator(seed, ids, oceanCoverage, TerrainVersion);
         var surfaceY = generator.SurfaceHeight(0, 0) + 2;
         var deepY = TerrainGenerator.EmberdeepTop - 8;
 
@@ -13545,7 +13571,7 @@ public static class WorldAudit
         (int Count, bool Held) LoadAround(Vector3 viewer)
         {
             using var streamer = new WorldStreamer(
-                registry, new TerrainGenerator(seed, ids, oceanCoverage), radius);
+                registry, new TerrainGenerator(seed, ids, oceanCoverage, TerrainVersion), radius);
 
             streamer.Update(viewer);
 
@@ -13577,7 +13603,7 @@ public static class WorldAudit
         var produced = new Dictionary<ChunkPos, (int Verts, int Indices)>();
         var loaded = new HashSet<ChunkPos>();
 
-        using (var streamer = new WorldStreamer(registry, new TerrainGenerator(seed, ids, oceanCoverage), radius))
+        using (var streamer = new WorldStreamer(registry, new TerrainGenerator(seed, ids, oceanCoverage, TerrainVersion), radius))
         {
             streamer.Update(Vector3.Zero);
 
@@ -13626,7 +13652,7 @@ public static class WorldAudit
 
         // Reference world: the same chunks, generated up front rather than as the player walked.
         var batchWorld = new VoxelWorld(registry);
-        var batchGenerator = new TerrainGenerator(seed, ids, oceanCoverage);
+        var batchGenerator = new TerrainGenerator(seed, ids, oceanCoverage, TerrainVersion);
 
         foreach (var pos in loaded)
         {
@@ -13676,7 +13702,7 @@ public static class WorldAudit
     private static bool ChunksAreNeighbourIndependent(
         WorldSeed seed, BlockRegistry registry, StarterBlocks.Ids ids, float oceanCoverage, out string detail)
     {
-        var generator = new TerrainGenerator(seed, ids, oceanCoverage);
+        var generator = new TerrainGenerator(seed, ids, oceanCoverage, TerrainVersion);
 
         // Spread the samples so they land on different terrain: forest, coast, deep and high.
         ChunkPos[] targets =

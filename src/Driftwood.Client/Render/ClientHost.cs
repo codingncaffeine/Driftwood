@@ -2006,7 +2006,8 @@ public sealed class ClientHost : IDisposable
             + $"{_itemRenderer.SpriteQuads:N0} quads");
         _startup.Mark("item sprites");
 
-        var generator = new TerrainGenerator(_seed, ids, _options.OceanCoverage);
+        var generator = new TerrainGenerator(_seed, ids, _options.OceanCoverage, _terrainVersion);
+        Console.WriteLine($"terrain     version {generator.Version}, {generator.OceanCoverage:P0} sea");
         _terrain = generator;
 
         // --chunks used to size a fixed box; it now sets how far the world is kept loaded around
@@ -2093,7 +2094,8 @@ public sealed class ClientHost : IDisposable
             _targetable[id] = type.Solid || !type.Unbreakable;
         }
 
-        _spawnPoint = new Vector3(0.5f, generator.SurfaceHeight(0, 0) + 3f, 0.5f);
+        var (spawnX, spawnZ) = generator.SpawnColumn();
+        _spawnPoint = new Vector3(spawnX + 0.5f, generator.SurfaceHeight(spawnX, spawnZ) + 3f, spawnZ + 0.5f);
         _player.Teleport(_spawnPoint);
 
         if (_options.BenchSeconds > 0)
@@ -2232,6 +2234,7 @@ public sealed class ClientHost : IDisposable
         }
 
         _seed = WorldSeed.Parse(header.Seed);
+        _terrainVersion = header.TerrainVersion;
         _playedBefore = header.Played;
         _savedDayTime = header.DayTime;
         _loadedWorld = true;
@@ -2359,6 +2362,7 @@ public sealed class ClientHost : IDisposable
             Achievements = _achievements,
             Brewing = _brewing,
             WyrmDefeated = _wyrmDefeated,
+            TerrainVersion = _terrain.Version,
         };
 
         if (_herd is not null) state.Creatures.AddRange(_herd.Capture());
@@ -10564,6 +10568,12 @@ public sealed class ClientHost : IDisposable
         }
     }
 
+    /// <summary>
+    /// The terrain this world is made of: a new world gets the current one, and an existing world the
+    /// one in its header — 1 for every world from before there was a choice.
+    /// </summary>
+    private int _terrainVersion = TerrainGenerator.CurrentVersion;
+
     /// <summary>True once the wyrm has fallen in this world — saved with it.</summary>
     private bool _wyrmDefeated;
     private float _wyrmMend;
@@ -15237,9 +15247,14 @@ public sealed class ClientHost : IDisposable
             if (radius > 0 && Math.Max(Math.Abs(dx), Math.Abs(dz)) != radius) continue;
             var x = centreX + dx;
             var z = centreZ + dz;
+
+            // ⛔ From just over the column's own ground, tall enough for any crown on it — not from
+            // the world's top. TryGround looks at most 160 cells down, and once the top rose to 256
+            // that stopped at y 95, above every column near the sea: a new world never arrived.
+            var from = Math.Min(_terrain.SurfaceHeight(x, z) + 40, TerrainGenerator.WorldTop - 1);
             if (!CreatureHerd.TryGround(
                     SolidForCreature, TreeFreeSpawnSupport,
-                    x, z, TerrainGenerator.WorldTop - 1, out var feetY)) continue;
+                    x, z, from, out var feetY)) continue;
 
             var feet = (int)feetY;
             if (feet <= TerrainGenerator.SeaLevel) continue;
@@ -15734,6 +15749,9 @@ public sealed class ClientHost : IDisposable
         new(2000, "40-emberhold", "stick", ViewMode.First, false, Visit: "emberhold"),
         new(2200, "41-sanctum", "stick", ViewMode.First, false, Visit: "sanctum"),
         new(2400, "42-core-hollow", "stick", ViewMode.First, false, Visit: "hollow"),
+
+        // ⛳ Terrain version 2 (2026-10-25): the tallest ground near the start, from across a valley.
+        new(2600, "43-mountains", "stick", ViewMode.First, false, Visit: "mountains"),
     ];
 
     /// <summary>
@@ -16086,6 +16104,20 @@ public sealed class ClientHost : IDisposable
                 eye = new Vector3(sanctum.X + 0.5f, sanctum.Y + 3.2f, sanctum.Z + 5.8f);
                 pitch = -28f;
                 break;
+            case "mountains":
+            {
+                var (bestX, bestZ, best) = (sx, sz, int.MinValue);
+                for (var dz = -640; dz <= 640; dz += 16)
+                for (var dx = -640; dx <= 640; dx += 16)
+                {
+                    var h = _terrain.SurfaceHeight(sx + dx, sz + dz);
+                    if (h > best) (bestX, bestZ, best) = (sx + dx, sz + dz, h);
+                }
+                eye = new Vector3(bestX + 0.5f, best - 10f, bestZ + 120.5f);
+                pitch = 6f;
+                break;
+            }
+
             case "hollow":
                 eye = CoreHollow.Landing + new Vector3(0f, 6f, 6f);
                 pitch = -4f;

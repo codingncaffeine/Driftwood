@@ -46,6 +46,9 @@ public static class Program
 
             if (args.Contains("--audit"))
             {
+                var terrainAt = Array.IndexOf(args, "--terrain");
+                if (terrainAt >= 0 && terrainAt + 1 < args.Length && int.TryParse(args[terrainAt + 1], out var terrain))
+                    WorldAudit.TerrainVersion = terrain;
                 var result = WorldAudit.Run(options.Seed, options.ChunksAcross, options.OceanCoverage);
                 Console.WriteLine(result.Report);
                 return result.Passed ? 0 : 1;
@@ -705,6 +708,10 @@ public static class Program
                         ChunksAcross = ParseInt(Next(args, ref i, "--chunks"), 2, 64),
                         ChunksGiven = true,
                     };
+                    break;
+                // Which terrain --audit judges; read by the audit itself, stepped over here.
+                case "--terrain":
+                    i++;
                     break;
                 case "--ocean":
                     options = options with { OceanCoverage = ParseInt(Next(args, ref i, "--ocean"), 0, 90) / 100f };
