@@ -9392,7 +9392,8 @@ public static class WorldAudit
         (StarterBlocks.LayerTideCrystals, "tide_crystals"),
         (StarterBlocks.LayerStarbeacon, "starbeacon"),
         (StarterBlocks.LayerGoldenApple, "golden_apple"),
-        ((ushort)(StarterBlocks.LayerCount - 1), "cake"),
+        (StarterBlocks.LayerCake, "cake"),
+        ((ushort)(StarterBlocks.LayerCount - 1), "fermented_spider_eye"),
     ];
 
     /// <summary>

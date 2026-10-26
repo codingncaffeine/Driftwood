@@ -976,6 +976,21 @@ public static class StarterItems
         {
             Name = "cake", Label = "cake", IconLayer = StarterBlocks.LayerCake, Feeds = 14, MaxStack = 1,
         });
+
+        // ⛳ R1's third batch (2026-10-26). Flint turns up in gravel one dig in ten; struck against
+        // iron it kindles a campfire or a cask. The spider's eye is poison to eat, and fermented it
+        // is the brewer's corruptor beside rotten flesh.
+        Loose(items, "flint", "flint", StarterBlocks.LayerFlint);
+        items.Register(new ItemType
+        {
+            Name = "flint_and_steel", Label = "flint and steel", IconLayer = StarterBlocks.LayerFlintAndSteel,
+            MaxStack = 1, Durability = 64,
+        });
+        items.Register(new ItemType
+        {
+            Name = "spider_eye", Label = "spider eye", IconLayer = StarterBlocks.LayerSpiderEye, Feeds = 2,
+        });
+        Loose(items, "fermented_spider_eye", "fermented spider eye", StarterBlocks.LayerFermentedSpiderEye);
         Block(items, blocks, "starbeacon", "starbeacon", StarterBlocks.LayerStarbeacon);
         items.Register(new ItemType
         {
@@ -1284,6 +1299,10 @@ public static class StarterItems
         var rows = new List<BlockDrops.Chance>
         {
             new(StarterBlocks.WheatName(StarterBlocks.WheatStages - 1), "seeds", 1f, 1, 3),
+
+            // ⛳ Flint, one dig of gravel in ten (2026-10-26): the reference's rate. On top of the
+            // gravel rather than instead of it, so a gravel bank is never mined into nothing.
+            new("gravel", "flint", 0.1f),
         };
 
         foreach (var leaves in (string[])["driftoak_leaves", StarterBlocks.LeavesPlacedName])
@@ -1356,6 +1375,7 @@ public static class StarterItems
         // most, and until something hostile stood in the world neither could be obtained at all —
         // which the reachability walk said out loud rather than quietly letting them pass.
         new CreatureDrops.Rule("spider", DropTrigger.Killed, "string", 0, 2),
+        new CreatureDrops.Rule("spider", DropTrigger.Killed, "spider_eye", 1, 1, Chance: 0.33f),
         new CreatureDrops.Rule("skeleton", DropTrigger.Killed, "bone", 1, 3),
         new CreatureDrops.Rule("skeleton", DropTrigger.Killed, "arrow", 0, 2),
         new CreatureDrops.Rule("zombie", DropTrigger.Killed, "rotten_flesh", 1, 2),
@@ -1374,6 +1394,7 @@ public static class StarterItems
         new CreatureDrops.Rule("bogged", DropTrigger.Killed, "arrow", 0, 2),
         new CreatureDrops.Rule("bogged", DropTrigger.Killed, "mushroom_red", 0, 1),
         new CreatureDrops.Rule("cave_spider", DropTrigger.Killed, "string", 0, 2),
+        new CreatureDrops.Rule("cave_spider", DropTrigger.Killed, "spider_eye", 1, 1, Chance: 0.33f),
 
         // The witch's satchel, from what the world has: the reference's mix is seven things and
         // three of them are here. Each roll is its own, so a kill can leave all three or none.

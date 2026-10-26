@@ -798,6 +798,11 @@ public static class BlockTextureSet
         new("golden_apple", "textures/item/golden_apple.png", true, "textures/items/apple_golden.png"),
         new("milk_bucket", "textures/item/milk_bucket.png", true, "textures/items/bucket_milk.png"),
         new("cake", "textures/item/cake.png", true, "textures/items/cake.png"),
+        new("flint", "textures/item/flint.png", true, "textures/items/flint.png"),
+        new("flint_and_steel", "textures/item/flint_and_steel.png", true, "textures/items/flint_and_steel.png"),
+        new("spider_eye", "textures/item/spider_eye.png", true, "textures/items/spider_eye.png"),
+        new("fermented_spider_eye", "textures/item/fermented_spider_eye.png", true,
+            "textures/items/spider_eye_fermented.png"),
     ];
 
     /// <summary>
@@ -1956,6 +1961,10 @@ public static class BlockTextureSet
             StarterBlocks.LayerGoldenApple => TileGen.IconGem(1480, 246, 210, 84),
             StarterBlocks.LayerMilkBucket => TileGen.IconBucket(1481, true, 236, 234, 226),
             StarterBlocks.LayerCake => TileGen.IconPie(1482),
+            StarterBlocks.LayerFlint => TileGen.IconGem(1483, 62, 60, 66),
+            StarterBlocks.LayerFlintAndSteel => TileGen.IconKey(1484, 168, 168, 174),
+            StarterBlocks.LayerSpiderEye => TileGen.IconEgg(1485, 150, 34, 46),
+            StarterBlocks.LayerFermentedSpiderEye => TileGen.IconEgg(1486, 128, 70, 64),
             _ => Wheat(layer) ?? Crop(layer) ?? CropIcon(layer) ?? PotionIcon(layer) ?? StainedGlass(layer)
                  ?? MetalBlock(layer) ?? Wool(layer) ?? Meat(layer) ?? Dye(layer)
                  ?? Armour(layer) ?? Shield(layer) ?? Tool(layer),

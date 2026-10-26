@@ -324,6 +324,13 @@ public static class StarterRecipes
         Shaped("bow", "bow", 1, [" SJ", "S J", " SJ"], station: CraftStation.Bench);
         Shaped("arrows", "arrow", 4, ["R", "S", "H"], station: CraftStation.Bench);
 
+        // ⛳ The reference's own arrow (2026-10-26): a flint head flies truer than a chip of stone,
+        // so the same three make six.
+        Shaped("flint arrows", "arrow", 6, ["f", "S", "H"], station: CraftStation.Bench);
+        LooseAt("flint and steel", "flint_and_steel", 1, CraftStation.Bench, "iron_ingot", "flint");
+        LooseAt("fermented spider eye", "fermented_spider_eye", 1, CraftStation.Bench,
+            "spider_eye", "mushroom_brown", "sugar");
+
         // The rest of it, and the reason a torch stops being the only answer. A lantern is iron
         // shut round a flame, so it is brighter, whiter and can be hung; a campfire is timber and
         // kindling with something to light it, laid out as a picture of the thing it makes; and
@@ -757,6 +764,7 @@ public static class StarterRecipes
         'u' => "sugar",
         'e' => "egg",
         'h' => "wheat",
+        'f' => "flint",
         's' => "ember_star",
         'c' => "tide_crystals",
         'M' => material ?? throw new InvalidOperationException($"recipe '{recipe}' uses M with no material"),

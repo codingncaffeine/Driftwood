@@ -795,7 +795,16 @@ public static class StarterBlocks
     public const ushort LayerMilkBucket = LayerGoldenApple + 1;
     public const ushort LayerCake = LayerGoldenApple + 2;
 
-    public const int LayerCount = LayerCake + 1;
+    /// <summary>
+    /// R1's third batch (2026-10-26): the materials the left-out recipes were waiting on, each with a
+    /// source in the world — flint out of gravel, the spider's eye.
+    /// </summary>
+    public const ushort LayerFlint = LayerCake + 1;
+    public const ushort LayerFlintAndSteel = LayerCake + 2;
+    public const ushort LayerSpiderEye = LayerCake + 3;
+    public const ushort LayerFermentedSpiderEye = LayerCake + 4;
+
+    public const int LayerCount = LayerFermentedSpiderEye + 1;
 
     /// <summary>One stage of the ashcap, as a block name.</summary>
     public static string AshcapName(int stage) => $"ashcap_{stage}";

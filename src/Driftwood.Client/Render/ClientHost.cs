@@ -11669,6 +11669,9 @@ public sealed class ClientHost : IDisposable
         // even on a full stomach.
         if (food.Name == "golden_apple") _ailments.Apply(Ailment.Regeneration, 5f, 2);
 
+        // A spider's eye fills a little and sickens more: the reference's five seconds of poison.
+        if (food.Name == "spider_eye") _ailments.Apply(Ailment.Poison, 5f);
+
         if (_vitals.Eat(food.Feeds) == 0 && food.Name != "golden_apple")
         {
             // ⛔ A refusal that says why, which this did not — and a fresh spawn starts with the
@@ -15054,6 +15057,43 @@ public sealed class ClientHost : IDisposable
         return true;
     }
 
+    /// <summary>
+    /// Strikes flint and steel at a cold campfire or a cask (2026-10-26).
+    /// </summary>
+    /// <remarks>
+    /// ⛳ There is no loose fire in this world to start, so the striker lights the two things that
+    /// burn on purpose: a smothered campfire comes back alight, and a cask's fuse starts — the
+    /// reference's own two uses that make sense here. A strike that lights nothing costs nothing.
+    /// </remarks>
+    private bool Kindle(RayHit hit)
+    {
+        if (_inventory.HeldType is not { Name: "flint_and_steel" }) return false;
+
+        var struck = _streamer.World.GetBlock(hit.X, hit.Y, hit.Z);
+        var name = _registry[struck].Name;
+        var here = new Vector3(hit.X + 0.5f, hit.Y + 0.5f, hit.Z + 0.5f);
+
+        if (_registry[struck].Use == BlockUse.Campfire && !name.EndsWith("_lit", StringComparison.Ordinal)
+            && _toggle.TryGetValue(struck.Value, out var lit))
+        {
+            _streamer.EditBlock(hit.X, hit.Y, hit.Z, lit);
+            _audio?.Play(Pick(ActionSounds.CampfireCrackle), here, 0.8f, Wobble());
+        }
+        else if (name == Blastcask.Cold)
+        {
+            _streamer.EditBlock(hit.X, hit.Y, hit.Z, _litCask);
+            LightFuse(hit.X, hit.Y, hit.Z, Blastcask.FuseSeconds);
+        }
+        else
+        {
+            return false;
+        }
+
+        _particles.DeathPuff(here, 0.3f, StarterBlocks.LayerFlint, 4);
+        WearHeld();
+        return true;
+    }
+
     /// <summary>The composter's stage ids in fill order, resolved once.</summary>
     private BlockId[]? _composterIds;
 
@@ -15390,7 +15430,7 @@ public sealed class ClientHost : IDisposable
         // and bone meal hurries what is growing there. All asked before the block's own Use,
         // because the ground has no Use of its own and would otherwise fall through to being
         // built on.
-        if (UseHoe(hit) || SmotherFire(hit) || PlantSeed(hit) || PlantBush(hit)
+        if (UseHoe(hit) || SmotherFire(hit) || Kindle(hit) || PlantSeed(hit) || PlantBush(hit)
             || CarvePumpkin(hit) || UseBonemeal(hit))
             return true;
 

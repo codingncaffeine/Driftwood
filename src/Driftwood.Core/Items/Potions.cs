@@ -19,7 +19,7 @@ public sealed record Potion(
 /// <para>⛳ <b>The reference's brewing, with this world's ingredients.</b> A water bottle and ashcap
 /// make the awkward base; then sugar is swiftness, cinder dust strength, a wail tear regeneration,
 /// ember cream fire resistance, glowcap night vision, seagrass water breathing, sunwort healing and a
-/// red toadstool poison. Rotten flesh corrupts — swiftness to slowness, healing and poison to
+/// red toadstool (or a spider's eye) poison. Rotten flesh — or the fermented eye — corrupts — swiftness to slowness, healing and poison to
 /// harming, and plain water to weakness — the way the reference's fermented eye does. Tidewire
 /// draws a brew out longer (the reference's redstone), azurite makes it stronger (its glowstone),
 /// and gunpowder makes any of them a splash potion to throw.</para>
@@ -108,6 +108,7 @@ public static class Potions
         ["seagrass"] = "water_breathing",
         ["sunwort"] = "healing",
         ["mushroom_red"] = "poison",
+        ["spider_eye"] = "poison",
     };
 
     /// <summary>What rotten flesh turns each effect into.</summary>
@@ -120,7 +121,10 @@ public static class Potions
 
     /// <summary>Every item that does something in the top of a brewing stand.</summary>
     public static IEnumerable<string> Ingredients =>
-        FromAwkward.Keys.Concat(["ashcap", "rotten_flesh", "tidewire", "azurite", "gunpowder"]);
+        FromAwkward.Keys.Concat(["ashcap", "rotten_flesh", "fermented_spider_eye", "tidewire", "azurite", "gunpowder"]);
+
+    /// <summary>The corruptors: rotten flesh, and the reference's own fermented eye (2026-10-26).</summary>
+    private static bool Corrupts(string ingredient) => ingredient is "rotten_flesh" or "fermented_spider_eye";
 
     /// <summary>
     /// What one bottle becomes with one ingredient added, or null when the two do nothing together.
@@ -131,7 +135,7 @@ public static class Potions
             return ingredient switch
             {
                 "ashcap" => "awkward_potion",
-                "rotten_flesh" => "potion_weakness",
+                _ when Corrupts(ingredient) => "potion_weakness",
                 _ => null,
             };
 
@@ -153,7 +157,7 @@ public static class Potions
             "gunpowder" when !potion.Splash => Exists("splash_potion_" + rest),
             "tidewire" when variant != "_long" => Exists(splash + effect + "_long"),
             "azurite" when variant != "_strong" => Exists(splash + effect + "_strong"),
-            "rotten_flesh" when Corrupted.TryGetValue(effect, out var turned) =>
+            _ when Corrupts(ingredient) && Corrupted.TryGetValue(effect, out var turned) =>
                 Exists(splash + turned + variant) ?? Exists(splash + turned),
             _ => null,
         };
