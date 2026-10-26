@@ -402,6 +402,9 @@ public sealed class PlayerVitals
     /// <summary>Fire and lava cannot hurt — a potion of fire resistance. Set each frame by the host.</summary>
     public bool FireProof { get; set; }
 
+    /// <summary>Whether this death has been reported, so it is reported exactly once.</summary>
+    private bool _mourned;
+
     /// <summary>Water does not take the breath — a potion of water breathing. Set each frame by the host.</summary>
     public bool BreathesWater { get; set; }
 
@@ -594,8 +597,19 @@ public sealed class PlayerVitals
     /// </remarks>
     public VitalsEvent Update(VoxelWorld world, PlayerBody body, float dt)
     {
-        if (!Alive) return new VitalsEvent(0, false, false);
+        // ⛔ A blow that lands between updates — a creature's swing, a skull bolt, the wither's half
+        // hearts, a thrown harming — takes health to nothing outside this method, and this line used
+        // to answer "not alive, nothing happened" to it for ever: hearts at zero, no death screen
+        // (2026-10-26, the user's report). The first update that finds the body dead reports the
+        // death once, whoever dealt it.
+        if (!Alive)
+        {
+            var first = !_mourned;
+            _mourned = true;
+            return new VitalsEvent(0, first, false, Cause: _cause);
+        }
 
+        _mourned = false;
         var before = Health;
 
         var onGround = body.OnGround;
@@ -713,6 +727,7 @@ public sealed class PlayerVitals
         if (hurt > 0)
         {
             Spend(hurt * EffortPerWound);
+            _mourned = !Alive;
             return new VitalsEvent(hurt, !Alive, Submerged && Breath == 0, Cause: _cause);
         }
 
@@ -903,6 +918,20 @@ public sealed class PlayerVitals
 
         if (!dying.Alive)
             faults.Add("starving killed a player, and it is the one thing in the game that must not");
+
+        // ⛔ A death dealt between updates is still a death (2026-10-26): reported by the next
+        // update, once, and not again by the one after.
+        {
+            var world = new VoxelWorld(registry);
+            var body = new PlayerBody(registry);
+            body.Teleport(new Vector3(0.5f, 60f, 0.5f));
+            var struck = new PlayerVitals(registry);
+            struck.Hurt(MaxHealth + 4, armoured: false);
+            var first = struck.Update(world, body, 1f / 60f);
+            var second = struck.Update(world, body, 1f / 60f);
+            if (!first.Died) faults.Add("a blow that landed between updates took every heart and no death was reported");
+            if (second.Died) faults.Add("a death was reported twice");
+        }
 
         detail = $"{EffortPerFood} effort a half-drumstick: a block walked costs "
                + $"{EffortPerBlockWalked}, a block mined {EffortPerBlockMined}, a half-heart mended "
