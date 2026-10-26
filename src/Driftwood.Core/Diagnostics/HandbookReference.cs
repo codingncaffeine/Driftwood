@@ -19,6 +19,9 @@ public static class HandbookReference
     public const string PageName = "Live-Registry-Reference.md";
     public const string JsonName = "game-reference.json";
 
+    /// <summary>The readable recipe list (2026-10-26): every recipe, smelt and brew, from the book itself.</summary>
+    public const string RecipePageName = "Recipe-List.md";
+
     public static IReadOnlyList<string> Write(string folder, string productVersion)
     {
         Directory.CreateDirectory(folder);
@@ -250,7 +253,154 @@ public static class HandbookReference
             the stable names in these exports, so registration-order changes cannot rename player state.
             """;
         File.WriteAllText(page, markdown.TrimEnd() + Environment.NewLine, new UTF8Encoding(false));
-        return [page, json];
+
+        var recipePage = Path.Combine(folder, RecipePageName);
+        File.WriteAllText(recipePage, RecipeList(items, recipes, productVersion), new UTF8Encoding(false));
+        return [page, json, recipePage];
+    }
+
+    /// <summary>
+    /// Every recipe as a person reads one (2026-10-26, the user: "we've added a lot of recipes that
+    /// aren't likely there"). Generated from the book the game crafts from, so it cannot fall behind.
+    /// </summary>
+    /// <remarks>
+    /// Grouped by where each is made — <see cref="Recipe.MadeAt"/>, the player-facing answer, not the
+    /// raw station — and drawn as the grid it is laid in, one letter per ingredient with a key beside
+    /// it. Smelts say how long and which fires take them; brewing is every base and every change.
+    /// </remarks>
+    public static string RecipeList(ItemRegistry items, RecipeBook recipes, string productVersion)
+    {
+        string Label(ItemId id) => items[id].Label;
+
+        string Named(Ingredient ingredient) =>
+            ingredient.Members.Length == 1 ? Label(ingredient.Members[0]) : ingredient.Name.TrimStart('#').Replace('_', ' ');
+
+        string Made(ItemStack stack) => stack.Count > 1 ? $"{Label(stack.Item)} ×{stack.Count}" : Label(stack.Item);
+
+        var text = new StringBuilder();
+        text.AppendLine($"<!-- Generated from Driftwood Core {productVersion}; regenerate with --magic-reference. -->");
+        text.AppendLine($"> **Release reference — Driftwood v{productVersion}.** Generated from the game's own recipe book.");
+        text.AppendLine();
+        text.AppendLine("# Recipe list");
+        text.AppendLine();
+        text.AppendLine($"{recipes.Recipes.Count} crafting recipes, {recipes.Smelting.Count} smelting recipes and every brew. "
+            + "In a grid, each letter is one ingredient and `·` is an empty square; a shaped recipe fits anywhere "
+            + "in the grid it is made in, and \"any\" ingredients take every variant (any planks, any logs).");
+        text.AppendLine();
+
+        var places = new[] { "in your hands", "at a bench", "at a stonecutter", "at a smithing table", "at a loom" };
+        var grouped = recipes.Recipes.GroupBy(recipe => recipe.MadeAt)
+            .OrderBy(group => Array.IndexOf(places, group.Key) is var at && at >= 0 ? at : places.Length)
+            .ThenBy(group => group.Key, StringComparer.Ordinal);
+
+        text.AppendLine("## Contents");
+        text.AppendLine();
+        foreach (var group in grouped)
+            text.AppendLine($"- [Made {group.Key}](#made-{group.Key.Replace(' ', '-')}) ({group.Count()})");
+        text.AppendLine("- [Smelting](#smelting)");
+        text.AppendLine("- [Brewing](#brewing)");
+        text.AppendLine();
+
+        foreach (var group in grouped)
+        {
+            text.AppendLine($"## Made {group.Key}");
+            text.AppendLine();
+            text.AppendLine("| Makes | Ingredients | Grid |");
+            text.AppendLine("| --- | --- | --- |");
+
+            foreach (var recipe in group.OrderBy(one => Label(one.Result.Item), StringComparer.Ordinal)
+                         .ThenBy(one => one.Name, StringComparer.Ordinal))
+            {
+                // One letter per distinct ingredient, in reading order, and its count.
+                var letters = new List<(Ingredient Ingredient, char Letter, int Count)>();
+                foreach (var cell in recipe.Cells)
+                {
+                    if (cell is null) continue;
+                    var at = letters.FindIndex(one => ReferenceEquals(one.Ingredient, cell) || one.Ingredient.Name == cell.Name);
+                    if (at >= 0) letters[at] = letters[at] with { Count = letters[at].Count + 1 };
+                    else letters.Add((cell, (char)('A' + letters.Count), 1));
+                }
+
+                var parts = letters.Select(one => recipe.Shapeless
+                    ? $"{one.Count} {Named(one.Ingredient)}"
+                    : $"**{one.Letter}** {Named(one.Ingredient)} ×{one.Count}");
+                string grid;
+                if (recipe.Shapeless)
+                {
+                    grid = "any arrangement";
+                }
+                else
+                {
+                    var rows = new List<string>();
+                    for (var y = 0; y < recipe.Height; y++)
+                    {
+                        var row = new StringBuilder();
+                        for (var x = 0; x < recipe.Width; x++)
+                        {
+                            var cell = recipe.At(x, y);
+                            row.Append(cell is null ? '·' : letters.First(one => one.Ingredient.Name == cell.Name).Letter);
+                        }
+
+                        rows.Add($"`{row}`");
+                    }
+
+                    grid = string.Join("<br>", rows);
+                }
+
+                text.AppendLine($"| {Made(recipe.Result)} | {string.Join(", ", parts)} | {grid} |");
+            }
+
+            text.AppendLine();
+        }
+
+        text.AppendLine("## Smelting");
+        text.AppendLine();
+        text.AppendLine($"Times are for a furnace. Ores also smelt in a blast furnace, and food also cooks in a smoker, "
+            + $"each in {FurnaceKinds.SpeedOf(FurnaceKind.Blast):0.#}× the time; food also cooks on a lit campfire "
+            + $"in {FurnaceKinds.SpeedOf(FurnaceKind.Campfire):0.#}× the time. Everything else needs a furnace.");
+        text.AppendLine();
+        text.AppendLine("| Makes | From | Seconds | Kind |");
+        text.AppendLine("| --- | --- | ---: | --- |");
+        foreach (var smelt in recipes.Smelting.OrderBy(one => Label(one.Result.Item), StringComparer.Ordinal))
+        {
+            var kind = smelt.Work switch
+            {
+                SmeltWork.Ore => "ore",
+                SmeltWork.Food => "food",
+                _ => "furnace only",
+            };
+            text.AppendLine($"| {Made(smelt.Result)} | {Named(smelt.Input)} | {smelt.Seconds:0.#} | {kind} |");
+        }
+
+        text.AppendLine();
+        text.AppendLine("## Brewing");
+        text.AppendLine();
+        text.AppendLine("A brewing stand fired with cinder dust works up to three bottles at once. Glass bottles fill from "
+            + "water. Start from a water bottle, make the awkward potion, then add an ingredient for its effect.");
+        text.AppendLine();
+        text.AppendLine("| Bottle | Add | Makes |");
+        text.AppendLine("| --- | --- | --- |");
+
+        string PotionLabel(string name) => items.TryByName(name, out var item) ? item.Label : name.Replace('_', ' ');
+
+        foreach (var bottle in (string[])["water_bottle", "awkward_potion"])
+        foreach (var ingredient in Potions.Ingredients.OrderBy(one => PotionLabel(one), StringComparer.Ordinal))
+            if (Potions.Brew(bottle, ingredient) is { } made)
+                text.AppendLine($"| {PotionLabel(bottle)} | {PotionLabel(ingredient)} | {PotionLabel(made)} |");
+
+        text.AppendLine();
+        text.AppendLine("### Changing a potion");
+        text.AppendLine();
+        text.AppendLine("| Add | To | Makes |");
+        text.AppendLine("| --- | --- | --- |");
+        var plain = Potions.All.Where(one => one.Effect is not null && !one.Splash
+            && !one.Name.EndsWith("_long", StringComparison.Ordinal) && !one.Name.EndsWith("_strong", StringComparison.Ordinal));
+        foreach (var ingredient in Potions.Ingredients.OrderBy(one => PotionLabel(one), StringComparer.Ordinal))
+        foreach (var potion in plain.OrderBy(one => one.Label, StringComparer.Ordinal))
+            if (Potions.Brew(potion.Name, ingredient) is { } changed)
+                text.AppendLine($"| {PotionLabel(ingredient)} | {PotionLabel(potion.Name)} | {PotionLabel(changed)} |");
+
+        return text.ToString().TrimEnd() + Environment.NewLine;
     }
 
     public static List<string> Faults(string folder, string productVersion)
@@ -260,9 +410,13 @@ public static class HandbookReference
         var jsonPath = Path.Combine(folder, JsonName);
         if (!File.Exists(page)) faults.Add($"missing generated wiki page {PageName}");
         if (!File.Exists(jsonPath)) faults.Add($"missing {JsonName}");
+        var recipePath = Path.Combine(folder, RecipePageName);
+        if (!File.Exists(recipePath)) faults.Add($"missing generated wiki page {RecipePageName}");
         if (faults.Count > 0) return faults;
 
         var (blocks, items, _, creatureDrops, recipes) = Registries();
+        if (File.ReadAllText(recipePath) != RecipeList(items, recipes, productVersion))
+            faults.Add($"{RecipePageName} is stale; regenerate it with --magic-reference");
         var expectedBlocks = blocks.All.Skip(1).Select(one => one.Name).OrderBy(one => one, StringComparer.Ordinal);
         var expectedItems = items.All.Skip(1).Select(one => one.Name).OrderBy(one => one, StringComparer.Ordinal);
         var expectedRecipes = recipes.Recipes.Select(one => one.Name).OrderBy(one => one, StringComparer.Ordinal);
