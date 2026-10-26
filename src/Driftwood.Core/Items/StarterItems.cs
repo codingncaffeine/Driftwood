@@ -965,6 +965,17 @@ public static class StarterItems
         {
             Name = "golden_apple", Label = "golden apple", IconLayer = StarterBlocks.LayerGoldenApple, Feeds = 4,
         });
+
+        // ⛳ Milk (2026-10-25), from a bucket held to a grown cow: drunk, it washes every ailment out,
+        // the elders' curse included — the reference's one cure for it. And the cake it makes.
+        items.Register(new ItemType
+        {
+            Name = "milk_bucket", Label = "bucket of milk", IconLayer = StarterBlocks.LayerMilkBucket, MaxStack = 1,
+        });
+        items.Register(new ItemType
+        {
+            Name = "cake", Label = "cake", IconLayer = StarterBlocks.LayerCake, Feeds = 14, MaxStack = 1,
+        });
         Block(items, blocks, "starbeacon", "starbeacon", StarterBlocks.LayerStarbeacon);
         items.Register(new ItemType
         {

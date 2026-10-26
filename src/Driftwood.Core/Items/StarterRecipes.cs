@@ -301,6 +301,7 @@ public static class StarterRecipes
         Shaped("beetroot soup", "beetroot_soup", 1, ["MMM", "MMM", " w "], "beetroot", station: CraftStation.Bench);
         Shaped("rabbit stew", "rabbit_stew", 1, [" k ", "rpm", " w "], station: CraftStation.Bench);
         Shaped("golden carrot", "golden_carrot", 1, ["MMM", "MrM", "MMM"], "gold_nugget", station: CraftStation.Bench);
+        Shaped("cake", "cake", 1, ["qqq", "ueu", "hhh"], station: CraftStation.Bench);
         Shaped("golden apple", "golden_apple", 1, ["MMM", "MaM", "MMM"], "gold_ingot", station: CraftStation.Bench);
 
         // ⛳ The starbeacon (2026-10-25): glass round the ember star on a polished deepstone foot.
@@ -752,6 +753,10 @@ public static class StarterRecipes
         'p' => "baked_potato",
         'm' => "mushroom_brown",
         'a' => "apple",
+        'q' => "milk_bucket",
+        'u' => "sugar",
+        'e' => "egg",
+        'h' => "wheat",
         's' => "ember_star",
         'c' => "tide_crystals",
         'M' => material ?? throw new InvalidOperationException($"recipe '{recipe}' uses M with no material"),

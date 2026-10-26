@@ -11567,6 +11567,17 @@ public sealed class ClientHost : IDisposable
     /// a player who shears a sheep on an unlucky frame is told nothing happened at all, and clicks
     /// again, and the sheep they already sheared refuses them.
     /// </remarks>
+    /// <summary>A bucket held to a grown cow comes away full of milk (2026-10-25), the reference's way.</summary>
+    private bool MilkCreature(Creature quarry)
+    {
+        if (quarry.Kind != "cow" || quarry.Grown < 1f || _inventory.HeldType is not { Name: "bucket" }) return false;
+        _inventory.SpendHeld();
+        if (!_inventory.Add(new ItemStack(_items.ByName("milk_bucket").Id, 1)).IsEmpty)
+            _drops.Drop(new ItemStack(_items.ByName("milk_bucket").Id, 1), _player.EyePosition);
+        _audio?.Play(Pick(ActionSounds.BucketFillWater), quarry.Middle, 0.6f, 0.8f);
+        return true;
+    }
+
     private bool HarvestCreature(Creature quarry)
     {
         var held = _inventory.HeldType;
@@ -11612,6 +11623,16 @@ public sealed class ClientHost : IDisposable
 
     private bool EatHeld()
     {
+        // ⛳ Milk is drunk, not eaten (2026-10-25): every ailment washed out, the bucket kept.
+        if (_inventory.HeldType is { Name: "milk_bucket" })
+        {
+            _ailments.Clear();
+            _inventory.SpendHeld();
+            _inventory.Add(new ItemStack(_items.ByName("bucket").Id, 1));
+            _audio?.Play(Pick(ActionSounds.BucketFillWater), _player.EyePosition, 0.5f, 1.2f);
+            return true;
+        }
+
         // The main hand first, then the other one — the order placing already uses, and it is
         // what makes sword-and-steak the loop it is meant to be: the blade stays pointed at the
         // dark while the meal comes out of the off hand.
@@ -14411,7 +14432,7 @@ public sealed class ClientHost : IDisposable
             OpenTrade(resident);
             return;
         }
-        if (_creatureTarget is { } quarry && (FeedCreature(quarry) || HarvestCreature(quarry))) return;
+        if (_creatureTarget is { } quarry && (MilkCreature(quarry) || FeedCreature(quarry) || HarvestCreature(quarry))) return;
 
         // ⛔ EATING IS LAST IN FACT NOW, not only in the comment above. It used to run second,
         // gated on "is the aimed block interactive" — the wrong question, because planting and

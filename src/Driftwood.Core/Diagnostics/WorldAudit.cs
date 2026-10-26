@@ -3443,6 +3443,11 @@ public static class WorldAudit
                 changed |= Gain(items.ByName(filled).Id);
             }
 
+            // ⛳ MILK (2026-10-25). A bucket held to a cow — the hunt's own reach, since every beast on
+            // the roster is out there to be found, and the draw's bucket in hand.
+            if (Held(items.ByName("bucket").Id) && CreatureSet.All.Any(kind => kind.Name == "cow"))
+                changed |= Gain(items.ByName("milk_bucket").Id);
+
             // ⛳ FISH (2026-10-16). Water in the world and a rod in hand, and the whole catch table
             // is in reach — fish, junk and treasure alike, since each comes up from the same cast.
             if (counts[registry.ByName("water").Id.Value] > 0 && Held(items.ByName("fishing_rod").Id))
@@ -9386,7 +9391,8 @@ public static class WorldAudit
         (StarterBlocks.LayerTidestone, "tidestone"),
         (StarterBlocks.LayerTideCrystals, "tide_crystals"),
         (StarterBlocks.LayerStarbeacon, "starbeacon"),
-        ((ushort)(StarterBlocks.LayerCount - 1), "golden_apple"),
+        (StarterBlocks.LayerGoldenApple, "golden_apple"),
+        ((ushort)(StarterBlocks.LayerCount - 1), "cake"),
     ];
 
     /// <summary>

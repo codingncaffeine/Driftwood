@@ -796,6 +796,8 @@ public static class BlockTextureSet
         new("rabbit_stew", "textures/item/rabbit_stew.png", true, "textures/items/rabbit_stew.png"),
         new("golden_carrot", "textures/item/golden_carrot.png", true, "textures/items/carrot_golden.png"),
         new("golden_apple", "textures/item/golden_apple.png", true, "textures/items/apple_golden.png"),
+        new("milk_bucket", "textures/item/milk_bucket.png", true, "textures/items/bucket_milk.png"),
+        new("cake", "textures/item/cake.png", true, "textures/items/cake.png"),
     ];
 
     /// <summary>
@@ -1952,6 +1954,8 @@ public static class BlockTextureSet
             StarterBlocks.LayerRabbitStew => TileGen.IconBowl(1478, stew: true),
             StarterBlocks.LayerGoldenCarrot => TileGen.IconGem(1479, 236, 196, 70),
             StarterBlocks.LayerGoldenApple => TileGen.IconGem(1480, 246, 210, 84),
+            StarterBlocks.LayerMilkBucket => TileGen.IconBucket(1481, true, 236, 234, 226),
+            StarterBlocks.LayerCake => TileGen.IconPie(1482),
             _ => Wheat(layer) ?? Crop(layer) ?? CropIcon(layer) ?? PotionIcon(layer) ?? StainedGlass(layer)
                  ?? MetalBlock(layer) ?? Wool(layer) ?? Meat(layer) ?? Dye(layer)
                  ?? Armour(layer) ?? Shield(layer) ?? Tool(layer),

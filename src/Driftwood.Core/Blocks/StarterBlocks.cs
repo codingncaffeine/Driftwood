@@ -791,7 +791,11 @@ public static class StarterBlocks
     public const ushort LayerGoldenCarrot = LayerStarbeacon + 13;
     public const ushort LayerGoldenApple = LayerStarbeacon + 14;
 
-    public const int LayerCount = LayerGoldenApple + 1;
+    /// <summary>R1's second batch (2026-10-25): milk, and the cake it makes.</summary>
+    public const ushort LayerMilkBucket = LayerGoldenApple + 1;
+    public const ushort LayerCake = LayerGoldenApple + 2;
+
+    public const int LayerCount = LayerCake + 1;
 
     /// <summary>One stage of the ashcap, as a block name.</summary>
     public static string AshcapName(int stage) => $"ashcap_{stage}";
