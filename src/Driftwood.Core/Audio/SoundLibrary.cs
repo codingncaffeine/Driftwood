@@ -1,7 +1,7 @@
 namespace Driftwood.Core.Audio;
 
 /// <summary>
-/// A sparse stack of local sounds and one optional Minecraft resource-pack ZIP, decoded on first use.
+/// A sparse stack of local sounds and one optional resource-pack ZIP, decoded on first use.
 /// </summary>
 public sealed class SoundLibrary
 {

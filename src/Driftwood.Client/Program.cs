@@ -458,7 +458,7 @@ public static class Program
         {
             Console.Error.WriteLine(
                 "driftwood: no geometry found. Give a folder of .geo.json files after --creatures, "
-                + "or install the Bedrock client, which ships them."
+                + "or install the reference client, which ships them."
                 + (CreatureLibrary.LastLookupNote.Length > 0
                     ? $"{Environment.NewLine}            ({CreatureLibrary.LastLookupNote})"
                     : ""));
@@ -736,7 +736,7 @@ public static class Program
                 case "--skin":
                     options = options with { SkinPath = Next(args, ref i, "--skin") };
                     break;
-                // ⛔ Given once and remembered. The skeletons ship with an installed Bedrock client
+                // ⛔ Given once and remembered. The skeletons ship with an installed reference client
                 // rather than with us or with a pack, and that install cannot be found by looking —
                 // enumerating WindowsApps throws for a plain process even where a known path under
                 // it opens. So the folder is said once and kept in the settings file.
@@ -920,7 +920,7 @@ public static class Program
               --creatures [dir] read creature skeletons and say which of ours found one. The
                                 skeletons ship with the GAME, not with a texture pack — a pack only
                                 overrides shapes it changes — so this wants the folder of .geo.json
-                                files an installed Bedrock client keeps under
+                                files an installed reference client keeps under
                                 data\resource_packs. Add --pack to check the skins as well.
               --pack-report     with --pack, report which of OUR layers the pack supplied and
                                 which kept our art — the answer to "is the pack even being used"

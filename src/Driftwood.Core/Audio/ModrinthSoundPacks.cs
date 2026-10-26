@@ -499,7 +499,7 @@ public sealed class ModrinthSoundPackProvider(ISoundPackTransport? transport = n
                 String(version, "version_type").Equals("release", StringComparison.OrdinalIgnoreCase)));
         }
 
-        if (choices.Count == 0) throw new InvalidDataException("there is no listed Minecraft ZIP to download");
+        if (choices.Count == 0) throw new InvalidDataException("there is no listed pack ZIP to download");
         var releases = choices.Where(choice => choice.Release).ToArray();
         IEnumerable<DownloadChoice> eligible = releases.Length > 0 ? releases : choices;
         return eligible.MaxBy(choice => choice.Published)!;

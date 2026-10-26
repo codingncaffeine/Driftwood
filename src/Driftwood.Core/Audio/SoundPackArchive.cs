@@ -4,7 +4,7 @@ using Driftwood.Core.Textures;
 
 namespace Driftwood.Core.Audio;
 
-/// <summary>The useful part of a Minecraft sound-pack archive, indexed without extracting it.</summary>
+/// <summary>The useful part of a sound-pack archive, indexed without extracting it.</summary>
 public sealed record SoundPackInspection(
     int Clips,
     int Covered,
