@@ -121,6 +121,10 @@ public sealed class SupportTable
         var against = world.GetBlock(x + dx, y + dy, z + dz).Value;
         if (against >= _solid.Length) return false;
 
+        // ⛳ A plant stands on another of itself (2026-10-26): a kelp stalk, a reed's joints. The
+        // one below answers for itself in turn, so cutting the foot still brings the column down.
+        if (face == Faces.NegY && against == here) return true;
+
         return Placeable.NeedsFirmSupport(face) ? _firm[against] : _solid[against];
     }
 

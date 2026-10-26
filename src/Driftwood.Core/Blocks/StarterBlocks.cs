@@ -804,7 +804,14 @@ public static class StarterBlocks
     public const ushort LayerSpiderEye = LayerCake + 3;
     public const ushort LayerFermentedSpiderEye = LayerCake + 4;
 
-    public const int LayerCount = LayerFermentedSpiderEye + 1;
+
+    /// <summary>The kelp of the deep sea floor, and what drying it makes (2026-10-26).</summary>
+    public const ushort LayerKelp = LayerFermentedSpiderEye + 1;
+    public const ushort LayerDriedKelp = LayerFermentedSpiderEye + 2;
+    public const ushort LayerDriedKelpTop = LayerFermentedSpiderEye + 3;
+    public const ushort LayerDriedKelpSide = LayerFermentedSpiderEye + 4;
+
+    public const int LayerCount = LayerDriedKelpSide + 1;
 
     /// <summary>One stage of the ashcap, as a block name.</summary>
     public static string AshcapName(int stage) => $"ashcap_{stage}";
@@ -1065,7 +1072,10 @@ public static class StarterBlocks
         BlockId DarkTidestone,
         BlockId Deeplight,
         BlockId Sponge,
-        BlockId WetSponge)
+        BlockId WetSponge,
+
+        /// <summary>The deep sea's forest (2026-10-26): stalks standing in water six deep or more.</summary>
+        BlockId Kelp)
     {
         /// <summary>Every log a canopy counts as its tree, for the decay rule.</summary>
         public BlockId[] Logs => [Log, CherryLog];
@@ -1643,6 +1653,27 @@ public static class StarterBlocks
             Fluid = FluidKind.Water, FluidLevel = FluidEngine.MaxLevel, Waterlogged = true,
             LightAttenuation = 1,
             Model = BlockModel.Cross(LayerSeagrass, tinted: false),
+        });
+
+        // ⛳ Kelp (2026-10-26): the deep sea's forest. Always wet as seagrass is, but taken by hand,
+        // and it stands on its own kind — a column is one id stacked, and the support rule lets a
+        // plant rest on another of itself, so cutting the foot brings the whole stalk down.
+        // Growth lengthens a stalk a joint at a time until it nears the surface.
+        var kelp = registry.Register(new BlockType
+        {
+            Name = "kelp", Hardness = 0.05f, Solid = false, Opaque = false,
+            Sounds = SoundMaterial.Grass,
+            SupportFace = Faces.NegY,
+            Fluid = FluidKind.Water, FluidLevel = FluidEngine.MaxLevel, Waterlogged = true,
+            LightAttenuation = 1,
+            Model = BlockModel.Cross(LayerKelp, tinted: false),
+        });
+
+        registry.Register(new BlockType
+        {
+            Name = "dried_kelp_block", Hardness = 0.5f, Crafted = true, Sounds = SoundMaterial.Grass,
+            HarvestClass = ToolClass.Hoe,
+            TopLayer = LayerDriedKelpTop, SideLayer = LayerDriedKelpSide, BottomLayer = LayerDriedKelpTop,
         });
         var log = registry.Register(new BlockType
         {
@@ -2335,7 +2366,8 @@ public static class StarterBlocks
             registry.ByName("bookshelf").Id,
             registry.ByName("tidestone").Id, registry.ByName("tidestone_bricks").Id,
             registry.ByName("dark_tidestone").Id, registry.ByName("deeplight").Id,
-            registry.ByName("sponge").Id, registry.ByName("wet_sponge").Id);
+            registry.ByName("sponge").Id, registry.ByName("wet_sponge").Id,
+            kelp);
     }
 
     /// <summary>The saplings and the placed leaves, by name, for the rows that speak of them.</summary>

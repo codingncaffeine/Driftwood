@@ -128,10 +128,22 @@ public sealed class Growth
     public List<(int X, int Y, int Z, BlockId Was)> Fallen { get; } = new();
 
     private readonly BlockId _water;
+    private readonly BlockId _kelp;
+
+    /// <summary>How likely a kelp stalk's top is to put on a joint when it is looked at.</summary>
+    /// <remarks>
+    /// A tenth of a crop's chance: a cut forest grows back over an hour or two rather than while a
+    /// player watches, which is the reference's own slow pace for it.
+    /// </remarks>
+    public const float KelpChance = 0.14f;
+
+    /// <summary>The tallest a stalk grows on its own.</summary>
+    public const int KelpMost = 14;
 
     public Growth(BlockRegistry registry)
     {
         _water = registry.ByName("water").Id;
+        _kelp = registry.ByName("kelp").Id;
 
         _next = new int[registry.Count];
         _isCrop = new bool[registry.Count];
@@ -274,6 +286,21 @@ public sealed class Growth
             if (roll >= SaplingChance) return false;
 
             return GrowSapling(world, x, y, z, here, roll);
+        }
+
+        // ⛳ Kelp (2026-10-26): the top of a stalk puts on a joint while two cells of open water
+        // stand over it, so a stalk never breaks the surface, and stops at its own height.
+        if (here == _kelp)
+        {
+            if (roll >= KelpChance) return false;
+            if (world.GetBlock(x, y + 1, z) != _water || world.GetBlock(x, y + 2, z) != _water) return false;
+
+            var length = 1;
+            while (length < KelpMost && world.GetBlock(x, y - length, z) == _kelp) length++;
+            if (length >= KelpMost) return false;
+
+            Write(world, x, y + 1, z, _kelp);
+            return true;
         }
 
         if (!_isCrop[here.Value] || _next[here.Value] < 0) return false;

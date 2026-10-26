@@ -15645,9 +15645,11 @@ public sealed class ClientHost : IDisposable
 
             // Down means anything a foot would rest on, which is what lets a torch stand on a slab.
             // Any other direction means a whole face to fix to, or a torch hangs off a fence post.
+            // ⛳ Or another of itself, for a plant that stacks (2026-10-26): kelp on kelp, a reed
+            // on a reed — the support rule's own exception.
             var enough = Placeable.NeedsFirmSupport(support)
                 ? against.Solid && against.Model.IsFullCube
-                : against.Solid;
+                : against.Solid || (support == Faces.NegY && against.Id == block);
 
             if (!enough) return false;
         }

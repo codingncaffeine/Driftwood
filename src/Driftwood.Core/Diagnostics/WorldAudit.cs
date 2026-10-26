@@ -1603,6 +1603,13 @@ public static class WorldAudit
         // is eligible then. Height needs no band: never above the waterline is the rule itself.
         // ⚠ Blind to a wrong CLUSTERING: an even wash and proper beds count the same. That is the
         // patch field's job and only eyes grade it.
+        // ⛳ And the kelp forests (2026-10-26): somewhere in the deep, every stalk under the water.
+        var kelpCells = counts[ids.Kelp.Value];
+        Check(
+            "the deep sea grows kelp",
+            kelpCells > 0 && maxY[ids.Kelp.Value] < TerrainGenerator.SeaLevel - 1,
+            $"{kelpCells:N0} kelp cells, topmost at y {maxY[ids.Kelp.Value]} (want some, under y {TerrainGenerator.SeaLevel - 1})");
+
         var seagrassCells = counts[ids.Seagrass.Value];
         Check(
             "the drowned floor grows seagrass",
@@ -9393,7 +9400,8 @@ public static class WorldAudit
         (StarterBlocks.LayerStarbeacon, "starbeacon"),
         (StarterBlocks.LayerGoldenApple, "golden_apple"),
         (StarterBlocks.LayerCake, "cake"),
-        ((ushort)(StarterBlocks.LayerCount - 1), "fermented_spider_eye"),
+        (StarterBlocks.LayerFermentedSpiderEye, "fermented_spider_eye"),
+        ((ushort)(StarterBlocks.LayerCount - 1), "dried_kelp_side"),
     ];
 
     /// <summary>

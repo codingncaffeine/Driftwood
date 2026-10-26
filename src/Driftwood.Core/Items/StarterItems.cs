@@ -161,6 +161,15 @@ public static class StarterItems
 
         // Sheared off the sea floor, replanted in any water source over solid ground (#96).
         Block(items, blocks, "seagrass", "seagrass", StarterBlocks.LayerSeagrass);
+        Block(items, blocks, "kelp", "kelp", StarterBlocks.LayerKelp);
+
+        // ⛳ Dried kelp (2026-10-26): a mouthful that goes down fast, and nine of it pressed into a
+        // block that burns two and a half times as long as a lump of coal.
+        items.Register(new ItemType
+        {
+            Name = "dried_kelp", Label = "dried kelp", IconLayer = StarterBlocks.LayerDriedKelp, Feeds = 1,
+        });
+        Block(items, blocks, "dried_kelp_block", "dried kelp block", StarterBlocks.LayerDriedKelpSide, burn: 200f);
 
         // ── The signal kit (#27) ──────────────────────────────────────────────────────────────
         // Wire lies on the floor; the lever and button stand or hang off any face the torch can;

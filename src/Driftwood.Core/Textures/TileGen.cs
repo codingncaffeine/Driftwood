@@ -3788,6 +3788,55 @@ public static class TileGen
     /// sway is baked into the drawing, since the tile itself is static; darker toward the roots the
     /// way everything under two blocks of water is.
     /// </remarks>
+    /// <summary>
+    /// One joint of a kelp stalk: a swaying olive ribbon with a blade off alternate sides and a
+    /// float at each blade's root.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ <b>The sway's period is the tile's height</b>, so a stalk stacked ten joints high is one
+    /// unbroken ribbon rather than ten pieces with a kink at every seam.
+    /// </remarks>
+    public static byte[] Kelp(int seed)
+    {
+        var t = new byte[BytesPerTile];
+
+        for (var y = 0; y < Size; y++)
+        {
+            var centre = Size / 2f - 0.5f + MathF.Sin(y / (float)Size * MathF.Tau) * 1.6f;
+            for (var x = 0; x < Size; x++)
+            {
+                var off = x - centre;
+                var grain = (int)((Noise(x, y, seed) * 2f - 1f) * 10f);
+
+                // The stalk itself, two texels wide with a darker spine on one edge.
+                if (MathF.Abs(off) <= 1.0f)
+                {
+                    var spine = off < 0f ? -14 : 0;
+                    Put(t, x, y, Clamp(96 + grain + spine), Clamp(112 + grain + spine), Clamp(38 + grain), 255);
+                    continue;
+                }
+
+                // A blade every eight rows, out to one side and then the other, drooping as it goes.
+                var side = (y / 8 & 1) == 0 ? 1f : -1f;
+                var along = off * side;
+                var row = y % 8;
+                if (along > 1f && along < 6.5f && row >= 1 && row <= 3 + (int)(along / 2.5f)
+                    && row >= (int)(along / 2.2f))
+                {
+                    var tip = (int)(along * 4f);
+                    Put(t, x, y, Clamp(70 + grain + tip / 2), Clamp(116 + grain + tip), Clamp(44 + grain), 255);
+                    continue;
+                }
+
+                // The float at the blade's root: a round amber bead tucked against the stalk.
+                if (row == 4 && along > 1f && along < 2.6f)
+                    Put(t, x, y, Clamp(150 + grain), Clamp(140 + grain), Clamp(58 + grain), 255);
+            }
+        }
+
+        return t;
+    }
+
     public static byte[] Seagrass(int seed)
     {
         var t = new byte[BytesPerTile];

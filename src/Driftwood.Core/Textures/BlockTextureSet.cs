@@ -803,6 +803,12 @@ public static class BlockTextureSet
         new("spider_eye", "textures/item/spider_eye.png", true, "textures/items/spider_eye.png"),
         new("fermented_spider_eye", "textures/item/fermented_spider_eye.png", true,
             "textures/items/spider_eye_fermented.png"),
+
+        // ⚠ Modern paths only: kelp postdates the flattening, so no legacy names exist.
+        new("kelp", "textures/block/kelp_plant.png", true),
+        new("dried_kelp", "textures/item/dried_kelp.png", true),
+        new("dried_kelp_top", "textures/block/dried_kelp_top.png", false),
+        new("dried_kelp_side", "textures/block/dried_kelp_side.png", false),
     ];
 
     /// <summary>
@@ -1965,6 +1971,10 @@ public static class BlockTextureSet
             StarterBlocks.LayerFlintAndSteel => TileGen.IconKey(1484, 168, 168, 174),
             StarterBlocks.LayerSpiderEye => TileGen.IconEgg(1485, 150, 34, 46),
             StarterBlocks.LayerFermentedSpiderEye => TileGen.IconEgg(1486, 128, 70, 64),
+            StarterBlocks.LayerKelp => TileGen.Kelp(1487),
+            StarterBlocks.LayerDriedKelp => TileGen.IconLeather(1488, 58, 70, 40),
+            StarterBlocks.LayerDriedKelpTop => TileGen.Rings(1489, 54, 66, 38),
+            StarterBlocks.LayerDriedKelpSide => TileGen.Planks(1490, 50, 62, 36),
             _ => Wheat(layer) ?? Crop(layer) ?? CropIcon(layer) ?? PotionIcon(layer) ?? StainedGlass(layer)
                  ?? MetalBlock(layer) ?? Wool(layer) ?? Meat(layer) ?? Dye(layer)
                  ?? Armour(layer) ?? Shield(layer) ?? Tool(layer),

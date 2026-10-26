@@ -159,6 +159,7 @@ public sealed class TerrainGenerator
     private readonly int _seedMeadow;
     private readonly int _seedDune;
     private readonly int _seedSeagrass;
+    private readonly int _seedKelp;
     private readonly int _seedGlowcap;
     private readonly int _seedReed;
     private readonly int _seedMoss;
@@ -258,6 +259,7 @@ public sealed class TerrainGenerator
         _seedMeadow = seed.Derive("decor.meadowgrass");
         _seedDune = seed.Derive("decor.dunes");
         _seedSeagrass = seed.Derive("decor.seagrass");
+        _seedKelp = seed.Derive("decor.kelp");
         _seedGlowcap = seed.Derive("decor.glowcap");
         _seedReed = seed.Derive("decor.reeds");
         _seedMoss = seed.Derive("decor.moss");
@@ -1635,6 +1637,23 @@ public sealed class TerrainGenerator
             // back: seagrass is waterlogged, so the sea it stands in never has a hole in it.
             if (surface + 2 <= SeaLevel)
             {
+                // ⛳ Kelp before the seagrass (2026-10-26): where the sea stands six or more deep
+                // and does not freeze, a patch field draws the forests and a per-column roll the
+                // stalks. Each stalk's height is the column's own, two joints up to two short of
+                // the surface, so it never shows above the water. A column is decided whole and
+                // each chunk in its stack keeps its share of cells — the reeds' purity rule.
+                var depth = SeaLevel - surface;
+                if (depth >= KelpDepth && !FrozenSurface(wx, wz)
+                    && Noise.Fbm2(wx / 56f, wz / 56f, _seedKelp, 2) > 0.16f
+                    && Noise.Value2(wx, wz, _seedKelp + 3) < 0.30f)
+                {
+                    var tall = 2 + (int)(Noise.Value2(wx, wz, _seedKelp + 5) * (depth - 3));
+                    for (var up = 1; up <= tall; up++)
+                        PlaceIntoWater(chunk, ox, oy, oz, wx, surface + up, wz, _ids.Kelp);
+
+                    continue;
+                }
+
                 if (Noise.Fbm2(wx / 40f, wz / 40f, _seedSeagrass, 2) > 0.10f
                     && Noise.Value2(wx, wz, _seedSeagrass + 7) < 0.22f)
                     PlaceIntoWater(chunk, ox, oy, oz, wx, surface + 1, wz, _ids.Seagrass);
@@ -2452,6 +2471,9 @@ public sealed class TerrainGenerator
     /// Writes a waterlogged plant only over the water it lives in, so a cave mouth or an iced lid
     /// under the sea never grows a blade in its air pocket.
     /// </summary>
+    /// <summary>How deep the sea has to stand before kelp grows in it.</summary>
+    public const int KelpDepth = 6;
+
     private void PlaceIntoWater(Chunk chunk, int ox, int oy, int oz, int wx, int wy, int wz, BlockId id)
     {
         var lx = wx - ox;

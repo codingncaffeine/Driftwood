@@ -328,6 +328,8 @@ public static class StarterRecipes
         // so the same three make six.
         Shaped("flint arrows", "arrow", 6, ["f", "S", "H"], station: CraftStation.Bench);
         LooseAt("flint and steel", "flint_and_steel", 1, CraftStation.Bench, "iron_ingot", "flint");
+        Shaped("dried kelp block", "dried_kelp_block", 1, ["MMM", "MMM", "MMM"], "dried_kelp", station: CraftStation.Bench);
+        LooseAt("dried kelp from a block", "dried_kelp", 9, CraftStation.Bench, "dried_kelp_block");
         LooseAt("fermented spider eye", "fermented_spider_eye", 1, CraftStation.Bench,
             "spider_eye", "mushroom_brown", "sugar");
 
@@ -630,6 +632,7 @@ public static class StarterRecipes
         // what makes a second pass through the fire worth doing.
         Smelt("stone", "smooth_stone");
         Smelt("wet_sponge", "sponge");
+        Smelt("kelp", "dried_kelp", work: SmeltWork.Food);
         Smelt("clay", "terracotta");
         Smelt("stone_bricks", "cracked_stone_bricks");
         Smelt("sandstone", "cut_sandstone");
