@@ -1587,10 +1587,42 @@ public sealed class ClientHost : IDisposable
     private bool TreeFreeSpawnSupport(int x, int y, int z)
     {
         var block = _streamer.World.GetBlock(x, y, z);
-        return _registry[block].Solid
-               && block != _ids.Log && block != _ids.CherryLog
-               && block != _ids.Leaves && block != _ids.CherryLeaves;
+        return _registry[block].Solid && !TreePart(block);
     }
+
+    /// <summary>Every block a tree is made of, by name, built once.</summary>
+    private bool[]? _treeParts;
+
+    /// <summary>
+    /// Whether a block is part of a tree (2026-10-26): any log, any leaves — grown or placed — and a
+    /// bee nest hung on a trunk.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>The user's rule: "make it impossible for anything to spawn on trees."</b> The check
+    /// named two logs and two leaves and nothing else, so a placed leaf, a branch of a third species
+    /// or a nest on a trunk was ground to stand on. Asked of the names, so the next species and its
+    /// leaves are covered the day they are registered.
+    /// </remarks>
+    private bool TreePart(BlockId block)
+    {
+        if (_treeParts is null)
+        {
+            _treeParts = new bool[_registry.Count];
+            for (var id = 1; id < _registry.Count; id++)
+            {
+                var name = _registry[(ushort)id].Name;
+                _treeParts[id] = name.Contains("_log", StringComparison.Ordinal)
+                    || name.Contains("leaves", StringComparison.Ordinal)
+                    || name.StartsWith("bee_nest", StringComparison.Ordinal);
+            }
+        }
+
+        return block.Value < _treeParts.Length && _treeParts[block.Value];
+    }
+
+    /// <summary>Where an animal may be born: on the land's own surface or above it, under the sky.</summary>
+    private bool AnimalGround(int x, int y, int z) =>
+        SpawnRules.AnimalGround(_streamer.World.GetLight(x, y, z), y, _terrain.SurfaceHeight(x, z));
 
     private bool DryTreeFreeSpawnSupport(int x, int y, int z) =>
         TreeFreeSpawnSupport(x, y, z)
@@ -1746,12 +1778,16 @@ public sealed class ClientHost : IDisposable
         // The beasts, not the hostiles: the first thing anybody meets in a field should be a cow.
         // ⛳ Each one carries the size its own mesh came out at, because that is the box a blow has
         // to land inside — measured off the model rather than written down beside it.
-        var kinds = KindsOf(CreatureFamily.Beast);
+        // ⚠ Not the bee (2026-10-26): bees come out of their nest or hive and nowhere else.
+        var kinds = KindsOf(CreatureFamily.Beast).Where(kind => kind.Name != "bee").ToList();
         if (kinds.Count == 0) return;
 
+        // ⛳ And only on the land's surface under the sky (2026-10-26): a player down a cave no
+        // longer finds the meadow's herd in there with them.
         var before = _herd.Count;
         _herd.Spawn(
             SolidForCreature, kinds, _player.Position, HerdSize - beasts,
+            where: AnimalGround,
             spawnSupport: TreeFreeSpawnSupport);
 
         if (_herd.Count == before) return;

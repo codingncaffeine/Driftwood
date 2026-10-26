@@ -11308,6 +11308,18 @@ public static class WorldAudit
         Want("a lit cave, dark", SpawnRules.Dark(lit, 1f), false);
         Want("a lit cave, buried", SpawnRules.Buried(lit), false);
 
+        // ⛳ Where an animal may be born (2026-10-26, the user: cows were spawning underground):
+        // the field, at midnight as at noon; never a cave, a cave mouth, or a pit dug under the
+        // ground's own level, however much sky reaches into it.
+        var mouth = LightValue.Pack(12, 0, 0, 0);       // a cave mouth, sky leaking in
+        Want("an animal in a field", SpawnRules.AnimalGround(open, 71, 70), true);
+        Want("an animal on a roof above the field", SpawnRules.AnimalGround(LightValue.Pack(15, 0, 0, 0), 80, 70), true);
+        Want("an animal in a cave", SpawnRules.AnimalGround(cave, 30, 70), false);
+        Want("an animal in a lit cave", SpawnRules.AnimalGround(lit, 30, 70), false);
+        Want("an animal in a cave mouth", SpawnRules.AnimalGround(mouth, 64, 70), false);
+        Want("an animal in an open pit below the ground", SpawnRules.AnimalGround(open, 66, 70), false);
+        Want("an animal under a roof on the ground", SpawnRules.AnimalGround(cave, 71, 70), false);
+
         // ── The monster spawner, against a world of two floors ──────────────────────────────────
         //
         // ⛔ The fault this replaced: a cap of five, a ring round the player, and nothing ever let

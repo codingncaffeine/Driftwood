@@ -48,6 +48,22 @@ public static class SpawnRules
     public static bool Buried(ushort packed) =>
         LightValue.Sky(packed) == 0 && BlockLight(packed) <= Darkness;
 
+    /// <summary>The least raw sky light an animal's feet may stand in (2026-10-26).</summary>
+    public const int AnimalSky = 8;
+
+    /// <summary>
+    /// True where an animal may be born: on or above the land's own surface, under real sky.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>The user's report, 2026-10-26: cows spawning underground.</b> The animals' top-up asked
+    /// for nothing but somewhere to stand, so a player in a cave got a herd in the cave. Both halves
+    /// are asked, because each alone lets one through: sky light alone passes a cave mouth or a
+    /// ravine, and the surface alone passes a roofed pit dug at the surface. Raw sky light, never
+    /// the time-scaled kind — a field is a field at midnight too.
+    /// </remarks>
+    public static bool AnimalGround(ushort packed, int feetY, int surface) =>
+        feetY > surface && LightValue.Sky(packed) >= AnimalSky;
+
     // ── Monsters, by the reference's own rules ──────────────────────────────────────────────────
 
     /// <summary>The most monsters about at once, everywhere within <see cref="SpawnRadius"/>.</summary>
