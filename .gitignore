@@ -28,7 +28,7 @@ Desktop.ini
 
 ## Local-only working files: plans, scratch notes, captures.
 ## Planning docs stay local and are never pushed.
-/_local/
+/local-notes/
 *.local.md
 
 ## Third-party test assets: texture packs and skins the user supplies for local testing.
