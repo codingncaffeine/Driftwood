@@ -4,10 +4,10 @@ Driftwood is an open-world survival crafting game built from scratch in C# and O
 empty hands, gather materials, make tools and workstations, build, explore, fight, trade, learn
 magic, command companions, and return to the same persistent procedurally generated world later.
 
-[**Download v0.7.0 for Linux**](https://github.com/codingncaffeine/Driftwood/releases/tag/v0.7.0)
+[**Download v0.7.1 for Linux**](https://github.com/codingncaffeine/Driftwood/releases/tag/v0.7.1)
 · [**v0.3.0 for Windows**](https://github.com/codingncaffeine/Driftwood/releases/tag/v0.3.0)
 · [**Player handbook**](https://github.com/codingncaffeine/Driftwood/wiki)
-· [Release notes](https://github.com/codingncaffeine/Driftwood/releases/tag/v0.7.0)
+· [Release notes](https://github.com/codingncaffeine/Driftwood/releases/tag/v0.7.1)
 
 ## What is in the game?
 
@@ -25,7 +25,7 @@ magic, command companions, and return to the same persistent procedurally genera
   radial hotbar selection, target assist, rumble, and controller navigation throughout the UI.
 - Local and Modrinth-backed shelves for texture and sound packs, plus local and online player skins.
 
-Driftwood is a playable single-player game for Linux and Windows on x64. The current release is v0.7.0
+Driftwood is a playable single-player game for Linux and Windows on x64. The current release is v0.7.1
 for Linux; Windows players stay on v0.3.0 for now.
 Multiplayer is planned but is not included yet. Exact current content and control counts are
 generated from the game registries in the
@@ -35,13 +35,13 @@ generated from the game registries in the
 
 ### Linux
 
-On Debian or Ubuntu, download `driftwood-game_0.7.0-1_amd64.deb` from the
-[release page](https://github.com/codingncaffeine/Driftwood/releases/tag/v0.7.0) and install it with
-`sudo apt install ./driftwood-game_0.7.0-1_amd64.deb`; it adds Driftwood to the application menu and a
+On Debian or Ubuntu, download `driftwood-game_0.7.1-1_amd64.deb` from the
+[release page](https://github.com/codingncaffeine/Driftwood/releases/tag/v0.7.1) and install it with
+`sudo apt install ./driftwood-game_0.7.1-1_amd64.deb`; it adds Driftwood to the application menu and a
 `driftwood-game` command. On Arch, install `driftwood-game-bin` from the AUR.
 
-Anywhere else, download `Driftwood-v0.7.0-linux-x64.tar.gz` from the
-[release page](https://github.com/codingncaffeine/Driftwood/releases/tag/v0.7.0), extract it anywhere, and run
+Anywhere else, download `Driftwood-v0.7.1-linux-x64.tar.gz` from the
+[release page](https://github.com/codingncaffeine/Driftwood/releases/tag/v0.7.1), extract it anywhere, and run
 `./Driftwood` from the extracted folder. Run `./install.sh` once to add Driftwood to your application
 menu (`./install.sh --uninstall` removes it again). The build is self-contained: it does not need .NET,
 and it brings its own GLFW, OpenAL and SDL. It runs on Ubuntu 22.04, Debian 12, Fedora, Arch, or

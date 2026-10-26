@@ -42,6 +42,9 @@
     <content_attribute id="violence-fantasy">mild</content_attribute>
   </content_rating>
   <releases>
+    <release version="0.7.1" date="2026-10-26">
+      <url type="details">https://github.com/codingncaffeine/Driftwood/releases/tag/v0.7.1</url>
+    </release>
     <release version="0.7.0" date="2026-10-26">
       <url type="details">https://github.com/codingncaffeine/Driftwood/releases/tag/v0.7.0</url>
     </release>
