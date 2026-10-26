@@ -12915,6 +12915,10 @@ public sealed class ClientHost : IDisposable
             _controller.Rumble(low, high, milliseconds, _settings.ControllerRumble);
     }
 
+    /// <summary>Whether the world is held still: the game menu is open over a world being played.</summary>
+    private bool Paused =>
+        _hudScreen.Kind == HudScreenKind.Game && !_atStartScreen && _bench is null && !_options.UiCheck;
+
     private void OnUpdate(double dt)
     {
         // ⛔ CAPPED, AND THE FIRST UPDATE IS WHY. The window's clock starts when the window does, so
@@ -12954,6 +12958,12 @@ public sealed class ClientHost : IDisposable
         StepController((float)dt);
         StepSpellCursorInput();
 
+        // ⛳ The game menu pauses the world (2026-10-26, the user's call), as the reference's does
+        // in a world of one: the clock, the body, every creature, fluid, furnace and fuse get no
+        // time while it is open. The menu itself, pack downloads and the autosave still run on
+        // real time — `dt` — and everything that IS the world runs on `sim`.
+        var sim = Paused ? 0.0 : dt;
+
         if (_benchPath is not null)
         {
             // The path clock is the measured time itself, so the camera is exactly where the
@@ -12976,7 +12986,7 @@ public sealed class ClientHost : IDisposable
         }
         else if (_walking)
         {
-            StepPlayer((float)dt);
+            StepPlayer((float)sim);
         }
         else
         {
@@ -12994,7 +13004,7 @@ public sealed class ClientHost : IDisposable
         _elapsed += dt;
 
         if (_walking && !_atStartScreen && _bench is null)
-            _progress.Survived(dt);
+            _progress.Survived(sim);
 
         // Closed the way a player closes it, so the exit path under test is the one that ships.
         // ⛳ Frames counted through the ORDINARY loop, which --bench cannot report because it is
@@ -13027,37 +13037,37 @@ public sealed class ClientHost : IDisposable
             Console.Out.Flush();
         }
 
-        _clock.Advance((float)dt);
+        _clock.Advance((float)sim);
         _skyState = _clock.Now;
         _audio?.SetListener(_viewPosition, _viewForward);
 
         UpdateTarget();
-        StepAnimation((float)dt);
-        StepFootfall((float)dt);
-        StepVitals((float)dt);
-        StepFluid((float)dt);
-        _signalNow += dt;
-        StepSignals(_signalNow, (float)dt);
-        StepFuses((float)dt);
-        StepLeaffall((float)dt);
-        StepFurnaces((float)dt);
-        StepBrewing((float)dt);
-        StepProjectiles((float)dt);
-        StepCreatures((float)dt);
-        StepMagic((float)dt);
-        StepInhabitants((float)dt);
+        StepAnimation((float)sim);
+        StepFootfall((float)sim);
+        StepVitals((float)sim);
+        StepFluid((float)sim);
+        _signalNow += sim;
+        StepSignals(_signalNow, (float)sim);
+        StepFuses((float)sim);
+        StepLeaffall((float)sim);
+        StepFurnaces((float)sim);
+        StepBrewing((float)sim);
+        StepProjectiles((float)sim);
+        StepCreatures((float)sim);
+        StepMagic((float)sim);
+        StepInhabitants((float)sim);
         StepExploration();
-        StepProgressionRewards((float)dt);
-        StepAchievements((float)dt);
-        StepCarts((float)dt);
-        StepBoats((float)dt);
-        StepShips((float)dt);
+        StepProgressionRewards((float)sim);
+        StepAchievements((float)sim);
+        StepCarts((float)sim);
+        StepBoats((float)sim);
+        StepShips((float)sim);
         StepToasts((float)dt);
-        StepAmbience((float)dt);
-        StepRain((float)dt);
+        StepAmbience((float)sim);
+        StepRain((float)sim);
         StepAutosave(dt);
-        _particles.Update(_streamer.World, (float)dt);
-        StepFires((float)dt);
+        _particles.Update(_streamer.World, (float)sim);
+        StepFires((float)sim);
 
         // ⛳ The file chooser's answer, whenever it arrives. It runs on a thread of its own so the
         // world keeps drawing behind it, which means nothing here waits — this is one volatile read
@@ -13089,7 +13099,7 @@ public sealed class ClientHost : IDisposable
             ? _player.Position + new Vector3(0f, PlayerBody.Height * 0.5f, 0f)
             : (Vector3?)null;
 
-        var picked = _drops.Update(_streamer.World, (float)dt, collector, collector is null ? null : _inventory);
+        var picked = _drops.Update(_streamer.World, (float)sim, collector, collector is null ? null : _inventory);
         if (picked > 0 && collector is { } where)
         {
             _audio?.Play(Pick(ActionSounds.Pickup), where, 0.45f, Wobble());
