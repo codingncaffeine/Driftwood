@@ -299,6 +299,9 @@ public sealed class ClientHost : IDisposable
     /// <summary>True while the menu is showing the list of worlds rather than its four choices.</summary>
     private bool _startListing;
 
+    /// <summary>Whether the title menu is showing its Create New World page (2026-10-26).</summary>
+    private bool _startCreating;
+
     /// <summary>The row that leaves the settings when they were opened from the menu.</summary>
     private const string BackToMenu = "back to the menu";
 
@@ -382,7 +385,10 @@ public sealed class ClientHost : IDisposable
     /// telling somebody their world is 1,748,392,011 is not telling them anything.
     /// </remarks>
     private readonly TextField _seedBox =
-        new(32, TextAllows.FileSafe) { Placeholder = "a fresh one" };
+        new(32, TextAllows.FileSafe) { Placeholder = "random" };
+
+    /// <summary>What a new world's save is called, filled with a free name when the page opens.</summary>
+    private readonly TextField _nameBox = new(32, TextAllows.FileSafe) { Placeholder = "a new name" };
 
     private readonly TextField _handbookSearch = new(40) { Placeholder = "an item or use" };
 
@@ -2344,6 +2350,16 @@ public sealed class ClientHost : IDisposable
             _options.WorldName, instrument,
             _options.SeedGiven, _options.SeedText ?? _options.Seed.ToString());
 
+        // ⛳ A plain launch opens the world played LAST (2026-10-26, the user: "the most recent
+        // played world should always be default"), not whichever one happens to be called "world".
+        // An explicit --world or --seed still says which; an instrument never reaches here.
+        if (!instrument && string.IsNullOrWhiteSpace(_options.WorldName) && !_options.SeedGiven
+            && WorldSave.List().FirstOrDefault(header => header.Name != WorldSave.TestWorld) is { } recent)
+        {
+            // The save brings its own seed when it is read below, as any existing world's does.
+            _worldName = recent.Name;
+        }
+
         if (instrument)
             Console.WriteLine($"world       instrument run, working in '{_worldName}' rather than a real world");
 
@@ -3268,6 +3284,7 @@ public sealed class ClientHost : IDisposable
         _hudScreen.Selected = 0;
         _hudScreen.Scroll = 0;
         _startListing = false;
+        _startCreating = false;
 
         TakeThePointer();
         RefreshScreen();
@@ -3275,6 +3292,30 @@ public sealed class ClientHost : IDisposable
     }
 
     private const string MainMenuRow = "main menu";
+
+    // ⛳ The title menu's words (2026-10-26, the user: "more intuitive ... more common verbiage"):
+    // the ones every game's front screen uses, so nobody has to learn what "carry on" or "make
+    // another world" means before they can play.
+    private const string ContinueRow = "Continue";
+    private const string PlayRow = "Play";
+    private const string CreateWorldRow = "Create New World";
+    private const string LoadWorldRow = "Load World";
+    private const string MoreWorldsRow = "More Worlds";
+
+    /// <summary>How many other worlds the main menu shows itself, before More Worlds.</summary>
+    private const int MenuWorlds = 4;
+
+    /// <summary>Which rows of the main menu are a world, and which world — by row, never by words.</summary>
+    private readonly Dictionary<int, string> _startWorldRows = [];
+    private const string OptionsRow = "Options";
+    private const string QuitRow = "Quit Game";
+    private const string WorldNameRow = "World Name";
+    private const string SeedRowLabel = "Seed";
+    private const string CreateRow = "Create World";
+    private const string CancelRow = "Cancel";
+    private const string BackRow = "Back";
+    private const string NoWorldsRow = "No saved worlds yet";
+    private const string CurrentMark = "  (current)";
     private const string MainMenuYesRow = "yes, return to the main menu";
     private const string MainMenuNoRow = "no, keep playing";
 
@@ -5307,6 +5348,14 @@ public sealed class ClientHost : IDisposable
         // player standing in the world with no idea how they got there.
         // The death screen refuses for its own reason: there is no escaping being dead — the one
         // way out is the row, and WakeUp clears the kind itself before coming through here.
+        // ⛳ Except from one of its pages (2026-10-26): Escape on the world list or on Create New
+        // World goes back to the main menu, the way Back and Cancel do.
+        if (_hudScreen.Kind == HudScreenKind.Start && (_startListing || _startCreating))
+        {
+            BackToStartMenu(_startListing ? MoreWorldsRow : CreateWorldRow);
+            return;
+        }
+
         if (_hudScreen.Kind is HudScreenKind.Start or HudScreenKind.Death) return;
 
         if (OnTab(GameTab.Skins)) CancelSkinNetwork();
@@ -5631,6 +5680,8 @@ public sealed class ClientHost : IDisposable
         return _hudScreen.Kind switch
         {
             // No "closes" — there is nothing behind it to go back to yet.
+            HudScreenKind.Start when _startListing || _startCreating =>
+                $"up and down pick, enter chooses{wheel}, {close} goes back",
             HudScreenKind.Start => $"up and down pick, enter chooses{wheel}",
             HudScreenKind.Game when _atStartScreen =>
                 $"up and down pick, left and right change it, tab changes tab{wheel}, "
@@ -5672,22 +5723,23 @@ public sealed class ClientHost : IDisposable
         if (_startListing)
         {
             _hudScreen.Rows.Add(new MenuRow(
-                (_saved.Count == 1 ? "1 world" : $"{_saved.Count} worlds")
+                "Select World — " + (_saved.Count == 1 ? "1 saved" : $"{_saved.Count} saved")
                 + (_unreadable.Count > 0 ? $", {_unreadable.Count} unreadable" : ""),
                 Heading: true));
 
             if (_saved.Count == 0 && _unreadable.Count == 0)
-                _hudScreen.Rows.Add(new MenuRow("none yet", "", Note: SavesFolderNote));
+                _hudScreen.Rows.Add(new MenuRow(NoWorldsRow, "", Note: SavesFolderNote));
 
             foreach (var world in _saved)
             {
                 var when = world.Saved.ToLocalTime();
+                var current = world.Name == _worldName;
                 _hudScreen.Rows.Add(new MenuRow(
-                    world.Name == _worldName ? $"{world.Name}  (open)" : world.Name,
+                    current ? world.Name + CurrentMark : world.Name,
                     $"{world.PlayedFor} · {when:d MMM HH:mm}",
-                    Note: world.Name == _worldName
-                        ? "this is the one that is open — enter plays it"
-                        : $"{world.Edits} changes, seed {world.Seed}. Enter opens it"));
+                    Note: current
+                        ? "This world is open now. Enter to keep playing it"
+                        : $"Seed {world.Seed}, {world.Edits} changes. Enter to play it"));
             }
 
             // ⛔ On the screen, not only in a log. A file that will not read is somebody's world and
@@ -5695,41 +5747,111 @@ public sealed class ClientHost : IDisposable
             // name and what stopped it rather than quietly leaving the list one shorter.
             foreach (var bad in _unreadable)
                 _hudScreen.Rows.Add(new MenuRow(
-                    bad.File, "cannot read", Note: $"{bad.Why}. {SavesFolderNote}"));
+                    bad.File, "can't be read", Note: $"{bad.Why}. {SavesFolderNote}"));
 
-            _hudScreen.Rows.Add(new MenuRow("back", "", Note: "enter returns to the menu"));
+            _hudScreen.Rows.Add(new MenuRow(BackRow, "", Note: "Back to the main menu"));
+            return;
+        }
+
+        if (_startCreating)
+        {
+            _hudScreen.Rows.Add(new MenuRow("Create New World", Heading: true));
+            _hudScreen.Rows.Add(new MenuRow(
+                WorldNameRow, Edits: _nameBox,
+                Note: $"What the save is called. Left blank, it is {NextWorldName()}"));
+            _hudScreen.Rows.Add(new MenuRow(
+                SeedRowLabel, Edits: _seedBox,
+                Note: "Optional. Type a word or number to make the same world again, or leave it blank for a random one"));
+            _hudScreen.Rows.Add(new MenuRow(
+                CreateRow, "",
+                Note: NewWorldTaken() is { } taken
+                    ? $"A world called {taken} already exists. Pick another name, or load it from Load World"
+                    : _worldName.Length > 0 && _loadedWorld
+                        ? $"Saves {_worldName} first, then opens the new world"
+                        : "Opens the new world"));
+            _hudScreen.Rows.Add(new MenuRow(CancelRow, "", Note: "Back to the main menu"));
             return;
         }
 
         _hudScreen.Rows.Add(new MenuRow($"Driftwood v{ProductVersion}", Heading: true));
+        _startWorldRows.Clear();
 
+        // ⛳ Play is the world played last (2026-10-26) — the one this launch opened, which is the
+        // most recent save — and it is the row the menu starts on. A world that would not load is
+        // played honestly: nothing of it can be kept.
+        var lastPlayed = _saved.Where(w => w.Name == _worldName).Select(w => (DateTime?)w.Saved).FirstOrDefault();
         _hudScreen.Rows.Add(_loadedWorld
-            ? new MenuRow("carry on", _worldName, Note: $"played {Spoken(_playedBefore)}")
-            : new MenuRow("start a world", _worldName.Length > 0 ? _worldName : "not being kept",
-                Note: $"a new one, seed {_seed}"));
+            ? new MenuRow(PlayRow, _worldName,
+                Note: $"Your last world. Played for {Spoken(_playedBefore)}"
+                      + (lastPlayed is { } last ? $", last on {last.ToLocalTime():d MMM}" : ""))
+            : _worldName.Length > 0
+                ? new MenuRow(PlayRow, _worldName, Note: $"A brand new world, seed {_seed}")
+                : new MenuRow(PlayRow, "won't be saved",
+                    Note: "Your world couldn't be loaded, so this one is a visit: nothing in it will be saved"));
 
-        _hudScreen.Rows.Add(new MenuRow(
-            "make another world", NextWorldName(),
-            Note: _seedBox.Empty
-                ? "a fresh seed, kept under its own name — this one stays where it is"
-                : $"seed '{_seedBox.Text}', kept under its own name — this one stays where it is"));
+        // ⛳ Your other worlds, right here, most recent first (2026-10-26, the user: "make it
+        // easier to see other worlds") — a few on the menu itself, and the rest one row away.
+        var others = _saved.Where(w => w.Name != _worldName).ToList();
+        if (others.Count > 0)
+        {
+            _hudScreen.Rows.Add(new MenuRow("Your Worlds", Heading: true));
+            foreach (var world in others.Take(MenuWorlds))
+            {
+                _startWorldRows[_hudScreen.Rows.Count] = world.Name;
+                _hudScreen.Rows.Add(new MenuRow(
+                    world.Name, $"{world.PlayedFor} · {world.Saved.ToLocalTime():d MMM}",
+                    Note: $"Seed {world.Seed}. Enter to play it — {_worldName} is saved first"));
+            }
 
-        // Under the row it belongs to, because a seed is a thing about the world being made and
-        // means nothing to any of the others.
-        _hudScreen.Rows.Add(new MenuRow(
-            "seed", Edits: _seedBox,
-            Note: "type a word to make the same world again — leave it empty for one nobody has seen"));
-        // ⛔ "none saved yet" is the sentence the user read when their world was on disk all along,
-        // so it now only appears when the folder really is empty — and when it is not empty but
-        // nothing in it opened, the row says that instead of the same four words.
-        _hudScreen.Rows.Add(new MenuRow(
-            "open a world",
-            _saved.Count > 0 ? $"{_saved.Count} saved"
-            : _unreadable.Count > 0 ? $"{_unreadable.Count} cannot be read"
-            : "none saved yet",
-            Note: _saved.Count == 0 && _unreadable.Count == 0 ? SavesFolderNote : ""));
-        _hudScreen.Rows.Add(new MenuRow("options", "", Note: "keys, picture, sound"));
-        _hudScreen.Rows.Add(new MenuRow("quit", ""));
+            if (others.Count > MenuWorlds || _unreadable.Count > 0)
+                _hudScreen.Rows.Add(new MenuRow(
+                    MoreWorldsRow,
+                    others.Count > MenuWorlds ? $"{others.Count - MenuWorlds} more" : $"{_unreadable.Count} can't be read",
+                    Note: "Every saved world, and any file that couldn't be read"));
+        }
+        else if (_unreadable.Count > 0)
+        {
+            _hudScreen.Rows.Add(new MenuRow(
+                MoreWorldsRow, $"{_unreadable.Count} can't be read", Note: "Files in the saves folder that couldn't be read"));
+        }
+
+        _hudScreen.Rows.Add(new MenuRow("", Heading: true));
+        _hudScreen.Rows.Add(new MenuRow(CreateWorldRow, "", Note: "Choose a name and, if you like, a seed"));
+        _hudScreen.Rows.Add(new MenuRow(OptionsRow, "", Note: "Controls, video, sound, packs and skins"));
+        _hudScreen.Rows.Add(new MenuRow(QuitRow, ""));
+    }
+
+    /// <summary>The name a new world would be saved under: what was typed, or the next free one.</summary>
+    private string NewWorldName() =>
+        _nameBox.Text.Trim() is { Length: > 0 } typed ? WorldSave.Sanitised(typed) : NextWorldName();
+
+    /// <summary>The new world's name when a save already has it, so Create can refuse; null when free.</summary>
+    private string? NewWorldTaken() =>
+        File.Exists(WorldSave.PathFor(NewWorldName())) ? NewWorldName() : null;
+
+    /// <summary>Moves the title menu to one of its pages, with the first real row picked.</summary>
+    private void ShowStartPage(bool listing, bool creating, int select = 1)
+    {
+        _startListing = listing;
+        _startCreating = creating;
+        _hudScreen.Selected = select;
+        _hudScreen.Scroll = 0;
+        RefreshScreen();
+        ShowSelectedRow();
+    }
+
+    /// <summary>
+    /// Back to the main menu from one of its pages, with the row that led there picked — found by
+    /// its words, because how many worlds sit above it changes.
+    /// </summary>
+    private void BackToStartMenu(string from)
+    {
+        ShowStartPage(listing: false, creating: false);
+        var at = _hudScreen.Rows.FindIndex(row => row.Label == from && !row.Heading);
+        if (at < 0) at = _hudScreen.Rows.FindIndex(row => row.Label == PlayRow);
+        if (at >= 0) _hudScreen.Selected = at;
+        RefreshScreen();
+        ShowSelectedRow();
     }
 
     /// <summary>What the open settings tab is showing, rebuilt from what is actually set.</summary>
@@ -9671,18 +9793,14 @@ public sealed class ClientHost : IDisposable
 
         if (_startListing)
         {
-            if (row.Label == "back" || row.Label == "none yet")
+            if (row.Label is BackRow or NoWorldsRow)
             {
-                _startListing = false;
-                _hudScreen.Selected = 1;
-                _hudScreen.Scroll = 0;
-                RefreshScreen();
-                ShowSelectedRow();
+                BackToStartMenu(MoreWorldsRow);
                 return;
             }
 
             // The mark the open world's row carries is not part of its name.
-            var chosen = row.Label.Replace("  (open)", "");
+            var chosen = row.Label.Replace(CurrentMark, "");
 
             // ⛔ Asked of the list, not of the row's words. The rows for files that would not open
             // carry a file name rather than a world name, and enter on one of those used to reach
@@ -9699,39 +9817,64 @@ public sealed class ClientHost : IDisposable
             return;
         }
 
+        if (_startCreating)
+        {
+            switch (row.Label)
+            {
+                case WorldNameRow: StartTyping(_nameBox); return;
+                case SeedRowLabel: StartTyping(_seedBox); return;
+                case CancelRow: BackToStartMenu(CreateWorldRow); return;
+                case CreateRow:
+                    // ⛔ Never over a world that exists: that would open somebody's save under the
+                    // words "Create World". The row's note already says why it will not.
+                    if (NewWorldTaken() is not null)
+                    {
+                        RefreshScreen();
+                        ShowSelectedRow();
+                        return;
+                    }
+
+                    OpenAnotherWorld(NewWorldName(), _seedBox.Text);
+                    return;
+            }
+
+            return;
+        }
+
+        // One of the worlds listed on the menu itself: asked by row, so a world called "Options"
+        // is still a world.
+        if (_startWorldRows.TryGetValue(_hudScreen.Selected, out var listed))
+        {
+            if (listed == _worldName) StartPlaying();
+            else OpenAnotherWorld(listed);
+            return;
+        }
+
         switch (row.Label)
         {
-            case "carry on":
-            case "start a world":
+            case ContinueRow:
+            case PlayRow:
                 StartPlaying();
                 return;
 
-            case "make another world":
-                // A name nothing is under yet, and whatever was typed into the box beneath — or no
-                // seed at all, so the new run draws its own random one.
-                OpenAnotherWorld(NextWorldName(), _seedBox.Text);
+            case CreateWorldRow:
+                _nameBox.Text = NextWorldName();
+                ShowStartPage(listing: false, creating: true, select: 1);
                 return;
 
-            case "seed":
-                StartTyping(_seedBox);
-                return;
-
-            case "open a world":
+            case MoreWorldsRow:
+            case LoadWorldRow:
                 ReadSavesFolder();
-                _startListing = true;
-                _hudScreen.Selected = 0;
-                _hudScreen.Scroll = 0;
-                RefreshScreen();
-                ShowSelectedRow();
+                ShowStartPage(listing: true, creating: false, select: 1);
                 return;
 
-            case "options":
+            case OptionsRow:
                 // The world keeps flying underneath. Escape comes back here rather than to a world
                 // nobody has asked to play yet — see CloseScreen.
                 OpenGame(GameTab.Controls);
                 return;
 
-            case "quit":
+            case QuitRow:
                 _stopRequested = true;
                 return;
         }
@@ -18496,6 +18639,7 @@ public sealed class ClientHost : IDisposable
                 // from the step above, so the box was hunted for on a screen that did not have one
                 // and the check reported that nothing was typed into it.
                 _startListing = false;
+                _startCreating = true;
                 RefreshScreen();
 
                 _hudScreen.Selected = SeedRow();
@@ -19034,7 +19178,7 @@ public sealed class ClientHost : IDisposable
     private int SeedRow()
     {
         for (var i = 0; i < _hudScreen.Rows.Count; i++)
-            if (_hudScreen.Rows[i].Edits is not null) return i;
+            if (_hudScreen.Rows[i].Edits == _seedBox) return i;
 
         return -1;
     }
@@ -19418,7 +19562,11 @@ public sealed class ClientHost : IDisposable
 
     private unsafe void SampleField(Vector2D<int> size, string what)
     {
-        var zone = _layout.Zones.FirstOrDefault(z => z.Kind == ZoneKind.Field);
+        // The seed's own box where a page has more than one (2026-10-26: Create New World puts
+        // the name's above it); the first box otherwise.
+        var seedRow = SeedRow();
+        var zone = _layout.Zones.FirstOrDefault(z => z.Kind == ZoneKind.Field && z.Index == seedRow);
+        if (zone.Kind != ZoneKind.Field) zone = _layout.Zones.FirstOrDefault(z => z.Kind == ZoneKind.Field);
         if (zone.Kind != ZoneKind.Field)
         {
             Console.Error.WriteLine($"ui-check    {what}: no box was laid out at all");
@@ -21612,14 +21760,21 @@ public sealed class ClientHost : IDisposable
 
         if (_uiRows.TryGetValue("start", out var menu))
         {
-            // The name, then: carry on / make another world / seed / open a world / options / quit.
-            const int Choices = 7;
-            const int Selectable = 6;
+            // ⛳ Counted off what the menu offers (2026-10-26): its length follows the saves folder
+            // now, because the worlds are listed on it. The four fixed choices must be there, every
+            // choice must be reachable, and the worlds planted on disk must be on the menu itself.
+            var labels = _uiRowLabels.GetValueOrDefault("start", []);
+            foreach (var needed in new[] { PlayRow, CreateWorldRow, OptionsRow, QuitRow })
+                if (!labels.Contains(needed)) faults.Add($"the start menu does not offer '{needed}'");
 
-            if (menu.Total != Choices)
-                faults.Add($"the start menu built {menu.Total} rows where it offers {Choices}");
-            if (menu.Seen != Selectable)
-                faults.Add($"{menu.Seen} of the menu's rows can be landed on where {Selectable} should be");
+            var selectable = labels.Count(label =>
+                label.Length > 0 && !label.StartsWith("Driftwood v", StringComparison.Ordinal) && label != "Your Worlds");
+            if (menu.Seen != selectable)
+                faults.Add($"{menu.Seen} of the menu's rows can be landed on where {selectable} should be");
+
+            foreach (var name in CheckWorlds)
+                if (!labels.Contains(name))
+                    faults.Add($"'{name}' is on disk and the main menu does not list it among the worlds");
         }
         else
         {
@@ -21735,10 +21890,10 @@ public sealed class ClientHost : IDisposable
             var buttons = _uiRowLabels.GetValueOrDefault("start", []);
 
             // The control. Without it "the list does not offer quit" passes on a list of nothing.
-            if (!buttons.Contains("quit"))
-                faults.Add("the menu itself was not carrying 'quit', so the pair below compares nothing");
+            if (!buttons.Contains(QuitRow))
+                faults.Add($"the menu itself was not carrying '{QuitRow}', so the pair below compares nothing");
 
-            foreach (var button in new[] { "quit", "options", "make another world" })
+            foreach (var button in new[] { QuitRow, OptionsRow, CreateWorldRow })
                 if (listed.Contains(button))
                     faults.Add(
                         $"the menu's list of worlds still has '{button}' on it — folding the list "
