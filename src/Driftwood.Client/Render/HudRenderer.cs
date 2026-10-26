@@ -895,6 +895,9 @@ public sealed class HudRenderer : IDisposable
         int screenWidth,
         int screenHeight)
     {
+        _health = vitals.Health;
+        _maximumHealth = vitals.MaximumHealth;
+
         // Every frame starts unclipped: nothing a menu set may reach the next frame's HUD.
         screen.ScrollBars.Clear();
         _clip = NoClip;
@@ -1423,55 +1426,151 @@ public sealed class HudRenderer : IDisposable
     /// </remarks>
     private void CharacterMeters(HudScreen screen, float w, float h, int maximumHealth)
     {
+        // ⛳ Focus alone stays on screen (2026-10-26, the user: level and money "don't need to be on
+        // screen all of the time"). They live on the inventory's character card now; focus is what a
+        // spell is paid from, and that is a thing to see mid-fight.
         if (screen.Character is not { } character) return;
         const float width = 174f;
-        const float badge = 20f;
-        const float label = 6f;
         var left = MathF.Round((w - width) * 0.5f);
         var top = MathF.Round(h - VitalBars.SpellBarFromBottom(maximumHealth) - 17f);
         var stats = character.Statistics;
-        var maxed = character.Level >= CharacterProgression.MaximumLevel;
-        var xp = maxed ? 1f : character.Experience / (float)Math.Max(1, character.ExperienceNeeded);
+        var focusInk = new Vector4(0.44f, 0.68f, 1f, 1f);
         var focus = character.Focus / (float)Math.Max(1, stats.MaximumFocus);
 
+        var words = $"{character.Focus}/{stats.MaximumFocus} focus";
+        Text(words, left + width - TextWidth(words, 6f), top - 2f, 6f, focusInk);
+        Meter(left, top + 5f, width, 4f, focus, focusInk, quarters: false);
+    }
+
+    /// <summary>The player's health as the HUD last drew it, for the character card.</summary>
+    private int _health;
+    private int _maximumHealth;
+
+    /// <summary>How wide the inventory's character card is.</summary>
+    private const float CardWidth = 124f;
+
+    /// <summary>
+    /// The character card beside the inventory (2026-10-26): level and the way to the next, the
+    /// numbers that matter in a fight, the four attributes, and money.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>Moved here from the HUD at the user's word</b>: level and money "don't need to be on
+    /// screen all of the time". Drawn on the panel's right, in the menus' own glass, when there is
+    /// room for it; where there is not — a narrow window, or the recipe book open with the journal's
+    /// bookmarks down that side — a one-line strip under the panel keeps level, progress and money.
+    /// </remarks>
+    private void CharacterCard(
+        ItemRegistry catalogue, Equipment equipment, HudScreen screen, ScreenLayout layout, float w, float h)
+    {
+        if (screen.Character is not { } character) return;
+        var stats = character.Statistics;
+        var maxed = character.Level >= CharacterProgression.MaximumLevel;
+        var xp = maxed ? 1f : character.Experience / (float)Math.Max(1, character.ExperienceNeeded);
         var xpInk = new Vector4(0.72f, 0.86f, 0.38f, 1f);
         var focusInk = new Vector4(0.44f, 0.68f, 1f, 1f);
+        var coins = Math.Max(0L, character.Coins);
+        var (gold, silver, copper) = (coins / 10_000, coins / 100 % 100, coins % 100);
 
-        // The plate: the menus' glass, edged top and bottom.
-        Rect(_plain, left - 3f, top - 12f, width + 6f, 22f, MenuGlass with { W = 0.72f });
-        Rect(_plain, left - 3f, top - 12f, width + 6f, 1f, MenuEdge);
-        Rect(_plain, left - 3f, top + 9f, width + 6f, 1f, MenuEdge);
+        var panelRight = layout.X(ScreenLayout.PanelWidth);
+        var panelTop = layout.Y(0f);
+        var x = panelRight + (_railShown && layout.BookOut ? RailCell + RailProud + 8f : 8f);
+        const float Line = 11f;
+        const float Pad = 8f;
+        var height = Pad + 34f + 26f + 6f + 4 * Line + 6f + 4 * Line + (character.AttributePoints > 0 ? Line : 0f) + 6f + 16f + Pad;
 
-        // The badge: the level in amber on the sidebar's dark, ringed in amber.
-        var bx = left;
-        var by = top - 11f;
-        Rect(_plain, bx, by, badge, badge, MenuSide);
-        Rect(_plain, bx, by, badge, 1f, MenuAmber);
-        Rect(_plain, bx, by + badge - 1f, badge, 1f, MenuAmber with { W = 0.6f });
-        Rect(_plain, bx, by, 1f, badge, MenuAmber with { W = 0.8f });
-        Rect(_plain, bx + badge - 1f, by, 1f, badge, MenuAmber with { W = 0.6f });
-        TextCentred($"{character.Level}", bx + badge * 0.5f, by + 6f, 8f, MenuAmber);
+        if (x + CardWidth > w - 4f || panelTop + height > h - 4f)
+        {
+            CharacterStrip(character, layout, xp, xpInk, gold, silver, copper);
+            return;
+        }
 
-        // The words, over the bars: experience at the left, coin in the middle, focus at the right.
-        var x0 = left + badge + 4f;
-        var span = width - badge - 4f;
-        var xpWords = maxed ? "max level" : $"{character.Experience:N0}/{character.ExperienceNeeded:N0} xp";
-        Text(xpWords, x0, top - 11f, label, xpInk);
+        var y = panelTop;
+        Rect(_plain, x, y, CardWidth, height, MenuGlass with { W = 0.92f });
+        Rect(_plain, x, y, CardWidth, 1f, MenuAmber with { W = 0.7f });
+        Rect(_plain, x, y + height - 1f, CardWidth, 1f, MenuEdge);
+        var left = x + Pad;
+        var inner = CardWidth - Pad * 2f;
+        var pen = y + Pad;
 
-        var focusWords = $"{character.Focus}/{stats.MaximumFocus} focus";
-        Text(focusWords, x0 + span - TextWidth(focusWords, label), top - 11f, label, focusInk);
+        // The level, large, with its rank beside it.
+        Text("LEVEL", left, pen, 6f, InkFaint);
+        Text($"{character.Level}", left, pen + 9f, 16f, MenuAmber);
+        var rank = $"Rank {Roman(character.Rank)}";
+        Text(rank, left + inner - TextWidth(rank, 7f), pen + 15f, 7f, Ink);
+        pen += 34f;
 
-        var coins = CharacterProgression.CoinsText(character.Coins);
-        var coinWidth = TextWidth(coins, label) + 5f;
-        var coinX = MathF.Round(x0 + (span - coinWidth) * 0.5f);
-        Rect(_plain, coinX, top - 10f, 3f, 4f, MenuAmber);
-        Rect(_plain, coinX + 1f, top - 10f, 1f, 1f, new Vector4(1f, 0.92f, 0.70f, 1f));
-        Text(coins, coinX + 5f, top - 11f, label, MenuAmber);
+        // The way to the next one.
+        Text(maxed ? "highest level" : "next level", left, pen, 6f, InkFaint);
+        Meter(left, pen + 8f, inner, 5f, xp, xpInk, quarters: true);
+        var xpWords = maxed ? "" : $"{character.Experience:N0} / {character.ExperienceNeeded:N0} xp";
+        Text(xpWords, left + inner - TextWidth(xpWords, 6f), pen + 16f, 6f, xpInk);
+        pen += 26f;
 
-        // The bars: a sunk track, the fill with a lit top row, experience marked in quarters.
-        Meter(x0, top - 3f, span, 5f, xp, xpInk, quarters: true);
-        Meter(x0, top + 4f, span, 4f, focus, focusInk, quarters: false);
+        Rect(_plain, left, pen + 2f, inner, 1f, MenuEdge);
+        pen += 6f;
+
+        void Row(string label, string value, Vector4 ink)
+        {
+            Text(label, left, pen, 7f, InkDim);
+            Text(value, left + inner - TextWidth(value, 7f), pen, 7f, ink);
+            pen += Line;
+        }
+
+        Row("health", $"{_health}/{_maximumHealth}", new Vector4(0.92f, 0.42f, 0.40f, 1f));
+        Row("focus", $"{character.Focus}/{stats.MaximumFocus}", focusInk);
+        // What is worn and what Resolve adds, together: the number a blow is actually met with.
+        Row("armour", $"{Armour.PointsOf(equipment, catalogue) + stats.Armour}", Ink);
+        Row("attack", $"{stats.WeaponDamage}", Ink);
+
+        Rect(_plain, left, pen + 2f, inner, 1f, MenuEdge);
+        pen += 6f;
+
+        var attributes = character.Attributes;
+        Row("might", $"{attributes.Might}", Ink);
+        Row("finesse", $"{attributes.Finesse}", Ink);
+        Row("insight", $"{attributes.Insight}", Ink);
+        Row("resolve", $"{attributes.Resolve}", Ink);
+        if (character.AttributePoints > 0)
+            Row("to spend", $"{character.AttributePoints}", MenuAmber);
+
+        Rect(_plain, left, pen + 2f, inner, 1f, MenuEdge);
+        pen += 6f;
+
+        // Money as three coins, the way it is counted.
+        var chip = inner / 3f;
+        Coin(left, pen + 2f, gold, new Vector4(0.93f, 0.76f, 0.30f, 1f));
+        Coin(left + chip, pen + 2f, silver, new Vector4(0.80f, 0.82f, 0.86f, 1f));
+        Coin(left + chip * 2f, pen + 2f, copper, new Vector4(0.80f, 0.50f, 0.30f, 1f));
     }
+
+    /// <summary>One coin of the money row: a round mark in its metal and the count beside it.</summary>
+    private void Coin(float x, float y, long count, Vector4 metal)
+    {
+        Rect(_plain, x + 1f, y, 4f, 6f, metal);
+        Rect(_plain, x, y + 1f, 6f, 4f, metal);
+        Rect(_plain, x + 1f, y + 1f, 2f, 1f, Vector4.Lerp(metal, Vector4.One, 0.5f));
+        Text($"{count:N0}", x + 9f, y - 1f, 7f, Ink);
+    }
+
+    /// <summary>The card folded to one line under the panel, for when there is no room beside it.</summary>
+    private void CharacterStrip(
+        CharacterProgression character, ScreenLayout layout, float xp, Vector4 xpInk, long gold, long silver, long copper)
+    {
+        var x = layout.X(0f);
+        var width = layout.Size(ScreenLayout.PanelWidth);
+        var y = layout.Y(ScreenLayout.PanelHeight) + 4f;
+        Rect(_plain, x, y, width, 16f, MenuGlass with { W = 0.9f });
+        var level = $"Level {character.Level}";
+        Text(level, x + 5f, y + 5f, 7f, MenuAmber);
+        var money = CharacterProgression.CoinsText(gold * 10_000 + silver * 100 + copper);
+        var moneyWidth = TextWidth(money, 7f);
+        Text(money, x + width - moneyWidth - 5f, y + 5f, 7f, Ink);
+        var barLeft = x + 5f + TextWidth(level, 7f) + 8f;
+        var barWidth = width - (barLeft - x) - moneyWidth - 18f;
+        if (barWidth > 20f) Meter(barLeft, y + 6f, barWidth, 4f, xp, xpInk, quarters: true);
+    }
+
+    private static string Roman(int rank) => rank switch { 1 => "I", 2 => "II", 3 => "III", 4 => "IV", _ => $"{rank}" };
 
     /// <summary>One bar of the character meters: a sunk track, its fill, and a lit top row.</summary>
     private void Meter(float x, float y, float width, float height, float share, Vector4 ink, bool quarters)
@@ -4735,6 +4834,9 @@ public sealed class HudRenderer : IDisposable
             JournalTabs(screen, layout, 12f, layout.OriginY);
         else if (screen.TabNames.Length > 1)
             JournalRail(catalogue, screen, layout, w);
+
+        // ⛳ The character card (2026-10-26): on the player's own inventory, not a station's.
+        if (kind == PanelKind.Player) CharacterCard(catalogue, equipment, screen, layout, w, h);
 
         // The button that folds the book out, on whichever panel has one.
         foreach (var zone in layout.Zones)
