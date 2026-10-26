@@ -528,6 +528,82 @@ public static class CreatureDesigns
 
     // ⚠ Last in the class: the kits above are static fields, and a table built before them would
     // capture nothing.
+    // ── The Emberdeep's own (2026-10-25) ───────────────────────────────────────────────────
+
+    // Charred bone, sockets that still glow.
+    private static readonly BoneKit CharredKit = new(new(58, 56, 56), new(196, 84, 36, 0f), null, null, null);
+
+    /// <summary>
+    /// The cinderwisp: a head of hot brass with dark-lidded eyes and a grim mouth, over rods that are
+    /// brightest at the middle — the reference's blaze, in our ember register.
+    /// </summary>
+    private static Ink? Cinderwisp(DesignTexel t)
+    {
+        var brass = new Ink(228, 164, 56, 0.07f);
+        var scorch = new Ink(150, 86, 30, 0.06f);
+
+        if (t.Bone == "head")
+        {
+            var skin = Patch(t, 61) > 0.7f ? scorch : Hash(t, 62) > 0.85f ? brass.Lighter(0.18f) : brass;
+            if (!t.Front) return skin;
+
+            // A heavy dark brow over two lit eyes, and a short dark mouth.
+            if (t.Y == 2 && t.X is >= 1 and <= 6) return scorch.Darker(0.35f);
+            if (t.Y is 3 or 4 && t.X is 1 or 2 or 5 or 6) return t.Y == 3 ? new Ink(64, 30, 12, 0f) : new Ink(255, 226, 120, 0f);
+            if (t.Y == 6 && t.X is >= 2 and <= 5) return new Ink(70, 32, 14, 0f);
+            return skin;
+        }
+
+        // The rods: white-hot in the middle of their length, darker to the ends.
+        var middle = MathF.Abs(t.Y - (t.H - 1) * 0.5f) / MathF.Max(1f, t.H * 0.5f);
+        var rod = new Ink(252, 206, 92, 0.05f);
+        return middle < 0.35f ? rod.Lighter(0.3f) : middle > 0.8f ? rod.Darker(0.32f) : rod;
+    }
+
+    /// <summary>
+    /// The ashwail: a great pale head, eyes shut, a dark open mouth, and the tear tracks it is named
+    /// for; its tentacles are the same pale skin, darkening to the tips.
+    /// </summary>
+    private static Ink? Ashwail(DesignTexel t)
+    {
+        var skin = new Ink(234, 232, 226, 0.04f);
+        var shade = skin.Darker(0.12f);
+
+        if (t.Bone == "head")
+        {
+            var body = Hash(t, 71) > 0.9f ? shade : skin;
+            if (t.Bottom) return shade;
+            if (!t.Front) return body;
+
+            // Shut eyes, long tear tracks under them, and the mouth low and wide.
+            if (t.Y == 6 && t.X is >= 3 and <= 5 or >= 10 and <= 12) return new Ink(40, 40, 44, 0f);
+            if (t.Y is >= 7 and <= 10 && t.X is 4 or 11) return new Ink(150, 176, 196, 0f);
+            if (t.Y is >= 11 and <= 13 && t.X is >= 6 and <= 9) return t.Y == 11 ? new Ink(60, 56, 58, 0f) : new Ink(24, 22, 24, 0f);
+            return body;
+        }
+
+        // Tentacles: pale, shading to the tip.
+        return t.Y >= t.H - 2 ? shade.Darker(0.1f) : Hash(t, 72) > 0.85f ? shade : skin;
+    }
+
+    /// <summary>
+    /// The ember slime: black crust split by orange cracks, two hot eyes on the front of the third
+    /// and fourth slices — where the reference's net puts them — and a core that glows.
+    /// </summary>
+    private static Ink? EmberSlime(DesignTexel t)
+    {
+        if (t.Bone == "core") return Hash(t, 81) > 0.7f ? new Ink(255, 214, 96, 0f) : new Ink(250, 160, 42, 0.04f);
+
+        var crust = new Ink(54, 24, 18, 0.08f);
+        var crack = new Ink(236, 104, 30, 0.06f);
+
+        if (t.Front && t.Bone is "cube2" or "cube3" && t.X is 1 or 2 or 5 or 6)
+            return t.Bone == "cube2" ? new Ink(255, 214, 80, 0f) : new Ink(214, 120, 30, 0f);
+
+        if (t.Top && t.Bone == "cube0") return Patch(t, 82) > 0.72f ? crack : crust;
+        return Hash(t, 83) > 0.78f || Patch(t, 84) > 0.86f ? crack : crust;
+    }
+
     private static readonly Dictionary<string, Func<DesignTexel, Ink?>> Designs = new(StringComparer.Ordinal)
     {
         ["zombie"] = t => Walker(t, ZombieKit),
@@ -544,5 +620,9 @@ public static class CreatureDesigns
         ["witch"] = Witch,
         ["silverfish"] = Silverfish,
         ["phantom"] = Phantom,
+        ["cinderwisp"] = Cinderwisp,
+        ["ashwail"] = Ashwail,
+        ["ember_slime"] = EmberSlime,
+        ["charred_skeleton"] = t => Bones(t, CharredKit),
     };
 }

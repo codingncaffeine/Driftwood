@@ -167,6 +167,18 @@ public static class CreatureSet
         new("phantom", "phantom", CreatureFamily.Hostile, "phantom",
             ["textures/entity/phantom.png"]),
 
+        // ⛳ The Emberdeep's own (2026-10-25), the reference's Nether dark on its nets and our names:
+        // a blaze is a cinderwisp, a ghast an ashwail, a magma cube an ember slime, a wither
+        // skeleton a charred one. The skeletons and sheets are theirs, so a pack dresses all four.
+        new("cinderwisp", "cinderwisp", CreatureFamily.Hostile, "blaze",
+            ["textures/entity/blaze.png"]),
+        new("ashwail", "ashwail", CreatureFamily.Hostile, "ghast",
+            ["textures/entity/ghast/ghast.png", "textures/entity/ghast.png"]),
+        new("ember_slime", "ember slime", CreatureFamily.Hostile, "lavaslime",
+            ["textures/entity/slime/magmacube.png", "textures/entity/magmacube.png"]),
+        new("charred_skeleton", "charred skeleton", CreatureFamily.Hostile, "skeleton.wither",
+            ["textures/entity/skeleton/wither_skeleton.png"]),
+
         // P14 residents use the folded-arm villager net. Pack paths are observational bridges;
         // Driftwood ships complete geometry and paint when a pack lacks the layered base art.
         new("shorewright", "shorewright", CreatureFamily.Inhabitant, "villager",
@@ -197,6 +209,9 @@ public static class CreatureSet
         ["bat"] = CreatureMove.Fly,
         ["squid"] = CreatureMove.Swim,
         ["phantom"] = CreatureMove.Fly,
+        ["cinderwisp"] = CreatureMove.Fly,
+        ["ashwail"] = CreatureMove.Fly,
+        ["ember_slime"] = CreatureMove.Hop,
     };
 
     public static CreatureMove MoveFor(string kind) => Moves.GetValueOrDefault(kind, CreatureMove.Walk);
@@ -227,6 +242,13 @@ public static class CreatureSet
         // The reference draws its cave spider at seven tenths of the spider.
         ["cave_spider"] = 0.7f,
         ["starwarden"] = 1.22f,
+
+        // The reference draws its wither skeleton at six fifths, its magma cube by size class like
+        // the slime, and its ghast at four and a half — ours at a little over two, a body that still
+        // fits the hollows it lives in.
+        ["charred_skeleton"] = 1.2f,
+        ["ember_slime"] = 1f,
+        ["ashwail"] = 2.4f,
     };
 
     public static float DrawScaleFor(string kind) => DrawScales.GetValueOrDefault(kind, 1f);

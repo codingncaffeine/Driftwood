@@ -706,7 +706,15 @@ public static class StarterBlocks
     public const ushort LayerRawSalmon = LayerApple + 12;
     public const ushort LayerCookedSalmon = LayerApple + 13;
 
-    public const int LayerCount = LayerCookedSalmon + 1;
+    /// <summary>The Emberdeep's leavings (2026-10-25): rod and dust, tear, cream, skull, and the charge.</summary>
+    public const ushort LayerCinderRod = LayerCookedSalmon + 1;
+    public const ushort LayerCinderDust = LayerCookedSalmon + 2;
+    public const ushort LayerWailTear = LayerCookedSalmon + 3;
+    public const ushort LayerEmberCream = LayerCookedSalmon + 4;
+    public const ushort LayerCharredSkull = LayerCookedSalmon + 5;
+    public const ushort LayerFireCharge = LayerCookedSalmon + 6;
+
+    public const int LayerCount = LayerFireCharge + 1;
 
     /// <summary>One anvil's name, by how worn it is and which way it lies.</summary>
     /// <remarks>

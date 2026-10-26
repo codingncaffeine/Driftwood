@@ -68,6 +68,9 @@ public enum ItemUse
     TrialKey,
     CrownKey,
     Keepsake,
+
+    /// <summary>Thrown as a fireball through the projectile pool — the fire charge (2026-10-25).</summary>
+    ThrownFire,
 }
 
 /// <summary>

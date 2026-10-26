@@ -854,6 +854,20 @@ public static class StarterItems
             Use = ItemUse.ThrownFarstep,
         });
 
+        // ⛳ The Emberdeep's leavings (2026-10-25), the reference's Nether drops by our names. The
+        // rod burns two minutes in a furnace as the reference's does, and grinds to dust; the
+        // charge is thrown as a fireball.
+        Loose(items, "cinder_rod", "cinder rod", StarterBlocks.LayerCinderRod, burn: 120f);
+        Loose(items, "cinder_dust", "cinder dust", StarterBlocks.LayerCinderDust);
+        Loose(items, "wail_tear", "wail tear", StarterBlocks.LayerWailTear);
+        Loose(items, "ember_cream", "ember cream", StarterBlocks.LayerEmberCream);
+        Loose(items, "charred_skull", "charred skull", StarterBlocks.LayerCharredSkull);
+        items.Register(new ItemType
+        {
+            Name = "fire_charge", Label = "fire charge", IconLayer = StarterBlocks.LayerFireCharge,
+            Use = ItemUse.ThrownFire,
+        });
+
         // The rabbit's pair and its hide. ⚠ Standalone rather than rows in Meats, because that
         // table's icon layers are a fixed run mid-numbering — see StarterBlocks.LayerRawRabbit.
         // The chicken's own feed values: a small animal is a light meal.
@@ -1230,6 +1244,16 @@ public static class StarterItems
         // ⛳ #93's first new drop. A component the magic arc (M1) is waiting on, obtainable the
         // day the slime is — the string-and-bone posture exactly.
         new CreatureDrops.Rule("slime", DropTrigger.Killed, "slimeball", 1, 2),
+
+        // The Emberdeep's (2026-10-25). The ember slime's cream comes off the bigger ones only —
+        // the host passes over the smallest, as the reference's does.
+        new CreatureDrops.Rule("cinderwisp", DropTrigger.Killed, "cinder_rod", 0, 1),
+        new CreatureDrops.Rule("ashwail", DropTrigger.Killed, "wail_tear", 0, 1),
+        new CreatureDrops.Rule("ashwail", DropTrigger.Killed, "gunpowder", 0, 2),
+        new CreatureDrops.Rule("ember_slime", DropTrigger.Killed, "ember_cream", 0, 1),
+        new CreatureDrops.Rule("charred_skeleton", DropTrigger.Killed, "coal", 0, 1),
+        new CreatureDrops.Rule("charred_skeleton", DropTrigger.Killed, "bone", 0, 2),
+        new CreatureDrops.Rule("charred_skeleton", DropTrigger.Killed, "charred_skull", 1, 1, Chance: 0.025f),
 
         // ⚠ Only for a crawler KILLED before it pops. The blast is not a death — it hands out a
         // crater, not components — so getting the powder means winning the sprint the fuse starts.

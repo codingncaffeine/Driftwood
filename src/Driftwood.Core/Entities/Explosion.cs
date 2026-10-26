@@ -44,10 +44,11 @@ public static class Explosion
     /// A cell's hardness, or null for one the blast cannot touch — air, a fluid, the unbreakable.
     /// The caller owns the registry; this owns the sphere.
     /// </param>
-    public static List<(int X, int Y, int Z)> Carve(Vector3 centre, Func<int, int, int, float?> hardness)
+    public static List<(int X, int Y, int Z)> Carve(
+        Vector3 centre, Func<int, int, int, float?> hardness, float radius = BlockRadius)
     {
         var carved = new List<(int, int, int)>();
-        var reach = (int)MathF.Ceiling(BlockRadius);
+        var reach = (int)MathF.Ceiling(radius);
 
         var cx = (int)MathF.Floor(centre.X);
         var cy = (int)MathF.Floor(centre.Y);
@@ -60,7 +61,7 @@ public static class Explosion
             // The cell's middle against the blast's own point, so the sphere is a sphere rather
             // than a rounded box of index arithmetic.
             var at = new Vector3(x + 0.5f, y + 0.5f, z + 0.5f);
-            if (Vector3.DistanceSquared(at, centre) > BlockRadius * BlockRadius) continue;
+            if (Vector3.DistanceSquared(at, centre) > radius * radius) continue;
 
             if (hardness(x, y, z) is not { } rock) continue;
             if (rock < 0f || rock > HardnessLimit) continue;
@@ -76,13 +77,17 @@ public static class Explosion
     /// Linear from the full figure at the centre to nothing at the edge — a curve would be more
     /// physical and would say nothing a player can read; "closer is worse, evenly" is legible.
     /// </remarks>
-    public static int HurtAt(Vector3 centre, Vector3 at)
+    public static int HurtAt(Vector3 centre, Vector3 at, float strength = 1f)
     {
+        var radius = HurtRadius * strength;
         var apart = Vector3.Distance(centre, at);
-        if (apart >= HurtRadius) return 0;
+        if (apart >= radius) return 0;
 
-        return (int)MathF.Round(MaxHalfHearts * (1f - apart / HurtRadius));
+        return (int)MathF.Round(MaxHalfHearts * strength * (1f - apart / radius));
     }
+
+    /// <summary>An ashwail bolt's burst: the reference's ghast fireball is a third of a creeper's power.</summary>
+    public const float WailStrength = 0.5f;
 
     /// <summary>
     /// Checks the blast digs a sphere and only a sphere, respects the rock it cannot break, and

@@ -4778,6 +4778,84 @@ public static class TileGen
         return t;
     }
 
+    /// <summary>
+    /// A skull face-on: a domed crown, two deep sockets, a nose notch and a row of teeth — the
+    /// charred skeleton's, in whatever bone and socket colours it is asked for.
+    /// </summary>
+    public static byte[] IconSkull(int seed, byte r, byte g, byte b, byte sr, byte sg, byte sb)
+    {
+        var t = new byte[BytesPerTile];
+        string[] shape =
+        [
+            "....######....",
+            "..##########..",
+            ".############.",
+            "##############",
+            "##############",
+            "##ooo####ooo##",
+            "##ooo####ooo##",
+            "##ooo####ooo##",
+            "######oo######",
+            ".############.",
+            "..#.#.#.#.#...",
+            "..##########..",
+        ];
+
+        for (var y = 0; y < shape.Length; y++)
+        for (var x = 0; x < shape[y].Length; x++)
+        {
+            var c = shape[y][x];
+            if (c == '.') continue;
+            if (c == 'o')
+            {
+                Put(t, x + 1, y + 2, sr, sg, sb, 255);
+                continue;
+            }
+
+            var d = (x + y < 9 ? 28 : x + y > 18 ? -26 : 0) + (int)((Noise(x, y, seed) * 2f - 1f) * 8f);
+            Put(t, x + 1, y + 2, Clamp(r + d), Clamp(g + d), Clamp(b + d), 255);
+        }
+
+        return t;
+    }
+
+    /// <summary>A dark ball split by bright cracks — the fire charge, and anything molten under a crust.</summary>
+    public static byte[] IconCharge(int seed, byte r, byte g, byte b, byte cr, byte cg, byte cb)
+    {
+        var t = IconLump(seed, r, g, b);
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var i = (y * Size + x) * 4;
+            if (t[i + 3] == 0) continue;
+            var crack = Noise(x, y, seed + 41) > 0.82f || Noise(x >> 1, y >> 1, seed + 43) > 0.9f;
+            if (crack) Put(t, x, y, cr, cg, cb, 255);
+        }
+
+        return t;
+    }
+
+    /// <summary>A single drop, point up — the ashwail's tear.</summary>
+    public static byte[] IconTear(int seed, byte r, byte g, byte b)
+    {
+        var t = new byte[BytesPerTile];
+        for (var y = 2; y < 14; y++)
+        {
+            // A point at the top widening to a round foot.
+            var half = y < 8 ? (y - 2) * 0.55f : MathF.Sqrt(MathF.Max(0f, 16f - (y - 9.5f) * (y - 9.5f))) * 0.95f;
+            for (var x = 0; x < Size; x++)
+            {
+                var dx = x - 7.5f;
+                if (MathF.Abs(dx) > half) continue;
+                var d = (int)(-dx * 6f - (y - 8) * 3f) + (int)((Noise(x, y, seed) * 2f - 1f) * 6f);
+                Put(t, x, y, Clamp(r + d), Clamp(g + d), Clamp(b + d), 230);
+            }
+        }
+
+        Put(t, 6, 9, Clamp(r + 60), Clamp(g + 60), Clamp(b + 60), 255);
+        return t;
+    }
+
     /// <summary>A cast bar with a bevel — what comes out of a furnace.</summary>
     public static byte[] IconIngot(int seed, byte r, byte g, byte b)
     {

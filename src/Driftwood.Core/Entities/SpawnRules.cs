@@ -188,7 +188,33 @@ public static class SpawnRules
     /// where the light has never been.
     /// </remarks>
     public static IReadOnlyList<MonsterEntry> MonstersFor(Biome biome, int y) =>
-        y < DeepLine ? DeepOf(MonstersFor(biome)) : MonstersFor(biome);
+        y < TerrainGenerator.EmberdeepTop ? Emberdeep
+        : y < DeepLine ? DeepOf(MonstersFor(biome)) : MonstersFor(biome);
+
+    /// <summary>
+    /// The Emberdeep's own dark, which is not the surface's whatever biome is overhead.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ The reference's Nether, ours: the slime that lives in lava commonest, the big floater of
+    /// the wide hollows next, the charred skeleton in its bands, the cinderwisp rarer in the open
+    /// (its home is the Emberhold), and the odd farwalker, as the reference's Nether keeps endermen.
+    /// </remarks>
+    public static readonly MonsterEntry[] Emberdeep =
+    [
+        new("ember_slime", 100, 2, 3),
+        new("ashwail", 40, 1, 1),
+        new("charred_skeleton", 30, 1, 3),
+        new("cinderwisp", 15, 1, 2),
+        new("farwalker", 5, 1, 2),
+    ];
+
+    /// <summary>
+    /// Kinds born of the Emberdeep, which stand in its glow: the lava lights every hollow down
+    /// there, so asking for darkness would ask for nothing at all. The reference lets its Nether
+    /// spawn by any block light for the same reason.
+    /// </summary>
+    public static bool EmberNative(string kind) =>
+        kind is "ember_slime" or "ashwail" or "charred_skeleton" or "cinderwisp";
 
     /// <summary>Below this the deep's own spider joins the table.</summary>
     public const int DeepLine = 0;

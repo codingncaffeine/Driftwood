@@ -1755,10 +1755,33 @@ public sealed class ClientHost : IDisposable
             (x, z) => _terrain.BiomeAt(x, z));
 
         foreach (var placed in _monsters.Step(dt, _spawnWorld, _player.Position, Daylight, living, _monsterKinds))
-            _herd.SpawnAt(placed.Kind, placed.Position, placed.Yaw);
+            _herd.SpawnAt(placed.Kind, placed.Position, placed.Yaw, BulkFor(placed));
     }
 
     private float _monsterReport = 10f;
+
+    /// <summary>
+    /// The size an ember slime is born at: the reference's one, two or four, the biggest only where
+    /// it has the room. Every other kind is one.
+    /// </summary>
+    private int BulkFor(MonsterPlacement placed)
+    {
+        if (placed.Kind.Name != "ember_slime") return 1;
+
+        var bulk = (int)Math.Pow(2, Random.Shared.Next(3));
+        for (; bulk > 1; bulk /= 2)
+        {
+            var span = placed.Kind.Size.X * bulk;
+            var fits = true;
+            for (var x = (int)MathF.Floor(placed.Position.X - span / 2); x <= (int)MathF.Floor(placed.Position.X + span / 2) && fits; x++)
+            for (var z = (int)MathF.Floor(placed.Position.Z - span / 2); z <= (int)MathF.Floor(placed.Position.Z + span / 2) && fits; z++)
+            for (var y = (int)MathF.Floor(placed.Position.Y); y <= (int)MathF.Floor(placed.Position.Y + span) && fits; y++)
+                fits = !SolidForCreature(x, y, z);
+            if (fits) break;
+        }
+
+        return bulk;
+    }
 
     /// <summary>True where a creature's feet would stand in the dark.</summary>
     /// <remarks>
@@ -3522,6 +3545,9 @@ public sealed class ClientHost : IDisposable
 
     private bool _draggingMap;
     private Vector2 _mapDragOrigin;
+
+    /// <summary>Ashwails a returned bolt has hurt, for the achievement that asks it be their own that kills them.</summary>
+    private readonly HashSet<string> _returnedTo = new(StringComparer.Ordinal);
 
     private bool _draggingAchievements;
     private Vector2 _achievementDragOrigin;
@@ -9565,6 +9591,9 @@ public sealed class ClientHost : IDisposable
 
                 // The cave spider's bite is the reference's poison: seven seconds of it.
                 if (blow.Kind == "cave_spider") Ail(Ailment.Poison, 7f);
+
+                // And the charred skeleton's blade is its wither: ten seconds.
+                if (blow.Kind == "charred_skeleton") Ail(Ailment.Withering, 10f);
             }
 
             _audio?.Play(Pick(CreatureSounds.Blows), blow.Position, 0.62f, Wobble());
@@ -9579,6 +9608,16 @@ public sealed class ClientHost : IDisposable
         // they test the player and never the herd.
         foreach (var shot in _herd.TakeShots())
         {
+            // The Emberdeep's fire: a cinderwisp's quick fireball, an ashwail's slow bolt.
+            if (shot.Ember || shot.Wail)
+            {
+                if (_projectiles.Spawn(shot.Ember ? ProjectileKind.Ember : ProjectileKind.WailBolt,
+                        ProjectileOwner.Creature, shot.From, shot.Direction,
+                        shot.Ember ? ProjectileSystem.EmberSpeed : ProjectileSystem.WailBoltSpeed, 0f, shot.HalfHearts))
+                    _audio?.Play(Pick(CreatureSounds.Fireballs), shot.From, shot.Wail ? 1f : 0.7f, shot.Wail ? 0.9f : 1.1f);
+                continue;
+            }
+
             if (shot.Flask)
             {
                 _projectiles.Spawn(ProjectileKind.Flask, ProjectileOwner.Creature, shot.From, shot.Direction,
@@ -9671,6 +9710,22 @@ public sealed class ClientHost : IDisposable
             _audio?.Play(Pick(CreatureSounds.Deaths), death.Position, 0.68f, Wobble());
 
             var contributed = _playerContributions.Remove(death.RuntimeId);
+            if (_returnedTo.Remove(death.RuntimeId) && contributed)
+                Achieve(AchievementEvents.Returned, death.Kind);
+
+            // ⛳ An ember slime comes apart into two to four of the size below, as the reference's do.
+            if (death.Kind == "ember_slime" && death.Bulk > 1 && KindFor("ember_slime") is { } smaller)
+            {
+                var pieces = 2 + Random.Shared.Next(3);
+                for (var i = 0; i < pieces; i++)
+                {
+                    var off = new Vector3((float)Random.Shared.NextDouble() - 0.5f, 0f, (float)Random.Shared.NextDouble() - 0.5f)
+                              * death.Bulk * 0.4f;
+                    var at = death.Position + off - new Vector3(0f, death.Bulk * 0.2f, 0f);
+                    _herd.SpawnAt(smaller, at, (float)(Random.Shared.NextDouble() * 360.0), death.Bulk / 2).Provoked = true;
+                }
+            }
+
             if (contributed)
             {
                 Achieve(AchievementEvents.Kill, death.Kind);
@@ -9717,7 +9772,7 @@ public sealed class ClientHost : IDisposable
             // read the tool here would hand out more leather to whoever happened to be holding a
             // sword when the last one landed. ⛔ A young one leaves NOTHING: a calf that dropped
             // leather would make the nursery the farm, and killing calves must not pay.
-            if (death.Grown)
+            if (death.Grown && !(death.Kind == "ember_slime" && death.Bulk == 1))
             {
                 foreach (var left in _creatureDropTable.Roll(
                              death.Kind, DropTrigger.Killed, null, death.Shorn, Random.Shared))
@@ -9954,7 +10009,7 @@ public sealed class ClientHost : IDisposable
         {
             if (!_projectiles.ActiveAt(i)) continue;
             var shot = _projectiles.SnapshotAt(i);
-            if (shot.Kind != ProjectileKind.FireBolt) continue;
+            if (shot.Kind is not (ProjectileKind.FireBolt or ProjectileKind.Ember or ProjectileKind.WailBolt)) continue;
             SpellParticleEffects.Emit(
                 _particles, SpellParticleId.FireBolt, SpellParticlePhase.Travel,
                 shot.Position - shot.Velocity * MathF.Min(dt, 0.05f), shot.Position, _character.Rank);
@@ -9975,6 +10030,41 @@ public sealed class ClientHost : IDisposable
             {
                 FarstepTo(impact);
                 continue;
+            }
+
+            // ⛳ An ashwail's bolt bursts wherever it lands — on rock, on the player, on a creature.
+            // Sent back by a swing it is the player's, and so is what it kills.
+            if (impact.Kind == ProjectileKind.WailBolt)
+            {
+                var byPlayer = impact.Owner == ProjectileOwner.Player;
+                if (impact.Creature is { } burst && _herd is not null)
+                {
+                    _herd.Hurt(burst, 6, impact.Position - impact.Velocity);
+                    if (byPlayer)
+                    {
+                        _playerContributions.Add(burst.RuntimeId);
+                        if (burst.Kind == "ashwail") _returnedTo.Add(burst.RuntimeId);
+                    }
+                }
+                if (impact.Player) HurtPlayer(6);
+                Detonate(impact.Position - Vector3.Normalize(impact.Velocity) * 0.3f, Explosion.WailStrength, byPlayer);
+                continue;
+            }
+
+            // A fireball sets alight whoever it finds; on rock it puffs out.
+            if (impact.Kind == ProjectileKind.Ember)
+            {
+                SpellParticleEffects.Emit(
+                    _particles, SpellParticleId.FireBolt, SpellParticlePhase.Impact,
+                    impact.Position - impact.Velocity * 0.03f, impact.Position, 1);
+                if (impact.Player)
+                {
+                    HurtPlayer(impact.Damage);
+                    _vitals.Ignite(5f);
+                    Rumble(0.5f, 0.8f, 110);
+                    continue;
+                }
+                if (impact.Creature is null) continue;
             }
 
             if (impact.Kind == ProjectileKind.FireBolt)
@@ -10096,6 +10186,7 @@ public sealed class ClientHost : IDisposable
             {
                 Ailment.Poison => "poisoned",
                 Ailment.Slowness => "slowed",
+                Ailment.Withering => "withering",
                 _ => "weakened",
             }, null);
         return 0;
@@ -10232,9 +10323,9 @@ public sealed class ClientHost : IDisposable
         }
     }
 
-    private void Detonate(Vector3 centre)
+    private void Detonate(Vector3 centre, float strength = 1f, bool byPlayer = false)
     {
-        _audio?.Play(Pick(CreatureSounds.Explosions), centre, 1f, Wobble());
+        _audio?.Play(Pick(CreatureSounds.Explosions), centre, strength < 1f ? 0.8f : 1f, Wobble());
 
         var carved = Explosion.Carve(centre, (x, y, z) =>
         {
@@ -10248,7 +10339,7 @@ public sealed class ClientHost : IDisposable
             if (type.Unbreakable || (type.Fluid != FluidKind.None && !type.Waterlogged)) return null;
 
             return type.Hardness;
-        });
+        }, Explosion.BlockRadius * strength);
 
         foreach (var (x, y, z) in carved)
         {
@@ -10284,10 +10375,10 @@ public sealed class ClientHost : IDisposable
 
         foreach (var (x, y, z) in carved) ShedUnsupported(x, y, z);
 
-        _particles.DeathPuff(centre, 2.4f, StarterBlocks.LayerSmoke);
+        _particles.DeathPuff(centre, 2.4f * strength, StarterBlocks.LayerSmoke);
 
         // Whoever was standing in it — the player from their middle, every animal from its own.
-        var hurt = Explosion.HurtAt(centre, _player.Position + new Vector3(0f, 0.9f, 0f));
+        var hurt = Explosion.HurtAt(centre, _player.Position + new Vector3(0f, 0.9f, 0f), strength);
         if (hurt > 0)
         {
             HurtPlayer(hurt);
@@ -10300,8 +10391,14 @@ public sealed class ClientHost : IDisposable
             {
                 if (!creature.Alive) continue;
 
-                var toll = Explosion.HurtAt(centre, creature.Middle);
-                if (toll > 0) _herd.Hurt(creature, toll, centre);
+                var toll = Explosion.HurtAt(centre, creature.Middle, strength);
+                if (toll <= 0) continue;
+                _herd.Hurt(creature, toll, centre);
+                if (byPlayer)
+                {
+                    _playerContributions.Add(creature.RuntimeId);
+                    if (creature.Kind == "ashwail") _returnedTo.Add(creature.RuntimeId);
+                }
             }
         }
     }
@@ -10818,6 +10915,13 @@ public sealed class ClientHost : IDisposable
         _holdingBreak = true;
         _lastStrikeWasBreak = true;
         _animator.Strike();
+
+        // ⛳ A swing at an ashwail's bolt sends it back, the reference's own trick.
+        if (_walking && _projectiles.TryDeflect(_camera.Position, _camera.Forward, 4f))
+        {
+            _audio?.Play(Pick(CreatureSounds.Blows), _camera.Position + _camera.Forward * 2f, 0.7f, 0.8f);
+            Rumble(0.4f, 0.6f, 90);
+        }
     }
 
     /// <summary>The using hand goes down: a use, a placing or the held thing's own use.</summary>
@@ -12724,6 +12828,13 @@ public sealed class ClientHost : IDisposable
             _vitals.Hurt(poisoned, armoured: false, cause: VitalsCause.Poison);
             _audio?.Play(Pick(CreatureSounds.Blows), _viewPosition, 0.35f, 1.3f);
         }
+
+        // The wither's own half hearts, which — unlike poison's — may be the last.
+        if (_ailments.Withered > 0)
+        {
+            _vitals.Hurt(_ailments.Withered, armoured: false);
+            _audio?.Play(Pick(CreatureSounds.Blows), _viewPosition, 0.35f, 0.8f);
+        }
         _player.SpeedScale = _ailments.SpeedScale;
         _awake += dt;
 
@@ -13232,6 +13343,19 @@ public sealed class ClientHost : IDisposable
                 _inventory.SpendHeld();
                 _audio?.Play(Pick(CreatureSounds.Blinks), origin, 0.55f, 1.08f);
                 Rumble(0.08f, 0.14f, 38);
+                return true;
+
+            case ItemUse.ThrownFire:
+                if (!_projectiles.Spawn(ProjectileKind.Ember, ProjectileOwner.Player, origin, _camera.Forward,
+                        ProjectileSystem.EmberSpeed, 0f, CreatureHerd.EmberDamage))
+                {
+                    Notice("too many shots in flight", held);
+                    return true;
+                }
+
+                _inventory.SpendHeld();
+                _audio?.Play(Pick(CreatureSounds.Fireballs), origin, 0.6f, 1.1f);
+                Rumble(0.1f, 0.2f, 40);
                 return true;
 
             case ItemUse.Brush:
@@ -15042,6 +15166,12 @@ public sealed class ClientHost : IDisposable
         new(1420, "34-achievement-toasts", "stick", ViewMode.First, false, Achievements: 1),
         new(1450, "35-achievements", "stick", ViewMode.First, false, ShotScreen.Achievements, Achievements: 2),
         new(1480, "36-achievements-adventure", "stick", ViewMode.First, false, ShotScreen.Achievements, Achievements: 3),
+
+        // ⛳ The Emberdeep's own (2026-10-25), stood up like the overworld's dark. The ember slime at
+        // its biggest, beside one at its smallest; the ashwail alone, because it fills a frame.
+        new(1640, "37-emberdeep", "stick", ViewMode.First, false,
+            Lineup: ["cinderwisp", "ember_slime*4", "ember_slime", "charred_skeleton", "charred_skeleton"]),
+        new(1800, "38-ashwail", "stick", ViewMode.First, false, Lineup: ["ashwail"]),
     ];
 
     /// <summary>
@@ -15180,6 +15310,7 @@ public sealed class ClientHost : IDisposable
                 OpenForShot(shot.Screen);
                 WearForShot(shot.Wears, shot.Offhand, shot.Guard);
                 if (shot.Achievements > 0) EarnForShot(shot.Achievements);
+                else _toasts.Clear();
             }
 
             // The hover has to wait for the page to be laid out, which is a frame after it opens.
@@ -15271,13 +15402,17 @@ public sealed class ClientHost : IDisposable
         var left = origin.X - (kinds.Length - 1) * spacing * 0.5f;
         for (var i = 0; i < kinds.Length; i++)
         {
-            if (KindFor(kinds[i]) is not { } kind) continue;
+            // "name*size" stands an ember slime up at a size class.
+            var parts = kinds[i].Split('*');
+            var bulk = parts.Length > 1 && int.TryParse(parts[1], out var asked) ? asked : 1;
+            if (KindFor(parts[0]) is not { } kind) continue;
             var x = left + i * spacing;
             var z = origin.Z + 7f;
             var y = CreatureHerd.TryGround(SolidForCreature, (int)MathF.Floor(x), (int)MathF.Floor(z),
                 (int)origin.Y + 6, out var ground) ? ground : origin.Y;
-            if (kinds[i] == "phantom") y += 1.5f;
-            _lineup.Add(_herd.SpawnAt(kind, new Vector3(x, y, z), -90f));
+            if (kinds[i] is "phantom" or "cinderwisp") y += 1.5f;
+            if (kinds[i] == "ashwail") { z += 6f; y += 1f; }
+            _lineup.Add(_herd.SpawnAt(kind, new Vector3(x, y, z), -90f, bulk));
             _lineupAt.Add(new Vector3(x, y, z));
         }
 

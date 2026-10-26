@@ -708,6 +708,13 @@ public static class BlockTextureSet
         new("cooked_cod", "textures/item/cooked_cod.png", true, "textures/items/fish_cod_cooked.png"),
         new("raw_salmon", "textures/item/salmon.png", true, "textures/items/fish_salmon_raw.png"),
         new("cooked_salmon", "textures/item/cooked_salmon.png", true, "textures/items/fish_salmon_cooked.png"),
+        new("cinder_rod", "textures/item/blaze_rod.png", true, "textures/items/blaze_rod.png"),
+        new("cinder_dust", "textures/item/blaze_powder.png", true, "textures/items/blaze_powder.png"),
+        new("wail_tear", "textures/item/ghast_tear.png", true, "textures/items/ghast_tear.png"),
+        new("ember_cream", "textures/item/magma_cream.png", true, "textures/items/magma_cream.png"),
+        // ⚠ No pack path: the reference draws its skulls as blocks, so a pack has no flat art for one.
+        new("charred_skull", "", true),
+        new("fire_charge", "textures/item/fire_charge.png", true, "textures/items/fireball.png"),
     ];
 
     /// <summary>
@@ -1725,6 +1732,15 @@ public static class BlockTextureSet
                 (108, 38, 34), (190, 62, 54), (222, 112, 98), (112, 126, 112), (220, 140, 150), (20, 20, 20)),
             StarterBlocks.LayerCookedSalmon => TileGen.IconFish(1382,
                 (128, 68, 38), (212, 110, 58), (232, 150, 94), (150, 118, 88), (222, 150, 110), (40, 30, 24)),
+
+            // The Emberdeep's (2026-10-25): a rod lit from within, its dust, a pale tear, cream gone
+            // orange, a charred skull with embers in its sockets, and the charge split by fire.
+            StarterBlocks.LayerCinderRod => TileGen.IconStick(1390, 238, 172, 58),
+            StarterBlocks.LayerCinderDust => TileGen.IconPile(1391, 236, 150, 44),
+            StarterBlocks.LayerWailTear => TileGen.IconTear(1392, 200, 222, 230),
+            StarterBlocks.LayerEmberCream => TileGen.IconCharge(1393, 212, 112, 38, 255, 214, 92),
+            StarterBlocks.LayerCharredSkull => TileGen.IconSkull(1394, 64, 62, 62, 200, 86, 38),
+            StarterBlocks.LayerFireCharge => TileGen.IconCharge(1395, 52, 38, 34, 246, 128, 36),
 
             StarterBlocks.LayerGlowcap => TileGen.Glowcap(1364),
             StarterBlocks.LayerMarshReed => TileGen.MarshReed(1365),

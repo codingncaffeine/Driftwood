@@ -179,6 +179,11 @@ public sealed class MonsterSpawner
         if (kind.Name == "slime") return SlimeFits(world, x, y, z, daylight);
 
         var light = world.Light(x, y, z);
+
+        // The Emberdeep's own ask only that the sky has never reached the cell.
+        if (SpawnRules.EmberNative(kind.Name))
+            return y < TerrainGenerator.EmberdeepTop && LightValue.Sky(light) == 0;
+
         if (!SpawnRules.MonsterDark(light, daylight, _roll)) return false;
 
         if (SpawnRules.NeedsSky(kind.Name) && LightValue.Sky(light)

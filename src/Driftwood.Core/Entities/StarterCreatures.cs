@@ -844,13 +844,110 @@ public static class StarterCreatures
         return new CreatureModel("squid", 64, 32, [.. bones]);
     }
 
+    // ── The Emberdeep's own (2026-10-25) ───────────────────────────────────────────────────
+
+    /// <summary>
+    /// The cinderwisp: a head over three rings of glowing rods — the reference's blaze, on its net.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ <b>Each ring is one bone.</b> The rods hang in the air round the head, and a rod on its own
+    /// touches nothing; a ring's four together reach the head (or the ring above), which is what the
+    /// assembly check asks and what a ring that spins as one wants anyway. Every rod reads the same
+    /// patch, as the reference's do. Lowered so the bottom ring's feet are the creature's.
+    /// </remarks>
+    public static CreatureModel Cinderwisp()
+    {
+        CreatureBone Ring(string name, float radius, float bottom, float turn)
+        {
+            var rods = new CreatureCube[4];
+            for (var i = 0; i < 4; i++)
+            {
+                var angle = float.DegreesToRadians(turn + i * 90f);
+                var x = MathF.Round(MathF.Cos(angle) * radius);
+                var z = MathF.Round(MathF.Sin(angle) * radius);
+                rods[i] = Box(x - 1f, bottom, z - 1f, 2f, 8f, 2f, 0, 16);
+            }
+
+            return Bone(name, "head", new Vector3(0f, bottom + 4f, 0f), rods);
+        }
+
+        return new CreatureModel(
+            "cinderwisp", 64, 32,
+            [
+                Bone("head", "", new Vector3(0f, 19f, 0f),
+                    Box(-4f, 15f, -4f, 8f, 8f, 8f, 0, 0)),
+                Ring("rods0", 9f, 13f, 0f),
+                Ring("rods1", 7f, 9f, 45f),
+                Ring("rods2", 5f, 0f, 0f),
+            ]);
+    }
+
+    /// <summary>
+    /// The ashwail: a great pale head trailing nine tentacles — the reference's ghast, on its net.
+    /// </summary>
+    /// <remarks>
+    /// The tentacles sit where the reference's do, a three-by-three under the body, at fixed lengths
+    /// (the reference rolls them from a fixed seed, so every ghast has the same ones too). They read
+    /// the body's own corner patch, as the reference's do. The body is named head: it is all face.
+    /// </remarks>
+    public static CreatureModel Ashwail()
+    {
+        int[] lengths = [9, 12, 10, 14, 8, 11, 13, 9, 12];
+        const float top = 14f;
+        var bones = new List<CreatureBone>
+        {
+            Bone("head", "", new Vector3(0f, top + 8f, 0f),
+                Box(-8f, top, -8f, 16f, 16f, 16f, 0, 0)),
+        };
+
+        for (var i = 0; i < 9; i++)
+        {
+            var x = MathF.Round(((i % 3) - (i / 3 % 2) * 0.5f + 0.25f - 1f) * 5f);
+            var z = (i / 3 - 1) * 5f;
+            var length = lengths[i];
+            bones.Add(Bone($"tentacle{i}", "head", new Vector3(x, top, z),
+                Box(x - 1f, top - length, z - 1f, 2f, length, 2f, 0, 0)));
+        }
+
+        return new CreatureModel("ashwail", 64, 32, [.. bones]);
+    }
+
+    /// <summary>
+    /// The ember slime: eight stacked slices round a small bright core — the reference's magma cube.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ The slices' patches are the reference's own odd ones, rows overlapping on the sheet, with the
+    /// third and fourth moved aside — copied exactly, because that is where a pack paints the eyes.
+    /// A slice per bone, so the body can open up as it hops the way the reference's does.
+    /// </remarks>
+    public static CreatureModel EmberSlime()
+    {
+        var bones = new List<CreatureBone>();
+        for (var i = 0; i < 8; i++)
+        {
+            var (u, v) = i switch { 2 => (24, 10), 3 => (24, 19), _ => (0, i) };
+            var bottom = 7f - i;
+            bones.Add(Bone($"cube{i}", i == 0 ? "" : "cube0", new Vector3(0f, bottom, 0f),
+                Box(-4f, bottom, -4f, 8f, 1f, 8f, u, v)));
+        }
+
+        bones.Add(Bone("core", "cube0", new Vector3(0f, 4f, 0f),
+            Box(-2f, 2f, -2f, 4f, 4f, 4f, 0, 16)));
+
+        return new CreatureModel("ember_slime", 64, 32, [.. bones]);
+    }
+
+    /// <summary>The Emberdeep's skeleton: the same bones, charred, drawn a fifth larger.</summary>
+    public static CreatureModel CharredSkeleton() => Skeleton() with { Name = "charred_skeleton" };
+
     /// <summary>Every creature that ships with the game, by our name for it.</summary>
     public static IReadOnlyList<CreatureModel> All { get; } =
         [Cow(), Pig(), Sheep(), Chicken(), Wolf(), Zombie(), Drowned(), Husk(), Skeleton(), Spider(),
          Slime(), Crawler(), Farwalker(), Rabbit(), Fox(), Cat(), Bat(), Squid(),
          Stray(), Bogged(), ZombieVillager(), Witch(), CaveSpider(), Silverfish(), Phantom(),
          Shorewright(), Forager(), Waykeeper(), Lorekeeper(), StormSentinel(), Starwarden(),
-         SummonedSkeleton(), SummonedZombie(), SpiritWolf(), EarthElemental()];
+         SummonedSkeleton(), SummonedZombie(), SpiritWolf(), EarthElemental(),
+         Cinderwisp(), Ashwail(), EmberSlime(), CharredSkeleton()];
 
     /// <summary>Kinds excused the height band because they are flat on purpose.</summary>
     private static readonly HashSet<string> Flat = new(StringComparer.Ordinal) { "phantom" };

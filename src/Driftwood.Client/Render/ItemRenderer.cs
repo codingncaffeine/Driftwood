@@ -283,6 +283,7 @@ public sealed class ItemRenderer : IDisposable
 
         var arrow = catalogue.ByName("arrow");
         var farpearl = catalogue.ByName("farpearl");
+        var charge = catalogue.ByName("fire_charge");
 
         _shader.Use();
         _shader.SetMatrix4("uViewProj", viewProj);
@@ -292,7 +293,14 @@ public sealed class ItemRenderer : IDisposable
         {
             if (!flights.ActiveAt(i)) continue;
             var shot = flights.SnapshotAt(i);
-            var type = shot.Kind == ProjectileKind.Arrow ? arrow : farpearl;
+            // The Emberdeep's fire is drawn as the reference draws its own: the fire charge, small for
+            // a cinderwisp's shot and the size of a head for an ashwail's.
+            var type = shot.Kind switch
+            {
+                ProjectileKind.Arrow => arrow,
+                ProjectileKind.Ember or ProjectileKind.WailBolt => charge,
+                _ => farpearl,
+            };
 
             Matrix4x4 model;
             if (shot.Kind == ProjectileKind.Arrow)
@@ -308,7 +316,12 @@ public sealed class ItemRenderer : IDisposable
             }
             else
             {
-                model = Matrix4x4.CreateScale(0.28f)
+                model = Matrix4x4.CreateScale(shot.Kind switch
+                        {
+                            ProjectileKind.WailBolt => 1f,
+                            ProjectileKind.Ember => 0.36f,
+                            _ => 0.28f,
+                        })
                       * Matrix4x4.CreateRotationX(shot.Age * 2.1f)
                       * Matrix4x4.CreateRotationY(shot.Age * 4.7f)
                       * Matrix4x4.CreateTranslation(shot.Position);

@@ -847,6 +847,11 @@ public static class WorldSave
             into.Write(one.Provoked);
             into.Write(one.Grown);
         }
+
+        // ⛳ The slimes' size classes (2026-10-25), after every record rather than inside them:
+        // records are positional, so a build from before stops at the last one and never sees these.
+        into.Write(creatures.Count);
+        foreach (var one in creatures) into.Write((byte)Math.Clamp(one.Bulk, 1, 4));
     }
 
     internal static List<Entities.CreatureHerd.SavedCreature> ReadCreatures(BinaryReader from)
@@ -866,6 +871,10 @@ public static class WorldSave
                 from.ReadBoolean(),
                 from.ReadSingle()));
         }
+
+        if (from.BaseStream.Position < from.BaseStream.Length && from.ReadInt32() == creatures.Count)
+            for (var i = 0; i < creatures.Count; i++)
+                creatures[i] = creatures[i] with { Bulk = from.ReadByte() };
 
         return creatures;
     }

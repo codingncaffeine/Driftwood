@@ -158,7 +158,23 @@ public sealed class Creature
     /// ⚠ A floor of just over half rather than a straight lerp from nothing — a newborn a tenth
     /// of its mother's size is a rodent wearing her skin, and it would be nearly unclickable.
     /// </remarks>
-    public float Scale => 0.55f + 0.45f * Math.Clamp(Grown, 0f, 1f);
+    public float Scale => (0.55f + 0.45f * Math.Clamp(Grown, 0f, 1f)) * Bulk;
+
+    /// <summary>
+    /// A slime's size class — 1, 2 or 4, the reference's — which it is drawn, hit and hurt by.
+    /// Every other kind is 1.
+    /// </summary>
+    public int Bulk { get; set; } = 1;
+
+    /// <summary>Shots left in a cinderwisp's volley, and the wait before the next.</summary>
+    public int Volley { get; set; }
+    public float VolleyIn { get; set; }
+
+    /// <summary>How long an ashwail has been drawing breath for a bolt.</summary>
+    public float Charge { get; set; }
+
+    /// <summary>Where a big floater is drifting to.</summary>
+    public Vector3 Drift { get; set; }
 
     /// <summary>Seconds of courtship left after being fed. Two courting adults of a kind pair.</summary>
     public float LovedFor { get; set; }
@@ -235,7 +251,7 @@ public sealed class Creature
 /// <summary>One animal that has just died, for whoever turns that into drops and a noise.</summary>
 /// <param name="Grown">False for a young one, which leaves nothing — killing calves must not pay.</param>
 public readonly record struct CreatureDeath(
-    string RuntimeId, string Kind, Vector3 Position, bool Shorn, bool Grown, bool Hostile);
+    string RuntimeId, string Kind, Vector3 Position, bool Shorn, bool Grown, bool Hostile, int Bulk = 1);
 
 /// <summary>One animal that has just been born, for whoever plays the moment.</summary>
 public readonly record struct CreatureBirth(string Kind, Vector3 Position);
@@ -248,8 +264,11 @@ public readonly record struct CreatureBlink(string Kind, Vector3 From, Vector3 T
 
 /// <summary>One arrow a creature loosed, for whoever owns the flight pool to put in the air.</summary>
 /// <param name="Flask">True for a thrown flask, whose brew the host picks — it knows what ails the target.</param>
+/// <param name="Ember">A cinderwisp's small fireball: straight, quick, and it sets alight.</param>
+/// <param name="Wail">An ashwail's bolt: slow, and it bursts where it lands — unless it is struck back.</param>
 public readonly record struct CreatureShot(
-    string Kind, Vector3 From, Vector3 Direction, int HalfHearts, ShotTag Tag = ShotTag.None, bool Flask = false);
+    string Kind, Vector3 From, Vector3 Direction, int HalfHearts, ShotTag Tag = ShotTag.None, bool Flask = false,
+    bool Ember = false, bool Wail = false);
 
 /// <summary>
 /// What each creature sounds like: our name for it against a clip's name.
@@ -303,6 +322,12 @@ public static class CreatureSounds
         ["husk"] = ["enemies/zombie"],
         ["zombie_villager"] = ["enemies/zombie"],
         ["cave_spider"] = ["enemies/spider"],
+
+        // ⛳ The Emberdeep's, under the reference's own sound names, so a sound pack voices them.
+        ["cinderwisp"] = Run("mob/blaze/breathe", 4),
+        ["ashwail"] = Run("mob/ghast/moan", 7),
+        ["ember_slime"] = Run("mob/magmacube/big", 4),
+        ["charred_skeleton"] = Run("mob/wither_skeleton/idle", 3),
     };
 
     /// <summary>What one cries when a blow lands on it.</summary>
@@ -311,6 +336,10 @@ public static class CreatureSounds
         ["cow"] = Run("mob/cow/hurt", 3),
         ["chicken"] = Run("mob/chicken/hurt", 2),
         ["wolf"] = Run("mob/wolf/classic/hurt", 3),
+        ["cinderwisp"] = Run("mob/blaze/hit", 4),
+        ["ashwail"] = Run("mob/ghast/scream", 5),
+        ["ember_slime"] = Run("mob/magmacube/small", 5),
+        ["charred_skeleton"] = Run("mob/wither_skeleton/hurt", 4),
     };
 
     /// <summary>What one sounds like going for somebody.</summary>
@@ -326,7 +355,16 @@ public static class CreatureSounds
     {
         ["pig"] = ["mob/pig/death"],
         ["wolf"] = ["mob/wolf/classic/death"],
+        ["cinderwisp"] = ["mob/blaze/death"],
+        ["ashwail"] = ["mob/ghast/death"],
+        ["charred_skeleton"] = Run("mob/wither_skeleton/death", 2),
     };
+
+    /// <summary>A fireball leaving its maker — the reference uses one recording for both kinds.</summary>
+    public static readonly string[] Fireballs = ["mob/ghast/fireball4"];
+
+    /// <summary>The ashwail drawing breath before it fires.</summary>
+    public static readonly string[] WailCharge = ["mob/ghast/charge"];
 
     /// <summary>What a laying hen leaves behind, sound-wise.</summary>
     private static readonly Dictionary<string, string[]> Shed = new(StringComparer.Ordinal)
@@ -407,7 +445,9 @@ public static class CreatureSounds
             .Concat(Explosions)
             .Concat(Blinks)
             .Concat(ArrowHits)
-            .Concat(ArrowMisses);
+            .Concat(ArrowMisses)
+            .Concat(Fireballs)
+            .Concat(WailCharge);
 }
 
 /// <summary>
@@ -643,7 +683,7 @@ public sealed class CreatureHerd
     public int Count => _creatures.Count;
 
     /// <summary>Places one authored actor exactly, bypassing the random ground-search spawner.</summary>
-    public Creature SpawnAt(SpawnKind kind, Vector3 position, float yaw = 0f)
+    public Creature SpawnAt(SpawnKind kind, Vector3 position, float yaw = 0f, int bulk = 1)
     {
         var creature = new Creature
         {
@@ -651,8 +691,9 @@ public sealed class CreatureHerd
             Size = kind.Size,
             Hostile = kind.Hostile,
             Move = kind.Move,
-            MaxHealth = CreatureVitals.HealthFor(kind.Name),
-            Health = CreatureVitals.HealthFor(kind.Name),
+            Bulk = Math.Max(1, bulk),
+            MaxHealth = CreatureVitals.HealthFor(kind.Name, bulk),
+            Health = CreatureVitals.HealthFor(kind.Name, bulk),
             Position = position,
             Yaw = yaw,
             WantsYaw = yaw,
@@ -812,7 +853,7 @@ public sealed class CreatureHerd
             creature.DyingFor = DyingSeconds;
             _dead.Add(new CreatureDeath(
                 creature.RuntimeId, creature.Kind, creature.Middle, creature.Shorn,
-                creature.Adult, creature.Hostile));
+                creature.Adult, creature.Hostile, creature.Bulk));
             return true;
         }
 
@@ -1061,7 +1102,7 @@ public sealed class CreatureHerd
     /// </remarks>
     public readonly record struct SavedCreature(
         string Kind, Vector3 Position, float Yaw, int Health, bool Shorn, float Regrows,
-        bool Provoked, float Grown);
+        bool Provoked, float Grown, int Bulk = 1);
 
     /// <summary>Everything alive, as the save wants it.</summary>
     public List<SavedCreature> Capture()
@@ -1074,7 +1115,7 @@ public sealed class CreatureHerd
 
             saved.Add(new SavedCreature(
                 creature.Kind, creature.Position, creature.Yaw, creature.Health,
-                creature.Shorn, creature.Regrows, creature.Provoked, creature.Grown));
+                creature.Shorn, creature.Regrows, creature.Provoked, creature.Grown, creature.Bulk));
         }
 
         return saved;
@@ -1105,7 +1146,8 @@ public sealed class CreatureHerd
                 continue;
             }
 
-            var most = CreatureVitals.HealthFor(one.Kind);
+            var bulk = Math.Clamp(one.Bulk, 1, 4);
+            var most = CreatureVitals.HealthFor(one.Kind, bulk);
 
             _creatures.Add(new Creature
             {
@@ -1122,6 +1164,7 @@ public sealed class CreatureHerd
                 Regrows = one.Regrows,
                 Provoked = one.Provoked,
                 Grown = Math.Clamp(one.Grown, 0f, 1f),
+                Bulk = bulk,
                 Thinks = (float)(_random.NextDouble() * 4.0),
                 Speaks = SpeaksEvery * (float)_random.NextDouble(),
                 Sheds = CreatureVitals.ShedsEvery * (0.4f + (float)_random.NextDouble()),
@@ -1305,6 +1348,20 @@ public sealed class CreatureHerd
                 continue;
             }
 
+            // ⛳ The Emberdeep's two fliers keep their own air: the cinderwisp hangs over you and
+            // looses volleys, the ashwail drifts the hollows and draws breath for a bolt.
+            if (creature.Kind == "cinderwisp")
+            {
+                if (magicMovement > 0f) Kindle(creature, dt * magicMovement, player, solid);
+                continue;
+            }
+
+            if (creature.Kind == "ashwail")
+            {
+                if (magicMovement > 0f) Wail(creature, dt * magicMovement, player, solid);
+                continue;
+            }
+
             var swimming = creature.Move == CreatureMove.Swim
                 && water is not null
                 && water(
@@ -1316,7 +1373,8 @@ public sealed class CreatureHerd
             {
                 // A hopper travels while it is in the air — the hop IS the stride. Straight along
                 // the yaw it launched with, no steering: it aimed on the ground.
-                if (creature.Move == CreatureMove.Hop || creature.Leaping) HopDrift(creature, dt, solid);
+                if (creature.Move == CreatureMove.Hop || creature.Leaping)
+                    HopDrift(creature, dt, solid, creature.Targeting ? player : null);
                 continue;
             }
 
@@ -1565,11 +1623,27 @@ public sealed class CreatureHerd
     /// ⚠ The refusal leaves the vertical motion alone: blocked, it rises and falls where it is,
     /// which is what a thing bouncing against a wall looks like. The ground decision will turn it.
     /// </remarks>
-    private static void HopDrift(Creature creature, float dt, Func<int, int, int, bool> solid)
+    private static void HopDrift(Creature creature, float dt, Func<int, int, int, bool> solid, Vector3? quarry = null)
     {
         var yaw = float.DegreesToRadians(creature.Yaw);
         var ahead = new Vector3(MathF.Cos(yaw), 0f, MathF.Sin(yaw));
-        var wanted = creature.Position + ahead * (HopStride * dt);
+
+        // A bigger slime takes a longer hop — the reference's jump grows with the size class.
+        var wanted = creature.Position + ahead * (HopStride * MathF.Sqrt(creature.Bulk) * dt);
+
+        // ⚠ A hunter's hop ends at its own edge of its quarry rather than landing on top of them.
+        if (quarry is { } at)
+        {
+            var girth = MathF.Max(MathF.Max(creature.Size.X, creature.Size.Z) * creature.Scale * 0.5f, BodyHalf);
+            var flat = new Vector2(at.X - wanted.X, at.Z - wanted.Z).Length();
+            if (flat < girth + 0.5f) return;
+        }
+
+        if (creature.Bulk > 1)
+        {
+            if (BodyFree(creature, wanted with { Y = creature.Position.Y + 0.05f }, solid)) creature.Position = wanted;
+            return;
+        }
 
         var x = (int)MathF.Floor(wanted.X);
         var y = (int)MathF.Floor(creature.Position.Y + 0.5f);
@@ -1648,8 +1722,10 @@ public sealed class CreatureHerd
 
         Steer(creature, dt, target, toward, range, solid);
 
-        // In reach it stands and swings rather than walking circles on your toes.
-        creature.Moving = !(creature.SeesTarget && range < 1.1f && MathF.Abs(target.Y - creature.Position.Y) < 1.2f);
+        // In reach it stands and swings rather than walking circles on your toes. ⚠ Measured from
+        // its own edge, so a body two blocks wide stops beside you rather than on top of you.
+        var girth = MathF.Max(0f, MathF.Max(creature.Size.X, creature.Size.Z) * creature.Scale * 0.5f - BodyHalf);
+        creature.Moving = !(creature.SeesTarget && range < 1.1f + girth && MathF.Abs(target.Y - creature.Position.Y) < 1.2f + girth);
 
         // ⚠ Held short so the ordinary re-think cannot fire mid-chase and send it wandering. The
         // heading is rewritten every step anyway; this is what stops the *decision to move* being
@@ -1750,10 +1826,13 @@ public sealed class CreatureHerd
             creature.FallSpeed = -LeapLaunch;
         }
 
-        if (range <= StrikeRange && height <= 2f && creature.Swings <= 0f)
+        // ⚠ Reach is measured from the middle, so a body wider than the standard one reaches as far
+        // past its own edge as a small one does — a big ember slime is not harmless at its own side.
+        var reach = StrikeRange + girth;
+        if (range <= reach && height <= 2f + (creature.Bulk - 1) * 0.5f && creature.Swings <= 0f)
         {
             creature.Swings = StrikeEvery;
-            _attacks.Add(new CreatureAttack(creature.Kind, creature.Middle, CreatureVitals.DamageFor(creature.Kind)));
+            _attacks.Add(new CreatureAttack(creature.Kind, creature.Middle, CreatureVitals.DamageFor(creature.Kind, creature.Bulk)));
         }
 
         return true;
@@ -1888,6 +1967,228 @@ public sealed class CreatureHerd
 
         creature.Position = next;
         creature.Yaw = creature.WantsYaw = float.RadiansToDegrees(MathF.Atan2(to.Z, to.X));
+    }
+
+    /// <summary>A cinderwisp's volley: three shots this far apart, and this long between volleys.</summary>
+    public const int VolleyShots = 3;
+    public const float VolleyGap = 0.3f;
+    public const float VolleyRest = 3.5f;
+    public const float VolleyCharge = 0.8f;
+    public const float VolleyRange = 16f;
+    public const float CinderwispSpeed = 2.4f;
+
+    /// <summary>An ashwail's beat: a second's breath, a bolt, three seconds' rest.</summary>
+    public const float WailCharge = 1f;
+    public const float WailRest = 3f;
+    public const float WailRange = 40f;
+    public const float AshwailSpeed = 1.2f;
+
+    /// <summary>A cinderwisp's fireball, on the player: the reference's five.</summary>
+    public const int EmberDamage = 5;
+
+    /// <summary>
+    /// A cinderwisp's step: hover two and a half over the target's head, between four and ten off,
+    /// and loose volleys of three.
+    /// </summary>
+    /// <remarks>
+    /// The reference's blaze: it bobs in the air, rises to fight, flares for a moment and fires three
+    /// small fireballs a third of a second apart, then rests. With nobody to fight it drifts, bobbing.
+    /// </remarks>
+    private void Kindle(Creature creature, float dt, Vector3? player, Func<int, int, int, bool> solid)
+    {
+        creature.Swings = MathF.Max(0f, creature.Swings - dt);
+        creature.Orbit += dt;
+        var bob = MathF.Sin(creature.Orbit * 2.2f) * 0.5f;
+        Vector3 goal;
+
+        if (player is { } target
+            && Vector3.Distance(target, creature.Position) < CreatureVitals.FollowRange(creature.Kind))
+        {
+            creature.SightCheck -= dt;
+            if (creature.SightCheck <= 0f)
+            {
+                creature.SightCheck = 0.4f + (float)_random.NextDouble() * 0.2f;
+                creature.SeesTarget = LineOfSight(solid, creature.Middle, target + new Vector3(0f, 1.5f, 0f));
+            }
+
+            if (creature.SeesTarget || creature.Provoked)
+            {
+                creature.Targeting = true;
+                var flat = target - creature.Position;
+                flat.Y = 0f;
+                var range = flat.Length();
+                var hold = range > 10f ? flat / range * (range - 8f)
+                    : range is < 4f and > 0.01f ? -flat / range * (4f - range)
+                    : Vector3.Zero;
+                goal = creature.Position + hold;
+                goal.Y = target.Y + 2.5f + bob;
+                if (range > 0.01f) creature.Yaw = creature.WantsYaw = float.RadiansToDegrees(MathF.Atan2(flat.Z, flat.X));
+
+                var distance = Vector3.Distance(creature.Middle, target);
+                if (creature.Volley > 0)
+                {
+                    creature.VolleyIn -= dt;
+                    if (creature.VolleyIn <= 0f)
+                    {
+                        creature.Volley--;
+                        creature.VolleyIn = VolleyGap;
+                        if (creature.SeesTarget) Fling(creature, target, ember: true);
+                    }
+                }
+                else if (creature.Swings <= 0f && creature.SeesTarget && distance <= VolleyRange)
+                {
+                    creature.Swings = VolleyRest + (float)_random.NextDouble();
+                    creature.Volley = VolleyShots;
+                    creature.VolleyIn = VolleyCharge;
+                    creature.Spoke = true;
+                }
+            }
+            else goal = Idle(creature, dt, bob);
+        }
+        else
+        {
+            creature.Targeting = false;
+            goal = Idle(creature, dt, bob);
+        }
+
+        creature.Moving = true;
+        FlyTo(creature, goal, CinderwispSpeed * dt, solid);
+    }
+
+    /// <summary>Where an unbothered flier drifts next: a slow heading, bobbing.</summary>
+    private Vector3 Idle(Creature creature, float dt, float bob)
+    {
+        creature.Thinks -= dt;
+        if (creature.Thinks <= 0f)
+        {
+            creature.Thinks = 3f + (float)_random.NextDouble() * 4f;
+            creature.WantsYaw = (float)(_random.NextDouble() * 360.0);
+        }
+
+        creature.Yaw = creature.WantsYaw;
+        var yaw = float.DegreesToRadians(creature.WantsYaw);
+        return creature.Position + new Vector3(MathF.Cos(yaw) * 0.4f, bob * 0.3f, MathF.Sin(yaw) * 0.4f);
+    }
+
+    /// <summary>
+    /// An ashwail's step: drift to somewhere in the open, and when the target is in sight, draw
+    /// breath for a second and loose a bolt.
+    /// </summary>
+    /// <remarks>
+    /// The reference's ghast. It wanders its caverns slowly, picking open air to float to; seeing
+    /// you, it turns, wails and fires, then rests three seconds. Its body is the size of a room, so
+    /// where it may go is asked of the whole box, not one cell.
+    /// </remarks>
+    private void Wail(Creature creature, float dt, Vector3? player, Func<int, int, int, bool> solid)
+    {
+        creature.Swings = MathF.Max(0f, creature.Swings - dt);
+        creature.SwoopIn -= dt;
+
+        var reached = Vector3.DistanceSquared(creature.Position, creature.Drift) < 1f;
+        if (creature.SwoopIn <= 0f || reached || creature.Drift == Vector3.Zero)
+        {
+            creature.SwoopIn = 5f + (float)_random.NextDouble() * 5f;
+            creature.Drift = creature.Position;
+            for (var attempt = 0; attempt < 6; attempt++)
+            {
+                var spot = creature.Position + new Vector3(
+                    (float)(_random.NextDouble() * 16.0 - 8.0),
+                    (float)(_random.NextDouble() * 8.0 - 4.0),
+                    (float)(_random.NextDouble() * 16.0 - 8.0));
+                if (!BodyFree(creature, spot, solid)) continue;
+                creature.Drift = spot;
+                break;
+            }
+        }
+
+        if (player is { } target && Vector3.Distance(target, creature.Position) < WailRange)
+        {
+            creature.SightCheck -= dt;
+            if (creature.SightCheck <= 0f)
+            {
+                creature.SightCheck = 0.5f;
+                creature.SeesTarget = LineOfSight(solid, creature.Middle, target + new Vector3(0f, 1.5f, 0f));
+            }
+
+            if (creature.SeesTarget)
+            {
+                var flat = target - creature.Position;
+                if (flat.X * flat.X + flat.Z * flat.Z > 0.01f)
+                    creature.Yaw = creature.WantsYaw = float.RadiansToDegrees(MathF.Atan2(flat.Z, flat.X));
+
+                if (creature.Swings <= 0f)
+                {
+                    if (creature.Charge == 0f) creature.Spoke = true;
+                    creature.Charge += dt;
+                    if (creature.Charge >= WailCharge)
+                    {
+                        creature.Charge = 0f;
+                        creature.Swings = WailRest;
+                        Fling(creature, target, ember: false);
+                    }
+                }
+            }
+            else creature.Charge = 0f;
+        }
+        else creature.Charge = 0f;
+
+        creature.Moving = true;
+        FlyTo(creature, creature.Drift, AshwailSpeed * dt, solid);
+    }
+
+    /// <summary>A fireball or a bolt, from the edge of the body at the target's chest.</summary>
+    private void Fling(Creature creature, Vector3 target, bool ember)
+    {
+        var from = creature.Middle;
+        var aim = target + new Vector3(0f, 1.1f, 0f) - from;
+        if (aim.LengthSquared() < 1e-4f) return;
+        aim = Vector3.Normalize(aim);
+
+        // The reference's blaze scatters its shots a little; the ghast's goes where it looks.
+        if (ember)
+        {
+            aim = Vector3.Normalize(aim + new Vector3(
+                (float)(_random.NextDouble() - 0.5) * 0.12f,
+                (float)(_random.NextDouble() - 0.5) * 0.06f,
+                (float)(_random.NextDouble() - 0.5) * 0.12f));
+        }
+
+        var clear = MathF.Max(creature.Size.X, creature.Size.Z) * creature.Scale * 0.5f + 0.4f;
+        _shots.Add(new CreatureShot(creature.Kind, from + aim * clear, aim,
+            ember ? EmberDamage : 0, Ember: ember, Wail: !ember));
+    }
+
+    /// <summary>Moves a flier toward a point, each axis refused where its whole body would meet rock.</summary>
+    private static void FlyTo(Creature creature, Vector3 goal, float step, Func<int, int, int, bool> solid)
+    {
+        var to = goal - creature.Position;
+        var length = to.Length();
+        if (length < 1e-3f) return;
+        var move = to / length * MathF.Min(step, length);
+
+        foreach (var axis in (ReadOnlySpan<int>)[0, 1, 2])
+        {
+            var next = creature.Position;
+            if (axis == 0) next.X += move.X;
+            else if (axis == 1) next.Y += move.Y;
+            else next.Z += move.Z;
+            if (BodyFree(creature, next, solid)) creature.Position = next;
+        }
+    }
+
+    /// <summary>Whether the creature's whole box would stand clear of rock with its feet here.</summary>
+    private static bool BodyFree(Creature creature, Vector3 at, Func<int, int, int, bool> solid)
+    {
+        var half = MathF.Max(MathF.Max(creature.Size.X, creature.Size.Z) * creature.Scale * 0.5f, BodyHalf);
+        var tall = MathF.Max(creature.Size.Y * creature.Scale, 0.5f);
+        const float hair = 1e-3f;
+
+        for (var x = (int)MathF.Floor(at.X - half + hair); x <= (int)MathF.Floor(at.X + half - hair); x++)
+        for (var z = (int)MathF.Floor(at.Z - half + hair); z <= (int)MathF.Floor(at.Z + half - hair); z++)
+        for (var y = (int)MathF.Floor(at.Y + hair); y <= (int)MathF.Floor(at.Y + tall - hair); y++)
+            if (solid(x, y, z)) return false;
+
+        return true;
     }
 
     private void EndSwoop(Creature creature)

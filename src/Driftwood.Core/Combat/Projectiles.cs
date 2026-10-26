@@ -15,6 +15,12 @@ public enum ProjectileKind : byte
 
     /// <summary>A witch's flask: thrown, lobbed, and splashing where it lands.</summary>
     Flask,
+
+    /// <summary>A cinderwisp's small fireball: straight and quick, and it sets alight.</summary>
+    Ember,
+
+    /// <summary>An ashwail's bolt: slow, bursting where it lands, and turned back by a blow.</summary>
+    WailBolt,
 }
 
 /// <summary>Who launched a projectile. Spells and creature shots can extend this without a new pool.</summary>
@@ -69,6 +75,13 @@ public sealed class ProjectileSystem
     /// <summary>A thrown flask's speed and fall: the reference's, a slow lob that drops hard.</summary>
     public const float FlaskSpeed = 15f;
     public const float FlaskGravity = 20f;
+
+    /// <summary>The Emberdeep's fire: the reference's small fireball is quick, the ghast's slow.</summary>
+    public const float EmberSpeed = 16f;
+    public const float WailBoltSpeed = 9f;
+
+    /// <summary>How near a bolt has to pass the point of a swing for the swing to send it back.</summary>
+    public const float DeflectRadius = 1.1f;
     public const float Lifetime = 20f;
 
     private struct Slot
@@ -277,6 +290,36 @@ public sealed class ProjectileSystem
             face,
             player,
             shot.Tag);
+    }
+
+    /// <summary>
+    /// Turns a creature's bolt back along the line of a swing, as the reference's ghast fireball is
+    /// returned by a punch. True when one was close enough to turn.
+    /// </summary>
+    /// <remarks>
+    /// Owned by the player from then on, so it tests the herd instead of the player — which is the
+    /// whole of what sends it back to its maker.
+    /// </remarks>
+    public bool TryDeflect(Vector3 eye, Vector3 forward, float reach)
+    {
+        forward = Vector3.Normalize(forward);
+        for (var i = 0; i < Capacity; i++)
+        {
+            ref var shot = ref _slots[i];
+            if (!shot.Active || shot.Kind != ProjectileKind.WailBolt || shot.Owner != ProjectileOwner.Creature) continue;
+
+            var to = shot.Position - eye;
+            var along = Vector3.Dot(to, forward);
+            if (along < 0f || along > reach) continue;
+            if ((to - forward * along).Length() > DeflectRadius) continue;
+
+            shot.Owner = ProjectileOwner.Player;
+            shot.Velocity = forward * MathF.Max(shot.Velocity.Length(), WailBoltSpeed) * 1.4f;
+            shot.Age = 0f;
+            return true;
+        }
+
+        return false;
     }
 
     private void Retire(ref Slot shot)

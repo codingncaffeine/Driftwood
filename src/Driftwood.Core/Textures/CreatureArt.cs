@@ -640,7 +640,7 @@ public static class CreatureArt
     }
 
     /// <summary>The kinds allowed to have no head bone. Each is a decision, not an oversight.</summary>
-    private static readonly HashSet<string> Faceless = new(StringComparer.Ordinal) { "slime", "squid" };
+    private static readonly HashSet<string> Faceless = new(StringComparer.Ordinal) { "slime", "squid", "ember_slime" };
 
     /// <summary>For a headless kind with eye boxes: are the eyes actually drawn on?</summary>
     private static string EyeFault(CreatureModel model, Image sheet)

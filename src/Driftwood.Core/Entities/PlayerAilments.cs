@@ -11,6 +11,12 @@ public enum Ailment : byte
 
     /// <summary>A weaker blow.</summary>
     Weakness,
+
+    /// <summary>
+    /// The charred skeleton's blow (2026-10-25): the reference's wither. Like poison, but it does
+    /// not stop at the last half heart.
+    /// </summary>
+    Withering,
 }
 
 /// <summary>What a shot carries besides its damage. Rides on the projectile from loosing to landing.</summary>
@@ -49,8 +55,15 @@ public sealed class PlayerAilments
     public const float SlownessScale = 0.85f;
     public const int WeaknessPenalty = 3;
 
-    private readonly float[] _left = new float[3];
+    private readonly float[] _left = new float[4];
     private float _poisonTick;
+    private float _witherTick;
+
+    /// <summary>Half hearts the last <see cref="Step"/> withered away — apart from what it returned.</summary>
+    public int Withered { get; private set; }
+
+    /// <summary>A half heart this often while withering: the reference's two seconds.</summary>
+    public const float WitherEvery = 2f;
 
     public bool Has(Ailment ailment) => _left[(int)ailment] > 0f;
 
@@ -61,6 +74,7 @@ public sealed class PlayerAilments
         if (seconds <= 0f || !float.IsFinite(seconds)) return;
         ref var left = ref _left[(int)ailment];
         if (left <= 0f && ailment == Ailment.Poison) _poisonTick = 0f;
+        if (left <= 0f && ailment == Ailment.Withering) _witherTick = 0f;
         left = MathF.Max(left, seconds);
     }
 
@@ -69,6 +83,7 @@ public sealed class PlayerAilments
     {
         Array.Clear(_left);
         _poisonTick = 0f;
+        _witherTick = 0f;
     }
 
     /// <summary>What the feet are worth while slowed.</summary>
@@ -92,6 +107,20 @@ public sealed class PlayerAilments
             {
                 _poisonTick -= PoisonEvery;
                 if (health - taken > 1) taken++;
+            }
+        }
+
+        // ⚠ Withering is counted apart from poison and handed out as a blow, not as poison, because
+        // poison's own rule is never the last half heart and the wither's whole difference is that
+        // it takes it.
+        Withered = 0;
+        if (Has(Ailment.Withering))
+        {
+            _witherTick += dt;
+            while (_witherTick >= WitherEvery)
+            {
+                _witherTick -= WitherEvery;
+                Withered++;
             }
         }
 

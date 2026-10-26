@@ -262,6 +262,12 @@ public static class StarterRecipes
         // and the thing that makes a crop jump a stage. One grind, two uses, no ambiguity.
         LooseAt("bone meal", "bonemeal", 3, CraftStation.Bench, "bone");
 
+        // The Emberdeep's makes (2026-10-25): a rod grinds to two dust, dust in a slimeball is
+        // ember cream, and dust, powder and a coal pack three fire charges — the reference's own.
+        LooseAt("cinder dust", "cinder_dust", 2, CraftStation.Bench, "cinder_rod");
+        LooseAt("ember cream", "ember_cream", 1, CraftStation.Bench, "slimeball", "cinder_dust");
+        LooseAt("fire charge", "fire_charge", 3, CraftStation.Bench, "gunpowder", "cinder_dust", "#coals");
+
         // Light. Either coal will do — the one that comes out of the ground and the one that comes
         // out of a furnace are the same thing on the end of a stick.
         Shaped("torch", "torch", 4, ["C", "S"]);

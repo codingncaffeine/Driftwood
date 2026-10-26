@@ -107,6 +107,9 @@ public static class AchievementEvents
     /// <summary>The spellbook holds at least this many spells. Subject: the count, as digits.</summary>
     public const string Learned = "learned";
 
+    /// <summary>A creature killed by its own bolt, struck back. Subject: its kind.</summary>
+    public const string Returned = "returned";
+
     /// <summary>
     /// The depth bands a <see cref="Reach"/> names, deepest last. A player at a depth has reached
     /// every band above it too, so a fall straight to the floor still earns the steps on the way.
@@ -243,6 +246,17 @@ public sealed class AchievementBook
             new("bottom_of_the_world", deep, "emberdeep", "Bottom of the World",
                 "Stand over the molten sea at the floor of the world",
                 "lava_bucket", goal, Any(AchievementEvents.Reach, "core")),
+            new("into_fire", deep, "emberdeep", "Into Fire", "Take a cinder rod from a cinderwisp",
+                "cinder_rod", task, Any(O, "cinder_rod")),
+            new("return_to_sender", deep, "emberdeep", "Return to Sender",
+                "Bring down an ashwail with its own bolt, struck back",
+                "fire_charge", challenge, Any(AchievementEvents.Returned, "ashwail")),
+            new("tear_stained", deep, "emberdeep", "Tear-Stained", "Collect the tear an ashwail cries",
+                "wail_tear", task, Any(O, "wail_tear")),
+            new("spooky", deep, "emberdeep", "Charred Remains", "Take a charred skeleton's skull",
+                "charred_skull", goal, Any(O, "charred_skull")),
+            new("melted", deep, "emberdeep", "Hot to the Touch", "Make ember cream",
+                "ember_cream", task, Any(O, "ember_cream")),
 
             // ── Adventure ──
             new("adventure", adventure, "", "Adventure", "Adventure, exploration and combat",

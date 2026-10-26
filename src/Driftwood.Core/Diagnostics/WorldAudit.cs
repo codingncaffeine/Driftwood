@@ -1938,6 +1938,10 @@ public static class WorldAudit
             + $"{trial.HuntersReached} of {trial.Hunters} hunters reach a player across the wall (want 10), "
             + $"in {trial.MeanSecondsToReach:F1} s on average");
 
+        var ember = EmberdeepFaults(out var emberSaid);
+        Check("the Emberdeep's own fight the way they should", ember.Count == 0,
+            ember.Count == 0 ? emberSaid : $"{ember.Count} faults: {ember[0]}");
+
         var achievementBook = new AchievementBook(items);
         var achievementFaults = achievementBook.Validate(items);
         achievementFaults.AddRange(AchievementLogFaults(achievementBook));
@@ -9246,9 +9250,12 @@ public static class WorldAudit
         (StarterBlocks.LayerIronBars, "iron_bars"),
         (StarterBlocks.LayerSign, "sign"),
 
-        // Fishing (2026-10-16) after the sign; cooked salmon is the true end.
+        // Fishing (2026-10-16) after the sign, then the Emberdeep's leavings (2026-10-25); the
+        // fire charge is the true end.
         (StarterBlocks.LayerFishingRod, "fishing_rod"),
-        ((ushort)(StarterBlocks.LayerCount - 1), "cooked_salmon"),
+        (StarterBlocks.LayerCookedSalmon, "cooked_salmon"),
+        (StarterBlocks.LayerCinderRod, "cinder_rod"),
+        ((ushort)(StarterBlocks.LayerCount - 1), "fire_charge"),
     ];
 
     /// <summary>
@@ -14347,6 +14354,53 @@ public static class WorldAudit
             back.Record(book, criterion.Event, criterion.Subject, earned);
         if (!back.Has("balanced_diet")) faults.Add("eating everything did not finish A Balanced Diet");
 
+        return faults;
+    }
+
+    /// <summary>
+    /// The four Emberdeep kinds against a player on open ground for twelve seconds: the cinderwisp
+    /// looses volleys, the ashwail bolts, the charred skeleton closes and strikes, and a size-four
+    /// ember slime strikes from its own edge rather than from on top of the player.
+    /// </summary>
+    private static List<string> EmberdeepFaults(out string said)
+    {
+        var faults = new List<string>();
+        static bool Flat(int x, int y, int z) => y < 64;
+        var player = new Vector3(0.5f, 64f, 0.5f);
+
+        (int Embers, int Bolts, int Blows, float Closest) Run(string kind, Vector3 size, CreatureMove move, Vector3 at, int bulk = 1)
+        {
+            var herd = new CreatureHerd(3);
+            var one = herd.SpawnAt(new SpawnKind(kind, size, true, move), at, 180f, bulk);
+            int embers = 0, bolts = 0, blows = 0;
+            var closest = float.MaxValue;
+            for (var t = 0f; t < 12f; t += 0.05f)
+            {
+                herd.Update(0.05f, Flat, player);
+                foreach (var shot in herd.TakeShots()) { if (shot.Ember) embers++; if (shot.Wail) bolts++; }
+                blows += herd.TakeAttacks().Count;
+                closest = MathF.Min(closest, new Vector2(one.Position.X - player.X, one.Position.Z - player.Z).Length());
+            }
+            return (embers, bolts, blows, closest);
+        }
+
+        var wisp = Run("cinderwisp", new(1.25f, 1.44f, 1.25f), CreatureMove.Fly, new(10.5f, 64f, 0.5f));
+        var wail = Run("ashwail", new(2.4f, 4.5f, 2.4f), CreatureMove.Fly, new(25.5f, 66f, 0.5f));
+        var charred = Run("charred_skeleton", new(1f, 2.4f, 1f), CreatureMove.Walk, new(10.5f, 64f, 0.5f));
+        var big = Run("ember_slime", new(0.5f, 0.5f, 0.5f), CreatureMove.Hop, new(10.5f, 64f, 0.5f), 4);
+
+        if (wisp.Embers < 6) faults.Add($"a cinderwisp loosed {wisp.Embers} fireballs in twelve seconds (want two volleys)");
+        if (wail.Bolts < 2) faults.Add($"an ashwail loosed {wail.Bolts} bolts in twelve seconds");
+        if (charred.Blows == 0) faults.Add("a charred skeleton never struck a player standing in the open");
+        if (big.Blows == 0) faults.Add("a size-four ember slime never struck");
+        if (big.Closest < 1.2f) faults.Add($"a size-four ember slime came {big.Closest:F1} from the player's middle — on top of them");
+
+        foreach (var kind in (ReadOnlySpan<string>)["cinderwisp", "ashwail", "ember_slime", "charred_skeleton"])
+            if (!SpawnRules.Emberdeep.Any(row => row.Kind == kind))
+                faults.Add($"{kind} is not on the Emberdeep's table");
+
+        said = $"{wisp.Embers} cinderwisp fireballs, {wail.Bolts} ashwail bolts, {charred.Blows} charred blows and "
+             + $"{big.Blows} from a size-four ember slime in twelve seconds; the slime stops {big.Closest:F1} off";
         return faults;
     }
 }

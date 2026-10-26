@@ -399,6 +399,9 @@ public sealed class PlayerVitals
     /// <summary>True while still alight after leaving the fire.</summary>
     public bool Burning => _burningFor > 0f;
 
+    /// <summary>Sets the player alight for at least this long — what a fireball does.</summary>
+    public void Ignite(float seconds) => _burningFor = MathF.Max(_burningFor, seconds);
+
     /// <summary>True when any part of the body is inside something that burns.</summary>
     private bool TouchesBurning(VoxelWorld world, PlayerBody body)
     {

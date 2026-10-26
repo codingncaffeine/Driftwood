@@ -73,6 +73,13 @@ public static class CreatureVitals
 
         ["storm_sentinel"] = 52,
         ["starwarden"] = 240,
+
+        // The Emberdeep's, at the reference's figures doubled. The ember slime's is its smallest
+        // size; a bigger one is this times its size squared, as the reference's is.
+        ["cinderwisp"] = 40,
+        ["ashwail"] = 20,
+        ["ember_slime"] = 2,
+        ["charred_skeleton"] = 40,
     };
 
     /// <summary>Kinds that leave something behind without being touched.</summary>
@@ -107,6 +114,9 @@ public static class CreatureVitals
         ["phantom"] = 4,
         ["storm_sentinel"] = 5,
         ["starwarden"] = 8,
+        ["cinderwisp"] = 6,
+        ["ember_slime"] = 3,
+        ["charred_skeleton"] = 8,
 
         // The one beast with teeth. Only lands once provoked — see Retaliates.
         ["wolf"] = 3,
@@ -181,6 +191,8 @@ public static class CreatureVitals
         ["drowned"] = 35f,
         ["zombie_villager"] = 35f,
         ["farwalker"] = 64f,
+        ["cinderwisp"] = 32f,
+        ["ashwail"] = 48f,
     };
 
     public static float FollowRange(string kind) => Follow.GetValueOrDefault(kind, 16f);
@@ -196,6 +208,13 @@ public static class CreatureVitals
     public static bool Archer(string kind) => Archers.Contains(kind);
 
     public static int HealthFor(string kind) => Health.GetValueOrDefault(kind, DefaultHealth);
+
+    /// <summary>Health for a kind at a size class: the slimes' is their smallest times size squared.</summary>
+    public static int HealthFor(string kind, int bulk) => HealthFor(kind) * Math.Max(1, bulk) * Math.Max(1, bulk);
+
+    /// <summary>A blow from a size class: one more a step up, as the reference's magma cube hits 3, 4 and 6.</summary>
+    public static int DamageFor(string kind, int bulk) =>
+        DamageFor(kind) + (bulk >= 4 ? 3 : bulk >= 2 ? 1 : 0);
 
     /// <summary>True when this kind leaves something behind on its own.</summary>
     public static bool Sheds(string kind) => Shedders.Contains(kind);
