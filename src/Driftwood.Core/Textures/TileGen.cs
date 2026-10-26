@@ -1599,6 +1599,172 @@ public static class TileGen
         return t;
     }
 
+    /// <summary>A melon's flank: dark green with paler stripes that wander as they run down it.</summary>
+    public static byte[] MelonSide(int seed)
+    {
+        var t = new byte[BytesPerTile];
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            // The stripes waver a texel either way down the rind, so the flank reads as grown.
+            var wobble = (int)MathF.Round(MathF.Sin(y * 0.7f + x * 0.3f + seed) * 0.9f);
+            var stripe = (x + wobble + 16) % 5 < 2;
+
+            var d = (int)((Noise(x, y, seed) * 2f - 1f) * 10f);
+            var (r, g, b) = stripe ? (128, 168, 52) : (70, 118, 30);
+            var shade = Math.Abs(x - 8);
+            Put(t, x, y, Clamp(r + d - shade), Clamp(g + d - shade), Clamp(b + d - shade / 2), 255);
+        }
+
+        return t;
+    }
+
+    /// <summary>And its crown: the stripes meet in a pale ring round a stub of stalk.</summary>
+    public static byte[] MelonTop(int seed)
+    {
+        var t = new byte[BytesPerTile];
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var dx = x - 7.5f;
+            var dy = y - 7.5f;
+            var reach = MathF.Sqrt(dx * dx + dy * dy);
+            var spoke = (int)((MathF.Atan2(dy, dx) + MathF.PI) / MathF.Tau * 12f) % 2 == 0;
+
+            var d = (int)((Noise(x, y, seed) * 2f - 1f) * 10f);
+            var (r, g, b) = reach < 2.2f ? (138, 150, 70) : spoke ? (120, 162, 50) : (68, 116, 30);
+            Put(t, x, y, Clamp(r + d - (int)reach), Clamp(g + d - (int)reach), Clamp(b + d), 255);
+        }
+
+        return t;
+    }
+
+    /// <summary>
+    /// A slice of melon as carried: a red half-moon on its green rind, black pips in the flesh —
+    /// or glistering, flecked with gold, for the brewer's.
+    /// </summary>
+    public static byte[] IconMelonSlice(int seed, bool glistering)
+    {
+        var t = new byte[BytesPerTile];
+
+        for (var y = 3; y < 13; y++)
+        for (var x = 2; x < 14; x++)
+        {
+            // The half-moon: under a circle's centre line, inside its radius.
+            var dx = (x - 7.5f) / 5.6f;
+            var dy = (y - 4.5f) / 7.4f;
+            var reach = dx * dx + dy * dy;
+            if (reach > 1f) continue;
+
+            var d = (int)((Noise(x, y, seed) * 2f - 1f) * 9f);
+            var rind = reach > 0.72f;
+            var pith = !rind && reach > 0.6f;
+            var pip = !rind && !pith && y > 5 && (x * 7 + y * 5) % 11 == 0;
+            var gold = glistering && !rind && (x * 5 + y * 3 + seed) % 6 == 0;
+
+            var (r, g, b) =
+                rind ? (66, 128, 36)
+                : pith ? (236, 214, 150)
+                : gold ? (250, 216, 84)
+                : pip ? (34, 24, 20)
+                : glistering ? (226, 96, 58)
+                : (214, 54, 46);
+            Put(t, x, y, Clamp(r + d), Clamp(g + d), Clamp(b + d), 255);
+        }
+
+        return t;
+    }
+
+    /// <summary>
+    /// A fruit's stem at one stage: a green shoot that climbs with each stage, and at the last
+    /// bends over browning toward the fruit it has set.
+    /// </summary>
+    public static byte[] Stem(int seed, int stage)
+    {
+        var t = new byte[BytesPerTile];
+        var ripe = stage >= Blocks.StarterBlocks.StemStages - 1;
+        var height = 4 + stage * 3;
+
+        var prev = int.MinValue;
+        for (var up = 0; up < height; up++)
+        {
+            var y = Size - 1 - up;
+            if (y < 1) break;
+
+            // Ripe, the stalk leans over in its top third; growing, it stands nearly straight.
+            var lean = ripe ? Math.Max(0, up - height * 2 / 3) : 0;
+            var x = Math.Clamp(7 + lean + (int)MathF.Round(MathF.Sin(up * 0.6f + seed) * 0.6f), 1, Size - 2);
+
+            var d = (int)((Noise(x, y, seed) * 2f - 1f) * 10f);
+            var (r, g, b) = ripe ? (150, 126, 46) : (92, 150, 48);
+            Put(t, x, y, Clamp(r + d), Clamp(g + d), Clamp(b + d), 255);
+            if (prev != int.MinValue && prev != x) Put(t, prev, y, Clamp(r + d), Clamp(g + d), Clamp(b + d), 255);
+            prev = x;
+
+            // A leaf off each side every four texels up, held level from the stalk.
+            if (up % 4 == 2)
+                for (var spread = 1; spread <= 2 + stage / 2; spread++)
+                {
+                    var side = up % 8 == 2 ? 1 : -1;
+                    var lx = x + spread * side;
+                    if ((uint)lx < Size) Put(t, lx, y, Clamp(70 + d), Clamp(132 + d), Clamp(40 + d), 255);
+                }
+        }
+
+        return t;
+    }
+
+    /// <summary>
+    /// A cocoa pod's skin at one stage: green and furrowed young, yellowing, then a ripe
+    /// orange-brown — the colour is the whole of what tells a player it is ready.
+    /// </summary>
+    public static byte[] CocoaPod(int seed, int stage)
+    {
+        var t = new byte[BytesPerTile];
+        var (r, g, b) = stage switch
+        {
+            0 => (110, 146, 52),
+            1 => (176, 150, 62),
+            _ => (164, 92, 40),
+        };
+
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            // Furrows run the pod's length, every third texel.
+            var furrow = x % 3 == 0 ? -26 : 0;
+            var d = (int)((Noise(x, y, seed + stage) * 2f - 1f) * 10f);
+            Put(t, x, y, Clamp(r + d + furrow), Clamp(g + d + furrow), Clamp(b + d + furrow / 2), 255);
+        }
+
+        return t;
+    }
+
+    /// <summary>A cookie: a round golden biscuit with dark chips pressed into it.</summary>
+    public static byte[] IconCookie(int seed)
+    {
+        var t = new byte[BytesPerTile];
+
+        for (var y = 2; y < 14; y++)
+        for (var x = 2; x < 14; x++)
+        {
+            var dx = x - 7.5f;
+            var dy = y - 7.5f;
+            var reach = dx * dx + dy * dy;
+            if (reach > 31f) continue;
+
+            var d = (int)((Noise(x, y, seed) * 2f - 1f) * 10f);
+            var chip = (x * 5 + y * 7 + seed) % 9 == 0 && reach < 22f;
+            var edge = reach > 24f;
+            var (r, g, b) = chip ? (74, 42, 24) : edge ? (172, 112, 54) : (210, 148, 78);
+            Put(t, x, y, Clamp(r + d), Clamp(g + d), Clamp(b + d), 255);
+        }
+
+        return t;
+    }
+
     /// <summary>And its crown: the same ribs run to a woody stem in the middle.</summary>
     public static byte[] PumpkinTop(int seed)
     {

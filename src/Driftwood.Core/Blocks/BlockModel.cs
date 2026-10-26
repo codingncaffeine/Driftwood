@@ -1235,6 +1235,41 @@ public sealed class BlockModel
     /// part that model happened to put there; a face that reads all of it is a small picture of a
     /// lantern, which is wrong by a little in every pack rather than wrong entirely in most.
     /// </remarks>
+    /// <summary>
+    /// A cocoa pod hanging off the log on one side of its cell: a ribbed box that swells with each
+    /// stage, its top a quarter down from the cell's, flush against the bark.
+    /// </summary>
+    /// <param name="facing">The face of the cell the log is on.</param>
+    public static BlockModel Pod(ushort layer, int facing, int stage)
+    {
+        var width = 4f + stage * 2f;
+        var height = 5f + stage * 2f;
+        const float Top = 12f;
+
+        // Centred across the face, butted against it along it.
+        var (nx, _, nz) = Faces.Normals[facing];
+        var across = (16f - width) / 2f;
+        float x0 = across, x1 = across + width, z0 = across, z1 = across + width;
+        if (nx > 0) (x0, x1) = (16f - width, 16f);
+        if (nx < 0) (x0, x1) = (0f, width);
+        if (nz > 0) (z0, z1) = (16f - width, 16f);
+        if (nz < 0) (z0, z1) = (0f, width);
+
+        var faces = new ModelFace?[Faces.Count];
+        for (var face = 0; face < Faces.Count; face++)
+            faces[face] = new ModelFace { Layer = layer, Uv = new Vector4(0f, 0f, 16f, 16f) };
+
+        return new BlockModel(
+        [
+            new ModelElement
+            {
+                From = new Vector3(x0, Top - height, z0),
+                To = new Vector3(x1, Top, z1),
+                Faces = faces,
+            },
+        ]);
+    }
+
     public static BlockModel Lantern(ushort layer, bool hanging)
     {
         var body = new ModelFace?[Faces.Count];

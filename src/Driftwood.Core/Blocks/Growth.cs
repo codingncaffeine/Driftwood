@@ -130,6 +130,12 @@ public sealed class Growth
     private readonly BlockId _water;
     private readonly BlockId _kelp;
 
+    /// <summary>For a cocoa pod, the next size up on the same side; -1 for a ripe pod and everything else.</summary>
+    private readonly int[] _podNext;
+
+    /// <summary>For a ripe stem, the fruit it sets beside it; -1 for everything else.</summary>
+    private readonly int[] _fruitOf;
+
     /// <summary>How likely a kelp stalk's top is to put on a joint when it is looked at.</summary>
     /// <remarks>
     /// A tenth of a crop's chance: a cut forest grows back over an hour or two rather than while a
@@ -144,6 +150,19 @@ public sealed class Growth
     {
         _water = registry.ByName("water").Id;
         _kelp = registry.ByName("kelp").Id;
+
+        _podNext = new int[registry.Count];
+        Array.Fill(_podNext, -1);
+        for (var stage = 0; stage + 1 < StarterBlocks.CocoaStages; stage++)
+        for (var f = 0; f < Placeable.Facings.Length; f++)
+            _podNext[registry.ByName(StarterBlocks.CocoaName(stage, f)).Id.Value] =
+                registry.ByName(StarterBlocks.CocoaName(stage + 1, f)).Id.Value;
+
+        _fruitOf = new int[registry.Count];
+        Array.Fill(_fruitOf, -1);
+        foreach (var (fruit, _) in StarterBlocks.StemFruits)
+            _fruitOf[registry.ByName(StarterBlocks.StemName(fruit, StarterBlocks.StemStages - 1)).Id.Value] =
+                registry.ByName(fruit).Id.Value;
 
         _next = new int[registry.Count];
         _isCrop = new bool[registry.Count];
@@ -303,6 +322,38 @@ public sealed class Growth
             return true;
         }
 
+        // ⛳ A cocoa pod (2026-10-26) swells a size on a fifth of a crop's chance, light or dark —
+        // it hangs in the shade of its own tree, so asking for light would starve every one.
+        if (_podNext[here.Value] >= 0)
+        {
+            if (roll >= StageChance * 0.2) return false;
+            Write(world, x, y, z, new BlockId((ushort)_podNext[here.Value]));
+            return true;
+        }
+
+        // ⛳ A grown stem (2026-10-26) sets its fruit in a neighbouring cell — one of the four
+        // round it, by the roll — on soil or tilled ground, while it stands lit on watered
+        // ground and has no fruit beside it already. Take the fruit and it sets another.
+        if (_fruitOf[here.Value] >= 0)
+        {
+            if (world.GetBlock(x, y - 1, z) != _farmlandWet) return false;
+            if (LightOf(world.GetLight(x, y, z)) < MinLight) return false;
+            if (roll >= StageChance * 0.5) return false;
+
+            var fruit = new BlockId((ushort)_fruitOf[here.Value]);
+            foreach (var (fx, fz) in Around)
+                if (world.GetBlock(x + fx, y, z + fz) == fruit) return false;
+
+            var (dx, dz) = Around[(int)(roll / (StageChance * 0.5) * 4.0) & 3];
+            if (!world.GetBlock(x + dx, y, z + dz).IsAir) return false;
+
+            var soil = world.GetBlock(x + dx, y - 1, z + dz);
+            if (soil != _grass && soil != _dirt && !_isFarmland[soil.Value]) return false;
+
+            Write(world, x + dx, y, z + dz, fruit);
+            return true;
+        }
+
         if (!_isCrop[here.Value] || _next[here.Value] < 0) return false;
 
         // ⛔ On tilled ground, and WATERED tilled ground. Without this a crop grows on the dry
@@ -396,6 +447,9 @@ public sealed class Growth
 
         return false;
     }
+
+    /// <summary>The four cells round a stem a fruit may be set in.</summary>
+    private static readonly (int X, int Z)[] Around = [(1, 0), (-1, 0), (0, 1), (0, -1)];
 
     private static readonly (int, int, int)[] Neighbours =
         [(1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1)];

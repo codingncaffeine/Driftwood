@@ -741,6 +741,25 @@ public static class StarterItems
         // shut inside it is the meadow's own lantern. The carve itself is an act on the world, not
         // a recipe — the shears do it where the pumpkin stands.
         Block(items, blocks, "pumpkin", "pumpkin", StarterBlocks.LayerPumpkinSide);
+
+        // ⛳ The melon and the seeds of both (2026-10-26). A melon breaks into slices; nine slices
+        // pack back into one. Each fruit's seeds go into tilled ground as a stem that sets the
+        // fruit beside it, so a pumpkin is a crop now and not only a find.
+        Block(items, blocks, "melon", "melon", StarterBlocks.LayerMelonSide);
+        items.Register(new ItemType
+        {
+            Name = "melon_slice", Label = "melon slice", IconLayer = StarterBlocks.LayerMelonSlice, Feeds = 2,
+        });
+        Loose(items, "melon_seeds", "melon seeds", StarterBlocks.LayerMelonSeeds);
+        Loose(items, "pumpkin_seeds", "pumpkin seeds", StarterBlocks.LayerPumpkinSeeds);
+        // ⛳ Cocoa (2026-10-26): beans picked off a warm wood's pods, pressed against any log to
+        // hang a new pod there, and baked with wheat into cookies.
+        Loose(items, "cocoa_beans", "cocoa beans", StarterBlocks.LayerCocoaBeans);
+        items.Register(new ItemType
+        {
+            Name = "cookie", Label = "cookie", IconLayer = StarterBlocks.LayerCookie, Feeds = 2,
+        });
+        Loose(items, "glistering_melon_slice", "glistering melon slice", StarterBlocks.LayerGlisteringMelon);
         Block(items, blocks, "bookshelf", "bookshelf", StarterBlocks.LayerBookshelf, burn: 15f);
 
         items.Register(new ItemType
@@ -1312,7 +1331,13 @@ public static class StarterItems
             // ⛳ Flint, one dig of gravel in ten (2026-10-26): the reference's rate. On top of the
             // gravel rather than instead of it, so a gravel bank is never mined into nothing.
             new("gravel", "flint", 0.1f),
+
+            // A melon is three slices for certain and up to four more: the reference's three to seven.
+            new("melon", "melon_slice", 1f, 1, 4),
         };
+
+        for (var f = 0; f < Placeable.Facings.Length; f++)
+            rows.Add(new BlockDrops.Chance(StarterBlocks.CocoaName(StarterBlocks.CocoaStages - 1, f), "cocoa_beans", 0.5f));
 
         foreach (var leaves in (string[])["driftoak_leaves", StarterBlocks.LeavesPlacedName])
         {
@@ -1462,6 +1487,19 @@ public static class StarterItems
     /// persist. Built off the table so a fourth crop is a row in <see cref="StarterBlocks.Crops"/>
     /// and nothing here.
     /// </remarks>
+    /// <summary>Every stage of every stem gives its seed back, and nothing else — the fruit is the harvest.</summary>
+    private static IEnumerable<BlockDrops.Rule> StemDropRules() =>
+        from pair in StarterBlocks.StemFruits
+        from stage in Enumerable.Range(0, StarterBlocks.StemStages)
+        select new BlockDrops.Rule(StarterBlocks.StemName(pair.Fruit, stage), pair.Seeds);
+
+    /// <summary>A young pod gives its bean back; a ripe one two, and a coin for a third.</summary>
+    private static IEnumerable<BlockDrops.Rule> CocoaDropRules() =>
+        from stage in Enumerable.Range(0, StarterBlocks.CocoaStages)
+        from f in Enumerable.Range(0, Placeable.Facings.Length)
+        select new BlockDrops.Rule(
+            StarterBlocks.CocoaName(stage, f), "cocoa_beans", stage == StarterBlocks.CocoaStages - 1 ? 2 : 1);
+
     private static BlockDrops.Rule[] CropDropRules()
     {
         var rules = new BlockDrops.Rule[StarterBlocks.CropCount * StarterBlocks.CropStages];
@@ -1533,6 +1571,9 @@ public static class StarterItems
         // there should not be: the first field comes from walking through a meadow pulling up tufts,
         // which is a thing a player does by accident on their first afternoon and can then use.
         new BlockDrops.Rule("meadowgrass", "seeds"),
+        new BlockDrops.Rule("melon", "melon_slice", 3),
+        .. StemDropRules(),
+        .. CocoaDropRules(),
 
         // ⚠ Tilled ground digs up as the dirt it was made from. Farmland has an item nowhere and
         // needs none — it is a state of the ground rather than a thing to carry.

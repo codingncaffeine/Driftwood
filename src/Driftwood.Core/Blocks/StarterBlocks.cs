@@ -811,7 +811,44 @@ public static class StarterBlocks
     public const ushort LayerDriedKelpTop = LayerFermentedSpiderEye + 3;
     public const ushort LayerDriedKelpSide = LayerFermentedSpiderEye + 4;
 
-    public const int LayerCount = LayerDriedKelpSide + 1;
+
+    /// <summary>
+    /// The melon, its slices and seed, the pumpkin's seed, and the stem both grow from (2026-10-26).
+    /// </summary>
+    public const ushort LayerMelonSide = LayerDriedKelpSide + 1;
+    public const ushort LayerMelonTop = LayerDriedKelpSide + 2;
+    public const ushort LayerMelonSlice = LayerDriedKelpSide + 3;
+    public const ushort LayerMelonSeeds = LayerDriedKelpSide + 4;
+    public const ushort LayerPumpkinSeeds = LayerDriedKelpSide + 5;
+    public const ushort LayerGlisteringMelon = LayerDriedKelpSide + 6;
+    public const ushort LayerFirstStem = LayerDriedKelpSide + 7;
+
+
+    /// <summary>The cocoa pod's three sizes, green to ripe, and the bean and cookie (2026-10-26).</summary>
+    public const ushort LayerFirstCocoa = LayerFirstStem + StemStages;
+    public const ushort LayerCocoaBeans = LayerFirstCocoa + CocoaStages;
+    public const ushort LayerCookie = LayerCocoaBeans + 1;
+
+    public const int LayerCount = LayerCookie + 1;
+
+    /// <summary>How many sizes a cocoa pod swells through.</summary>
+    public const int CocoaStages = 3;
+
+    /// <summary>One cocoa pod, by stage and by which side of its cell the log is on.</summary>
+    public static string CocoaName(int stage, int facing) => $"cocoa_{stage}_{FacingNames[facing]}";
+
+    /// <summary>How many stages a melon or pumpkin stem climbs before it sets fruit.</summary>
+    public const int StemStages = 4;
+
+    /// <summary>The two fruits that grow on a stem beside it rather than in its own cell.</summary>
+    public static readonly (string Fruit, string Seeds)[] StemFruits =
+    [
+        ("melon", "melon_seeds"),
+        ("pumpkin", "pumpkin_seeds"),
+    ];
+
+    /// <summary>One stage of a fruit's stem, as a block name.</summary>
+    public static string StemName(string fruit, int stage) => $"{fruit}_stem_{stage}";
 
     /// <summary>One stage of the ashcap, as a block name.</summary>
     public static string AshcapName(int stage) => $"ashcap_{stage}";
@@ -899,7 +936,7 @@ public static class StarterBlocks
     /// </remarks>
     public static GrowthLadder[] CropLadders()
     {
-        var ladders = new GrowthLadder[3 + CropCount];
+        var ladders = new GrowthLadder[3 + CropCount + StemFruits.Length];
 
         var wheat = new string[WheatStages];
         for (var s = 0; s < WheatStages; s++) wheat[s] = WheatName(s);
@@ -910,6 +947,15 @@ public static class StarterBlocks
             var rungs = new string[CropStages];
             for (var s = 0; s < CropStages; s++) rungs[s] = CropName(c, s);
             ladders[c + 1] = new GrowthLadder(rungs, OnFarmland: true);
+        }
+
+        // ⛳ The stems (2026-10-26): tilled crops whose ripe rung sets its fruit in the next cell
+        // over, which is Growth's rule, not a rung of the ladder.
+        for (var f = 0; f < StemFruits.Length; f++)
+        {
+            var fruit = StemFruits[f].Fruit;
+            ladders[1 + CropCount + f] = new GrowthLadder(
+                [.. Enumerable.Range(0, StemStages).Select(s => StemName(fruit, s))], OnFarmland: true);
         }
 
         ladders[^2] = new GrowthLadder([BerryBushName, BerryBushRipeName], OnFarmland: false);
@@ -929,6 +975,9 @@ public static class StarterBlocks
     {
         if (item == "seeds") return WheatName(0);
         if (item == "ashcap") return AshcapName(0);
+
+        foreach (var (fruit, seeds) in StemFruits)
+            if (item == seeds) return StemName(fruit, 0);
 
         for (var c = 0; c < CropCount; c++)
             if (Crops[c].Name == item) return CropName(c, 0);
@@ -1075,7 +1124,16 @@ public static class StarterBlocks
         BlockId WetSponge,
 
         /// <summary>The deep sea's forest (2026-10-26): stalks standing in water six deep or more.</summary>
-        BlockId Kelp)
+        BlockId Kelp,
+
+        /// <summary>The melon as found wild, beside the pumpkin and the berry bush (2026-10-26).</summary>
+        BlockId Melon,
+
+        /// <summary>
+        /// The ripe cocoa pod, one per side of its cell in <see cref="Placeable.Facings"/> order —
+        /// how one is found on a warm wood's trunks (2026-10-26).
+        /// </summary>
+        BlockId[] CocoaRipe)
     {
         /// <summary>Every log a canopy counts as its tree, for the decay rule.</summary>
         public BlockId[] Logs => [Log, CherryLog];
@@ -1517,6 +1575,44 @@ public static class StarterBlocks
             HarvestClass = ToolClass.Axe,
             TopLayer = LayerPumpkinTop, SideLayer = LayerPumpkinSide, BottomLayer = LayerPumpkinTop,
         });
+
+        // ⛳ The melon (2026-10-26), the pumpkin's twin in the wild finds: broken, it comes apart
+        // into three to seven slices rather than coming home whole.
+        var melon = registry.Register(new BlockType
+        {
+            Name = "melon", Hardness = 1.0f, Sounds = SoundMaterial.Wood,
+            HarvestClass = ToolClass.Axe,
+            TopLayer = LayerMelonTop, SideLayer = LayerMelonSide, BottomLayer = LayerMelonTop,
+        });
+
+        // ⛳ Cocoa (2026-10-26): a pod hung off the side of a log, one id per size per side —
+        // the stage is the block, as every crop's is. The ripe ones are what a warm wood grows.
+        var cocoaRipe = new BlockId[Placeable.Facings.Length];
+        for (var stage = 0; stage < CocoaStages; stage++)
+        for (var f = 0; f < Placeable.Facings.Length; f++)
+        {
+            var id = registry.Register(new BlockType
+            {
+                Name = CocoaName(stage, f), Hardness = 0.2f, Crafted = true, Derived = stage < CocoaStages - 1,
+                Solid = false, Opaque = false, Sounds = SoundMaterial.Wood,
+                HarvestClass = ToolClass.Axe,
+                SupportFace = Placeable.Facings[f],
+                Model = BlockModel.Pod((ushort)(LayerFirstCocoa + stage), Placeable.Facings[f], stage),
+            });
+            if (stage == CocoaStages - 1) cocoaRipe[f] = id;
+        }
+
+        // And the stem each grows from: a tilled crop of four stages sharing one drawing, the
+        // reference's way, which sets its fruit beside it once it is grown.
+        foreach (var (fruit, _) in StemFruits)
+        for (var stage = 0; stage < StemStages; stage++)
+            registry.Register(new BlockType
+            {
+                Name = StemName(fruit, stage), Hardness = 0.05f, Crafted = true, Derived = stage > 0,
+                Solid = false, Opaque = false, Sounds = SoundMaterial.Plant,
+                SupportFace = Faces.NegY,
+                Model = BlockModel.Cross((ushort)(LayerFirstStem + stage), tinted: false),
+            });
 
         // Carved, it keeps its body and gains a face on one side — and with a torch shut inside it
         // is the meadow's own lantern. Four facings each: every orientation is its own id.
@@ -2367,7 +2463,7 @@ public static class StarterBlocks
             registry.ByName("tidestone").Id, registry.ByName("tidestone_bricks").Id,
             registry.ByName("dark_tidestone").Id, registry.ByName("deeplight").Id,
             registry.ByName("sponge").Id, registry.ByName("wet_sponge").Id,
-            kelp);
+            kelp, melon, cocoaRipe);
     }
 
     /// <summary>The saplings and the placed leaves, by name, for the rows that speak of them.</summary>

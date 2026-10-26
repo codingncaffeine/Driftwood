@@ -107,6 +107,7 @@ public static class Potions
         ["glowcap"] = "night_vision",
         ["seagrass"] = "water_breathing",
         ["sunwort"] = "healing",
+        ["glistering_melon_slice"] = "healing",
         ["mushroom_red"] = "poison",
         ["spider_eye"] = "poison",
     };

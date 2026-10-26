@@ -809,6 +809,28 @@ public static class BlockTextureSet
         new("dried_kelp", "textures/item/dried_kelp.png", true),
         new("dried_kelp_top", "textures/block/dried_kelp_top.png", false),
         new("dried_kelp_side", "textures/block/dried_kelp_side.png", false),
+        new("melon_side", "textures/block/melon_side.png", false, "textures/blocks/melon_side.png"),
+        new("melon_top", "textures/block/melon_top.png", false, "textures/blocks/melon_top.png"),
+        new("melon_slice", "textures/item/melon_slice.png", true, "textures/items/melon.png"),
+        new("melon_seeds", "textures/item/melon_seeds.png", true, "textures/items/seeds_melon.png"),
+        new("pumpkin_seeds", "textures/item/pumpkin_seeds.png", true, "textures/items/seeds_pumpkin.png"),
+        new("glistering_melon_slice", "textures/item/glistering_melon_slice.png", true,
+            "textures/items/melon_speckled.png"),
+
+        // ⚠ No pack path, honestly: the reference's stem is one grey drawing tinted by age in the
+        // shader, and this one is untinted — a grey stem would read as dead.
+        new("stem_0", "", true),
+        new("stem_1", "", true),
+        new("stem_2", "", true),
+        new("stem_3", "", true),
+
+        // ⚠ No pack path for the pods, honestly: the reference's cocoa is a model with its own
+        // unwrapped layout, and ours is a plain box reading one whole tile per face.
+        new("cocoa_0", "", false),
+        new("cocoa_1", "", false),
+        new("cocoa_2", "", false),
+        new("cocoa_beans", "textures/item/cocoa_beans.png", true, "textures/items/dye_powder_brown.png"),
+        new("cookie", "textures/item/cookie.png", true, "textures/items/cookie.png"),
     ];
 
     /// <summary>
@@ -1975,6 +1997,18 @@ public static class BlockTextureSet
             StarterBlocks.LayerDriedKelp => TileGen.IconLeather(1488, 58, 70, 40),
             StarterBlocks.LayerDriedKelpTop => TileGen.Rings(1489, 54, 66, 38),
             StarterBlocks.LayerDriedKelpSide => TileGen.Planks(1490, 50, 62, 36),
+            StarterBlocks.LayerMelonSide => TileGen.MelonSide(1491),
+            StarterBlocks.LayerMelonTop => TileGen.MelonTop(1492),
+            StarterBlocks.LayerMelonSlice => TileGen.IconMelonSlice(1493, glistering: false),
+            StarterBlocks.LayerMelonSeeds => TileGen.IconGrains(1494, 46, 34, 24),
+            StarterBlocks.LayerPumpkinSeeds => TileGen.IconGrains(1495, 222, 208, 150),
+            StarterBlocks.LayerGlisteringMelon => TileGen.IconMelonSlice(1496, glistering: true),
+            >= StarterBlocks.LayerFirstStem and < StarterBlocks.LayerFirstStem + StarterBlocks.StemStages =>
+                TileGen.Stem(1497, layer - StarterBlocks.LayerFirstStem),
+            >= StarterBlocks.LayerFirstCocoa and < StarterBlocks.LayerFirstCocoa + StarterBlocks.CocoaStages =>
+                TileGen.CocoaPod(1498, layer - StarterBlocks.LayerFirstCocoa),
+            StarterBlocks.LayerCocoaBeans => TileGen.IconLump(1499, 108, 62, 34),
+            StarterBlocks.LayerCookie => TileGen.IconCookie(1500),
             _ => Wheat(layer) ?? Crop(layer) ?? CropIcon(layer) ?? PotionIcon(layer) ?? StainedGlass(layer)
                  ?? MetalBlock(layer) ?? Wool(layer) ?? Meat(layer) ?? Dye(layer)
                  ?? Armour(layer) ?? Shield(layer) ?? Tool(layer),

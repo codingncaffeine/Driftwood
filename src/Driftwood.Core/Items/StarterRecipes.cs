@@ -328,6 +328,13 @@ public static class StarterRecipes
         // so the same three make six.
         Shaped("flint arrows", "arrow", 6, ["f", "S", "H"], station: CraftStation.Bench);
         LooseAt("flint and steel", "flint_and_steel", 1, CraftStation.Bench, "iron_ingot", "flint");
+        Shaped("cookies", "cookie", 8, ["hoh"], station: CraftStation.Bench);
+        LooseAt("brown dye from cocoa", "dye_brown", 1, CraftStation.Bench, "cocoa_beans");
+        LooseAt("melon seeds", "melon_seeds", 1, CraftStation.Bench, "melon_slice");
+        LooseAt("pumpkin seeds", "pumpkin_seeds", 4, CraftStation.Bench, "pumpkin");
+        Shaped("melon", "melon", 1, ["MMM", "MMM", "MMM"], "melon_slice", station: CraftStation.Bench);
+        Shaped("glistering melon slice", "glistering_melon_slice", 1, ["MMM", "MnM", "MMM"], "gold_nugget",
+            station: CraftStation.Bench);
         Shaped("dried kelp block", "dried_kelp_block", 1, ["MMM", "MMM", "MMM"], "dried_kelp", station: CraftStation.Bench);
         LooseAt("dried kelp from a block", "dried_kelp", 9, CraftStation.Bench, "dried_kelp_block");
         LooseAt("fermented spider eye", "fermented_spider_eye", 1, CraftStation.Bench,
@@ -768,6 +775,8 @@ public static class StarterRecipes
         'e' => "egg",
         'h' => "wheat",
         'f' => "flint",
+        'n' => "melon_slice",
+        'o' => "cocoa_beans",
         's' => "ember_star",
         'c' => "tide_crystals",
         'M' => material ?? throw new InvalidOperationException($"recipe '{recipe}' uses M with no material"),

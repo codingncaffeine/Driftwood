@@ -14872,6 +14872,38 @@ public sealed class ClientHost : IDisposable
         return true;
     }
 
+    /// <summary>
+    /// Presses a cocoa bean against the side of a log, hanging a young pod there (2026-10-26).
+    /// </summary>
+    /// <remarks>
+    /// ⛳ Any log, either species: the reference asks for its jungle wood, and this world has no
+    /// jungle — the warm wet woods grow the wild pods on driftoak, so a driftoak has to take one.
+    /// </remarks>
+    private bool HangPod(RayHit hit)
+    {
+        if (_inventory.HeldType is not { Name: "cocoa_beans" } held) return false;
+
+        var log = _registry[_streamer.World.GetBlock(hit.X, hit.Y, hit.Z)].Name;
+        if (log is not ("driftoak_log" or "cherry_log")) return false;
+
+        var side = Array.IndexOf(Placeable.Facings, hit.Face);
+        if (side < 0) return false;
+
+        var (nx, _, nz) = Faces.Normals[hit.Face];
+        var (x, y, z) = (hit.X + nx, hit.Y, hit.Z + nz);
+        if (!_registry[_streamer.World.GetBlock(x, y, z)].Replaceable) return false;
+
+        // The pod's cell is out from the struck face; the log is back the other way from it.
+        var towardLog = Array.IndexOf(Placeable.Facings, Placeable.Opposite(hit.Face));
+        var pod = _registry.ByName(StarterBlocks.CocoaName(0, towardLog)).Id;
+        _streamer.EditBlock(x, y, z, pod);
+
+        _inventory.SpendHeld();
+        Achieve(AchievementEvents.Plant, held.Name);
+        PlaySound(_registry[pod], SoundEvent.Place, new Vector3(x + 0.5f, y + 0.5f, z + 0.5f), 0.6f);
+        return true;
+    }
+
     /// <summary>Puts a berry bush down on plain grass or dirt, the way seeds go into tilled ground.</summary>
     /// <remarks>
     /// ⛳ A gate of its own rather than a Places on the berry, because what a berry becomes depends
@@ -15430,7 +15462,7 @@ public sealed class ClientHost : IDisposable
         // and bone meal hurries what is growing there. All asked before the block's own Use,
         // because the ground has no Use of its own and would otherwise fall through to being
         // built on.
-        if (UseHoe(hit) || SmotherFire(hit) || Kindle(hit) || PlantSeed(hit) || PlantBush(hit)
+        if (UseHoe(hit) || SmotherFire(hit) || Kindle(hit) || PlantSeed(hit) || PlantBush(hit) || HangPod(hit)
             || CarvePumpkin(hit) || UseBonemeal(hit))
             return true;
 

@@ -3477,6 +3477,11 @@ public static class WorldAudit
             var farmed = new List<(string Seed, string Crop)> { ("seeds", "wheat") };
             foreach (var crop in StarterBlocks.Crops) farmed.Add((crop.Name, crop.Name));
 
+            // ⛳ And the stems (2026-10-26): a seed in, its fruit set beside it — a melon breaks
+            // into slices where it grew, a pumpkin comes home whole.
+            farmed.Add(("melon_seeds", "melon_slice"));
+            farmed.Add(("pumpkin_seeds", "pumpkin"));
+
             foreach (var (seed, crop) in farmed)
             {
                 if (!Held(items.ByName(seed).Id)) continue;
@@ -9401,7 +9406,9 @@ public static class WorldAudit
         (StarterBlocks.LayerGoldenApple, "golden_apple"),
         (StarterBlocks.LayerCake, "cake"),
         (StarterBlocks.LayerFermentedSpiderEye, "fermented_spider_eye"),
-        ((ushort)(StarterBlocks.LayerCount - 1), "dried_kelp_side"),
+        (StarterBlocks.LayerDriedKelpSide, "dried_kelp_side"),
+        ((ushort)(StarterBlocks.LayerFirstStem + StarterBlocks.StemStages - 1), "stem_3"),
+        ((ushort)(StarterBlocks.LayerCount - 1), "cookie"),
     ];
 
     /// <summary>
@@ -9412,7 +9419,7 @@ public static class WorldAudit
     /// has one: the reference's <c>wheat_seeds.png</c> is nine separate grains.
     /// </remarks>
     private static readonly HashSet<string> Scatters =
-        new(StringComparer.Ordinal) { "seeds" };
+        new(StringComparer.Ordinal) { "seeds", "melon_seeds", "pumpkin_seeds" };
 
     /// <summary>
     /// Breaks twenty thousand leaves of each species with a bare hand, and a few with shears, and

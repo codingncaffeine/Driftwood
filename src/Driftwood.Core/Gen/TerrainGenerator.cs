@@ -1741,9 +1741,11 @@ public sealed class TerrainGenerator
                 // one; a pumpkin is whole because carving it is the player's own act.
                 if (roll < 0.0018f)
                 {
-                    var find = Noise.Fbm2(wx / 96f, wz / 96f, _seedMeadow + 41, 2) < 0f
-                        ? _ids.BerryBushRipe
-                        : _ids.Pumpkin;
+                    // ⛳ Three finds now (2026-10-26): the melon takes the top band of the field.
+                    var band = Noise.Fbm2(wx / 96f, wz / 96f, _seedMeadow + 41, 2);
+                    var find = band < -0.05f ? _ids.BerryBushRipe
+                        : band < 0.12f ? _ids.Pumpkin
+                        : _ids.Melon;
 
                     PlaceIntoAir(chunk, ox, oy, oz, wx, surface + 1, wz, find);
                     continue;
@@ -2241,7 +2243,27 @@ public sealed class TerrainGenerator
             };
             PlaceIntoAir(canvas, tree.X + dx, tree.BaseY, tree.Z + dz, tree.LogOf(_ids));
         }
+
+        // ⛳ Cocoa (2026-10-26): a driftoak in warm, wet country hangs a ripe pod or two on its
+        // trunk, low enough to reach, on whichever sides its own rolls pick.
+        if (tree.Cherry || !CocoaClimate(tree.X, tree.Z)) return;
+        if (Noise.Value2(tree.X, tree.Z, tree.Seed + 77) > 0.4f) return;
+
+        for (var f = 0; f < 4; f++)
+        {
+            if (Noise.Value3(tree.X, f, tree.Z, tree.Seed + 79) > 0.3f) continue;
+
+            // The pod's cell is beside the trunk; the log is on the opposite side of THAT cell.
+            var (nx, _, nz) = Faces.Normals[Placeable.Facings[f]];
+            var y = tree.BaseY + 1 + (int)(Noise.Value3(tree.X, f, tree.Z, tree.Seed + 83) * 3f);
+            var towardLog = Array.IndexOf(Placeable.Facings, Placeable.Opposite(Placeable.Facings[f]));
+            PlaceIntoAir(canvas, tree.X + nx, y, tree.Z + nz, _ids.CocoaRipe[towardLog]);
+        }
     }
+
+    /// <summary>Warm enough and wet enough for cocoa: the reference's jungle, in this world's climate.</summary>
+    private bool CocoaClimate(int x, int z) =>
+        _climate.Temperature(x, z) > HotLine - 0.06f && _climate.Downfall(x, z) > 0.5f;
 
     /// <summary>
     /// Grows one to three limbs out of the upper trunk, each ending in a knot of leaves.
