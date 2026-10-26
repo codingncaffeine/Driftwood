@@ -21,6 +21,9 @@ public enum ProjectileKind : byte
 
     /// <summary>An ashwail's bolt: slow, bursting where it lands, and turned back by a blow.</summary>
     WailBolt,
+
+    /// <summary>A seeker's eye, flying toward the Sanctum for a moment and then coming down.</summary>
+    Seeker,
 }
 
 /// <summary>Who launched a projectile. Spells and creature shots can extend this without a new pool.</summary>
@@ -83,6 +86,10 @@ public sealed class ProjectileSystem
 
     /// <summary>How near a bolt has to pass the point of a swing for the swing to send it back.</summary>
     public const float DeflectRadius = 1.1f;
+
+    /// <summary>How long a seeker's eye flies before it comes down: the reference's two seconds.</summary>
+    public const float SeekerLife = 2.2f;
+    public const float SeekerSpeed = 8f;
     public const float Lifetime = 20f;
 
     private struct Slot
@@ -181,6 +188,17 @@ public sealed class ProjectileSystem
             if (!shot.Active) continue;
 
             shot.Age += dt;
+
+            // A seeker's eye ends its flight where it is, and says so: the host decides whether it
+            // comes down whole or shatters.
+            if (shot.Kind == ProjectileKind.Seeker && shot.Age >= SeekerLife)
+            {
+                Impact(shot, shot.Position, Vector3.UnitY, null,
+                    (int)MathF.Floor(shot.Position.X), (int)MathF.Floor(shot.Position.Y), (int)MathF.Floor(shot.Position.Z), -1);
+                Retire(ref shot);
+                continue;
+            }
+
             if (shot.Age >= Lifetime)
             {
                 Retire(ref shot);

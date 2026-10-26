@@ -80,6 +80,9 @@ public enum ItemUse
 
     /// <summary>Dipped in water to fill — the empty bottle.</summary>
     FillBottle,
+
+    /// <summary>Thrown, it flies toward the nearest Sanctum; used on a gate socket, it is set in it.</summary>
+    Seeker,
 }
 
 /// <summary>

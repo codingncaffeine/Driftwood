@@ -761,6 +761,12 @@ public static class BlockTextureSet
         new("emberite_debris", "textures/block/ancient_debris_side.png", false, "textures/blocks/ancient_debris_side.png"),
         new("emberite_scrap", "textures/item/netherite_scrap.png", true, "textures/items/netherite_scrap.png"),
         new("emberite_ingot", "textures/item/netherite_ingot.png", true, "textures/items/netherite_ingot.png"),
+        new("sanctum_socket_top", "textures/block/end_portal_frame_top.png", false, "textures/blocks/endframe_top.png"),
+        new("sanctum_socket_side", "textures/block/end_portal_frame_side.png", false, "textures/blocks/endframe_side.png"),
+        new("sanctum_socket_filled", "", false),
+        new("core_gate", "", false),
+        new("ember_crystal", "", true),
+        new("seeker_eye", "textures/item/ender_eye.png", true, "textures/items/ender_eye.png"),
     ];
 
     /// <summary>
@@ -1882,6 +1888,12 @@ public static class BlockTextureSet
             StarterBlocks.LayerEmberiteDebris => TileGen.Ember(1440, TileGen.Speckle(1441, 88, 64, 58, 22, 0.7f), 186, 120, 92),
             StarterBlocks.LayerEmberiteScrap => TileGen.IconLump(1442, 92, 72, 70),
             StarterBlocks.LayerEmberiteIngot => TileGen.IconIngot(1443, 78, 62, 66),
+            StarterBlocks.LayerSocketTop => TileGen.SocketTop(1444, eye: false),
+            StarterBlocks.LayerSocketSide => TileGen.Bricks(1445, 70, 74, 66, 40),
+            StarterBlocks.LayerSocketFilled => TileGen.SocketTop(1446, eye: true),
+            StarterBlocks.LayerCoreGate => TileGen.Ember(1447, TileGen.Speckle(1448, 26, 12, 10, 14, 0.8f), 255, 140, 60),
+            StarterBlocks.LayerEmberCrystal => TileGen.EmberCrystal(1449),
+            StarterBlocks.LayerSeekerEye => TileGen.IconSeekerEye(1450),
             _ => Wheat(layer) ?? Crop(layer) ?? CropIcon(layer) ?? PotionIcon(layer) ?? StainedGlass(layer)
                  ?? MetalBlock(layer) ?? Wool(layer) ?? Meat(layer) ?? Dye(layer)
                  ?? Armour(layer) ?? Shield(layer) ?? Tool(layer),

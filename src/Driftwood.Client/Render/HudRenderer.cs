@@ -2537,6 +2537,7 @@ public sealed class HudRenderer : IDisposable
         AchievementTab.Adventure => "driftoak_planks",
         AchievementTab.Husbandry => "dirt",
         AchievementTab.Emberdeep => "emberstone",
+        AchievementTab.Core => "polished_deepstone",
         _ => "rubble",
     };
 

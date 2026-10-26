@@ -738,7 +738,18 @@ public static class StarterBlocks
     public const ushort LayerEmberiteScrap = LayerBrewingStand + 2;
     public const ushort LayerEmberiteIngot = LayerBrewingStand + 3;
 
-    public const int LayerCount = LayerEmberiteIngot + 1;
+    /// <summary>
+    /// The Sanctum and the Core (2026-10-25): the gate's socket — top, side, and top with an eye in
+    /// it — the gate itself, the ember crystal, and the seeker's eye.
+    /// </summary>
+    public const ushort LayerSocketTop = LayerEmberiteIngot + 1;
+    public const ushort LayerSocketSide = LayerEmberiteIngot + 2;
+    public const ushort LayerSocketFilled = LayerEmberiteIngot + 3;
+    public const ushort LayerCoreGate = LayerEmberiteIngot + 4;
+    public const ushort LayerEmberCrystal = LayerEmberiteIngot + 5;
+    public const ushort LayerSeekerEye = LayerEmberiteIngot + 6;
+
+    public const int LayerCount = LayerSeekerEye + 1;
 
     /// <summary>One stage of the ashcap, as a block name.</summary>
     public static string AshcapName(int stage) => $"ashcap_{stage}";
@@ -986,7 +997,14 @@ public static class StarterBlocks
         BlockId Ashsand,
         BlockId AshcapRipe,
         BlockId CinderCage,
-        BlockId EmberiteDebris)
+        BlockId EmberiteDebris,
+        BlockId SanctumSocket,
+        BlockId SanctumSocketFilled,
+        BlockId CoreGate,
+        BlockId EmberCrystal,
+        BlockId PolishedDeepstone,
+        BlockId DeepstoneBricks,
+        BlockId Bookshelf)
     {
         /// <summary>Every log a canopy counts as its tree, for the decay rule.</summary>
         public BlockId[] Logs => [Log, CherryLog];
@@ -2120,6 +2138,39 @@ public static class StarterBlocks
             TopLayer = LayerEmberiteDebris, SideLayer = LayerEmberiteDebris, BottomLayer = LayerEmberiteDebris,
         });
 
+        // ⛳ The Sanctum's gate (2026-10-25): twelve sockets, each taking one seeker's eye, round the
+        // three-by-three the gate opens in — the reference's portal frame. Neither socket can be
+        // broken: an eye set is set, and a gate is not a quarry.
+        var socket = registry.Register(new BlockType
+        {
+            Name = "sanctum_socket", Hardness = -1f, Crafted = true,
+            Sounds = SoundMaterial.Deepstone,
+            TopLayer = LayerSocketTop, SideLayer = LayerSocketSide, BottomLayer = LayerSocketSide,
+        });
+        var socketFilled = registry.Register(new BlockType
+        {
+            Name = "sanctum_socket_filled", Hardness = -1f, Crafted = true,
+            Sounds = SoundMaterial.Deepstone, LightEmission = LightValue.PackBlock(4, 8, 6),
+            TopLayer = LayerSocketFilled, SideLayer = LayerSocketSide, BottomLayer = LayerSocketSide,
+        });
+
+        // The gate, once open: walked into, it carries you down to the Core Hollow.
+        var coreGate = registry.Register(new BlockType
+        {
+            Name = "core_gate", Hardness = -1f, Crafted = true,
+            Solid = false, Opaque = false, Sounds = SoundMaterial.Glass,
+            LightEmission = LightValue.PackBlock(15, 8, 4),
+            Model = BlockModel.Cube(LayerCoreGate, LayerCoreGate, LayerCoreGate),
+        });
+
+        // The ember crystal on each of the Hollow's pillars, which feeds the wyrm while it stands.
+        var emberCrystal = registry.Register(new BlockType
+        {
+            Name = "ember_crystal", Hardness = 0.3f, Crafted = true, Opaque = false,
+            Sounds = SoundMaterial.Glass, LightEmission = LightValue.PackBlock(15, 12, 6),
+            Model = BlockModel.Cube(LayerEmberCrystal, LayerEmberCrystal, LayerEmberCrystal),
+        });
+
         var cinderCage = registry.Register(new BlockType
         {
             Name = "cinder_cage", Hardness = 5f, Opaque = false, Crafted = true,
@@ -2144,7 +2195,10 @@ public static class StarterBlocks
             registry.ByName("rail_x").Id,
             registry.ByName("lantern").Id,
             sapling, cherrySapling, leavesPlaced, cherryLeavesPlaced,
-            emberBricks, ashsand, ashcapRipe, cinderCage, emberiteDebris);
+            emberBricks, ashsand, ashcapRipe, cinderCage, emberiteDebris,
+            socket, socketFilled, coreGate, emberCrystal,
+            registry.ByName("polished_deepstone").Id, registry.ByName("deepstone_bricks").Id,
+            registry.ByName("bookshelf").Id);
     }
 
     /// <summary>The saplings and the placed leaves, by name, for the rows that speak of them.</summary>

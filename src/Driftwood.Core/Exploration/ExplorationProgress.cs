@@ -176,6 +176,14 @@ public static class WorldLoot
             new("gold_ingot", 1, 3), new("iron_ingot", 1, 5), new("diamond", 1, 3, 0.2f),
             new("ashcap", 3, 7), new("ashsand", 2, 6), new("fire_charge", 1, 3, 0.4f),
         ],
+
+        // The reference's stronghold library, by what this world has: books and paper, a pearl
+        // or two toward the eyes, and now and then a diamond.
+        [StructureKind.Sanctum] =
+        [
+            new("book", 1, 4), new("paper", 2, 8), new("farpearl", 1, 2, 0.5f),
+            new("iron_ingot", 1, 4), new("diamond", 1, 2, 0.15f),
+        ],
     };
 
     /// <summary>

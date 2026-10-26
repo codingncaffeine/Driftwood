@@ -285,6 +285,7 @@ public sealed class ItemRenderer : IDisposable
         var arrow = catalogue.ByName("arrow");
         var farpearl = catalogue.ByName("farpearl");
         var charge = catalogue.ByName("fire_charge");
+        var seeker = catalogue.ByName("seeker_eye");
 
         _shader.Use();
         _shader.SetMatrix4("uViewProj", viewProj);
@@ -302,6 +303,7 @@ public sealed class ItemRenderer : IDisposable
             {
                 ProjectileKind.Arrow => arrow,
                 ProjectileKind.Ember or ProjectileKind.WailBolt => charge,
+                ProjectileKind.Seeker => seeker,
                 ProjectileKind.Flask => catalogue.ByName(shot.Tag switch
                 {
                     ShotTag.SlownessFlask => "splash_potion_slowness",

@@ -16,6 +16,9 @@ public enum StructureKind : byte
 
     /// <summary>The Emberdeep's fortress (2026-10-25): the reference's Nether fortress, ours.</summary>
     Emberhold,
+
+    /// <summary>The Sanctum (2026-10-25): the reference's stronghold — the gate down to the Core.</summary>
+    Sanctum,
 }
 
 /// <summary>A structure's identity and bounds. The id survives block-id and palette changes.</summary>
@@ -75,6 +78,7 @@ public sealed class ExplorationGenerator
         StructureKind.StormVault => 448,
         StructureKind.StarfallCrown => 960,
         StructureKind.Emberhold => 384,
+        StructureKind.Sanctum => 768,
         _ => 320,
     };
 
@@ -107,6 +111,7 @@ public sealed class ExplorationGenerator
             StructureKind.StormVault => 0.38f,
             StructureKind.StarfallCrown => 0.52f,
             StructureKind.Emberhold => 0.7f,
+            StructureKind.Sanctum => 0.8f,
             _ => 0f,
         };
         if (Noise.Value2(cellX, cellZ, salt) >= chance) return null;
@@ -167,6 +172,9 @@ public sealed class ExplorationGenerator
             // ⛳ The Emberhold keeps to the Emberdeep whatever the surface does: a floor somewhere
             // forty to fifty below its top, above the molten sea at the bottom of the world.
             StructureKind.Emberhold => TerrainGenerator.EmberdeepTop - 40 - (int)(Noise.Value2(cellX, cellZ, salt + 47) * 10f),
+
+            // The Sanctum sits in the hollows, between the deep and the Emberdeep.
+            StructureKind.Sanctum => TerrainGenerator.HollowsTop - 26,
             _ => surface + 1,
         };
         var radius = kind switch
@@ -177,6 +185,7 @@ public sealed class ExplorationGenerator
             StructureKind.StormVault => 12,
             StructureKind.StarfallCrown => 18,
             StructureKind.Emberhold => 20,
+            StructureKind.Sanctum => 18,
             _ => MaxRadius,
         };
 
@@ -188,6 +197,7 @@ public sealed class ExplorationGenerator
             StructureKind.StormVault => y - 1,
             StructureKind.StarfallCrown => y,
             StructureKind.Emberhold => y - HoldPillars - 1,
+            StructureKind.Sanctum => y - 2,
             _ => y,
         };
         var maxY = kind switch
@@ -198,6 +208,7 @@ public sealed class ExplorationGenerator
             StructureKind.StormVault => y + 9,
             StructureKind.StarfallCrown => y + 14,
             StructureKind.Emberhold => y + 8,
+            StructureKind.Sanctum => y + 8,
             _ => y,
         };
 
@@ -314,6 +325,7 @@ public sealed class ExplorationGenerator
             case StructureKind.StormVault: WalkVault(site, emit); break;
             case StructureKind.StarfallCrown: WalkCrown(site, emit); break;
             case StructureKind.Emberhold: WalkHold(site, emit); break;
+            case StructureKind.Sanctum: WalkSanctum(site, emit); break;
         }
     }
 
@@ -331,6 +343,32 @@ public sealed class ExplorationGenerator
         var cells = new List<(int X, int Y, int Z)>();
         Walk(site, (x, y, z, block) => { if (block == _ids.CinderCage) cells.Add((x, y, z)); });
         return cells.Distinct().ToArray();
+    }
+
+    /// <summary>A Sanctum's twelve gate sockets, round the three-by-three.</summary>
+    public static IReadOnlyList<(int X, int Y, int Z)> SocketCells(StructureSite site)
+    {
+        if (site.Kind != StructureKind.Sanctum) return [];
+        var cells = new List<(int, int, int)>(12);
+        for (var d = -1; d <= 1; d++)
+        {
+            cells.Add((site.X + d, site.Y, site.Z - 2));
+            cells.Add((site.X + d, site.Y, site.Z + 2));
+            cells.Add((site.X - 2, site.Y, site.Z + d));
+            cells.Add((site.X + 2, site.Y, site.Z + d));
+        }
+        return cells;
+    }
+
+    /// <summary>The nine cells a Sanctum's gate opens in.</summary>
+    public static IReadOnlyList<(int X, int Y, int Z)> GateCells(StructureSite site)
+    {
+        if (site.Kind != StructureKind.Sanctum) return [];
+        var cells = new List<(int, int, int)>(9);
+        for (var dz = -1; dz <= 1; dz++)
+        for (var dx = -1; dx <= 1; dx++)
+            cells.Add((site.X + dx, site.Y, site.Z + dz));
+        return cells;
     }
 
     /// <summary>One brushable rubble pocket in each gallery and wreck.</summary>
@@ -584,6 +622,96 @@ public sealed class ExplorationGenerator
             if (dz != 0) emit(tx, y0, tz, _ids.CinderCage);
             else if (dx > 0) emit(tx, y0, tz, _ids.Chest);
         }
+    }
+
+    /// <summary>
+    /// The Sanctum: a hall of deepstone bricks with the gate at its middle — twelve sockets round a
+    /// three-by-three pit on a raised dais — four corridors out, and a library with a chest.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ The reference's stronghold, at this radius: the portal room is the point of it, and a seeker's
+    /// eye leads here. A few sockets come with an eye already in them — the reference sets each one
+    /// at a tenth — fixed by the site, so the same Sanctum always wants the same number of eyes.
+    /// </remarks>
+    private void WalkSanctum(StructureSite s, Action<int, int, int, BlockId> emit)
+    {
+        var brick = _ids.DeepstoneBricks;
+        var polished = _ids.PolishedDeepstone;
+        var (x0, y0, z0) = (s.X, s.Y, s.Z);
+
+        // The hall.
+        CarveBox(x0 - 6, y0 - 1, z0 - 6, x0 + 6, y0 + 6, z0 + 6, emit);
+        for (var x = x0 - 7; x <= x0 + 7; x++)
+        for (var z = z0 - 7; z <= z0 + 7; z++)
+        {
+            emit(x, y0 - 2, z, brick);
+            emit(x, y0 + 7, z, brick);
+            if (Math.Abs(x - x0) <= 3 && Math.Abs(z - z0) <= 3) emit(x, y0 - 1, z, polished);
+            else emit(x, y0 - 1, z, brick);
+        }
+
+        for (var y = y0 - 1; y <= y0 + 6; y++)
+        for (var d = -7; d <= 7; d++)
+        {
+            var door = Math.Abs(d) <= 1 && y >= y0 && y <= y0 + 3;
+            if (door) continue;
+            emit(x0 + d, y, z0 - 7, brick);
+            emit(x0 + d, y, z0 + 7, brick);
+            emit(x0 - 7, y, z0 + d, brick);
+            emit(x0 + 7, y, z0 + d, brick);
+        }
+
+        // The gate: the pit sunk one under the dais, the sockets round it.
+        for (var dz = -1; dz <= 1; dz++)
+        for (var dx = -1; dx <= 1; dx++)
+            emit(x0 + dx, y0 - 1, z0 + dz, BlockId.Air);
+
+        var sockets = SocketCells(s);
+        for (var i = 0; i < sockets.Count; i++)
+        {
+            var (sx, sy, sz) = sockets[i];
+            var seeded = Noise.Value2(s.CellX * 13 + i, s.CellZ * 7 - i, _layoutSeed + 997) < 0.1f;
+            emit(sx, sy, sz, seeded ? _ids.SanctumSocketFilled : _ids.SanctumSocket);
+        }
+
+        foreach (var (lx, lz) in (ReadOnlySpan<(int, int)>)[(-5, -5), (5, -5), (-5, 5), (5, 5)])
+            emit(x0 + lx, y0 + 5, z0 + lz, _ids.Lantern);
+
+        // Four corridors out, and the library at the end of the north one.
+        foreach (var (dx, dz) in (ReadOnlySpan<(int, int)>)[(1, 0), (-1, 0), (0, 1), (0, -1)])
+        {
+            var (sx, sz) = (dz, dx);
+            for (var along = 8; along <= 13; along++)
+            for (var across = -2; across <= 2; across++)
+            for (var y = y0 - 1; y <= y0 + 4; y++)
+            {
+                var (bx, bz) = (x0 + dx * along + sx * across, z0 + dz * along + sz * across);
+                var shell = Math.Abs(across) == 2 || y == y0 - 1 || y == y0 + 4;
+                emit(bx, y, bz, shell ? brick : BlockId.Air);
+            }
+        }
+
+        // The library: a small room at the corridor's end, its long walls lined with books.
+        var (cx, cz) = (x0, z0 - 16);
+        CarveBox(cx - 3, y0, cz - 2, cx + 3, y0 + 4, cz + 2, emit);
+        for (var x = cx - 4; x <= cx + 4; x++)
+        for (var z = cz - 3; z <= cz + 3; z++)
+        {
+            emit(x, y0 - 1, z, brick);
+            emit(x, y0 + 5, z, brick);
+
+            var wall = Math.Abs(x - cx) == 4 || Math.Abs(z - cz) == 3;
+            if (!wall) continue;
+            var doorway = z == cz + 3 && Math.Abs(x - cx) <= 1;
+            for (var y = y0; y <= y0 + 4; y++)
+            {
+                if (doorway && y <= y0 + 3) emit(x, y, z, BlockId.Air);
+                else emit(x, y, z, Math.Abs(x - cx) == 4 && y <= y0 + 2 ? _ids.Bookshelf : brick);
+            }
+        }
+
+        emit(cx, y0, cz - 2, _ids.Chest);
+        emit(cx, y0 + 3, cz, _ids.Lantern);
     }
 
     private void WalkCrown(StructureSite s, Action<int, int, int, BlockId> emit)

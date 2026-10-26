@@ -9797,6 +9797,7 @@ public sealed class ClientHost : IDisposable
 
         StepPhantoms(dt);
         StepEmberholds(dt);
+        StepGate(dt);
 
         // A blink is a soft pop and a wisp at both ends — the departure matters as much as the
         // arrival, because "where did it go" starts from where it was.
@@ -10061,7 +10062,7 @@ public sealed class ClientHost : IDisposable
 
             // ⚠ An Emberhold is found by going down to it, not by walking over its roof two hundred
             // blocks up — so it asks for the depth too.
-            if (site.Kind == StructureKind.Emberhold
+            if (site.Kind is StructureKind.Emberhold or StructureKind.Sanctum
                 && (_player.Position.Y < site.MinY - 8 || _player.Position.Y > site.MaxY + 8)) continue;
             Achieve(AchievementEvents.Discover, site.Kind.ToString());
             SettleCharacterReward(
@@ -10173,6 +10174,7 @@ public sealed class ClientHost : IDisposable
         StructureKind.Tidewreck => "a tidewreck",
         StructureKind.StormVault => "a storm vault",
         StructureKind.Emberhold => "an Emberhold",
+        StructureKind.Sanctum => "a Sanctum",
         _ => "the Starfall Crown",
     };
 
@@ -10203,6 +10205,20 @@ public sealed class ClientHost : IDisposable
             if (impact.Kind == ProjectileKind.Farpearl)
             {
                 FarstepTo(impact);
+                continue;
+            }
+
+            // A seeker's eye comes down whole four times in five; the fifth it shatters.
+            if (impact.Kind == ProjectileKind.Seeker)
+            {
+                var at = impact.Position - impact.Velocity * 0.05f;
+                if (Random.Shared.NextDouble() < 0.8)
+                    _drops.Drop(_items.Stack("seeker_eye", 1), at);
+                else
+                {
+                    _particles.DeathPuff(at, 0.7f, StarterBlocks.LayerSeekerEye, 10);
+                    _audio?.Play(Pick(CreatureSounds.ArrowMisses), at, 0.6f, 1.6f);
+                }
                 continue;
             }
 
@@ -10438,6 +10454,99 @@ public sealed class ClientHost : IDisposable
             if (worn.IsEmpty || !_items[worn.Item].Name.StartsWith(material + "_", StringComparison.Ordinal)) return false;
         }
         return true;
+    }
+
+    /// <summary>
+    /// A seeker's eye in hand: set in a gate socket when one is under the crosshair, otherwise thrown
+    /// toward the nearest Sanctum — up and along, the reference's eye of ender.
+    /// </summary>
+    private bool UseSeeker(ItemType held, Vector3 origin)
+    {
+        if (_target is { } hit && _streamer.World.GetBlock(hit.X, hit.Y, hit.Z) == _ids.SanctumSocket)
+        {
+            _streamer.EditBlock(hit.X, hit.Y, hit.Z, _ids.SanctumSocketFilled);
+            _inventory.SpendHeld();
+            var at = new Vector3(hit.X + 0.5f, hit.Y + 1f, hit.Z + 0.5f);
+            _particles.DeathPuff(at, 0.6f, StarterBlocks.LayerSeekerEye, 8);
+            _audio?.Play(Pick(CreatureSounds.Blinks), at, 0.6f, 0.7f);
+            OpenGateIfWhole(hit.X, hit.Z);
+            return true;
+        }
+
+        var px = (int)MathF.Floor(_player.Position.X);
+        var pz = (int)MathF.Floor(_player.Position.Z);
+        if (_terrain.Exploration.FindNearest(StructureKind.Sanctum, px, pz, rings: 6) is not { } sanctum)
+        {
+            Notice("the eye has nowhere to look", held);
+            return true;
+        }
+
+        var toward = new Vector3(sanctum.X + 0.5f - _player.Position.X, 0f, sanctum.Z + 0.5f - _player.Position.Z);
+        var flat = toward.Length();
+        var aim = flat > 0.5f ? Vector3.Normalize(toward / flat + new Vector3(0f, 0.4f, 0f)) : -Vector3.UnitY;
+        if (!_projectiles.Spawn(ProjectileKind.Seeker, ProjectileOwner.Player, origin, aim,
+                ProjectileSystem.SeekerSpeed, 0f, 0))
+        {
+            Notice("too many shots in flight", held);
+            return true;
+        }
+
+        _inventory.SpendHeld();
+        _audio?.Play(Pick(CreatureSounds.Blinks), origin, 0.5f, 1.2f);
+        return true;
+    }
+
+    /// <summary>When the last of a Sanctum's twelve sockets has its eye, the three-by-three becomes the gate.</summary>
+    private void OpenGateIfWhole(int x, int z)
+    {
+        if (_terrain.Exploration.FindNearest(StructureKind.Sanctum, x, z, rings: 1) is not { } sanctum) return;
+        var sockets = ExplorationGenerator.SocketCells(sanctum);
+        if (!sockets.Any(cell => cell.X == x && cell.Z == z)) return;
+        if (sockets.Any(cell => _streamer.World.GetBlock(cell.X, cell.Y, cell.Z) != _ids.SanctumSocketFilled)) return;
+
+        foreach (var (gx, gy, gz) in ExplorationGenerator.GateCells(sanctum))
+            _streamer.EditBlock(gx, gy, gz, _ids.CoreGate);
+
+        var middle = new Vector3(sanctum.X + 0.5f, sanctum.Y + 0.5f, sanctum.Z + 0.5f);
+        _particles.DeathPuff(middle, 2f, StarterBlocks.LayerCoreGate, 24);
+        _audio?.Play(Pick(CreatureSounds.Explosions), middle, 0.5f, 0.6f);
+        Notice("the gate opens", _items.ByName("seeker_eye"));
+        Achieve(AchievementEvents.Gate, "open");
+    }
+
+    /// <summary>Seconds before the gate will carry anyone again — so arriving is not leaving.</summary>
+    private float _gateRest;
+
+    /// <summary>Steps through an open gate: whoever stands in one is carried down to the Core Hollow.</summary>
+    private void StepGate(float dt)
+    {
+        _gateRest = MathF.Max(0f, _gateRest - dt);
+        if (!_spawned || !_walking || _gateRest > 0f) return;
+
+        var feet = _player.Position;
+        foreach (var lift in (ReadOnlySpan<float>)[0.1f, 1.2f])
+        {
+            if (_streamer.World.GetBlock((int)MathF.Floor(feet.X), (int)MathF.Floor(feet.Y + lift), (int)MathF.Floor(feet.Z))
+                != _ids.CoreGate) continue;
+
+            _gateRest = 5f;
+            JumpTo(CoreHollow.Landing);
+            Notice("the gate carries you down to the Core", _items.ByName("seeker_eye"));
+            Achieve(AchievementEvents.Gate, "enter");
+            return;
+        }
+    }
+
+    /// <summary>
+    /// A long way at once: set down, and held still until the ground there has arrived — the spawn's
+    /// own wait, so nobody falls through a world that is still loading.
+    /// </summary>
+    private void JumpTo(Vector3 where)
+    {
+        _player.Teleport(where);
+        _newWorldSpawnPending = false;
+        _spawned = false;
+        _camera.Position = _player.EyePosition;
     }
 
     /// <summary>The brightness the world is drawn at: the setting's, or close to full seeing in the dark.</summary>
@@ -13607,6 +13716,9 @@ public sealed class ClientHost : IDisposable
             case ItemUse.Drink:
                 return DrinkHeld(held);
 
+            case ItemUse.Seeker:
+                return UseSeeker(held, origin);
+
             // ⛳ A splash potion goes the witch's way: lobbed through the flight pool, bursting on
             // whoever is near where it lands. Which potion rides in the shot's damage.
             case ItemUse.ThrownSplash when Potions.TryGet(held.Name, out var splash):
@@ -15355,7 +15467,7 @@ public sealed class ClientHost : IDisposable
         int Frame, string Name, string Item, ViewMode View, bool Strike, ShotScreen Screen = ShotScreen.None,
         bool Creature = false, string Wears = "", string Offhand = "", bool Guard = false,
         bool Signs = false, bool Gates = false, bool Fishing = false, string[]? Lineup = null,
-        int Achievements = 0);
+        int Achievements = 0, string? Visit = null);
 
     /// <summary>Which interface, if any, is up when the picture is taken.</summary>
     private enum ShotScreen
@@ -15474,6 +15586,12 @@ public sealed class ClientHost : IDisposable
 
         // ⛳ Brewing (2026-10-25): a stand mid-brew, three bottles under strength.
         new(1820, "39-brewing", "stick", ViewMode.First, false, ShotScreen.Brewing),
+
+        // ⛳ The places the through line goes (2026-10-25), flown into with the camera: an Emberhold's
+        // keep, a Sanctum's gate room, and the Core Hollow from where the gate sets you down.
+        new(2000, "40-emberhold", "stick", ViewMode.First, false, Visit: "emberhold"),
+        new(2200, "41-sanctum", "stick", ViewMode.First, false, Visit: "sanctum"),
+        new(2400, "42-core-hollow", "stick", ViewMode.First, false, Visit: "hollow"),
     ];
 
     /// <summary>
@@ -15631,6 +15749,7 @@ public sealed class ClientHost : IDisposable
             if (shot.Fishing && _shotFrame == shot.Frame - SignLead) DigAPondAndCast();
             if (shot.Lineup is { } row && _shotFrame == shot.Frame - SignLead) LineUp(row);
             if (shot.Lineup is not null && _shotFrame > shot.Frame - SignLead) HoldTheLine();
+            if (shot.Visit is { } place && _shotFrame == shot.Frame - SignLead) VisitForShot(place);
 
             if (_shotFrame == shot.Frame) WriteShot(size, shot.Name);
         }
@@ -15801,6 +15920,41 @@ public sealed class ClientHost : IDisposable
                 }
                 break;
         }
+    }
+
+    /// <summary>
+    /// Flies the camera into one of the through line's places, nearest the start: the body stays
+    /// where it is, so the world loads round the camera and nothing falls while it does.
+    /// </summary>
+    private void VisitForShot(string place)
+    {
+        var (sx, sz) = ((int)MathF.Floor(_player.Position.X), (int)MathF.Floor(_player.Position.Z));
+        Vector3 eye;
+        float yaw = -90f, pitch = -12f;
+
+        switch (place)
+        {
+            case "emberhold" when _terrain.Exploration.FindNearest(StructureKind.Emberhold, sx, sz, 8) is { } hold:
+                eye = new Vector3(hold.X + 0.5f, hold.Y + 2.2f, hold.Z + 5.5f);
+                break;
+            case "sanctum" when _terrain.Exploration.FindNearest(StructureKind.Sanctum, sx, sz, 8) is { } sanctum:
+                eye = new Vector3(sanctum.X + 0.5f, sanctum.Y + 3.2f, sanctum.Z + 5.8f);
+                pitch = -28f;
+                break;
+            case "hollow":
+                eye = CoreHollow.Landing + new Vector3(0f, 6f, 6f);
+                pitch = -8f;
+                break;
+            default:
+                Console.WriteLine($"shot visit  no {place} to fly to");
+                return;
+        }
+
+        _walking = false;
+        _camera.Position = eye;
+        _camera.Yaw = yaw;
+        _camera.Pitch = pitch;
+        Console.WriteLine($"shot visit  {place} at {eye.X:F0}, {eye.Y:F0}, {eye.Z:F0}");
     }
 
     /// <summary>What each achievement shot has earned by the time it is taken.</summary>

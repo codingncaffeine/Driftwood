@@ -9284,7 +9284,8 @@ public static class WorldAudit
         (StarterBlocks.LayerEmberBricks, "ember_bricks"),
         (StarterBlocks.LayerCinderCage, "cinder_cage"),
         (StarterBlocks.LayerBrewingStand, "brewing_stand"),
-        ((ushort)(StarterBlocks.LayerCount - 1), "emberite_ingot"),
+        (StarterBlocks.LayerEmberiteIngot, "emberite_ingot"),
+        ((ushort)(StarterBlocks.LayerCount - 1), "seeker_eye"),
     ];
 
     /// <summary>

@@ -273,6 +273,9 @@ public static class StarterRecipes
         Shaped("brewing stand", "brewing_stand", 1, [" X ", "RRR"]);
         LooseAt("ember bricks", "ember_bricks", 2, CraftStation.Bench, "emberstone", "emberstone");
         LooseAt("ember cream", "ember_cream", 1, CraftStation.Bench, "slimeball", "cinder_dust");
+
+        // The reference's eye: its pearl lit with its rod's dust.
+        LooseAt("seeker's eye", "seeker_eye", 1, CraftStation.Bench, "farpearl", "cinder_dust");
         LooseAt("fire charge", "fire_charge", 3, CraftStation.Bench, "gunpowder", "cinder_dust", "#coals");
 
         // Light. Either coal will do — the one that comes out of the ground and the one that comes

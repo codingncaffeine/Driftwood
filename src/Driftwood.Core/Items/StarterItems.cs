@@ -870,6 +870,11 @@ public static class StarterItems
         Loose(items, "cinder_rod", "cinder rod", StarterBlocks.LayerCinderRod, burn: 120f);
         Block(items, blocks, "emberite_debris", "emberite debris", StarterBlocks.LayerEmberiteDebris);
         Loose(items, "emberite_scrap", "emberite scrap", StarterBlocks.LayerEmberiteScrap);
+        items.Register(new ItemType
+        {
+            Name = "seeker_eye", Label = "seeker's eye", IconLayer = StarterBlocks.LayerSeekerEye,
+            Use = ItemUse.Seeker,
+        });
         Loose(items, "emberite_ingot", "emberite ingot", StarterBlocks.LayerEmberiteIngot);
         Loose(items, "cinder_dust", "cinder dust", StarterBlocks.LayerCinderDust);
         Loose(items, "wail_tear", "wail tear", StarterBlocks.LayerWailTear);
@@ -1344,6 +1349,7 @@ public static class StarterItems
         new BlockDrops.Rule(StarterBlocks.AshcapName(1), "ashcap"),
         new BlockDrops.Rule(StarterBlocks.AshcapName(2), "ashcap", 3),
         new BlockDrops.Rule("cinder_cage", null),
+        new BlockDrops.Rule("ember_crystal", null),
         new BlockDrops.Rule("grass", "dirt"),
         new BlockDrops.Rule("clay", "clay_lump", 4),
 

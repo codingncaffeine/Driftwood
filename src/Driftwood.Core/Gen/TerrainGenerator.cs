@@ -328,6 +328,9 @@ public sealed class TerrainGenerator
 
         var raw = chunk.Raw;
 
+        // The Core Hollow (2026-10-25) is asked only where a chunk could reach it.
+        var hollow = CoreHollow.Touches(ox, oy, oz, ox + Chunk.Size - 1, oy + Chunk.Size - 1, oz + Chunk.Size - 1);
+
         for (var z = 0; z < Chunk.Size; z++)
         for (var x = 0; x < Chunk.Size; x++)
         {
@@ -374,6 +377,8 @@ public sealed class TerrainGenerator
 
                     if (IsRock(id)) id = OreAt(wx, wy, wz, id);
                 }
+
+                if (hollow && CoreHollow.At(wx, wy, wz, _ids) is { } carved) id = carved.Value;
 
                 raw[Chunk.Index(x, y, z)] = id;
             }

@@ -4936,6 +4936,57 @@ public static class TileGen
         return t;
     }
 
+    /// <summary>
+    /// A gate socket's top: worn stone round a round hollow — and with an eye set in it, the eye.
+    /// </summary>
+    public static byte[] SocketTop(int seed, bool eye)
+    {
+        var t = Speckle(seed, 92, 98, 84, 16, 0.5f);
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var dx = x - 7.5f;
+            var dy = y - 7.5f;
+            var r = MathF.Sqrt(dx * dx + dy * dy);
+            if (r > 4.6f) continue;
+            if (!eye) { Put(t, x, y, 34, 38, 32, 255); continue; }
+            var pupil = r < 1.6f;
+            var iris = r < 3.4f;
+            if (pupil) Put(t, x, y, 20, 16, 14, 255);
+            else if (iris) Put(t, x, y, Clamp(232 - (int)(r * 20)), Clamp(128 - (int)(r * 10)), 40, 255);
+            else Put(t, x, y, 60, 46, 40, 255);
+        }
+        return t;
+    }
+
+    /// <summary>An ember crystal: a cut glow, bright facets on a darker heart.</summary>
+    public static byte[] EmberCrystal(int seed)
+    {
+        var t = new byte[BytesPerTile];
+        for (var y = 0; y < Size; y++)
+        for (var x = 0; x < Size; x++)
+        {
+            var dx = MathF.Abs(x - 7.5f);
+            var dy = MathF.Abs(y - 7.5f);
+            if (dx + dy > 8.2f) continue;
+            var facet = ((x + y) & 3) == 0 || ((x - y) & 3) == 0;
+            var heat = 1f - (dx + dy) / 8.2f;
+            var d = (int)((Noise(x, y, seed) * 2f - 1f) * 10f);
+            Put(t, x, y, Clamp(200 + (int)(heat * 55f) + d), Clamp((facet ? 150 : 96) + (int)(heat * 80f) + d),
+                Clamp(40 + (int)(heat * 60f)), 255);
+        }
+        return t;
+    }
+
+    /// <summary>The seeker's eye: a farpearl gone amber, a slit of a pupil, looking.</summary>
+    public static byte[] IconSeekerEye(int seed)
+    {
+        var t = IconLump(seed, 196, 142, 66);
+        for (var y = 4; y <= 11; y++) Put(t, 7, y, 34, 26, 22, 255);
+        for (var y = 5; y <= 10; y++) Put(t, 8, y, 60, 48, 36, 255);
+        return t;
+    }
+
     /// <summary>A single drop, point up — the ashwail's tear.</summary>
     public static byte[] IconTear(int seed, byte r, byte g, byte b)
     {

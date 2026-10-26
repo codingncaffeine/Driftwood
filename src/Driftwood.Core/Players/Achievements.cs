@@ -18,6 +18,9 @@ public enum AchievementTab : byte
 
     /// <summary>Everything below the hollows.</summary>
     Emberdeep,
+
+    /// <summary>The Core Hollow and what lives there (2026-10-25): the reference's End page.</summary>
+    Core,
 }
 
 /// <summary>The reference's three frames: an ordinary step, a goal, and a challenge.</summary>
@@ -113,6 +116,9 @@ public static class AchievementEvents
     /// <summary>The player drank a potion. Subject: the effect's name.</summary>
     public const string Drink = "drink";
 
+    /// <summary>The Sanctum's gate: <c>open</c> when the twelfth eye goes in, <c>enter</c> when stepped through.</summary>
+    public const string Gate = "gate";
+
     /// <summary>A creature killed by its own bolt, struck back. Subject: its kind.</summary>
     public const string Returned = "returned";
 
@@ -175,6 +181,7 @@ public sealed class AchievementBook
         AchievementTab.Adventure => "Adventure",
         AchievementTab.Husbandry => "Husbandry",
         AchievementTab.Emberdeep => "Emberdeep",
+        AchievementTab.Core => "The Core",
         _ => tab.ToString(),
     };
 
@@ -245,6 +252,14 @@ public sealed class AchievementBook
                 Any(W, "diamond_helmet", "diamond_chestplate", "diamond_leggings", "diamond_boots"), All: true),
             new("deeper", story, "diamonds", "We Need to Go Deeper", "Reach the Emberdeep",
                 "emberstone", goal, Any(AchievementEvents.Reach, "emberdeep")),
+            new("eye_spy", story, "deeper", "Eye Spy", "Follow a seeker's eye to a Sanctum",
+                "seeker_eye", task, Any(AchievementEvents.Discover, "Sanctum")),
+            new("the_gate", story, "eye_spy", "The Gate Opens", "Set the twelfth eye in a Sanctum's gate",
+                "deepstone_bricks", goal, Any(AchievementEvents.Gate, "open")),
+
+            // ── The Core ──
+            new("the_core", AchievementTab.Core, "", "The Core", "Step through the gate, down to the Core Hollow",
+                "polished_deepstone", task, Any(AchievementEvents.Gate, "enter")),
 
             // ── The Emberdeep ──
             new("emberdeep", deep, "", "Emberdeep", "Below the hollows, where the rock runs molten",
