@@ -2058,6 +2058,8 @@ public sealed class ClientHost : IDisposable
         _railTable = _streamer.Rails!;
         _cartSystem = new CartSystem(_railTable);
         _boatSystem = new BoatSystem(registry, _ids);
+        _shipSystem = new ShipSystem(registry, new BlockTurns(registry, _items), _ids);
+        _shipMesher = new ChunkMesher(registry);
 
         var reach = viewRadius * Chunk.Size;
         _fogEnd = MathF.Min(reach * 0.90f, 700f);
@@ -2408,6 +2410,10 @@ public sealed class ClientHost : IDisposable
     {
         if (_worldName.Length == 0 || _streamer is null || _items is null) return false;
 
+        // A ship under way holds blocks the world does not: the save moors her first, forcibly if
+        // she lies somewhere nothing fits, rather than writing a world with a hole where she was.
+        if (_sailing is not null) MoorShip(force: true);
+
         _sinceSave = 0;
 
         // Words whose sign is gone — mined, shed, burnt — are not written. ⚠ Only judged where the
@@ -2562,6 +2568,16 @@ public sealed class ClientHost : IDisposable
 
     /// <summary>Spray thrown at the bow, rationed by time rather than by frame.</summary>
     private float _spray;
+
+    /// <summary>Ships (2026-10-25): the system, the one under way with the player at its helm, and
+    /// each one's meshes with the version they were built from.</summary>
+    private ShipSystem _shipSystem = null!;
+    private Ship? _sailing;
+    private ShipOrders _orders;
+    private ChunkMesher _shipMesher = null!;
+    private readonly Dictionary<Ship, (int Version, List<ChunkMeshGpu> Meshes, Vector3 Offset)> _shipMeshes = [];
+    private float _sailed;
+    private bool _moorAsked;
 
     private float _signalClock;
 
@@ -2860,6 +2876,172 @@ public sealed class ClientHost : IDisposable
         return true;
     }
 
+    /// <summary>
+    /// Takes the helm: lifts the ship it is built into off the world, its cargo and its crew with it,
+    /// or says why it will not come.
+    /// </summary>
+    private void TakeHelm(int x, int y, int z)
+    {
+        if (_sailing is not null || _ridingBoat is not null || _ridingCart is not null) return;
+
+        var look = _camera.Forward;
+        var ship = _shipSystem.Lift(_streamer.World, x, y, z, new Vector3(look.X, 0f, look.Z),
+            (wx, wy, wz, id) => _streamer.EditBlock(wx, wy, wz, id));
+        if (ship is null)
+        {
+            Notice(_shipSystem.Refusal ?? "the helm will not turn", _items.ByName("helm"));
+            return;
+        }
+
+        // What it carries comes off the world with it, whole: a chest's stacks, a furnace mid-smelt,
+        // a brewing stand, a sign's words.
+        foreach (var c in ship.Cells)
+        {
+            var (wx, wy, wz) = (c.X + x, c.Y + y, c.Z + z);
+            object? held = (object?)_chests.Detach(wx, wy, wz) ?? (object?)_furnaces.Detach(wx, wy, wz)
+                ?? _brewing.Detach(wx, wy, wz);
+            if (held is null && StarterBlocks.SignOf(_registry[c.Id].Name) is not null)
+            {
+                held = _signs.Get(wx, wy, wz);
+                _signs.Remove(wx, wy, wz);
+            }
+
+            if (held is not null) ship.Cargo[(c.X, c.Y, c.Z)] = held;
+        }
+
+        if (_herd is not null) _shipSystem.Muster(ship, _herd.All);
+
+        _sailing = ship;
+        _sailed = 0f;
+        _moorAsked = true;   // the sneak that might be held as the wheel is taken does not let go of it
+        Achieve(AchievementEvents.Ride, "ship");
+        if (ship.Crew.Count > 0) Achieve(AchievementEvents.Ride, "ship_crewed");
+        _audio?.Play(Pick(ActionSounds.SwimStroke), ship.HelmStand, 0.9f, 0.6f);
+    }
+
+    /// <summary>Sails the ship at the helm and keeps the steersman standing behind the wheel.</summary>
+    private void StepShips(float dt)
+    {
+        if (!_walking || !_spawned || _sailing is not { } ship) return;
+
+        var before = ship.Yaw;
+        var from = ship.Position;
+        var bumps = ship.Bumped;
+        _shipSystem.Step(_streamer.World, ship, _orders, dt);
+
+        // The view swings with the deck, as it does with a boat's hull.
+        _camera.Yaw += ship.Yaw - before;
+        _player.Teleport(ship.HelmStand + new Vector3(0f, 0.01f, 0f));
+
+        var moved = ship.Position - from;
+        _sailed += new Vector2(moved.X, moved.Z).Length();
+        if (_sailed >= 2000f) Achieve(AchievementEvents.Ride, "ship_voyage");
+
+        if (ship.Bumped != bumps)
+        {
+            Rumble(0.6f, 0.3f, 160);
+            _audio?.Play(Pick(ActionSounds.SwimStroke), ship.HelmStand + ship.Forward * 4f, 0.8f, 0.5f);
+        }
+
+        // A bow wave off the stem at speed.
+        if (ship.Speed > 2.5f)
+        {
+            _spray += dt * ship.Speed;
+            if (_spray >= 2f)
+            {
+                _spray = 0f;
+                var stem = ship.ToWorld(Ship.Pivot + new Vector3(0f, 0f, 0f))
+                           + ship.Forward * (MathF.Max(ship.Max.X - ship.Min.X, ship.Max.Z - ship.Min.Z) * 0.5f + 1f);
+                InteractionParticleEffects.WaterSplash(_particles, new Vector3(stem.X, ship.Waterline + 1.1f, stem.Z), 4);
+            }
+        }
+    }
+
+    /// <summary>Lets go of the wheel: the ship moors where it lies, square to the nearest quarter.</summary>
+    private bool MoorShip(bool force = false)
+    {
+        if (_sailing is not { } ship) return true;
+
+        var moored = _shipSystem.Moor(_streamer.World, ship,
+            (x, y, z, id) => _streamer.EditBlock(x, y, z, id),
+            (_, to, held) =>
+            {
+                switch (held)
+                {
+                    case Chest chest: _chests.Attach(to.X, to.Y, to.Z, chest); break;
+                    case Furnace furnace: _furnaces.Attach(to.X, to.Y, to.Z, furnace); break;
+                    case BrewingStand stand: _brewing.Attach(to.X, to.Y, to.Z, stand); break;
+                    case string[] lines: _signs.Set(to.X, to.Y, to.Z, lines); break;
+                }
+            },
+            force);
+
+        if (!moored)
+        {
+            Notice("no room to moor here", _items.ByName("helm"));
+            return false;
+        }
+
+        _sailing = null;
+        _orders = default;
+        DropShipMeshes(ship);
+        _player.Teleport(_player.Position + new Vector3(0f, 0.2f, 0f));
+        return true;
+    }
+
+    private void DropShipMeshes(Ship ship)
+    {
+        if (!_shipMeshes.Remove(ship, out var built)) return;
+        foreach (var mesh in built.Meshes) mesh.Dispose();
+    }
+
+    /// <summary>
+    /// Meshes a ship as a little world of its own, lit as if by open sky — the chunk mesher and the
+    /// chunk shader draw it exactly as they draw the ground, turned by the shader's yaw.
+    /// </summary>
+    private (int Version, List<ChunkMeshGpu> Meshes, Vector3 Offset) ShipMeshes(Ship ship)
+    {
+        if (_shipMeshes.TryGetValue(ship, out var built) && built.Version == ship.Version) return built;
+        DropShipMeshes(ship);
+
+        var offset = new Vector3(1 - ship.Min.X, 1 - ship.Min.Y, 1 - ship.Min.Z);
+        var world = new VoxelWorld(_registry);
+        var positions = new HashSet<ChunkPos>();
+        foreach (var c in ship.Cells)
+        {
+            var (x, y, z) = (c.X + (int)offset.X, c.Y + (int)offset.Y, c.Z + (int)offset.Z);
+            var pos = ChunkPos.FromWorld(x, y, z);
+            if (positions.Add(pos)) Array.Fill(world.GetOrCreateChunk(pos).RawLight, LightValue.Pack(15, 0, 0, 0));
+            world.SetBlock(x, y, z, c.Id);
+        }
+
+        var meshes = new List<ChunkMeshGpu>();
+        foreach (var pos in positions)
+            if (_shipMesher.Build(world, pos) is { } data) meshes.Add(new ChunkMeshGpu(_gl, data));
+
+        built = (ship.Version, meshes, offset);
+        _shipMeshes[ship] = built;
+        return built;
+    }
+
+    /// <summary>Draws every ship under way through the chunk shader, turned about its wheel.</summary>
+    private void DrawShips()
+    {
+        if (_sailing is not { } ship) return;
+
+        var (_, meshes, offset) = ShipMeshes(ship);
+        _chunkShader.SetFloat("uYaw", float.DegreesToRadians(ship.Yaw));
+        _chunkShader.SetVec3("uPivot", ship.Position + Ship.Pivot);
+        foreach (var mesh in meshes)
+        {
+            _chunkShader.SetVec3("uChunkOrigin", ship.Position + mesh.Origin - offset);
+            _chunkShader.SetVec3Array("uTint", mesh.TintPalette);
+            mesh.Draw();
+        }
+
+        _chunkShader.SetFloat("uYaw", 0f);
+    }
+
     /// <summary>Climbs out beside the hull, onto whatever is there.</summary>
     private void LeaveBoat()
     {
@@ -2884,6 +3066,10 @@ public sealed class ClientHost : IDisposable
         // Nobody is playing yet, so there is nothing to keep and the flight would otherwise write
         // the world out every two minutes for as long as the menu was left up.
         if (_worldName.Length == 0 || _bench is not null || _atStartScreen) return;
+
+        // ⚠ Not while a ship is under way: the save would moor her mid-voyage. It waits for the
+        // steersman to let go of the wheel.
+        if (_sailing is not null) return;
 
         _sinceSave += dt;
         if (_sinceSave < AutosaveSeconds) return;
@@ -12414,6 +12600,7 @@ public sealed class ClientHost : IDisposable
         StepAchievements((float)dt);
         StepCarts((float)dt);
         StepBoats((float)dt);
+        StepShips((float)dt);
         StepToasts((float)dt);
         StepAmbience((float)dt);
         StepRain((float)dt);
@@ -14928,6 +15115,10 @@ public sealed class ClientHost : IDisposable
                 OpenBrewing(hit.X, hit.Y, hit.Z);
                 return true;
 
+            case BlockUse.Helm:
+                TakeHelm(hit.X, hit.Y, hit.Z);
+                return true;
+
             case BlockUse.Chest:
                 OpenChest(hit.X, hit.Y, hit.Z);
                 return true;
@@ -15309,6 +15500,35 @@ public sealed class ClientHost : IDisposable
         if (_hudScreen.IsOpen)
         {
             _player.Step(_streamer.World, dt, Vector3.Zero, false, false, false);
+            _camera.Position = _player.EyePosition;
+            return;
+        }
+
+        // ⛳ At the helm (2026-10-25): W makes way, S backs her, A and D put the wheel over; sneak lets
+        // go of the wheel and moors her where she lies.
+        if (_sailing is not null)
+        {
+            var pad = _settings.ControllerEnabled ? _controllerMove : default;
+            if (_keys.Held(_input, GameAction.Sneak)
+                || (_settings.ControllerEnabled
+                    && _spellControllerBank == 0
+                    && _controller.Held(ControllerAction.Sneak, _settings.Pad)))
+            {
+                // Once per press: a mooring that will not fit says so once, not every frame.
+                if (!_moorAsked) MoorShip();
+                _moorAsked = true;
+                _orders = default;
+            }
+            else
+            {
+                _moorAsked = false;
+                _orders = new ShipOrders(
+                    _keys.Held(_input, GameAction.MoveForward) || pad.Y > 0.3f,
+                    _keys.Held(_input, GameAction.MoveBack) || pad.Y < -0.3f,
+                    _keys.Held(_input, GameAction.MoveLeft) || pad.X < -0.3f,
+                    _keys.Held(_input, GameAction.MoveRight) || pad.X > 0.3f);
+            }
+
             _camera.Position = _player.EyePosition;
             return;
         }
@@ -15713,6 +15933,8 @@ public sealed class ClientHost : IDisposable
             if (mesh.HasTranslucent) _wetChunks.Add(mesh);
         }
 
+        DrawShips();
+
         _drawnChunks = drawn;
         _drawnTriangles = triangles;
 
@@ -15983,6 +16205,10 @@ public sealed class ClientHost : IDisposable
         // ⛳ S1's boats (2026-10-25): a driftoak and a cherry hull afloat off the nearest shore,
         // seen from the water's edge — the prow scroll, the lantern and the oars at rest.
         new(3200, "45-boats", "boat", ViewMode.First, false, Visit: "boats"),
+
+        // ⛳ S2's ship (2026-10-25): a hull with a mast and a sail, lifted at its helm and swung
+        // off square, seen from over the steersman's shoulder — the shader's turn on a whole deck.
+        new(3500, "46-ship", "stick", ViewMode.ThirdBehind, false, Visit: "ship"),
     ];
 
     /// <summary>
@@ -16433,6 +16659,66 @@ public sealed class ClientHost : IDisposable
                 eye = new Vector3(wx + 0.5f, TerrainGenerator.SeaLevel + 3.2f, wz + 0.5f);
                 pitch = -22f;
                 Console.WriteLine($"shot visit  boats off {wx},{wz}");
+                break;
+            }
+
+            case "ship":
+            {
+                var found = false;
+                var (wx, wz) = (sx, sz);
+                for (var r = 0; r <= 400 && !found; r += 4)
+                for (var a = 0; a < 32 && !found; a++)
+                {
+                    var t = a / 32f * MathF.Tau;
+                    int x = sx + (int)(MathF.Cos(t) * r), z = sz + (int)(MathF.Sin(t) * r);
+                    var open = true;
+                    for (var dz = -6; dz <= 6 && open; dz += 3)
+                    for (var dx = -14; dx <= 14 && open; dx += 3)
+                        open = _terrain.SurfaceHeight(x + dx, z + dz) <= TerrainGenerator.SeaLevel - 3;
+                    if (open) (wx, wz, found) = (x, z, true);
+                }
+
+                if (!found)
+                {
+                    Console.WriteLine("shot visit  no open water for a ship");
+                    return;
+                }
+
+                // A hull eleven long and five wide, a cell under the water, walled, with a mast,
+                // a sail of wool and the helm aft on the deck.
+                var world = _streamer.World;
+                var planks = _registry.ByName("driftoak_planks").Id;
+                var log = _registry.ByName("driftoak_log").Id;
+                var sail = _registry.TryByName("white_wool", out var wool) ? wool.Id : planks;
+                var y0 = TerrainGenerator.SeaLevel - 1;
+                for (var dz = -2; dz <= 2; dz++)
+                for (var dx = -5; dx <= 5; dx++)
+                {
+                    _streamer.EditBlock(wx + dx, y0, wz + dz, planks);
+                    var wall = dx is -5 or 5 || dz is -2 or 2;
+                    _streamer.EditBlock(wx + dx, y0 + 1, wz + dz, wall ? planks : BlockId.Air);
+                    _streamer.EditBlock(wx + dx, y0 + 2, wz + dz, wall ? planks : BlockId.Air);
+                }
+
+                for (var h = 1; h <= 8; h++) _streamer.EditBlock(wx + 1, y0 + h, wz, log);
+                for (var h = 3; h <= 7; h++)
+                for (var dz = -2; dz <= 2; dz++)
+                    if (dz != 0) _streamer.EditBlock(wx + 1, y0 + h, wz + dz, sail);
+                _streamer.EditBlock(wx - 3, y0 + 1, wz, StarterBlocks.Helms(_registry)[0]);
+
+                _player.Teleport(new Vector3(wx - 4f, y0 + 1.05f, wz + 0.5f));
+                _camera.Yaw = 0f;
+                TakeHelm(wx - 3, y0 + 1, wz);
+                if (_sailing is { } ship)
+                {
+                    ship.Yaw = 28f;
+                    ship.Speed = 2f;
+                    Console.WriteLine($"shot visit  ship of {ship.Cells.Length} cells off {wx},{wz}");
+                }
+
+                eye = new Vector3(wx - 4f, y0 + 2.7f, wz + 0.5f);
+                yaw = 28f;
+                pitch = -8f;
                 break;
             }
 

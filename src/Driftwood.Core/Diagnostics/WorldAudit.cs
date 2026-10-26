@@ -743,6 +743,10 @@ public static class WorldAudit
         Check("a boat floats, rows, turns and beaches", boatFaults.Count == 0,
             boatFaults.Count == 0 ? boatDetail : string.Join("; ", boatFaults));
 
+        var shipFaults = ShipFaults(registry, items, ids, out var shipDetail);
+        Check("a ship lifts, sails, beaches and moors turned", shipFaults.Count == 0,
+            shipFaults.Count == 0 ? shipDetail : string.Join("; ", shipFaults));
+
         var spawnFaults = SpawnBandFaults(out var spawnDetail);
         Check("where a thing lives takes two questions", spawnFaults.Count == 0,
             spawnFaults.Count == 0 ? spawnDetail : string.Join("; ", spawnFaults));
@@ -13125,6 +13129,126 @@ public static class WorldAudit
         detail = $"floats {draft:F2} under, tops out at {top:F1} b/s, beached at x {beached:F2}, coasts {glide:F1} "
                + $"blocks, swings {swung:F0}° in two seconds; a shove slides {onStone:F2} on stone and {onIce:F1} on ice; "
                + "a passenger boards, rides and leaves";
+        return faults;
+    }
+
+    /// <summary>
+    /// The ship (2026-10-25): a walled hull with a hold, lifted, sailed into a shore, and moored a
+    /// quarter turn round — every block where it should be, turned as it should be, the hold dry.
+    /// </summary>
+    private static List<string> ShipFaults(
+        BlockRegistry registry, ItemRegistry items, StarterBlocks.Ids ids, out string detail)
+    {
+        var faults = new List<string>();
+        var world = FluidBox(registry, ids, 0, 0, 0);
+        for (var z = -20; z <= 20; z++)
+        for (var x = -20; x <= 20; x++)
+        for (var y = 1; y <= 3; y++)
+            Put(world, x, y, z, x >= 11 ? ids.Stone : ids.Water);
+
+        var turns = new BlockTurns(registry, items);
+        var ships = new ShipSystem(registry, turns, ids);
+        void Write(int x, int y, int z, BlockId id) => world.SetBlock(x, y, z, id);
+
+        var planks = registry.ByName("driftoak_planks").Id;
+        var stairs = items.ByName("driftoak_stairs").Places!.Variants;   // east lower first
+        var helms = StarterBlocks.Helms(registry);
+
+        // Every block comes home after four quarter turns, and a stair's facing goes east to south.
+        for (var id = 1; id < registry.Count; id++)
+            if (turns.Turn(new BlockId((ushort)id), 4).Value != id)
+            {
+                faults.Add($"'{registry[(ushort)id].Name}' does not come back after a full turn");
+                break;
+            }
+
+        if (turns.Turn(stairs[0], 1) != stairs[4]) faults.Add("an east stair turned a quarter is not a south one");
+        if (turns.Turn(helms[0], 1) != helms[2]) faults.Add("an east helm turned a quarter is not a south one");
+
+        // The hull: a five-square floor a cell under the water, walls round it, the hold inside dry.
+        for (var z = -2; z <= 2; z++)
+        for (var x = -6; x <= -2; x++)
+        {
+            Put(world, x, 2, z, planks);
+            var wall = x is -6 or -2 || z is -2 or 2;
+            Put(world, x, 3, z, wall ? planks : BlockId.Air);
+        }
+
+        Put(world, -4, 3, 0, helms[0]);
+        Put(world, -5, 3, -1, stairs[0]);
+
+        // A helm on the shore is fast to the land.
+        Put(world, 15, 4, 0, helms[0]);
+        if (ships.Lift(world, 15, 4, 0, Vector3.UnitX, Write) is not null || ships.Refusal is null)
+            faults.Add("a helm standing on the shore lifted the land");
+
+        var ship = ships.Lift(world, -4, 3, 0, Vector3.UnitX, Write);
+        if (ship is null)
+        {
+            detail = "";
+            faults.Add($"the hull would not lift: {ships.Refusal}");
+            return faults;
+        }
+
+        if (ship.Cells.Length != 43) faults.Add($"the hull lifted {ship.Cells.Length} cells (built 43)");
+        if (ship.Hold.Length != 7) faults.Add($"the hold held {ship.Hold.Length} cells of air (built 7)");
+        var wake = 0;
+        for (var z = -2; z <= 2; z++)
+        for (var x = -6; x <= -2; x++)
+        for (var y = 2; y <= 3; y++)
+            if (At(world, x, y, z) == ids.Water) wake++;
+        if (wake != 50) faults.Add($"{wake} of the hull's 50 cells filled with sea when it left");
+
+        // Under way: it makes way ahead, and stops against the shore rather than in it.
+        var start = ship.Position.X;
+        for (var t = 0f; t < 4f; t += 0.05f) ships.Step(world, ship, new ShipOrders(true, false, false, false), 0.05f);
+        var made = ship.Position.X - start;
+        if (made < 4f) faults.Add($"four seconds ahead made {made:F1} blocks");
+        for (var t = 0f; t < 20f; t += 0.05f) ships.Step(world, ship, new ShipOrders(true, false, false, false), 0.05f);
+        var bow = ship.Position.X + 3f;
+        // The rim is sampled a tenth in from each corner, so a bow may lean that far into a face.
+        if (bow > 11.15f || bow < 9.5f || ship.Bumped == 0)
+            faults.Add($"run at the shore, the bow stopped at x {bow:F2} after {ship.Bumped} bumps (want at the stone at 11)");
+
+        // The wheel: put over, she swings.
+        ship.Position = new Vector3(-6f, 3f, -10f);
+        ship.Yaw = 0f;
+        ship.Speed = 0f;
+        for (var t = 0f; t < 4f; t += 0.05f) ships.Step(world, ship, new ShipOrders(true, false, false, true), 0.05f);
+        var swung = ship.Yaw;
+        if (swung < 30f) faults.Add($"four seconds of starboard helm swung her {swung:F0}°");
+
+        // Moored a quarter round, in open water: every block where it belongs, turned, the hold dry.
+        ship.Position = new Vector3(-10.2f, 3f, 8.3f);
+        ship.Yaw = 94f;
+        if (!ships.Moor(world, ship, Write))
+        {
+            faults.Add("she would not moor in open water");
+        }
+        else
+        {
+            var corner = (-10, 3, 8);
+            var misplaced = ship.Cells.Count(c =>
+            {
+                var (x, y, z) = ShipSystem.Place(c.X, c.Y, c.Z, 1, corner);
+                return At(world, x, y, z) != turns.Turn(c.Id, 1);
+            });
+            if (misplaced > 0) faults.Add($"{misplaced} cells moored somewhere other than where they belong");
+            if (At(world, -10, 3, 8) != helms[2]) faults.Add("the helm did not moor facing south after a quarter turn");
+            var (sx, sy, sz) = ShipSystem.Place(-1, 0, -1, 1, corner);
+            if (At(world, sx, sy, sz) != stairs[4]) faults.Add("the stair did not moor turned with the deck");
+            var wet = ship.Hold.Count(h =>
+            {
+                var (x, y, z) = ShipSystem.Place(h.X, h.Y, h.Z, 1, corner);
+                return !At(world, x, y, z).IsAir;
+            });
+            if (wet > 0) faults.Add($"{wet} of the hold's cells were left flooded");
+            if (ships.All.Count != 0) faults.Add("a moored ship is still under way");
+        }
+
+        detail = $"43 cells and a 7-cell hold lift and leave sea behind; {made:F1} blocks in four seconds, "
+               + $"stopped at the shore after {ship.Bumped} bumps, swung {swung:F0}° in four; moored a quarter "
+               + "round with every block, the helm and the stair turned, and the hold bailed";
         return faults;
     }
 

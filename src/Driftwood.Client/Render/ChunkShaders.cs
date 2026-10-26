@@ -20,6 +20,8 @@ public static class ChunkShaders
 
         uniform mat4 uViewProj;
         uniform vec3 uChunkOrigin;
+        uniform float uYaw;           // a ship under way (2026-10-25): its turn about uPivot; 0 for the world
+        uniform vec3 uPivot;
         uniform vec3 uCameraPos;
         uniform vec3 uSunDir;         // surface toward sun, normalised
         uniform vec3 uSunColor;       // colour and strength of direct sun at this time of day
@@ -89,6 +91,14 @@ public static class ChunkShaders
             vec3 n = kNormals[face];
             vNormal = n;
             vec3 world = uChunkOrigin + local;
+            if (uYaw != 0.0)
+            {
+                float c = cos(uYaw), s = sin(uYaw);
+                vec2 d = world.xz - uPivot.xz;
+                world.xz = uPivot.xz + vec2(d.x * c - d.y * s, d.x * s + d.y * c);
+                n.xz = vec2(n.x * c - n.z * s, n.x * s + n.z * c);
+                vNormal = n;
+            }
             gl_Position = uViewProj * vec4(world + n * (float(pass) * kCoplanarLift), 1.0);
 
             // Baked light: sky in the low nibble, then red, green, blue.

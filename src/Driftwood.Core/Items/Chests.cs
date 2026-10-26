@@ -75,6 +75,12 @@ public sealed class ChestBank
 
     public bool TryGet(int x, int y, int z, out Chest chest) => _at.TryGetValue((x, y, z), out chest!);
 
+    /// <summary>Lifts one out whole, contents and all, for a ship to carry (2026-10-25).</summary>
+    public Chest? Detach(int x, int y, int z) => _at.Remove((x, y, z), out var lifted) ? lifted : null;
+
+    /// <summary>Sets a carried one down at its new cell.</summary>
+    public void Attach(int x, int y, int z, Chest chest) => _at[(x, y, z)] = chest;
+
     /// <summary>Takes a chest out of the world and hands back everything that was in it.</summary>
     public IEnumerable<ItemStack> Remove(int x, int y, int z)
     {

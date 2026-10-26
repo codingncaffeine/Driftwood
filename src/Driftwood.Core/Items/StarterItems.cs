@@ -285,6 +285,19 @@ public static class StarterItems
             MaxStack = 1, PlacesEntity = true,
         });
 
+        // ⛳ The helm (2026-10-25): the wheel that turns a pile of blocks on the water into a ship.
+        items.Register(new ItemType
+        {
+            Name = "helm", Label = "helm", IconLayer = StarterBlocks.LayerPlanks,
+            BurnSeconds = Timber, DrawsAsBlock = true,
+            Places = new Placeable
+            {
+                Label = "helm",
+                Kind = PlacementKind.Facing,
+                Variants = StarterBlocks.Helms(blocks),
+            },
+        });
+
         // ⛳ The boats (2026-10-25): put down on water, rowed, and broken back into themselves.
         items.Register(new ItemType
         {

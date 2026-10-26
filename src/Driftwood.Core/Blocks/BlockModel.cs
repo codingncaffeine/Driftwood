@@ -897,6 +897,40 @@ public sealed class BlockModel
     /// busier top texture would need walking up to. The fill is its own box rather than a repaint
     /// of the floor, which is what lets the level rise without another wall texture per stage.
     /// </remarks>
+    /// <summary>
+    /// A ship's wheel on its post (2026-10-25): the rim and its spoke handles stand square to the
+    /// way the helm faces, so whoever steers stands behind it looking over it.
+    /// </summary>
+    /// <remarks>
+    /// Written for a helm facing ±z and turned by swapping the horizontal spans, the anvil's way, so
+    /// no texture or cull face is carried round a rotation.
+    /// </remarks>
+    public static BlockModel Helm(ushort wood, ushort post, int facing)
+    {
+        var alongZ = facing is Faces.PosZ or Faces.NegZ;
+
+        ModelElement Part(float x0, float x1, float y0, float y1, float z0, float z1, ushort layer) =>
+            alongZ
+                ? Box(new Vector3(x0, y0, z0), new Vector3(x1, y1, z1), layer, layer, layer)
+                : Box(new Vector3(z0, y0, x0), new Vector3(z1, y1, x1), layer, layer, layer);
+
+        return new BlockModel(
+        [
+            Part(5f, 11f, 0f, 2f, 5f, 11f, post),        // the foot
+            Part(6.5f, 9.5f, 2f, 9f, 6.5f, 9.5f, post),   // the post
+            Part(7f, 9f, 9f, 11f, 6f, 10f, post),         // the hub, through the wheel
+            Part(2f, 14f, 15f, 16f, 7.5f, 8.5f, wood),    // the rim, top
+            Part(2f, 14f, 4f, 5f, 7.5f, 8.5f, wood),      //          bottom
+            Part(2f, 3f, 5f, 15f, 7.5f, 8.5f, wood),      //          port
+            Part(13f, 14f, 5f, 15f, 7.5f, 8.5f, wood),    //          starboard
+            Part(7.5f, 8.5f, 5f, 15f, 7.5f, 8.5f, wood),  // spokes, up and down
+            Part(3f, 13f, 9.5f, 10.5f, 7.5f, 8.5f, wood), //         across
+            Part(7.5f, 8.5f, 16f, 17.5f, 7.5f, 8.5f, post), // handles past the rim
+            Part(0.5f, 2f, 9.5f, 10.5f, 7.5f, 8.5f, post),
+            Part(14f, 15.5f, 9.5f, 10.5f, 7.5f, 8.5f, post),
+        ]);
+    }
+
     public static BlockModel Composter(ushort side, ushort bottom, ushort fill, int stage)
     {
         var elements = new List<ModelElement>

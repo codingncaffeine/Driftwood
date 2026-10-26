@@ -91,6 +91,9 @@ public enum BlockUse
 
     /// <summary>Opens the sign's words for editing, as the reference does on a right click.</summary>
     Sign,
+
+    /// <summary>Takes the helm (2026-10-25): lifts the ship it stands on off the world and sails it.</summary>
+    Helm,
 }
 
 /// <summary>Which fluid a block is, when it is one.</summary>

@@ -53,6 +53,12 @@ public sealed class BrewingBank
 
     public bool TryGet(int x, int y, int z, out BrewingStand stand) => _at.TryGetValue((x, y, z), out stand!);
 
+    /// <summary>Lifts one out whole, contents and all, for a ship to carry (2026-10-25).</summary>
+    public BrewingStand? Detach(int x, int y, int z) => _at.Remove((x, y, z), out var lifted) ? lifted : null;
+
+    /// <summary>Sets a carried one down at its new cell.</summary>
+    public void Attach(int x, int y, int z, BrewingStand stand) => _at[(x, y, z)] = stand;
+
     /// <summary>Takes a stand out of the world and hands back what was in it.</summary>
     public IEnumerable<ItemStack> Remove(int x, int y, int z)
     {

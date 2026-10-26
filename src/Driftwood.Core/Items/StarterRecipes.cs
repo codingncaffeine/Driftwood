@@ -349,6 +349,9 @@ public static class StarterRecipes
             mirrored: false, station: CraftStation.Bench);
         Shaped("cart", "cart", 1, ["I I", "III"], mirrored: false, station: CraftStation.Bench);
 
+        // ⛳ The helm (2026-10-25): a wheel of sticks round an iron hub, on a plank post.
+        Shaped("helm", "helm", 1, ["S S", " I ", "SPS"], mirrored: false, station: CraftStation.Bench);
+
         // ⛳ The boats (2026-10-25): five planks of one wood, the reference's hull, each wood its own.
         Shaped("boat", "boat", 1, ["M M", "MMM"], "driftoak_planks", mirrored: false, station: CraftStation.Bench);
         Shaped("cherry boat", "cherry_boat", 1, ["M M", "MMM"], "cherry_planks", mirrored: false, station: CraftStation.Bench);

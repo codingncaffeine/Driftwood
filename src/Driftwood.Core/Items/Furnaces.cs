@@ -83,6 +83,12 @@ public sealed class FurnaceBank
 
     public bool TryGet(int x, int y, int z, out Furnace furnace) => _at.TryGetValue((x, y, z), out furnace!);
 
+    /// <summary>Lifts one out whole, contents and all, for a ship to carry (2026-10-25).</summary>
+    public Furnace? Detach(int x, int y, int z) => _at.Remove((x, y, z), out var lifted) ? lifted : null;
+
+    /// <summary>Sets a carried one down at its new cell.</summary>
+    public void Attach(int x, int y, int z, Furnace furnace) => _at[(x, y, z)] = furnace;
+
     /// <summary>Takes a furnace out of the world and hands back what was inside it.</summary>
     public IEnumerable<ItemStack> Remove(int x, int y, int z)
     {

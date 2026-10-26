@@ -1361,6 +1361,16 @@ public static class StarterBlocks
                 Model = BlockModel.FenceGate(LayerPlanks, Placeable.Facings[i], open),
             });
 
+        // ⛳ The helm (2026-10-25): a ship's wheel on a post, four facings. Taking it lifts whatever
+        // it is built into off the world and sails it — see Ships.
+        for (var i = 0; i < Placeable.Facings.Length; i++)
+            registry.Register(new BlockType
+            {
+                Name = HelmName(i), Hardness = 2f, Opaque = false, Crafted = true, Anchors = true,
+                Sounds = SoundMaterial.Wood, Use = BlockUse.Helm, HarvestClass = ToolClass.Axe,
+                Model = BlockModel.Helm(LayerPlanks, LayerLogSide, Placeable.Facings[i]),
+            });
+
         // ⛳ Signs (2026-10-16): four standing on a post, turned to face whoever placed them, and
         // four flat on a wall. Every one of them opens its words on a right click.
         for (var i = 0; i < Placeable.Facings.Length; i++)
@@ -3143,6 +3153,13 @@ public static class StarterBlocks
     }
 
     /// <summary>A fence gate's block name: which way it faces, and whether it stands open.</summary>
+    /// <summary>The helm's block name for a facing in <see cref="Placeable.Facings"/> order.</summary>
+    public static string HelmName(int facing) => $"helm_{FacingNames[facing]}";
+
+    /// <summary>The four helms in <see cref="Placeable.Facings"/> order, for the item to place.</summary>
+    public static BlockId[] Helms(BlockRegistry registry) =>
+        [.. Enumerable.Range(0, Placeable.Facings.Length).Select(i => registry.ByName(HelmName(i)).Id)];
+
     public static string FenceGateName(int facing, bool open) =>
         $"fence_gate_{FacingNames[facing]}{(open ? "_open" : "")}";
 
