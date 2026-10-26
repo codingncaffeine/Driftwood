@@ -44,7 +44,10 @@ public static class StarterItems
         new("wood", "#planks", 1, 2f, 60, 0),
         new("stone", "#rough_stone", 2, 4f, 132, 1),
         new("copper", "copper_ingot", 3, 6f, 190, 2),
-        new("gold", "gold_ingot", 2, 12f, 33, 3),
+        // ⚠ USER, 2026-10-26: mining that meets the genre's expectations. Gold is the quickest
+        // tool there is, ahead of the very top, and it breaks almost at once; at 12 it had fallen
+        // behind diamond and emberite when the ladder grew past them.
+        new("gold", "gold_ingot", 2, 18f, 33, 3),
         new("iron", "iron_ingot", 4, 8f, 251, 4),
         new("stormglass", "stormglass", 5, 10f, 1562, 5),
 

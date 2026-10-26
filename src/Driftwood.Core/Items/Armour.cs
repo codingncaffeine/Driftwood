@@ -108,7 +108,10 @@ public static class Armour
         // Chainmail is GREY and this metal is 198,124,78, so borrowing it was a mismatch accepted
         // for want of anything better. There is something better now.
         new("copper", "copper_ingot", "copper", 198, 124, 78, [2, 4, 3, 2], 200, Borrow: "iron"),
-        new("gold", "gold_ingot", "gold", 232, 196, 82, [2, 6, 5, 3], 100),
+        // ⚠ USER, 2026-10-26: armour that meets the genre's expectations. Gold was 2/6/5/3, a point
+        // ABOVE iron while wearing out three times faster; a player expects it a little over copper
+        // and well under iron, a soft metal worth having for everything but plate.
+        new("gold", "gold_ingot", "gold", 232, 196, 82, [2, 5, 4, 1], 100),
         new("iron", "iron_ingot", "iron", 214, 214, 220, [2, 6, 5, 2], 280),
 
         // ⚠ Stormglass moved off the pack's "diamond" sheet the day the game got a real diamond.

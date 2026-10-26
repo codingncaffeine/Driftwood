@@ -36,10 +36,10 @@ public static class MiningRules
     /// rung above your pickaxe, slowly.</b> Every block in the game is then in one of three states
     /// against what you are holding — yours, one-rung-slow, or refused — and a player learns which
     /// by swinging once.</para>
-    /// <para>⛔ <b>This is the number that forced deepstone down to tier 1.</b> Deepstone is 98.6% of
-    /// everything below y 0 and it is the rock you <em>tunnel through</em> rather than a prize. At
-    /// tier 2 a player whose last pickaxe broke at y −200 could not break it bare-handed at all,
-    /// which is not a difficulty setting but a way to lose a save. The tier ladder is for ORE.</para>
+    /// <para>⚠ <b>Deepstone is tier 2, so bare hands cannot move it at all.</b> It was once forced
+    /// down to tier 1 for exactly that reason, and the user later chose the other way: the deep is
+    /// somewhere you prepare for, and a wooden pickaxe still works one rung under. See its entry in
+    /// <c>StarterBlocks</c>.</para>
     /// </remarks>
     public const int MaxDeficit = 1;
 

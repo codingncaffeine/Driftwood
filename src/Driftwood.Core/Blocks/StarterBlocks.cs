@@ -1266,7 +1266,8 @@ public static class StarterBlocks
             {
                 Name = MetalBlocks[m].Name, Hardness = 5f, Crafted = true,
                 Sounds = SoundMaterial.Metal,
-                HarvestClass = ToolClass.Pickaxe, HarvestTier = 2,
+                // Gold's block wants what gold ore wants (2026-10-26): it had asked a rung less.
+                HarvestClass = ToolClass.Pickaxe, HarvestTier = MetalBlocks[m].Ingot == "gold_ingot" ? 3 : 2,
                 TopLayer = layer, SideLayer = layer, BottomLayer = layer,
             });
         }
@@ -1290,7 +1291,7 @@ public static class StarterBlocks
         // ladder and its gold-shaped exception are Items/Smithing.cs's to say.
         registry.Register(new BlockType
         {
-            Name = "smithing_table", Hardness = 2.5f, Crafted = true,
+            Name = "smithing_table", Hardness = 2.5f, Crafted = true, HarvestClass = ToolClass.Axe,
             Sounds = SoundMaterial.Wood, Use = BlockUse.Smithing,
             TopLayer = LayerSmithingTop, SideLayer = LayerSmithingSide,
             BottomLayer = LayerSmithingSide,
@@ -1300,7 +1301,7 @@ public static class StarterBlocks
         // carpet and banner offered, the stonecutter's own manner.
         registry.Register(new BlockType
         {
-            Name = "loom", Hardness = 2.5f, Crafted = true,
+            Name = "loom", Hardness = 2.5f, Crafted = true, HarvestClass = ToolClass.Axe,
             Sounds = SoundMaterial.Wood, Use = BlockUse.Loom,
             TopLayer = LayerLoomTop, SideLayer = LayerLoomSide, BottomLayer = LayerLoomSide,
         });
@@ -3381,7 +3382,7 @@ public static class StarterBlocks
         new("rubble", LayerRubble, LayerRubble, LayerRubble, SoundMaterial.Stone, ToolClass.Pickaxe, 1),
         new("bricks", LayerBricks, LayerBricks, LayerBricks, SoundMaterial.Stone, ToolClass.Pickaxe, 1),
         new("sandstone", LayerSandstoneTop, LayerSandstone, LayerSandstoneTop,
-            SoundMaterial.Stone, ToolClass.Pickaxe, 0),
+            SoundMaterial.Stone, ToolClass.Pickaxe, 1),
 
         // And every cut form, which is where this table stops being a list and starts being a
         // multiplier: nine rows below turn into eighteen shapes and eighteen recipes.
@@ -3400,7 +3401,7 @@ public static class StarterBlocks
         new("polished_saltstone", LayerSaltstonePolished, LayerSaltstonePolished, LayerSaltstonePolished,
             SoundMaterial.Stone, ToolClass.Pickaxe, 1),
         new("cut_sandstone", LayerSandstoneCut, LayerSandstoneCut, LayerSandstoneCut,
-            SoundMaterial.Stone, ToolClass.Pickaxe, 0),
+            SoundMaterial.Stone, ToolClass.Pickaxe, 1),
 
         // R1 (2026-10-25): the Deepwatch's stone and the Emberhold's brick, cut as the reference cuts
         // its prismarine and its nether brick.
@@ -3436,8 +3437,8 @@ public static class StarterBlocks
         new("polished_coralstone", LayerCoralstonePolished, 1.5f, 1),
         new("polished_driftstone", LayerDriftstonePolished, 1.5f, 1),
         new("polished_saltstone", LayerSaltstonePolished, 1.5f, 1),
-        new("cut_sandstone", LayerSandstoneCut, 0.8f, 0),
-        new("chiseled_sandstone", LayerSandstoneChiseled, 0.8f, 0),
+        new("cut_sandstone", LayerSandstoneCut, 0.8f, 1),
+        new("chiseled_sandstone", LayerSandstoneChiseled, 0.8f, 1),
     ];
 
     /// <summary>The worked forms, for whatever wants to walk them.</summary>
@@ -3502,7 +3503,7 @@ public static class StarterBlocks
     public readonly record struct ConnectedMaterial(
         string Name, ushort Layer, SoundMaterial Sound, ToolClass Harvest, int Tier,
         float PostHalf, float ArmHalf, (float Low, float High)[] Bars, float CollideHigh,
-        bool Translucent = false);
+        bool Translucent = false, float Hardness = 2f);
 
     /// <summary>
     /// A fence and a wall stop a body half a block higher than they are drawn.
@@ -3527,7 +3528,7 @@ public static class StarterBlocks
             4f, 3f, [(0f, 14f)], FenceCollideHigh),
         new("deepstone_brick_wall", LayerDeepstoneBricks, SoundMaterial.Deepstone, ToolClass.Pickaxe, 1,
             4f, 3f, [(0f, 14f)], FenceCollideHigh),
-        new("sandstone_wall", LayerSandstone, SoundMaterial.Stone, ToolClass.Pickaxe, 0,
+        new("sandstone_wall", LayerSandstone, SoundMaterial.Stone, ToolClass.Pickaxe, 1,
             4f, 3f, [(0f, 14f)], FenceCollideHigh),
         new("brick_wall", LayerBricks, SoundMaterial.Stone, ToolClass.Pickaxe, 1,
             4f, 3f, [(0f, 14f)], FenceCollideHigh),
@@ -3535,14 +3536,15 @@ public static class StarterBlocks
             4f, 3f, [(0f, 14f)], FenceCollideHigh),
         new("ember_brick_wall", LayerEmberBricks, SoundMaterial.Deepstone, ToolClass.Pickaxe, 1,
             4f, 3f, [(0f, 14f)], FenceCollideHigh),
+        // A pane breaks like the glass it is cut from (2026-10-26): it was a fence's two seconds.
         new("glass_pane", LayerGlass, SoundMaterial.Glass, ToolClass.None, 0,
-            1f, 1f, [(0f, 16f)], 0f),
+            1f, 1f, [(0f, 16f)], 0f, Hardness: 0.3f),
         new("smokeglass_pane", LayerSmokeglass, SoundMaterial.Glass, ToolClass.None, 0,
-            1f, 1f, [(0f, 16f)], 0f),
+            1f, 1f, [(0f, 16f)], 0f, Hardness: 0.4f),
 
         // A pane's frame in iron: the same thin join-up, mined with a pickaxe rather than by hand.
         new("iron_bars", LayerIronBars, SoundMaterial.Metal, ToolClass.Pickaxe, 1,
-            1f, 1f, [(0f, 16f)], 0f),
+            1f, 1f, [(0f, 16f)], 0f, Hardness: 5f),
 
         // ⛳ Sixteen more panes, appended off the colour table rather than written out — which is the
         // whole argument for this table being a table. Same geometry as a plain pane in every number;
@@ -3559,7 +3561,7 @@ public static class StarterBlocks
             panes[i] = new ConnectedMaterial(
                 $"stained_glass_pane_{Colours[i].Name}", (ushort)(LayerFirstStainedGlass + i),
                 SoundMaterial.Glass, ToolClass.None, 0,
-                1f, 1f, [(0f, 16f)], 0f, Translucent: true);
+                1f, 1f, [(0f, 16f)], 0f, Translucent: true, Hardness: 0.3f);
 
         return panes;
     }
@@ -3586,7 +3588,7 @@ public static class StarterBlocks
             registry.Register(new BlockType
             {
                 Name = $"{m.Name}_{mask}",
-                Hardness = 2f, Opaque = false, Crafted = true, Sounds = m.Sound,
+                Hardness = m.Hardness, Opaque = false, Crafted = true, Sounds = m.Sound,
                 Translucent = m.Translucent,
                 HarvestClass = m.Harvest, HarvestTier = m.Tier,
                 Model = BlockModel.Connected(
