@@ -436,6 +436,23 @@ public sealed class Growth
         // The shape comes off the roll and the cell, so two saplings side by side grow two trees
         // and the same sapling looked at twice does not grow the same tree it refused.
         var shape = unchecked((int)(roll * int.MaxValue) ^ (x * 73_856_093) ^ (y * 19_349_663) ^ (z * 83_492_791));
+
+        // Four of one kind planted in a square grow together into one great tree.
+        foreach (var (cx, cz) in Squares)
+        {
+            var x0 = x + cx;
+            var z0 = z + cz;
+            if (world.GetBlock(x0, y, z0) != sapling || world.GetBlock(x0 + 1, y, z0) != sapling
+                || world.GetBlock(x0, y, z0 + 1) != sapling || world.GetBlock(x0 + 1, y, z0 + 1) != sapling)
+                continue;
+
+            if (!trees.GrowGreatTree(world, x0, y, z0, _saplingIsCherry[sapling.Value], shape, (wx, wy, wz, id) => Write(world, wx, wy, wz, id)))
+                return false;
+
+            TreesGrown++;
+            return true;
+        }
+
         if (!trees.GrowTree(world, x, y, z, _saplingIsCherry[sapling.Value], shape, (wx, wy, wz, id) => Write(world, wx, wy, wz, id)))
             return false;
 
@@ -489,6 +506,9 @@ public sealed class Growth
 
         return false;
     }
+
+    /// <summary>The corners, relative to a sapling, of the four two-by-two squares it can be part of.</summary>
+    private static readonly (int X, int Z)[] Squares = [(0, 0), (-1, 0), (0, -1), (-1, -1)];
 
     /// <summary>The four cells round a stem a fruit may be set in.</summary>
     private static readonly (int X, int Z)[] Around = [(1, 0), (-1, 0), (0, 1), (0, -1)];

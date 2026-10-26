@@ -2188,7 +2188,7 @@ public sealed class TerrainGenerator
         var trunk = 5 + (int)(Noise.Value2(shapeSeed, 1, _seedTree + 53) * 4f);
 
         for (var i = 1; i < trunk; i++)
-            if (!world.GetBlock(x, y + i, z).IsAir) return false;
+            if (!TrunkRoom(world, x, y + i, z)) return false;
 
         var spec = new TreeSpec(
             X: x,
@@ -2204,6 +2204,83 @@ public sealed class TerrainGenerator
             Cherry: cherry);
 
         PlantOakInto(new WorldCanvas(world, write), spec);
+        return true;
+    }
+
+    /// <summary>
+    /// Whether a growing trunk may pass through a cell: air, or a wild tree's leaves or vines.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <b>USER, 2026-10-26: "i've planted a bunch of them close to each other but only two have
+    /// grown, the rest i think are stuck."</b> The first sapling's crown spread over its neighbours,
+    /// and a trunk asked for pure air, so every sapling under that crown waited for good. A trunk
+    /// already passes through a neighbour's foliage in a generated wood; a planted one now does too.
+    /// Leaves a player placed are still a ceiling.
+    /// </remarks>
+    private bool TrunkRoom(VoxelWorld world, int x, int y, int z)
+    {
+        if (!InWorld(y)) return false;
+        var block = world.GetBlock(x, y, z);
+        return block.IsAir || block == _ids.Leaves || block == _ids.CherryLeaves || block == _ids.Vine;
+    }
+
+    /// <summary>
+    /// Grows a great tree out of a two-by-two square of saplings, its corner at the lowest X and Z:
+    /// a trunk two logs across, half as tall again, under a crown twice the width.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>USER, 2026-10-26: "normal when separated but larger when planted together."</b> The same
+    /// crown, branch and flare code as every other tree, so it is the same species grown large: two
+    /// round crowns over opposite corners of the trunk make one broad mass, with a wider skirt of
+    /// leaves below them, and every leaf stays within reach of a log.
+    /// </remarks>
+    public bool GrowGreatTree(VoxelWorld world, int x, int y, int z, bool cherry, int shapeSeed, Action<int, int, int, BlockId> write)
+    {
+        var trunk = 10 + (int)(Noise.Value2(shapeSeed, 1, _seedTree + 53) * 6f);
+
+        for (var dz = 0; dz < 2; dz++)
+        for (var dx = 0; dx < 2; dx++)
+        for (var i = 1; i < trunk; i++)
+            if (!TrunkRoom(world, x + dx, y + i, z + dz)) return false;
+
+        var tree = new TreeSpec(
+            X: x,
+            Z: z,
+            BaseY: y,
+            TrunkHeight: trunk,
+            CrownRadius: 4,
+            CrownOffsetX: 0,
+            CrownOffsetZ: 0,
+            CrownDepth: 5 + (int)(Noise.Value2(shapeSeed, 5, _seedTree + 127) * 2f),
+            Branches: 3 + (int)(Noise.Value2(shapeSeed, 6, _seedTree + 131) * 3f),
+            Seed: Noise.Hash2(shapeSeed, 7, _seedTree),
+            Cherry: cherry);
+        var canvas = new WorldCanvas(world, write);
+        var log = tree.LogOf(_ids);
+
+        PlaceBranches(canvas, tree);
+        PlaceCrown(canvas, tree, x, tree.TopY, z, tree.CrownRadius, tree.CrownDepth);
+        PlaceCrown(canvas, tree with { X = x + 1, Z = z + 1 }, x + 1, tree.TopY, z + 1, tree.CrownRadius, tree.CrownDepth);
+        PlaceCrown(canvas, tree, x + 1, tree.TopY - tree.CrownDepth + 1, z, radius: 5, depth: 3);
+
+        for (var dz = 0; dz < 2; dz++)
+        for (var dx = 0; dx < 2; dx++)
+        for (var i = 0; i < trunk; i++)
+            canvas.Set(x + dx, y + i, z + dz, log);
+
+        // Roots round the whole foot, one roll a side.
+        for (var side = 0; side < 8; side++)
+        {
+            if (Noise.Value3(x, side, z, tree.Seed + 3) > 0.55f) continue;
+
+            var (rx, rz) = side switch
+            {
+                0 => (-1, 0), 1 => (-1, 1), 2 => (2, 0), 3 => (2, 1),
+                4 => (0, -1), 5 => (1, -1), 6 => (0, 2), _ => (1, 2),
+            };
+            PlaceIntoAir(canvas, x + rx, y, z + rz, log);
+        }
+
         return true;
     }
 
