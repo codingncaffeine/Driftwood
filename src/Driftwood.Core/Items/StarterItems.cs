@@ -870,6 +870,7 @@ public static class StarterItems
         Loose(items, "cinder_rod", "cinder rod", StarterBlocks.LayerCinderRod, burn: 120f);
         Block(items, blocks, "emberite_debris", "emberite debris", StarterBlocks.LayerEmberiteDebris);
         Loose(items, "emberite_scrap", "emberite scrap", StarterBlocks.LayerEmberiteScrap);
+        Block(items, blocks, "wyrm_egg", "wyrm egg", StarterBlocks.LayerWyrmEgg);
         items.Register(new ItemType
         {
             Name = "seeker_eye", Label = "seeker's eye", IconLayer = StarterBlocks.LayerSeekerEye,

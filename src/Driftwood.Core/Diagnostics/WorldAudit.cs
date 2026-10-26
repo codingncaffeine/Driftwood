@@ -3407,6 +3407,11 @@ public static class WorldAudit
             if (Held(items.ByName("glass_bottle").Id))
                 changed |= Gain(items.ByName("water_bottle").Id);
 
+            // ⛳ THE GATE AND THE WYRM. Seeker's eyes open a Sanctum's gate; beyond it the wyrm,
+            // and when it falls its egg. Asked of the eye, which is everything the gate wants.
+            if (Held(items.ByName("seeker_eye").Id))
+                changed |= Gain(items.ByName("wyrm_egg").Id);
+
             if (Held(items.ByName("brewing_stand").Id) && Held(items.ByName("cinder_dust").Id))
                 foreach (var bottle in Potions.All)
                 {
@@ -9285,7 +9290,8 @@ public static class WorldAudit
         (StarterBlocks.LayerCinderCage, "cinder_cage"),
         (StarterBlocks.LayerBrewingStand, "brewing_stand"),
         (StarterBlocks.LayerEmberiteIngot, "emberite_ingot"),
-        ((ushort)(StarterBlocks.LayerCount - 1), "seeker_eye"),
+        (StarterBlocks.LayerSeekerEye, "seeker_eye"),
+        ((ushort)(StarterBlocks.LayerCount - 1), "wyrm_egg"),
     ];
 
     /// <summary>
@@ -14426,12 +14432,35 @@ public static class WorldAudit
         if (big.Blows == 0) faults.Add("a size-four ember slime never struck");
         if (big.Closest < 1.2f) faults.Add($"a size-four ember slime came {big.Closest:F1} from the player's middle — on top of them");
 
+        // The wyrm, over three seeds and ninety seconds each against a player at the landing: it
+        // has to come down at them and hit, and it has to land on the podium where it can be hit.
+        int dives = 0, landed = 0, perches = 0;
+        for (var seed = 1; seed <= 3; seed++)
+        {
+            var arena = new CreatureHerd(seed);
+            var wyrm = arena.SpawnAt(new SpawnKind("core_wyrm", new(11f, 2.4f, 10f), true, CreatureMove.Fly),
+                Gen.CoreHollow.Centre + new Vector3(0f, 20f, -20f), 0f);
+            var (diving, perched) = (false, false);
+            for (var t = 0f; t < 90f; t += 0.05f)
+            {
+                arena.Update(0.05f, static (_, _, _) => false, Gen.CoreHollow.Landing);
+                arena.TakeShots();
+                landed += arena.TakeAttacks().Count;
+                if (wyrm.Swooping && !diving) dives++;
+                if (wyrm.Charge > 0f && !perched) perches++;
+                (diving, perched) = (wyrm.Swooping, wyrm.Charge > 0f);
+            }
+        }
+        if (dives == 0 || landed == 0) faults.Add($"the wyrm dived {dives} times and struck {landed} in four and a half minutes");
+        if (perches == 0) faults.Add("the wyrm never landed on its podium, so it can never be reached");
+
         foreach (var kind in (ReadOnlySpan<string>)["cinderwisp", "ashwail", "ember_slime", "charred_skeleton"])
             if (!SpawnRules.Emberdeep.Any(row => row.Kind == kind))
                 faults.Add($"{kind} is not on the Emberdeep's table");
 
         said = $"{wisp.Embers} cinderwisp fireballs, {wail.Bolts} ashwail bolts, {charred.Blows} charred blows and "
-             + $"{big.Blows} from a size-four ember slime in twelve seconds; the slime stops {big.Closest:F1} off";
+             + $"{big.Blows} from a size-four ember slime in twelve seconds; the slime stops {big.Closest:F1} off; "
+             + $"the wyrm dived {dives} times, struck {landed} and perched {perches} in three fights";
         return faults;
     }
 }

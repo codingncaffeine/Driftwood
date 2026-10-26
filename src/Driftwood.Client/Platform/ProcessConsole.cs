@@ -33,6 +33,9 @@ internal static class ProcessConsole
         if (commandLine || !OperatingSystem.IsWindows())
         {
             Console.Error.WriteLine($"driftwood: {error.Message}");
+
+            // The whole of it, stack and inner causes, for whoever is chasing one down.
+            if (Environment.GetEnvironmentVariable("DRIFTWOOD_TRACE") == "1") Console.Error.WriteLine(error);
             if (commandLine) return;
         }
 

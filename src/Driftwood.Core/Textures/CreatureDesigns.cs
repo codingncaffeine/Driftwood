@@ -604,6 +604,45 @@ public static class CreatureDesigns
         return Hash(t, 83) > 0.78f || Patch(t, 84) > 0.86f ? crack : crust;
     }
 
+    /// <summary>
+    /// The Core Wyrm: charcoal scales split by ember along the back and the wings' bones, a darker
+    /// belly, two burning eyes and a glowing maw.
+    /// </summary>
+    private static Ink? CoreWyrm(DesignTexel t)
+    {
+        var scale = new Ink(46, 38, 42, 0.08f);
+        var plate = Hash(t, 91) > 0.8f ? scale.Lighter(0.1f) : scale;
+        var ember = new Ink(232, 110, 38, 0.05f);
+
+        switch (t.Bone)
+        {
+            case "head":
+                if (t.Front)
+                {
+                    if (t.Y is 2 or 3 && t.X is 2 or 3 or 8 or 9) return new Ink(255, 214, 80, 0f);
+                    if (t.Y == 1 && t.X is >= 1 and <= 4 or >= 7 and <= 10) return scale.Darker(0.4f);
+                }
+                if (t.Top && t.X % 4 == 1 && t.Y % 3 == 0) return new Ink(170, 150, 120);
+                return plate;
+
+            case "jaw":
+                return t.Top ? ember.Lighter(0.2f) : plate.Darker(0.15f);
+
+            case "body" or "neck" or "tail0" or "tail1" or "tail2":
+                if (t.Bottom) return scale.Darker(0.3f);
+                if (t.Top && Math.Abs(t.X - (t.W - 1) * 0.5f) < 1f) return Hash(t, 92) > 0.4f ? ember : ember.Darker(0.3f);
+                return Patch(t, 93) > 0.85f ? ember.Darker(0.45f) : plate;
+
+            case "wing0" or "wing1" or "wingtip0" or "wingtip1":
+                // Membrane, and a bone of ember along the leading edge.
+                if (t.Y <= 1 || t.X % 6 == 0) return ember.Darker(0.25f);
+                return Hash(t, 94) > 0.9f ? scale.Lighter(0.15f) : new Ink(60, 44, 50, 0.06f);
+
+            default:
+                return t.Bottom ? new Ink(30, 26, 28) : plate.Darker(0.1f);
+        }
+    }
+
     private static readonly Dictionary<string, Func<DesignTexel, Ink?>> Designs = new(StringComparer.Ordinal)
     {
         ["zombie"] = t => Walker(t, ZombieKit),
@@ -624,5 +663,6 @@ public static class CreatureDesigns
         ["ashwail"] = Ashwail,
         ["ember_slime"] = EmberSlime,
         ["charred_skeleton"] = t => Bones(t, CharredKit),
+        ["core_wyrm"] = CoreWyrm,
     };
 }

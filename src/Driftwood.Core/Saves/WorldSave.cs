@@ -77,6 +77,9 @@ public sealed record WorldState(
     /// <summary>What is written on the world's signs.</summary>
     public SignBank Signs { get; set; } = new();
 
+    /// <summary>True once the Core Wyrm has been brought down in this world (2026-10-25).</summary>
+    public bool WyrmDefeated { get; set; }
+
     /// <summary>The world's brewing stands (2026-10-25).</summary>
     public BrewingBank Brewing { get; set; } = new();
 
@@ -479,6 +482,13 @@ public static class WorldSave
                     }
                 }));
 
+                // ⛳ The Core (2026-10-25): whether the wyrm has fallen, a section of its own to grow.
+                SaveSection.Write(into, "CORE", Bytes(core =>
+                {
+                    core.Write(1); // payload version
+                    core.Write(state.WyrmDefeated);
+                }));
+
                 // ⛳ The brewing stands (2026-10-25), their bottles and their dust.
                 SaveSection.Write(into, "BREW", brewing);
 
@@ -678,6 +688,10 @@ public static class WorldSave
                     case "SIGN": signText = payload; break;
                     case "ACHV": achievements = payload; break;
                     case "BREW": brewing = payload; break;
+                    case "CORE":
+                        using (var core = Reader(payload))
+                            if (core.ReadInt32() == 1) into.WyrmDefeated = core.ReadBoolean();
+                        break;
 
                     // Written by a newer build than this one. Skipped, and deliberately not an
                     // error: the length said how far, which is the whole reason sections carry one.

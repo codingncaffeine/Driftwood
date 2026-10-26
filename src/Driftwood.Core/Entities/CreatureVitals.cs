@@ -80,6 +80,9 @@ public static class CreatureVitals
         ["ashwail"] = 20,
         ["ember_slime"] = 2,
         ["charred_skeleton"] = 40,
+
+        // The reference's dragon, doubled like the rest.
+        ["core_wyrm"] = 400,
     };
 
     /// <summary>Kinds that leave something behind without being touched.</summary>
@@ -117,6 +120,7 @@ public static class CreatureVitals
         ["cinderwisp"] = 6,
         ["ember_slime"] = 3,
         ["charred_skeleton"] = 8,
+        ["core_wyrm"] = 12,
 
         // The one beast with teeth. Only lands once provoked — see Retaliates.
         ["wolf"] = 3,

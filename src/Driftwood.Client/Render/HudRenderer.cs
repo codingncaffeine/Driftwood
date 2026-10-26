@@ -975,6 +975,7 @@ public sealed class HudRenderer : IDisposable
         {
             Crosshair(w, h);
             AttackIndicator(screen, w, h);
+            if (BossName is { } boss) BossBar(boss, BossFraction, w);
         }
 
         // A container panel carries the player's own pockets in its bottom half, so the bar along
@@ -5173,6 +5174,21 @@ public sealed class HudRenderer : IDisposable
             var x = bubbles.X + 2 + (i * 3) % (bubbles.W - 3);
             Rect(_plain, layout.X(x), layout.Y(y), layout.Size(2f), layout.Size(2f), new Vector4(0.86f, 0.92f, 1f, 0.9f));
         }
+    }
+
+    /// <summary>A boss's name and how much of it is left, while one is being fought; null otherwise.</summary>
+    public string? BossName;
+    public float BossFraction;
+
+    /// <summary>The reference's boss bar: the name over a long bar at the top of the screen.</summary>
+    private void BossBar(string name, float fraction, float w)
+    {
+        const float Wide = 280f, Tall = 7f, Top = 16f;
+        var left = MathF.Round((w - Wide) * 0.5f);
+        TextCentred(name, w * 0.5f, Top - 11f, 8f, Ink);
+        Rect(_plain, left - 1f, Top - 1f, Wide + 2f, Tall + 2f, new Vector4(0.05f, 0.05f, 0.06f, 0.9f));
+        Rect(_plain, left, Top, Wide, Tall, new Vector4(0.25f, 0.08f, 0.06f, 1f));
+        Rect(_plain, left, Top, MathF.Round(Wide * Math.Clamp(fraction, 0f, 1f)), Tall, new Vector4(0.95f, 0.42f, 0.16f, 1f));
     }
 
     /// <summary>The pointer, and whatever is riding on it.</summary>

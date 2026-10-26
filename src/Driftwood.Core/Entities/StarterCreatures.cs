@@ -937,6 +937,40 @@ public static class StarterCreatures
         return new CreatureModel("ember_slime", 64, 32, [.. bones]);
     }
 
+    /// <summary>
+    /// The Core Wyrm: the Hollow's dragon — a long scaled body on four legs, a neck and a heavy
+    /// head with its jaw, a tail in three tapering lengths, and wide wings with their tips.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ Ours outright, on our own sheet. The reference's dragon is a different animal on a 256-square
+    /// net no shape here could share, and a pack that draws it would draw it on the wrong boxes; the
+    /// wyrm keeps its own art whatever pack is worn. Faces −z like everything else; the wings run out
+    /// level from the shoulders, so it is wide rather than tall.
+    /// </remarks>
+    public static CreatureModel CoreWyrm()
+    {
+        var bones = new List<CreatureBone>
+        {
+            Bone("body", "", new Vector3(0f, 16f, 0f), Box(-8f, 10f, -20f, 16f, 12f, 40f, 0, 0)),
+            Bone("neck", "body", new Vector3(0f, 18f, -20f), Box(-4f, 14f, -32f, 8f, 8f, 12f, 112, 24)),
+            Bone("head", "neck", new Vector3(0f, 19f, -32f), Box(-6f, 14f, -46f, 12f, 10f, 14f, 112, 0)),
+            Bone("jaw", "head", new Vector3(0f, 14f, -34f), Box(-5f, 10f, -46f, 10f, 4f, 12f, 164, 0)),
+            Bone("tail0", "body", new Vector3(0f, 17f, 20f), Box(-3f, 14f, 20f, 6f, 6f, 12f, 152, 24)),
+            Bone("tail1", "tail0", new Vector3(0f, 17f, 32f), Box(-2f, 15f, 32f, 4f, 4f, 12f, 188, 24)),
+            Bone("tail2", "tail1", new Vector3(0f, 17f, 44f), Box(-1f, 16f, 44f, 2f, 2f, 10f, 220, 24)),
+            Bone("wing0", "body", new Vector3(8f, 21f, 0f), Box(8f, 20f, -10f, 28f, 2f, 24f, 16, 52)),
+            Bone("wingtip0", "wing0", new Vector3(36f, 21f, 0f), Box(36f, 20f, -6f, 20f, 1f, 18f, 120, 52)),
+            Bone("wing1", "body", new Vector3(-8f, 21f, 0f), Box(-36f, 20f, -10f, 28f, 2f, 24f, 16, 52, mirror: true)),
+            Bone("wingtip1", "wing1", new Vector3(-36f, 21f, 0f), Box(-56f, 20f, -6f, 20f, 1f, 18f, 120, 52, mirror: true)),
+        };
+
+        foreach (var (name, x, z, mirror) in (ReadOnlySpan<(string, float, float, bool)>)
+                 [("leg0", -8f, -12f, false), ("leg1", 4f, -12f, true), ("leg2", -8f, 10f, false), ("leg3", 4f, 10f, true)])
+            bones.Add(Bone(name, "body", new Vector3(x + 2f, 10f, z + 2f), Box(x, 0f, z, 4f, 10f, 4f, 0, 52, mirror)));
+
+        return new CreatureModel("core_wyrm", 256, 128, [.. bones]);
+    }
+
     /// <summary>The Emberdeep's skeleton: the same bones, charred, drawn a fifth larger.</summary>
     public static CreatureModel CharredSkeleton() => Skeleton() with { Name = "charred_skeleton" };
 
@@ -947,7 +981,7 @@ public static class StarterCreatures
          Stray(), Bogged(), ZombieVillager(), Witch(), CaveSpider(), Silverfish(), Phantom(),
          Shorewright(), Forager(), Waykeeper(), Lorekeeper(), StormSentinel(), Starwarden(),
          SummonedSkeleton(), SummonedZombie(), SpiritWolf(), EarthElemental(),
-         Cinderwisp(), Ashwail(), EmberSlime(), CharredSkeleton()];
+         Cinderwisp(), Ashwail(), EmberSlime(), CharredSkeleton(), CoreWyrm()];
 
     /// <summary>Kinds excused the height band because they are flat on purpose.</summary>
     private static readonly HashSet<string> Flat = new(StringComparer.Ordinal) { "phantom" };

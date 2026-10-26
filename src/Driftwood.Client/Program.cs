@@ -238,8 +238,19 @@ public static class Program
                 return 0;
             }
 
-            using var host = new ClientHost(options);
-            return host.Run();
+            // ⛔ Not a using: a fault inside the render loop leaves the window mid-frame, its Dispose
+            // then throws "cannot call Reset inside of the render loop", and a using lets that second
+            // exception REPLACE the first — every crash in play reported as the same useless line.
+            var host = new ClientHost(options);
+            try
+            {
+                return host.Run();
+            }
+            finally
+            {
+                try { host.Dispose(); }
+                catch (Exception closing) { Console.Error.WriteLine($"driftwood: closing failed as well: {closing.Message}"); }
+            }
         }
         catch (Exception ex)
         {

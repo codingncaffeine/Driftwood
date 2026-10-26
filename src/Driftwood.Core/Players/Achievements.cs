@@ -119,6 +119,9 @@ public static class AchievementEvents
     /// <summary>The Sanctum's gate: <c>open</c> when the twelfth eye goes in, <c>enter</c> when stepped through.</summary>
     public const string Gate = "gate";
 
+    /// <summary>An ember crystal broken. Subject: <c>crystal</c>.</summary>
+    public const string Shatter = "shatter";
+
     /// <summary>A creature killed by its own bolt, struck back. Subject: its kind.</summary>
     public const string Returned = "returned";
 
@@ -260,6 +263,14 @@ public sealed class AchievementBook
             // ── The Core ──
             new("the_core", AchievementTab.Core, "", "The Core", "Step through the gate, down to the Core Hollow",
                 "polished_deepstone", task, Any(AchievementEvents.Gate, "enter")),
+            new("crystal_breaker", AchievementTab.Core, "the_core", "Starve It", "Break an ember crystal",
+                "fire_charge", task, Any(AchievementEvents.Shatter, "crystal")),
+            new("free_the_core", AchievementTab.Core, "the_core", "Free the Core", "Bring down the Core Wyrm",
+                "wyrm_egg", goal, Any(AchievementEvents.Kill, "core_wyrm")),
+            new("next_generation", AchievementTab.Core, "free_the_core", "The Next Generation", "Hold the wyrm's egg",
+                "wyrm_egg", goal, Any(O, "wyrm_egg")),
+            new("back_up", AchievementTab.Core, "free_the_core", "Back Up Again", "Take the gate home from the Core",
+                "seeker_eye", task, Any(AchievementEvents.Gate, "home")),
 
             // ── The Emberdeep ──
             new("emberdeep", deep, "", "Emberdeep", "Below the hollows, where the rock runs molten",

@@ -1368,6 +1368,12 @@ public sealed class CreatureHerd
                 continue;
             }
 
+            if (creature.Kind == "core_wyrm")
+            {
+                if (magicMovement > 0f) Rage(creature, dt * magicMovement, player);
+                continue;
+            }
+
             var swimming = creature.Move == CreatureMove.Swim
                 && water is not null
                 && water(
@@ -2151,6 +2157,120 @@ public sealed class CreatureHerd
 
         creature.Moving = true;
         FlyTo(creature, creature.Drift, AshwailSpeed * dt, solid);
+    }
+
+    /// <summary>The wyrm's circle, how fast it flies it, and how fast it dives.</summary>
+    public const float WyrmOrbit = 26f;
+    public const float WyrmSpeed = 10f;
+    public const float WyrmDive = 17f;
+
+    /// <summary>
+    /// The Core Wyrm's step: round the Hollow high up, and every so often a dive at the player, a
+    /// strafe of three bolts, or a landing on the podium to loose fire from there.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ The reference's dragon, in this dome: it circles out of reach, comes down at you,
+    /// burns the ground from the air, and now and then perches on the middle where a blade can reach
+    /// it. Perched is the moment to strike; the crystals that mend it are the host's business.</para>
+    /// <para>⚠ It flies through the Hollow without asking the rock: the dome is its own and a body
+    /// eleven blocks across would catch on every pillar. It never leaves the dome's middle reaches.</para>
+    /// </remarks>
+    private void Rage(Creature creature, float dt, Vector3? player)
+    {
+        creature.Swings = MathF.Max(0f, creature.Swings - dt);
+        creature.Moving = true;
+        var centre = Gen.CoreHollow.Centre;
+
+        // ⚠ Only someone in the dome is fought. The wyrm keeps its Hollow when its challenger goes
+        // home, and must not dive or fire through two hundred blocks of rock at them up there.
+        if (player is { } far && Vector3.Distance(far, centre) > Gen.CoreHollow.Radius + 6f)
+        {
+            player = null;
+            creature.Swooping = false;
+        }
+
+        if (creature.RideHeight <= 0f)
+        {
+            creature.RideHeight = 16f + (float)_random.NextDouble() * 6f;
+            creature.SwoopIn = 6f;
+            creature.Orbit = MathF.Atan2(creature.Position.Z - centre.Z, creature.Position.X - centre.X);
+        }
+
+        Vector3 goal;
+        float speed;
+
+        if (creature.Charge > 0f)
+        {
+            // Perched on the podium, turning to the player and loosing fire.
+            creature.Charge -= dt;
+            goal = centre + new Vector3(0f, 3f, 0f);
+            speed = WyrmSpeed;
+            if (player is { } perchTarget && Vector3.Distance(creature.Position, goal) < 1.5f)
+            {
+                var face = perchTarget - creature.Position;
+                creature.WantsYaw = creature.Yaw = float.RadiansToDegrees(MathF.Atan2(face.Z, face.X));
+                creature.VolleyIn -= dt;
+                if (creature.VolleyIn <= 0f)
+                {
+                    creature.VolleyIn = 1.4f;
+                    for (var i = 0; i < 3; i++) Fling(creature, perchTarget, ember: true);
+                }
+            }
+
+            if (creature.Charge <= 0f) creature.RideHeight = 16f + (float)_random.NextDouble() * 6f;
+        }
+        else if (creature.Swooping && player is { } diveTarget)
+        {
+            var chest = diveTarget + new Vector3(0f, 1.1f, 0f);
+            goal = chest - new Vector3(0f, creature.Size.Y * creature.Scale * 0.5f, 0f);
+            speed = WyrmDive;
+            creature.SwoopFor += dt;
+
+            if (Vector3.Distance(creature.Middle, chest) < 4f && creature.Swings <= 0f)
+            {
+                creature.Swings = 1f;
+                _attacks.Add(new CreatureAttack(creature.Kind, creature.Middle, CreatureVitals.DamageFor(creature.Kind)));
+                creature.Swooping = false;
+            }
+            else if (creature.SwoopFor > 4f) creature.Swooping = false;
+        }
+        else
+        {
+            creature.Swooping = false;
+            creature.Orbit += dt * WyrmSpeed / WyrmOrbit;
+            goal = centre + new Vector3(
+                MathF.Cos(creature.Orbit) * WyrmOrbit, creature.RideHeight, MathF.Sin(creature.Orbit) * WyrmOrbit);
+            speed = WyrmSpeed;
+
+            creature.SwoopIn -= dt;
+            if (creature.SwoopIn <= 0f && player is { } target
+                && Vector3.Distance(target, centre) < Gen.CoreHollow.Radius + 4f)
+            {
+                creature.SwoopIn = 7f + (float)_random.NextDouble() * 4f;
+                var roll = _random.NextDouble();
+                if (roll < 0.45) { creature.Swooping = true; creature.SwoopFor = 0f; }
+                else if (roll < 0.8) { creature.Volley = 3; creature.VolleyIn = 0f; }
+                else { creature.Charge = 8f; creature.VolleyIn = 1f; }
+            }
+
+            if (creature.Volley > 0 && player is { } strafed)
+            {
+                creature.VolleyIn -= dt;
+                if (creature.VolleyIn <= 0f)
+                {
+                    creature.Volley--;
+                    creature.VolleyIn = 0.5f;
+                    Fling(creature, strafed, ember: false);
+                }
+            }
+        }
+
+        var to = goal - creature.Position;
+        var length = to.Length();
+        if (length < 1e-3f) return;
+        creature.Position += to / length * MathF.Min(speed * dt, length);
+        if (creature.Charge <= 0f)
+            creature.Yaw = creature.WantsYaw = float.RadiansToDegrees(MathF.Atan2(to.Z, to.X));
     }
 
     /// <summary>A fireball or a bolt, from the edge of the body at the target's chest.</summary>

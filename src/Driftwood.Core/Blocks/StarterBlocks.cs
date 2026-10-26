@@ -749,7 +749,10 @@ public static class StarterBlocks
     public const ushort LayerEmberCrystal = LayerEmberiteIngot + 5;
     public const ushort LayerSeekerEye = LayerEmberiteIngot + 6;
 
-    public const int LayerCount = LayerSeekerEye + 1;
+    /// <summary>The wyrm's egg (2026-10-25), left on the podium when it falls.</summary>
+    public const ushort LayerWyrmEgg = LayerSeekerEye + 1;
+
+    public const int LayerCount = LayerWyrmEgg + 1;
 
     /// <summary>One stage of the ashcap, as a block name.</summary>
     public static string AshcapName(int stage) => $"ashcap_{stage}";
@@ -2169,6 +2172,13 @@ public static class StarterBlocks
             Name = "ember_crystal", Hardness = 0.3f, Crafted = true, Opaque = false,
             Sounds = SoundMaterial.Glass, LightEmission = LightValue.PackBlock(15, 12, 6),
             Model = BlockModel.Cube(LayerEmberCrystal, LayerEmberCrystal, LayerEmberCrystal),
+        });
+
+        registry.Register(new BlockType
+        {
+            Name = "wyrm_egg", Hardness = 3f, Crafted = true, Sounds = SoundMaterial.Stone,
+            LightEmission = LightValue.PackBlock(3, 1, 1),
+            TopLayer = LayerWyrmEgg, SideLayer = LayerWyrmEgg, BottomLayer = LayerWyrmEgg,
         });
 
         var cinderCage = registry.Register(new BlockType

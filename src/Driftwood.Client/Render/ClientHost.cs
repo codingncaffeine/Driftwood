@@ -2285,6 +2285,7 @@ public sealed class ClientHost : IDisposable
         _savedCreatures.AddRange(state.Creatures);
 
         _bedSpawn = state.BedSpawn;
+        _wyrmDefeated = state.WyrmDefeated;
         _awake = state.AwakeSeconds;
         if (_character.Bind is null && _bedSpawn is { } legacyBind)
             _character.SetBind(legacyBind);
@@ -2357,6 +2358,7 @@ public sealed class ClientHost : IDisposable
             Companions = _companions,
             Achievements = _achievements,
             Brewing = _brewing,
+            WyrmDefeated = _wyrmDefeated,
         };
 
         if (_herd is not null) state.Creatures.AddRange(_herd.Capture());
@@ -9798,6 +9800,7 @@ public sealed class ClientHost : IDisposable
         StepPhantoms(dt);
         StepEmberholds(dt);
         StepGate(dt);
+        StepWyrm(dt);
 
         // A blink is a soft pop and a wisp at both ends — the departure matters as much as the
         // arrival, because "where did it go" starts from where it was.
@@ -9879,6 +9882,7 @@ public sealed class ClientHost : IDisposable
             _audio?.Play(Pick(CreatureSounds.Deaths), death.Position, 0.68f, Wobble());
 
             var contributed = _playerContributions.Remove(death.RuntimeId);
+            if (death.Kind == "core_wyrm") WyrmSlain(death);
             if (_returnedTo.Remove(death.RuntimeId) && contributed)
                 Achieve(AchievementEvents.Returned, death.Kind);
 
@@ -10312,6 +10316,14 @@ public sealed class ClientHost : IDisposable
                 continue;
             }
 
+            // ⛳ A shot that finds an ember crystal breaks it — the reference's way with its end crystals.
+            if (impact.Face >= 0 && _streamer.World.GetBlock(impact.X, impact.Y, impact.Z) == _ids.EmberCrystal)
+            {
+                _streamer.EditBlock(impact.X, impact.Y, impact.Z, BlockId.Air);
+                Shatter(new Vector3(impact.X + 0.5f, impact.Y + 0.5f, impact.Z + 0.5f));
+                continue;
+            }
+
             if (impact.Face < 0 || impact.Kind == ProjectileKind.FireBolt) continue;
             var struck = _registry[_streamer.World.GetBlock(impact.X, impact.Y, impact.Z)];
             _particles.Chip(struck, impact.X, impact.Y, impact.Z, impact.Face, 5);
@@ -10530,11 +10542,107 @@ public sealed class ClientHost : IDisposable
                 != _ids.CoreGate) continue;
 
             _gateRest = 5f;
+
+            // ⛳ The gate in the Hollow goes the other way: home, to the bed or the spawn.
+            if (InHollow)
+            {
+                JumpTo(RespawnPoint());
+                Notice("the gate carries you home", _items.ByName("seeker_eye"));
+                Achieve(AchievementEvents.Gate, "home");
+                return;
+            }
+
             JumpTo(CoreHollow.Landing);
             Notice("the gate carries you down to the Core", _items.ByName("seeker_eye"));
             Achieve(AchievementEvents.Gate, "enter");
             return;
         }
+    }
+
+    /// <summary>True once the wyrm has fallen in this world — saved with it.</summary>
+    private bool _wyrmDefeated;
+    private float _wyrmMend;
+
+    /// <summary>Whether the player is inside the Core Hollow's dome.</summary>
+    private bool InHollow
+    {
+        get
+        {
+            var p = _player.Position;
+            var flat = new Vector2(p.X - CoreHollow.Centre.X, p.Z - CoreHollow.Centre.Z).Length();
+            return flat < CoreHollow.Radius + 2f && p.Y > CoreHollow.Floor - 2f && p.Y < CoreHollow.Floor + CoreHollow.Height;
+        }
+    }
+
+    /// <summary>
+    /// The Core Wyrm's side of the fight that the herd cannot see: it rises when someone comes into
+    /// the Hollow and it has not yet fallen, the standing ember crystals mend it, and its bar is shown.
+    /// </summary>
+    private void StepWyrm(float dt)
+    {
+        _hud.BossName = null;
+        if (_herd is null || !_spawned || !_walking) return;
+
+        Creature? wyrm = null;
+        foreach (var one in _herd.All)
+            if (one.Alive && one.Kind == "core_wyrm") { wyrm = one; break; }
+
+        if (!InHollow) return;
+
+        if (wyrm is null && !_wyrmDefeated && KindFor("core_wyrm") is { } kind)
+        {
+            wyrm = _herd.SpawnAt(kind, CoreHollow.Centre + new Vector3(0f, 20f, -20f), 90f);
+            Notice("the Core Wyrm wakes", _items.ByName("wyrm_egg"));
+            PlayMagicUi(MagicSounds.RankUp, 0.8f, 0.5f);
+        }
+
+        if (wyrm is null) return;
+        _hud.BossName = "the Core Wyrm";
+        _hud.BossFraction = wyrm.Health / (float)wyrm.MaxHealth;
+
+        // The crystals' mending: every second, each one still standing gives it back a little.
+        _wyrmMend -= dt;
+        if (_wyrmMend > 0f) return;
+        _wyrmMend = 1f;
+        foreach (var (cx, cy, cz) in CoreHollow.Crystals)
+        {
+            if (_streamer.World.GetBlock(cx, cy, cz) != _ids.EmberCrystal) continue;
+            var from = new Vector3(cx + 0.5f, cy + 0.5f, cz + 0.5f);
+            if (wyrm.Health < wyrm.MaxHealth) wyrm.Health = Math.Min(wyrm.MaxHealth, wyrm.Health + 3);
+            for (var step = 1; step <= 4; step++)
+                _particles.DeathPuff(Vector3.Lerp(from, wyrm.Middle, step / 5f), 0.3f, StarterBlocks.LayerEmberCrystal, 2);
+        }
+    }
+
+    /// <summary>An ember crystal comes apart: it bursts, and the wyrm has one fewer to feed on.</summary>
+    private void Shatter(Vector3 at)
+    {
+        Detonate(at, 0.6f, byPlayer: true);
+        Achieve(AchievementEvents.Shatter, "crystal");
+    }
+
+    /// <summary>
+    /// The wyrm falls: its egg on the podium, the gate home open beside it, the reward paid, and the
+    /// world remembering it is done.
+    /// </summary>
+    private void WyrmSlain(in CreatureDeath death)
+    {
+        if (_wyrmDefeated) return;
+        _wyrmDefeated = true;
+
+        var floor = CoreHollow.Floor;
+        _streamer.EditBlock(0, floor + 3, 0, _registry.ByName("wyrm_egg").Id);
+        for (var dz = 7; dz <= 9; dz++)
+        for (var dx = -1; dx <= 1; dx++)
+            _streamer.EditBlock(dx, floor + 1, dz, _ids.CoreGate);
+
+        for (var i = 0; i < 6; i++)
+            _particles.DeathPuff(death.Position + new Vector3(0f, i * 0.8f, 0f), 3f, StarterBlocks.LayerEmberCrystal, 20);
+        PlayMagicUi(MagicSounds.RankUp, 1f, 0.6f);
+        SettleCharacterReward($"wyrm:{LocalPlayerId}", new CharacterReward(1500, 25_000, "the Core Wyrm"),
+            XpSource.Encounter, "the Core Wyrm falls", StarterBlocks.LayerWyrmEgg);
+        Notice("the Core is free — a gate home stands open by the podium", _items.ByName("wyrm_egg"));
+        SaveWorld("after the wyrm");
     }
 
     /// <summary>
@@ -13554,6 +13662,7 @@ public sealed class ClientHost : IDisposable
         foreach (var spilled in _furnaces.Remove(hit.X, hit.Y, hit.Z)) _drops.Drop(spilled, centre);
         foreach (var spilled in _brewing.Remove(hit.X, hit.Y, hit.Z)) _drops.Drop(spilled, centre);
         foreach (var spilled in EmptyChestAt(hit.X, hit.Y, hit.Z)) _drops.Drop(spilled, centre);
+        var shattered = _streamer.World.GetBlock(hit.X, hit.Y, hit.Z) == _ids.EmberCrystal;
 
         // The cell keeps the water a wet block stood in — breaking a wet fence is a hole in the
         // water, not a hole in the sea.
@@ -13563,6 +13672,7 @@ public sealed class ClientHost : IDisposable
         _progress.Broke();
         Rumble(0.48f, 0.18f, 85);
         ShedUnsupported(hit.X, hit.Y, hit.Z);
+        if (shattered) Shatter(centre);
 
         // ⛳ Digging is work, and it is most of what a player does. Charged here rather than per
         // frame of swinging, so a block that took eight seconds and one that took one cost the same
@@ -15641,6 +15751,9 @@ public sealed class ClientHost : IDisposable
     /// <summary>Frames between putting the signs up and photographing them, for the remesh.</summary>
     private const int SignLead = 120;
 
+    /// <summary>A visit flies the camera somewhere nothing is loaded yet, and wants longer still.</summary>
+    private const int VisitLead = 180;
+
     /// <summary>
     /// Puts a whole set of one material on, and a shield up, or takes everything off.
     /// </summary>
@@ -15749,7 +15862,7 @@ public sealed class ClientHost : IDisposable
             if (shot.Fishing && _shotFrame == shot.Frame - SignLead) DigAPondAndCast();
             if (shot.Lineup is { } row && _shotFrame == shot.Frame - SignLead) LineUp(row);
             if (shot.Lineup is not null && _shotFrame > shot.Frame - SignLead) HoldTheLine();
-            if (shot.Visit is { } place && _shotFrame == shot.Frame - SignLead) VisitForShot(place);
+            if (shot.Visit is { } place && _shotFrame == shot.Frame - VisitLead) VisitForShot(place);
 
             if (_shotFrame == shot.Frame) WriteShot(size, shot.Name);
         }
@@ -15943,7 +16056,9 @@ public sealed class ClientHost : IDisposable
                 break;
             case "hollow":
                 eye = CoreHollow.Landing + new Vector3(0f, 6f, 6f);
-                pitch = -8f;
+                pitch = -4f;
+                if (_herd is not null && KindFor("core_wyrm") is { } wyrm)
+                    _herd.SpawnAt(wyrm, CoreHollow.Centre + new Vector3(0f, 7f, 14f), 90f);
                 break;
             default:
                 Console.WriteLine($"shot visit  no {place} to fly to");

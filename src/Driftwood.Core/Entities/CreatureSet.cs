@@ -179,6 +179,9 @@ public static class CreatureSet
         new("charred_skeleton", "charred skeleton", CreatureFamily.Hostile, "skeleton.wither",
             ["textures/entity/skeleton/wither_skeleton.png"]),
 
+        // ⛳ The Core Hollow's own (2026-10-25): fought, never spawned by the dark's rules.
+        new("core_wyrm", "the Core Wyrm", CreatureFamily.Encounter, "core_wyrm", []),
+
         // P14 residents use the folded-arm villager net. Pack paths are observational bridges;
         // Driftwood ships complete geometry and paint when a pack lacks the layered base art.
         new("shorewright", "shorewright", CreatureFamily.Inhabitant, "villager",
@@ -212,6 +215,7 @@ public static class CreatureSet
         ["cinderwisp"] = CreatureMove.Fly,
         ["ashwail"] = CreatureMove.Fly,
         ["ember_slime"] = CreatureMove.Hop,
+        ["core_wyrm"] = CreatureMove.Fly,
     };
 
     public static CreatureMove MoveFor(string kind) => Moves.GetValueOrDefault(kind, CreatureMove.Walk);
@@ -249,6 +253,7 @@ public static class CreatureSet
         ["charred_skeleton"] = 1.2f,
         ["ember_slime"] = 1f,
         ["ashwail"] = 2.4f,
+        ["core_wyrm"] = 1.6f,
     };
 
     public static float DrawScaleFor(string kind) => DrawScales.GetValueOrDefault(kind, 1f);

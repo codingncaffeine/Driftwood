@@ -74,7 +74,10 @@ public static class CoreHollow
         }
 
         if (shape >= 1.15f) return null;
-        if (shape >= 1f) return ids.DeepstoneBricks;
+
+        // ⛳ The shell, with emberstone set through it so the fight can be seen: the dome is the
+        // only place in the world no daylight or torch has ever reached, and dark was unreadable.
+        if (shape >= 1f) return Math.Abs(x * 7 + z * 13 + y * 3) % 17 == 0 ? ids.Emberstone : ids.DeepstoneBricks;
 
         // The podium, five across and two high, where the egg comes to rest.
         if (Math.Abs(x) <= 2 && Math.Abs(z) <= 2 && y <= Floor + 2) return ids.DeepstoneBricks;
