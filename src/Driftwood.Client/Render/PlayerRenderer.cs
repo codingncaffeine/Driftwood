@@ -332,8 +332,8 @@ public sealed class PlayerRenderer : IDisposable
     /// <see cref="HeldGrip"/>'s, which is in Core so the audit can run the whole chain without a
     /// window. This is the one line that joins them.
     /// </remarks>
-    public Matrix4x4 HeldTransform(float t, bool flat, Vector3 hold) =>
-        HeldGrip.InView(t, flat, hold, Arms);
+    public Matrix4x4 HeldTransform(float t, bool flat, Vector3 hold, bool turnOnHandle = false) =>
+        HeldGrip.InView(t, flat, hold, Arms, turnOnHandle);
 
     /// <summary>And what is in the other hand, in the camera's own space.</summary>
     public Matrix4x4 OffhandTransform(bool flat, Vector3 hold) =>
@@ -344,8 +344,8 @@ public sealed class PlayerRenderer : IDisposable
         HeldGrip.InViewShield(hold, Arms, guard);
 
     /// <summary>And where it sits in the model's own fist, in the world.</summary>
-    public Matrix4x4 HeldWorldTransform(Vector3 feet, in PlayerPose pose, bool flat, Vector3 hold) =>
-        HeldGrip.InWorld(feet, pose, flat, hold, Arms);
+    public Matrix4x4 HeldWorldTransform(Vector3 feet, in PlayerPose pose, bool flat, Vector3 hold, bool axe = false) =>
+        HeldGrip.InWorld(feet, pose, flat, hold, Arms, axe);
 
     /// <summary>And what is in the other hand, in the model's left fist.</summary>
     public Matrix4x4 OffhandWorldTransform(

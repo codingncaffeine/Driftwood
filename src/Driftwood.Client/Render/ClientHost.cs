@@ -22719,7 +22719,7 @@ public sealed class ClientHost : IDisposable
                         viewProj,
                         _playerRenderer.HeldWorldTransform(
                             _player.Position, pose, !carried.DrawsAsBlock,
-                            _itemRenderer.HoldPoint(carried)),
+                            _itemRenderer.HoldPoint(carried), axe: carried.Tool == ToolClass.Axe),
                         carried, _registry, HandLight(light));
                 }
 
@@ -22818,7 +22818,10 @@ public sealed class ClientHost : IDisposable
             projection,
             _playerRenderer.HeldTransform(
                 _animator.Swinging ? _animator.SwingProgress : 0f, !held.DrawsAsBlock,
-                _itemRenderer.HoldPoint(held)),
+                _itemRenderer.HoldPoint(held),
+                // ⛳ The axe turned on its handle (2026-10-26, the user: its blade was "facing
+                // towards the player instead of away"). Only the axe: every other tool was right.
+                turnOnHandle: held.Tool == ToolClass.Axe),
             held,
             _registry,
             HandLight(light));

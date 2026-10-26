@@ -274,6 +274,20 @@ public static class HeldGrip
     public static readonly Grip FirstFlat = new(
         -0.20f, -MathF.PI / 2f, 0f, new Vector3(0.12f, 0f, 0.12f), Twist: 0.34f);
 
+    /// <summary>
+    /// First person for the axe (2026-10-26): head up and away into the scene, the edge leading left.
+    /// </summary>
+    /// <remarks>
+    /// ⛳ <b>The user's report, with an example picture:</b> the shared grip held the axe nearly square
+    /// to the eye and rolled its edge back toward the player. The genre holds it turned in depth —
+    /// the handle near and upright, the head well into the scene, the edge pointing left and the face
+    /// seen from above. These four angles were solved for, through the whole arm chain, to put the
+    /// handle-to-head line at (0.30, 0.70, −0.65) and the edge at (−0.95, 0.18, −0.25) in camera
+    /// space; the face then looks up and toward the eye. Same place in the fist as every flat tool.
+    /// </remarks>
+    public static readonly Grip FirstAxe = new(
+        0.565f, -1.605f, -0.112f, new Vector3(0.12f, 0f, 0.12f), Twist: -1.284f);
+
     /// <summary>A first-person shield faces the player as a board, not as a second diagonal blade.</summary>
     /// <remarks>
     /// The ordinary flat grip twists a weapon around its handle so its cutting edge leads. A shield
@@ -422,8 +436,15 @@ public static class HeldGrip
     /// <summary>
     /// Where the held thing is in first person: in the fist of the view model, in the camera's space.
     /// </summary>
-    public static Matrix4x4 InView(float t, bool flat, Vector3 hold, ArmStyle arms) =>
-        InFist(flat ? FirstFlat : FirstBlock, HeldSize(flat), hold, arms, right: true) * ArmTransform(t);
+    /// <param name="turnOnHandle">
+    /// The axe's own grip (2026-10-26) rather than the shared flat one: see <see cref="FirstAxe"/>.
+    /// </param>
+    public static Matrix4x4 InView(float t, bool flat, Vector3 hold, ArmStyle arms, bool turnOnHandle = false) =>
+        InFist(
+            flat
+                ? turnOnHandle ? FirstAxe : FirstFlat
+                : FirstBlock,
+            HeldSize(flat), hold, arms, right: true) * ArmTransform(t);
 
     /// <summary>
     /// And where the OTHER hand's thing is in first person: in the left fist, never swinging.
@@ -492,10 +513,17 @@ public static class HeldGrip
     /// driving, which is why a swing carries it and a crouch carries it and nothing had to be said
     /// twice.
     /// </remarks>
-    public static Matrix4x4 InWorld(Vector3 feet, in PlayerPose pose, bool flat, Vector3 hold, ArmStyle arms)
+    /// <param name="axe">
+    /// The axe (2026-10-26, the user: in third person "it's facing backwards"): turned half round on
+    /// its handle, so the edge leads forward and the handle and head stay where they were.
+    /// </param>
+    public static Matrix4x4 InWorld(Vector3 feet, in PlayerPose pose, bool flat, Vector3 hold, ArmStyle arms, bool axe = false)
     {
         var arm = Rig(feet, pose).Part(PlayerPart.RightArm, PlayerModel.ArmPivot(true), pose);
-        return InFist(flat ? ThirdFlat : ThirdBlock, HeldSize(flat), hold, arms, right: true) * arm;
+        var grip = flat
+            ? axe ? ThirdFlat with { Twist = ThirdFlat.Twist + MathF.PI } : ThirdFlat
+            : ThirdBlock;
+        return InFist(grip, HeldSize(flat), hold, arms, right: true) * arm;
     }
 
     /// <summary>
