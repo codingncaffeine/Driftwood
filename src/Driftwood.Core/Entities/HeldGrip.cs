@@ -439,24 +439,47 @@ public static class HeldGrip
       * OffhandArmTransform();
 
     /// <summary>
-    /// Where a shield sits in first person: parked low and wide at rest, lifted inward to block.
+    /// Where a shield sits in first person: the reference's own placement, at rest and blocking.
     /// </summary>
     /// <param name="guard">Smoothed 0..1 blocking amount from <see cref="PlayerAnimator"/>.</param>
     /// <remarks>
-    /// These are camera-space offsets deliberately applied last. The rest pose moves the board away
-    /// from the lower-right sword instead of treating both hands as a symmetric pair. Raising it
-    /// follows Minecraft's readable silhouette: up first, modestly inward, and still anchored on the
-    /// left half rather than teleporting over the crosshair.
+    /// <para>⛔ <b>The user, 2026-10-25: "ours looks wrong from the first person perspective".</b> It
+    /// was posed by the grip a sword uses and pushed about by hand, which stood a square thick board
+    /// edge-on in the middle of the view. The reference's shield is a tall thin board — twelve by
+    /// twenty-two by one — that sits low on the left with its face to you, and comes up to the
+    /// middle-left, face on, to block.</para>
+    /// <para>⛳ <b>So this is the reference's own chain, number for number</b>, in the same view space
+    /// (−z ahead, +y up, blocks): the board's own box, the item origin moved to the corner, the
+    /// model's first-person display transform for the left hand — the rest one and the blocking one,
+    /// with the left hand's mirroring — and the off-hand arm's place, 0.56 left, 0.52 down, 0.72
+    /// ahead. Our picture is stretched onto the board: its fourteen-wide, fifteen-tall heater becomes
+    /// the board's twelve by twenty-two, and the sprite's two-sixteenths thickness its one.</para>
+    /// <para>The fingers' point (<paramref name="hold"/>) and the arm style no longer move it: the
+    /// reference draws no arm behind a held shield, and neither do we.</para>
     /// </remarks>
     public static Matrix4x4 InViewShield(Vector3 hold, ArmStyle arms, float guard)
     {
         guard = Math.Clamp(guard, 0f, 1f);
-        var rest = new Vector3(-0.30f, -0.08f, 0f);
-        var raised = new Vector3(-0.08f, 0.30f, -0.04f);
+        const float Px = 1f / 16f;
 
-        return InFist(FirstShield, HeldSize(flat: true), hold, arms, right: false)
-             * OffhandArmTransform()
-             * Matrix4x4.CreateTranslation(Vector3.Lerp(rest, raised, guard));
+        // The board's display, mirrored for the left hand: translation x and rotations y and z
+        // change sign. Rest is [0,180,5] at [10,0,-10]; blocking [0,180,-5] at [5,5,-11].
+        var restMove = new Vector3(-10f, 0f, -10f) * Px;
+        var guardMove = new Vector3(-5f, 5f, -11f) * Px;
+        var roll = float.DegreesToRadians(float.Lerp(-5f, 5f, guard));
+
+        // ⚠ Measured off our picture, not assumed: the heater is inked fourteen wide and fifteen tall,
+        // half a texel above the tile's middle. Taken as twelve by fourteen, the board came out a
+        // sixth too wide and filled half the screen.
+        return Matrix4x4.CreateTranslation(0f, -0.5f * Px, 0f)
+             * Matrix4x4.CreateScale(12f / 14f, 22f / 15f, 0.5f)       // our heater onto their board
+             * Matrix4x4.CreateTranslation(0f, 0f, 1.5f * Px)            // the board's own box, flipped up
+             * Matrix4x4.CreateTranslation(-0.5f, -0.5f, -0.5f)          // the item origin at its corner
+             * Matrix4x4.CreateScale(1.25f)
+             * Matrix4x4.CreateRotationZ(roll)
+             * Matrix4x4.CreateRotationY(float.DegreesToRadians(-180f))
+             * Matrix4x4.CreateTranslation(Vector3.Lerp(restMove, guardMove, guard))
+             * Matrix4x4.CreateTranslation(-0.56f, -0.52f, -0.72f);      // the off-hand arm's place
     }
 
     /// <summary>
@@ -621,34 +644,41 @@ public static class HeldGrip
         return faults;
     }
 
-    /// <summary>Pins the shield's deliberately asymmetric first-person composition and guard lift.</summary>
+    /// <summary>
+    /// Checks the first-person shield reads as the reference's: a thin board, face to the camera,
+    /// low on the left at rest and up to the middle-left to block — measured on screen.
+    /// </summary>
     private static List<string> ValidateShieldInView()
     {
         var faults = new List<string>();
         var hold = new Vector3(-0.21f, -0.36f, 0f);
 
-        foreach (var arms in (ReadOnlySpan<ArmStyle>)[ArmStyle.Classic, ArmStyle.Slim])
+        // Where an item-space point lands on a 70-degree, 16:9 screen, as −1..1 each way.
+        static Vector2 Screen(Vector3 at)
         {
-            var sword = Vector3.Transform(hold, InView(0f, flat: true, hold, arms));
-            var ordinary = Vector3.Transform(hold, InViewOffhand(flat: true, hold, arms));
-            var lowered = Vector3.Transform(hold, InViewShield(hold, arms, guard: 0f));
-            var raised = Vector3.Transform(hold, InViewShield(hold, arms, guard: 1f));
+            var depth = MathF.Max(1e-3f, -at.Z);
+            var half = MathF.Tan(float.DegreesToRadians(35f));
+            return new Vector2(at.X / (depth * half * 16f / 9f), at.Y / (depth * half));
+        }
 
-            if (sword.X - lowered.X < 1.05f)
-                faults.Add($"the resting {arms} sword and shield grips are only "
-                         + $"{sword.X - lowered.X:F2} blocks apart in first person");
-            if (lowered.X > ordinary.X - 0.20f)
-                faults.Add($"the lowered {arms} shield is only {ordinary.X - lowered.X:F2} farther left "
-                         + "than an ordinary offhand item");
-            if (lowered.Y > ordinary.Y - 0.04f)
-                faults.Add($"the lowered {arms} shield is not below the ordinary offhand pose");
-            if (raised.Y < lowered.Y + 0.30f)
-                faults.Add($"the raised {arms} shield rises only {raised.Y - lowered.Y:F2} blocks");
-            if (raised.X <= lowered.X || raised.X >= 0f)
-                faults.Add($"the raised {arms} shield moves from x {lowered.X:F2} to {raised.X:F2}, "
-                         + "rather than inward while staying left of the crosshair");
-            if (lowered.Z >= 0f || raised.Z >= 0f)
-                faults.Add($"the first-person {arms} shield crossed behind the camera");
+        foreach (var (guard, name) in (ReadOnlySpan<(float, string)>)[(0f, "resting"), (1f, "blocking")])
+        {
+            var m = InViewShield(hold, ArmStyle.Classic, guard);
+            var centre = Vector3.Transform(Vector3.Zero, m);
+            var top = Vector3.Transform(new Vector3(0f, 0.5f, 0f), m);
+            var face = Vector3.Normalize(Vector3.TransformNormal(Vector3.UnitZ, m));
+            var thick = Vector3.TransformNormal(new Vector3(0f, 0f, Items.ItemSprite.Thickness), m).Length();
+
+            if (MathF.Abs(face.Z) < 0.95f) faults.Add($"the {name} shield is turned {MathF.Acos(MathF.Abs(face.Z)) * 180f / MathF.PI:F0} degrees from facing the camera");
+            if (thick > 0.1f) faults.Add($"the {name} shield is {thick:F2} blocks thick — a box, not a board");
+            if (centre.Z >= -0.3f) faults.Add($"the {name} shield is at the camera");
+            if (Screen(centre).X >= 0f) faults.Add($"the {name} shield is right of the crosshair");
+
+            var edge = Screen(top).Y;
+            if (guard == 0f && edge is > -0.1f or < -0.8f)
+                faults.Add($"the resting shield's top edge is at {edge:F2} of the screen — want low, under the middle");
+            if (guard == 1f && edge is > 0.25f or < -0.25f)
+                faults.Add($"the blocking shield's top edge is at {edge:F2} — want about the middle of the screen");
         }
 
         return faults;
