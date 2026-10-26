@@ -279,7 +279,7 @@ public static class HeldGrip
     /// The ordinary flat grip twists a weapon around its handle so its cutting edge leads. A shield
     /// has no such edge: giving it the sword's twist tips its broad inner corner toward the sword and
     /// makes the two read as one crowded cluster. Its dedicated grip keeps the face nearly square;
-    /// <see cref="InViewShield"/> then owns the Minecraft-like lower-left and raised positions.
+    /// <see cref="InViewShield"/> then owns the genre's lower-left and raised positions.
     /// </remarks>
     public static readonly Grip FirstShield = new(
         -0.20f, -MathF.PI / 2f, 0f, new Vector3(0.12f, 0f, 0.12f));

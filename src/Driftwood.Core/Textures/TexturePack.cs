@@ -1069,9 +1069,9 @@ public sealed class TexturePack : IDisposable
     /// called. Every other kind of asset still tries them all.
     /// </remarks>
     private IReadOnlyList<string> SpacesFor(string assetPath) =>
-        assetPath.StartsWith("textures/", StringComparison.OrdinalIgnoreCase) ? MinecraftOnly : _namespaces;
+        assetPath.StartsWith("textures/", StringComparison.OrdinalIgnoreCase) ? BaseNamespaceOnly : _namespaces;
 
-    private static readonly string[] MinecraftOnly = ["minecraft"];
+    private static readonly string[] BaseNamespaceOnly = ["minecraft"];
 
     /// <summary>
     /// Where a 2012 pack keeps the few things that were never on the grid.

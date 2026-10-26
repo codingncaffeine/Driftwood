@@ -179,7 +179,7 @@ public sealed class ModrinthResourcePackProvider
         if (query.Length > 100) throw Failure(ResourcePackProviderFailure.InvalidRequest,
             "keep the search under 100 characters");
         category = SafeFacet(category, "category");
-        gameVersion = SafeFacet(gameVersion, "Minecraft version", allowDots: true);
+        gameVersion = SafeFacet(gameVersion, "game version", allowDots: true);
         offset = Math.Clamp(offset, 0, 100_000);
 
         var facets = new List<string[]> { new[] { "project_type:resourcepack" } };
@@ -321,7 +321,7 @@ public sealed class ModrinthResourcePackProvider
         var candidates = versions.Where(version => gameVersion is null
             || version.GameVersions.Contains(gameVersion, StringComparer.OrdinalIgnoreCase)).ToArray();
         if (candidates.Length == 0) throw Failure(ResourcePackProviderFailure.InvalidRequest,
-            "there is no downloadable version for that Minecraft version");
+            "there is no downloadable version for that game version");
         var releases = candidates.Where(version => version.Channel.Equals(
             "release", StringComparison.OrdinalIgnoreCase)).ToArray();
         return (releases.Length > 0 ? releases : candidates).MaxBy(static version => version.Published)!;
@@ -573,7 +573,7 @@ public sealed class ModrinthResourcePackProvider
                 Date(version, "date_published"), Strings(version, "game_versions", 128),
                 dependencies, files));
         }
-        if (versions.Count == 0) throw new InvalidDataException("there is no listed Minecraft ZIP to download");
+        if (versions.Count == 0) throw new InvalidDataException("there is no listed pack ZIP to download");
         return versions.OrderByDescending(static version => version.Published).ToArray();
     }
 

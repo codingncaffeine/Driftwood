@@ -21,7 +21,7 @@ public static class CreatureLibrary
     private const string VillagerPlains = "textures/entity/villager/type/plains.png";
 
     /// <summary>
-    /// Where an installed Bedrock client keeps its resource packs, or null when there is not one.
+    /// Where an installed reference client keeps its resource packs, or null when there is not one.
     /// </summary>
     /// <remarks>
     /// The store install is versioned into its own folder name, so the newest is taken rather than a
@@ -48,7 +48,7 @@ public static class CreatureLibrary
 
             if (newest is null)
             {
-                LastLookupNote = "no Microsoft.MinecraftUWP_* under WindowsApps";
+                LastLookupNote = "no reference-client package under WindowsApps";
                 return null;
             }
 
@@ -61,7 +61,7 @@ public static class CreatureLibrary
         catch (Exception error)
         {
             // An unreadable Program Files is a machine we simply do not read geometry from — but it
-            // is worth saying WHY, because "you have no Minecraft" and "I was not allowed to look"
+            // is worth saying WHY, because "you have no reference client" and "I was not allowed to look"
             // are different problems with the same symptom.
             LastLookupNote = $"{error.GetType().Name}: {error.Message}";
             return null;

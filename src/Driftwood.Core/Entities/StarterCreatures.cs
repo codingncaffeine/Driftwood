@@ -7,7 +7,7 @@ namespace Driftwood.Core.Entities;
 /// </summary>
 /// <remarks>
 /// <para>⛔ <b>Why these are written out by hand when a reader already exists.</b> The reader takes
-/// skeletons off an installed Bedrock client, and that is a fine way to <em>see</em> a creature and
+/// skeletons off an installed reference client, and that is a fine way to <em>see</em> a creature and
 /// no way at all to ship one — the files are somebody else's and they stay on their disk. Same
 /// posture as the blocks: <c>TileGen</c> draws every tile we ship and a pack replaces it if there is
 /// one. This is <c>TileGen</c>'s counterpart for animals, and <see cref="CreatureArt"/> paints them.

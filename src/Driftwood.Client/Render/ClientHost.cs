@@ -133,7 +133,7 @@ public sealed record ClientOptions
     /// </summary>
     /// <remarks>
     /// ⛔ <b>It has to be passed in and it has to be remembered.</b> The skeletons ship with an
-    /// installed Bedrock client rather than with a texture pack, and that install cannot be found by
+    /// installed reference client rather than with a texture pack, and that install cannot be found by
     /// looking: enumerating <c>WindowsApps</c> throws for a plain process even where a known path
     /// under it opens perfectly. So the folder is given once with <c>--creature-geometry</c> and
     /// kept in the settings file, which is also where the import screen will set it.
@@ -1469,7 +1469,7 @@ public sealed class ClientHost : IDisposable
     /// </summary>
     /// <remarks>
     /// ⚠ <b>A machine with no geometry folder is the ordinary case, not a fault.</b> The skeletons
-    /// ship with an installed Bedrock client rather than with us or with a pack, so this stays quiet
+    /// ship with an installed reference client rather than with us or with a pack, so this stays quiet
     /// about having found none and says exactly one line when it has. ⛔ It also must not throw: an
     /// unreadable folder, a pack with no entity art and a path that is simply wrong all have to end
     /// in a world with no animals in it rather than a game that will not start.
@@ -1498,7 +1498,7 @@ public sealed class ClientHost : IDisposable
         {
             // ⛔ NOT a reason to stop. Our own creatures are drawn from our own table and need no
             // install at all — the folder only ever adds the ones we have not drawn yet. Returning
-            // early when there was no folder is what left a machine with no Bedrock client with no
+            // early when there was no folder is what left a machine with no reference client with no
             // animals in the game, which is every machine that is not this one.
             var faults = new List<string>();
             var models = string.IsNullOrWhiteSpace(folder) || !Directory.Exists(folder)
@@ -7183,7 +7183,7 @@ public sealed class ClientHost : IDisposable
     private ResourcePackSort _packBrowseSort;
     private readonly TextField _packSearchBox = new(100) { Placeholder = "name, author or source" };
     private readonly TextField _packCategoryBox = new(40) { Placeholder = "category" };
-    private readonly TextField _packVersionBox = new(20) { Placeholder = "Minecraft version" };
+    private readonly TextField _packVersionBox = new(20) { Placeholder = "game version" };
     private readonly Dictionary<string, PackLibrary.Entry> _installedPackRows =
         new(StringComparer.Ordinal);
     private readonly Dictionary<string, RemoteResourcePack> _remotePackRows =
@@ -7243,7 +7243,7 @@ public sealed class ClientHost : IDisposable
 
     /// <summary>The Audio tab's local shelf, Modrinth browser and non-blocking install work.</summary>
     private readonly TextField _soundSearchBox = new(80) { Placeholder = "name or style; blank shows popular" };
-    private readonly TextField _soundPackBox = new(240) { Placeholder = "a Minecraft sound-pack ZIP" };
+    private readonly TextField _soundPackBox = new(240) { Placeholder = "a sound-pack ZIP" };
     private readonly NativeFilePicker _soundPackPicker = new();
     private readonly ModrinthSoundPackProvider _modrinthSounds = new();
 
@@ -7534,7 +7534,7 @@ public sealed class ClientHost : IDisposable
             Note: "Cycles relevance, downloads, newest and recently updated."));
         _hudScreen.Rows.Add(new MenuRow("category", Edits: _packCategoryBox,
             Note: "Optional Modrinth category slug, such as realistic, simplistic or 16x."));
-        _hudScreen.Rows.Add(new MenuRow("Minecraft version", Edits: _packVersionBox,
+        _hudScreen.Rows.Add(new MenuRow("game version", Edits: _packVersionBox,
             Note: "Optional catalog filter only; compatibility is decided from the exact archive."));
         _hudScreen.Rows.Add(new MenuRow(PackRefreshRow,
             _packSearchTask is null ? "" : "SEARCHING",
@@ -8740,7 +8740,7 @@ public sealed class ClientHost : IDisposable
                 Note: SaidSound($"Opens a file browser for {SoundPackLibrary.FilterLabel}")));
         _hudScreen.Rows.Add(new MenuRow(
             SoundPackPathRow, Edits: _soundPackBox,
-            Note: SaidSound("A Minecraft resource-pack ZIP from any source. Its license is shown as not supplied until metadata is available")));
+            Note: SaidSound("A resource-pack ZIP from any source. Its license is shown as not supplied until metadata is available")));
         _hudScreen.Rows.Add(new MenuRow(
             "the sound shelf", "",
             Note: $"Original archives and attribution metadata live in {_soundPackLibrary.Folder}"));

@@ -177,7 +177,7 @@ public sealed class GameSettings
     /// </summary>
     /// <remarks>
     /// ⛔ <b>A path rather than a switch, and it lives here rather than on the command line, because
-    /// it cannot be found by looking.</b> The skeletons ship with an installed Bedrock client, and
+    /// it cannot be found by looking.</b> The skeletons ship with an installed reference client, and
     /// enumerating <c>WindowsApps</c> to find that install throws for a plain process even where a
     /// known path under it opens perfectly. So it is said once — by <c>--creature-geometry</c> now,
     /// by the import screen later — and remembered.
