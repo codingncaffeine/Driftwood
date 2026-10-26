@@ -4133,22 +4133,27 @@ public sealed class ClientHost : IDisposable
                 return;
 
             // ⛳ A fire's book loads the fire rather than a grid, which is the same gesture one
-            // station over: pick a row, click it again, and what it needs comes out of the pockets
-            // and onto the flame. A book you can read and not act on, in a screen where every other
-            // book acts, reads as a list that has not been wired up.
+            // station over: click a row, and what it needs comes out of the pockets and onto the
+            // flame. A book you can read and not act on, in a screen where every other book acts,
+            // reads as a list that has not been wired up.
+            // ⛳ ONE CLICK (2026-10-26, the user's report: "i'm having to double click it"). It used
+            // to take a click to pick and a second to act; loading a fire is undone by taking the
+            // stacks back out, so the guard cost every use a click to save a rare one.
             case ZoneKind.Recipe when _hudScreen.Kind == HudScreenKind.Furnace:
-                if (_hudScreen.Selected == at.Value.Index) LoadFire(at.Value.Index, many);
-                else _hudScreen.Selected = at.Value.Index;
+                _hudScreen.Selected = at.Value.Index;
+                LoadFire(at.Value.Index, many);
                 RefreshScreen();
                 return;
 
             case ZoneKind.Recipe:
-                // The first click picks a recipe out; a click on the one already picked lays it
-                // into the grid. Selecting and acting on one press would make a mis-click move
-                // things out of the pockets, and shift makes as many as it can outright.
+                // ⛳ One click picks a recipe and lays it into the grid (2026-10-26), the reference's
+                // own gesture; it used to want a second click on the picked one. A mis-click costs
+                // nothing — laying out only moves stacks from the pockets to the grid, and the next
+                // recipe clicked, or the screen closing, puts them back. Shift still makes as many
+                // as the pockets allow.
+                _hudScreen.Selected = at.Value.Index;
                 if (many) CraftSelected(at.Value.Index, all: true);
-                else if (_hudScreen.Selected == at.Value.Index) LayOut(at.Value.Index);
-                else _hudScreen.Selected = at.Value.Index;
+                else LayOut(at.Value.Index);
                 RefreshScreen();
                 return;
 
