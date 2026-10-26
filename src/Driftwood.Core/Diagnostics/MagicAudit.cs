@@ -379,13 +379,51 @@ public static class MagicAudit
         if (keys.Primary(GameAction.ToggleDeveloper) != "GraveAccent")
             faults.Add("developer flight is not on the tilde/grave key");
         var pad = ControllerBindings.Defaults();
-        if (pad.Control(ControllerAction.SpellBankLeft) != ControllerControl.LeftTrigger
-            || pad.Control(ControllerAction.SpellBankRight) != ControllerControl.RightTrigger
-            || pad.Control(ControllerAction.BreakOrAttack) != ControllerControl.RightShoulder
-            || pad.Control(ControllerAction.UseOrPlace) != ControllerControl.LeftShoulder
-            || pad.Control(ControllerAction.RaiseShield) != ControllerControl.RightStick
-            || pad.Control(ControllerAction.ToggleView) != ControllerControl.Back)
-            faults.Add("the spell-ready controller preset is incomplete");
+        // ⛳ The Minecraft-shaped layout (2026-10-26): triggers break and place, bumpers walk the
+        // hotbar on a tap and open the spell banks on a hold, the right stick's click sneaks.
+        if (pad.Control(ControllerAction.BreakOrAttack) != ControllerControl.RightTrigger
+            || pad.Control(ControllerAction.UseOrPlace) != ControllerControl.LeftTrigger
+            || pad.Control(ControllerAction.PreviousSlot) != ControllerControl.LeftShoulder
+            || pad.Control(ControllerAction.NextSlot) != ControllerControl.RightShoulder
+            || pad.Control(ControllerAction.SpellBankLeft) != ControllerControl.LeftShoulder
+            || pad.Control(ControllerAction.SpellBankRight) != ControllerControl.RightShoulder
+            || pad.Control(ControllerAction.Sneak) != ControllerControl.RightStick
+            || pad.Control(ControllerAction.Jump) != ControllerControl.South
+            || pad.Control(ControllerAction.OpenInventory) != ControllerControl.North
+            || pad.Control(ControllerAction.ToggleView) != ControllerControl.DPadUp)
+            faults.Add("the shipped controller layout is not the Minecraft-shaped one");
+
+        // The magic-era layout, untouched, moves to it on its own; one changed row keeps it.
+        var magicEra = new HashSet<ControllerAction>(ControllerActions.All);
+        var old = new ControllerBindings();
+        foreach (var (action, control) in new (ControllerAction, ControllerControl)[]
+                 {
+                     (ControllerAction.Jump, ControllerControl.South), (ControllerAction.Sneak, ControllerControl.East),
+                     (ControllerAction.Sprint, ControllerControl.LeftStick),
+                     (ControllerAction.BreakOrAttack, ControllerControl.RightShoulder),
+                     (ControllerAction.UseOrPlace, ControllerControl.LeftShoulder),
+                     (ControllerAction.RaiseShield, ControllerControl.RightStick),
+                     (ControllerAction.SwapHands, ControllerControl.West),
+                     (ControllerAction.PreviousSlot, ControllerControl.DPadLeft),
+                     (ControllerAction.NextSlot, ControllerControl.DPadRight),
+                     (ControllerAction.RadialHotbar, ControllerControl.DPadUp),
+                     (ControllerAction.SpellBankLeft, ControllerControl.LeftTrigger),
+                     (ControllerAction.SpellBankRight, ControllerControl.RightTrigger),
+                     (ControllerAction.OpenInventory, ControllerControl.North),
+                     (ControllerAction.OpenOptions, ControllerControl.Start),
+                     (ControllerAction.ToggleView, ControllerControl.Back),
+                 })
+            old.Set(action, control);
+        if (!old.IsMagicEraDefault(magicEra)) faults.Add("the untouched magic-era controller layout is not recognised to move");
+        old.Bind(ControllerAction.Jump, ControllerControl.DPadDown);
+        if (old.IsMagicEraDefault(magicEra)) faults.Add("a changed controller layout would be moved over the player's choice");
+
+        // A bumper carries its slot step and its bank together, and nothing else may join them.
+        var shared = ControllerBindings.Defaults();
+        shared.Bind(ControllerAction.Jump, ControllerControl.LeftShoulder);
+        if (shared.Control(ControllerAction.PreviousSlot) != ControllerControl.None
+            || shared.Control(ControllerAction.SpellBankLeft) != ControllerControl.None)
+            faults.Add("binding another action to a bumper left the slot step or bank sharing it");
         faults.AddRange(keys.Faults().Select(one => "keyboard: " + one));
         faults.AddRange(pad.Faults().Select(one => "controller: " + one));
     }

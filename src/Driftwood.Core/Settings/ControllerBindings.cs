@@ -93,25 +93,75 @@ public sealed class ControllerBindings
 {
     private readonly ControllerControl[] _controls = new ControllerControl[ControllerActions.All.Length];
 
+    /// <summary>
+    /// The shipped layout: the one a Minecraft player's hands already know (2026-10-26).
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ <b>The user's report: "it didn't feel right".</b> Attack and use had moved to the
+    /// bumpers to give the triggers to the spell banks, and the hotbar to the d-pad — the opposite of
+    /// the genre's console layout, where the right trigger breaks, the left places, the bumpers walk
+    /// the hotbar, the right stick's click sneaks, A jumps, Y opens the inventory and d-pad up turns
+    /// the camera. That is the layout now.</para>
+    /// <para>⛳ <b>The spell banks share the bumpers</b> (<see cref="MayShare"/>): a tap walks the
+    /// hotbar, a hold opens the bank for the face buttons, with the companion's orders on the d-pad
+    /// as before — and the left stick still moves while casting.</para>
+    /// </remarks>
     public static ControllerBindings Defaults()
     {
         var bindings = new ControllerBindings();
         bindings.Set(ControllerAction.Jump, ControllerControl.South);
-        bindings.Set(ControllerAction.Sneak, ControllerControl.East);
+        bindings.Set(ControllerAction.Sneak, ControllerControl.RightStick);
         bindings.Set(ControllerAction.Sprint, ControllerControl.LeftStick);
-        bindings.Set(ControllerAction.BreakOrAttack, ControllerControl.RightShoulder);
-        bindings.Set(ControllerAction.UseOrPlace, ControllerControl.LeftShoulder);
-        bindings.Set(ControllerAction.RaiseShield, ControllerControl.RightStick);
+        bindings.Set(ControllerAction.BreakOrAttack, ControllerControl.RightTrigger);
+        bindings.Set(ControllerAction.UseOrPlace, ControllerControl.LeftTrigger);
+        bindings.Set(ControllerAction.RaiseShield, ControllerControl.East);
         bindings.Set(ControllerAction.SwapHands, ControllerControl.West);
-        bindings.Set(ControllerAction.PreviousSlot, ControllerControl.DPadLeft);
-        bindings.Set(ControllerAction.NextSlot, ControllerControl.DPadRight);
-        bindings.Set(ControllerAction.RadialHotbar, ControllerControl.DPadUp);
-        bindings.Set(ControllerAction.SpellBankLeft, ControllerControl.LeftTrigger);
-        bindings.Set(ControllerAction.SpellBankRight, ControllerControl.RightTrigger);
+        bindings.Set(ControllerAction.PreviousSlot, ControllerControl.LeftShoulder);
+        bindings.Set(ControllerAction.NextSlot, ControllerControl.RightShoulder);
+        bindings.Set(ControllerAction.RadialHotbar, ControllerControl.DPadDown);
+        bindings.Set(ControllerAction.SpellBankLeft, ControllerControl.LeftShoulder);
+        bindings.Set(ControllerAction.SpellBankRight, ControllerControl.RightShoulder);
         bindings.Set(ControllerAction.OpenInventory, ControllerControl.North);
         bindings.Set(ControllerAction.OpenOptions, ControllerControl.Start);
-        bindings.Set(ControllerAction.ToggleView, ControllerControl.Back);
+        bindings.Set(ControllerAction.ToggleView, ControllerControl.DPadUp);
         return bindings;
+    }
+
+    /// <summary>
+    /// The pairs one control may carry together: a tap for the first, a hold for the second — a
+    /// bumper walks the hotbar when tapped and opens its spell bank when held.
+    /// </summary>
+    public static bool MayShare(ControllerAction a, ControllerAction b) =>
+        (a, b) is (ControllerAction.PreviousSlot, ControllerAction.SpellBankLeft)
+            or (ControllerAction.SpellBankLeft, ControllerAction.PreviousSlot)
+            or (ControllerAction.NextSlot, ControllerAction.SpellBankRight)
+            or (ControllerAction.SpellBankRight, ControllerAction.NextSlot);
+
+    /// <summary>
+    /// True for the untouched magic-era layout (2026-10-25 to 2026-10-26) — attack and use on the
+    /// bumpers, the banks on the triggers — so it moves to <see cref="Defaults"/> on its own.
+    /// </summary>
+    public bool IsMagicEraDefault(IReadOnlySet<ControllerAction> named)
+    {
+        var magic = new Dictionary<ControllerAction, ControllerControl>
+        {
+            [ControllerAction.Jump] = ControllerControl.South,
+            [ControllerAction.Sneak] = ControllerControl.East,
+            [ControllerAction.Sprint] = ControllerControl.LeftStick,
+            [ControllerAction.BreakOrAttack] = ControllerControl.RightShoulder,
+            [ControllerAction.UseOrPlace] = ControllerControl.LeftShoulder,
+            [ControllerAction.RaiseShield] = ControllerControl.RightStick,
+            [ControllerAction.SwapHands] = ControllerControl.West,
+            [ControllerAction.PreviousSlot] = ControllerControl.DPadLeft,
+            [ControllerAction.NextSlot] = ControllerControl.DPadRight,
+            [ControllerAction.RadialHotbar] = ControllerControl.DPadUp,
+            [ControllerAction.SpellBankLeft] = ControllerControl.LeftTrigger,
+            [ControllerAction.SpellBankRight] = ControllerControl.RightTrigger,
+            [ControllerAction.OpenInventory] = ControllerControl.North,
+            [ControllerAction.OpenOptions] = ControllerControl.Start,
+            [ControllerAction.ToggleView] = ControllerControl.Back,
+        };
+        return magic.All(pair => named.Contains(pair.Key) && Control(pair.Key) == pair.Value);
     }
 
     /// <summary>
@@ -150,7 +200,8 @@ public sealed class ControllerBindings
         if (control != ControllerControl.None)
         {
             for (var i = 0; i < _controls.Length; i++)
-                if (_controls[i] == control) _controls[i] = ControllerControl.None;
+                if (_controls[i] == control && !MayShare((ControllerAction)i, action))
+                    _controls[i] = ControllerControl.None;
         }
 
         _controls[(int)action] = control;
@@ -178,7 +229,7 @@ public sealed class ControllerBindings
             if (actionsNamedByFile?.Contains(action) == true) continue;
             if (Control(action) != ControllerControl.None) continue;
             var control = source.Control(action);
-            if (ActionFor(control) is null) Set(action, control);
+            if (ActionFor(control) is not { } holder || MayShare(holder, action)) Set(action, control);
         }
     }
 
@@ -203,7 +254,7 @@ public sealed class ControllerBindings
                 continue;
             }
 
-            if (seen.TryGetValue(control, out var other))
+            if (seen.TryGetValue(control, out var other) && !MayShare(other, action))
                 faults.Add($"'{Name(control)}' runs both '{ControllerActions.Label(other)}' and '{ControllerActions.Label(action)}'");
             else
                 seen[control] = action;

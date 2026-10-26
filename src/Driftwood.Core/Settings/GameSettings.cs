@@ -351,7 +351,10 @@ public sealed class GameSettings
             // The one automatic migration is deliberately exact: only the untouched old shipped
             // preset moves its trigger actions to shoulders and gains two spell banks. Any custom
             // layout remains byte-for-intent intact and merely receives genuinely free defaults.
-            if (settings.Pad.IsLegacyDefault(namedPadActions)) settings.Pad = ControllerBindings.Defaults();
+            // ⛳ And the magic-era shipped layout (2026-10-26), untouched, moves to the
+            // Minecraft-shaped one the same way; a layout anybody changed is theirs.
+            if (settings.Pad.IsLegacyDefault(namedPadActions) || settings.Pad.IsMagicEraDefault(namedPadActions))
+                settings.Pad = ControllerBindings.Defaults();
             else settings.Pad.FillGapsFrom(ControllerBindings.Defaults(), namedPadActions);
         }
 

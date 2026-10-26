@@ -638,6 +638,16 @@ public sealed class ClientHost : IDisposable
     private bool _spellCursorOpen;
     private int _spellControllerBank;
     private int _spellLastControllerBank = 1;
+
+    /// <summary>How long each bumper-bank has been held, and whether it cast anything while held.</summary>
+    private readonly float[] _bankHeld = new float[2];
+    private readonly bool[] _bankUsed = new bool[2];
+
+    /// <summary>
+    /// How long a bumper must be held before it reads as a spell bank rather than a slot tap, for
+    /// the overlay — the bank itself answers at once, so a quick hold-and-press is never lost.
+    /// </summary>
+    private const float BankHoldSeconds = 0.22f;
     private readonly string[] _spellFaceLabels = new string[4];
     private Vector2 _spellBarWindowOffset;
     private Vector2 _companionWindowOffset;
@@ -13096,6 +13106,15 @@ public sealed class ClientHost : IDisposable
 
         var bankLeft = _controller.Held(ControllerAction.SpellBankLeft, pad);
         var bankRight = _controller.Held(ControllerAction.SpellBankRight, pad);
+
+        // ⛳ A bumper that carries both a slot and a bank (2026-10-26): its slot step waits for the
+        // release, and happens only for a tap that cast nothing.
+        var sharedLeft = pad.Control(ControllerAction.SpellBankLeft) == pad.Control(ControllerAction.PreviousSlot)
+            && pad.Control(ControllerAction.PreviousSlot) != ControllerControl.None;
+        var sharedRight = pad.Control(ControllerAction.SpellBankRight) == pad.Control(ControllerAction.NextSlot)
+            && pad.Control(ControllerAction.NextSlot) != ControllerControl.None;
+        StepBankHold(0, bankLeft, sharedLeft, ControllerAction.SpellBankLeft, -1, dt);
+        StepBankHold(1, bankRight, sharedRight, ControllerAction.SpellBankRight, +1, dt);
         if (_controller.Pressed(ControllerAction.SpellBankLeft, pad)) _spellLastControllerBank = 1;
         if (_controller.Pressed(ControllerAction.SpellBankRight, pad)) _spellLastControllerBank = 2;
         _spellControllerBank = bankLeft && bankRight ? _spellLastControllerBank
@@ -13114,23 +13133,31 @@ public sealed class ClientHost : IDisposable
 
         if (_spellControllerBank > 0)
         {
-            _controllerLookSuppressed = true;
+            // Looking stops for a real hold only: a bumper tapped to walk the hotbar must not
+            // catch the camera for the frames it is down.
+            if (_bankHeld[_spellControllerBank - 1] >= BankHoldSeconds || _bankUsed[_spellControllerBank - 1])
+                _controllerLookSuppressed = true;
             var first = (_spellControllerBank - 1) * 4;
+            var used = true;
             if (_controller.Pressed(ControllerControl.South)) TryCastPrepared(first);
             else if (_controller.Pressed(ControllerControl.East)) TryCastPrepared(first + 1);
             else if (_controller.Pressed(ControllerControl.West)) TryCastPrepared(first + 2);
             else if (_controller.Pressed(ControllerControl.North)) TryCastPrepared(first + 3);
-
-            if (_controller.Pressed(ControllerControl.DPadUp)) CommandCompanion(CompanionCommand.Attack);
+            else if (_controller.Pressed(ControllerControl.DPadUp)) CommandCompanion(CompanionCommand.Attack);
             else if (_controller.Pressed(ControllerControl.DPadRight)) CommandCompanion(CompanionCommand.Guard);
             else if (_controller.Pressed(ControllerControl.DPadDown)) CommandCompanion(CompanionCommand.Follow);
             else if (_controller.Pressed(ControllerControl.DPadLeft)) CommandCompanion(CompanionCommand.Stop);
             else if (_controller.Pressed(ControllerControl.Back)) CommandCompanion(CompanionCommand.GoAway);
+            else used = false;
+
+            // A bank that did something is a hold, however short — its release must not also
+            // step the hotbar.
+            if (used) _bankUsed[_spellControllerBank - 1] = true;
         }
 
-        if (_controller.Pressed(ControllerAction.PreviousSlot, pad))
+        if (!sharedLeft && _controller.Pressed(ControllerAction.PreviousSlot, pad))
             _inventory.Select(_inventory.Selected - 1);
-        if (_controller.Pressed(ControllerAction.NextSlot, pad))
+        if (!sharedRight && _controller.Pressed(ControllerAction.NextSlot, pad))
             _inventory.Select(_inventory.Selected + 1);
 
         var radial = _spellControllerBank == 0 && _controller.Held(ControllerAction.RadialHotbar, pad);
@@ -14780,6 +14807,7 @@ public sealed class ClientHost : IDisposable
             && _vitals.ShieldShare > 0f
             && (_shotGuard || _keys.Held(_input, GameAction.RaiseShield)
                 || (_settings.ControllerEnabled
+                    && _spellControllerBank == 0
                     && _controller.Held(ControllerAction.RaiseShield, _settings.Pad)));
     }
 
@@ -18245,12 +18273,36 @@ public sealed class ClientHost : IDisposable
         return ReadFrame(size);
     }
 
+    /// <summary>
+    /// Times one bumper-bank, and on its release steps the hotbar when it was only a tap.
+    /// </summary>
+    private void StepBankHold(int side, bool held, bool shared, ControllerAction bank, int step, float dt)
+    {
+        if (held)
+        {
+            _bankHeld[side] += dt;
+            return;
+        }
+
+        if (shared && _controller.Released(bank, _settings.Pad)
+            && _bankHeld[side] < BankHoldSeconds && !_bankUsed[side])
+            _inventory.Select(_inventory.Selected + step);
+
+        _bankHeld[side] = 0f;
+        _bankUsed[side] = false;
+    }
+
     private void SyncMagicHud()
     {
         _hudScreen.Character = _character;
         _hudScreen.Companion = _companions.For(LocalPlayerId);
         _hudScreen.SpellCursor = _spellCursorOpen;
-        _hudScreen.SpellBank = _spellControllerBank;
+
+        // ⛳ The bank's overlay waits for a real hold (or a cast), so a bumper tapped to walk the
+        // hotbar does not flash the spell overlay for a frame or two.
+        var side = _spellControllerBank - 1;
+        _hudScreen.SpellBank = side >= 0 && (_bankHeld[side] >= BankHoldSeconds || _bankUsed[side] || _options.UiCheck)
+            ? _spellControllerBank : 0;
         _spellFaceLabels[0] = _controller.Label(ControllerControl.South);
         _spellFaceLabels[1] = _controller.Label(ControllerControl.East);
         _spellFaceLabels[2] = _controller.Label(ControllerControl.West);
