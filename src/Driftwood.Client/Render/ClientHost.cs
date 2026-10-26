@@ -570,6 +570,28 @@ public sealed class ClientHost : IDisposable
     /// <summary>What has become makeable, and the notices on screen saying so.</summary>
     private readonly RecipeUnlocks _unlocks = new();
     private readonly PlayerProgress _progress = new();
+
+    /// <summary>The achievement tree, built once the items exist, and what this world has earned of it.</summary>
+    private AchievementBook? _achievementBook;
+    private readonly AchievementLog _achievements = new();
+    private readonly List<Achievement> _justEarned = [];
+    private int _achievedPockets = -1;
+    private int _achievedWorn = -1;
+    private int _achievedLevel;
+    private int _achievedRank;
+    private int _achievedLearned;
+    private float _achievementScan;
+
+    /// <summary>True until the first pass after a load, which earns without fanfare.</summary>
+    private bool _achievementsQuiet = true;
+
+    /// <summary>
+    /// Earned without a toast: the quiet first pass, and every shot but the achievement ones — the
+    /// shots fill and empty the pockets, and a toast in the corner of the hand pictures is noise.
+    /// </summary>
+    private bool Hushed => _achievementsQuiet || (_options.ShotPath is not null && !_shotAchievements);
+
+    private bool _shotAchievements;
     private readonly CharacterProgression _character = new(LocalPlayerId);
     private readonly CompanionService _companions = new();
     private readonly SpellCastingService _spellCasting = new();
@@ -2230,6 +2252,7 @@ public sealed class ClientHost : IDisposable
             Inhabitants = _inhabitants,
             Character = _character,
             Companions = _companions,
+            Achievements = _achievements,
         };
 
         if (_herd is not null) state.Creatures.AddRange(_herd.Capture());
@@ -2561,7 +2584,7 @@ public sealed class ClientHost : IDisposable
 
         _sinceSave += dt;
         if (_sinceSave < AutosaveSeconds) return;
-        if (!_streamer.World.Changed && !_unlocks.Dirty && !_progress.Dirty && !_map.Dirty
+        if (!_streamer.World.Changed && !_unlocks.Dirty && !_progress.Dirty && !_achievements.Dirty && !_map.Dirty
             && !_exploration.Dirty && !_inhabitants.Dirty && !_character.Dirty
             && !_companions.Dirty && !_signs.Dirty) return;
 
@@ -3183,6 +3206,27 @@ public sealed class ClientHost : IDisposable
             }
         }
 
+        // Nor has the achievement tree: arrows look around it, page keys turn its pages, Home
+        // brings it back to where it starts.
+        if (_hudScreen.Kind == HudScreenKind.Player
+            && _hudScreen.Tab == (int)PlayerTab.Achievements)
+        {
+            const float TreeStep = 32f;
+            switch (key)
+            {
+                case Key.Left or Key.A: _hudScreen.AchievementPan.X += TreeStep; RefreshScreen(); return true;
+                case Key.Right or Key.D: _hudScreen.AchievementPan.X -= TreeStep; RefreshScreen(); return true;
+                case Key.Up or Key.W: _hudScreen.AchievementPan.Y += TreeStep; RefreshScreen(); return true;
+                case Key.Down or Key.S: _hudScreen.AchievementPan.Y -= TreeStep; RefreshScreen(); return true;
+                case Key.PageUp: TurnAchievementPage(_hudScreen.AchievementPage - 1); return true;
+                case Key.PageDown: TurnAchievementPage(_hudScreen.AchievementPage + 1); return true;
+                case Key.Home:
+                    _hudScreen.AchievementPan = Vector2.Zero;
+                    RefreshScreen();
+                    return true;
+            }
+        }
+
         // A map has no rows. Arrows pan it, the wheel zooms it, and Home follows the player again.
         if (_hudScreen.Kind == HudScreenKind.Player
             && _hudScreen.Tab == (int)PlayerTab.Map)
@@ -3325,6 +3369,10 @@ public sealed class ClientHost : IDisposable
 
         switch (at.Value.Kind)
         {
+            case ZoneKind.AchievementTab:
+                if (button == MouseButton.Left) TurnAchievementPage(at.Value.Index);
+                return;
+
             case ZoneKind.TradeOffer:
                 if (button == MouseButton.Left) SelectTradeOffer(at.Value.Index);
                 return;
@@ -3474,6 +3522,20 @@ public sealed class ClientHost : IDisposable
 
     private bool _draggingMap;
     private Vector2 _mapDragOrigin;
+
+    private bool _draggingAchievements;
+    private Vector2 _achievementDragOrigin;
+    private Vector2 _achievementPanAtDrag;
+
+    /// <summary>Opens another page of the achievement tree, wrapping round, back at its start.</summary>
+    private void TurnAchievementPage(int page)
+    {
+        var pages = (_achievementBook ??= new AchievementBook(_items)).Tabs.Count();
+        if (pages == 0) return;
+        _hudScreen.AchievementPage = ((page % pages) + pages) % pages;
+        _hudScreen.AchievementPan = Vector2.Zero;
+        RefreshScreen();
+    }
     private Vector2 _mapPanAtDrag;
     private bool _mapDragMoved;
     private bool _draggingSkinPreview;
@@ -4346,6 +4408,7 @@ public sealed class ClientHost : IDisposable
         {
             var result = _items.ByName(offer.Result);
             Notice($"{_hudScreen.TradeVerb} complete · {quantity}", result);
+            Achieve(AchievementEvents.Trade, resident.Profession.ToString());
         }
         RefreshScreen();
     }
@@ -4795,6 +4858,10 @@ public sealed class ClientHost : IDisposable
             return _hudScreen.Kind switch
             {
                 HudScreenKind.Start => $"left stick or d-pad picks, {_controller.Label(ControllerControl.South)} chooses",
+                HudScreenKind.Player when _hudScreen.Tab == (int)PlayerTab.Achievements =>
+                    $"left stick looks around, {_controller.Label(ControllerControl.West)} and "
+                    + $"{_controller.Label(ControllerControl.North)} turn pages{tabs}, "
+                    + $"{_controller.Label(ControllerControl.East)} closes",
                 HudScreenKind.Player when _hudScreen.Tab == (int)PlayerTab.Map =>
                     $"left stick pans, {_controller.Label(ControllerControl.South)} marks, "
                     + $"{_controller.Label(ControllerControl.West)} clears{tabs}, "
@@ -4833,6 +4900,8 @@ public sealed class ClientHost : IDisposable
             HudScreenKind.Game when _atStartScreen =>
                 $"up and down pick, left and right change it, tab changes tab{wheel}, "
                 + $"{close} goes back to the menu",
+            HudScreenKind.Player when _hudScreen.Tab == (int)PlayerTab.Achievements =>
+                $"drag or arrows look around, page up and down turn pages, home re-centres, {close} closes",
             HudScreenKind.Player when _hudScreen.Tab == (int)PlayerTab.Map =>
                 $"left click marks, right click clears, drag or arrows pan, wheel zooms, {close} closes",
             HudScreenKind.Player when _hudScreen.Tab == (int)PlayerTab.Items =>
@@ -5207,7 +5276,7 @@ public sealed class ClientHost : IDisposable
                     Note: _saveFault ?? "enter writes it; closing the window writes it anyway"));
                 _hudScreen.Rows.Add(new MenuRow(
                     "last saved",
-                    _streamer.World.Changed || _unlocks.Dirty || _progress.Dirty || _map.Dirty
+                    _streamer.World.Changed || _unlocks.Dirty || _progress.Dirty || _achievements.Dirty || _map.Dirty
                         ? $"{(int)_sinceSave}s ago, with changes since"
                         : $"{(int)_sinceSave}s ago, up to date",
                     Note: $"written by itself every {(int)AutosaveSeconds}s when anything has changed, "
@@ -5458,6 +5527,12 @@ public sealed class ClientHost : IDisposable
                     _hudScreen.Rows.Add(new MenuRow(item.Label, HandbookKind(item), Note: note));
                 break;
 
+            case PlayerTab.Achievements:
+                _achievementBook ??= new AchievementBook(_items);
+                _hudScreen.Achievements = _achievementBook;
+                _hudScreen.AchievementLog = _achievements;
+                break;
+
             case PlayerTab.Map:
                 _hudScreen.Map = _map;
                 _hudScreen.MapPlayer = new Vector2(_player.Position.X, _player.Position.Z);
@@ -5631,6 +5706,10 @@ public sealed class ClientHost : IDisposable
                 {
                     _progress.Reset();
                     _unlocks.Forget();
+                    _achievements.Forget();
+                    _achievedPockets = _achievedWorn = -1;
+                    _achievedLevel = _achievedRank = _achievedLearned = 0;
+                    _achievementsQuiet = true;
                     _progressResetArmed = false;
                 }
                 RefreshScreen();
@@ -9527,6 +9606,7 @@ public sealed class ClientHost : IDisposable
         // A birth is its parents' voice pitched small, and a flutter where the calf stands.
         foreach (var birth in _herd.TakeBirths())
         {
+            Achieve(AchievementEvents.Breed, birth.Kind);
             var voice = CreatureSounds.VoicesFor(birth.Kind);
             if (voice.Length > 0) _audio?.Play(Pick(voice), birth.Position, 0.7f, 1.3f);
 
@@ -9593,6 +9673,7 @@ public sealed class ClientHost : IDisposable
             var contributed = _playerContributions.Remove(death.RuntimeId);
             if (contributed)
             {
+                Achieve(AchievementEvents.Kill, death.Kind);
                 var reward = CharacterRewards.Creature(death.Kind, death.Grown, death.Hostile);
                 if (reward.Empty)
                 {
@@ -9687,6 +9768,7 @@ public sealed class ClientHost : IDisposable
             {
                 if (sentinelCount == 0 && _exploration.Clear(site.Id))
                 {
+                    Achieve(AchievementEvents.Clear, nameof(EncounterKind.Trial));
                     SettleCharacterReward(
                         $"encounter:{site.Id}:{LocalPlayerId}",
                         CharacterRewards.Encounter(EncounterKind.Trial), XpSource.Encounter,
@@ -9702,6 +9784,7 @@ public sealed class ClientHost : IDisposable
             {
                 if (sentinelCount == 0 && _exploration.Clear(site.Id))
                 {
+                    Achieve(AchievementEvents.Clear, nameof(EncounterKind.Crown));
                     SettleCharacterReward(
                         $"encounter:{site.Id}:{LocalPlayerId}",
                         CharacterRewards.Encounter(EncounterKind.Crown), XpSource.Encounter,
@@ -9752,6 +9835,7 @@ public sealed class ClientHost : IDisposable
             var dx = (long)site.X - px;
             var dz = (long)site.Z - pz;
             if (dx * dx + dz * dz > reach * reach) continue;
+            Achieve(AchievementEvents.Discover, site.Kind.ToString());
             SettleCharacterReward(
                 $"discovery:{site.Id}:{LocalPlayerId}", CharacterRewards.Discovery(site.Kind),
                 XpSource.Discovery, $"discovered {StructureName(site.Kind)}", StarterBlocks.LayerRelicChart);
@@ -9764,6 +9848,94 @@ public sealed class ClientHost : IDisposable
             SettleCharacterReward(
                 $"survival:{milestone}:{LocalPlayerId}", CharacterRewards.Survival(milestone),
                 XpSource.Survival, "survival milestone", StarterBlocks.LayerBread);
+    }
+
+    /// <summary>
+    /// Tells the achievement log something happened, and celebrates whatever that finished.
+    /// </summary>
+    private void Achieve(string @event, string subject)
+    {
+        if (_items is null) return;
+        _achievementBook ??= new AchievementBook(_items);
+
+        _achievements.Record(_achievementBook, @event, subject, _justEarned);
+        if (_justEarned.Count == 0) return;
+
+        foreach (var earned in _justEarned)
+        {
+            Console.WriteLine($"achievement '{earned.Title}' earned");
+            if (Hushed) continue;
+
+            var icon = _items.TryByName(earned.Icon, out var item) ? item.IconLayer : -1;
+            _toasts.Add(new Toast(AchievementBook.Heading(earned.Frame), earned.Title, icon, ToastSeconds));
+            while (_toasts.Count > MaxToasts) _toasts.RemoveAt(0);
+
+        }
+
+        // One chime however many landed at once — a kill that finishes three at a time is one
+        // moment, and three copies of the same recording on top of each other are just louder.
+        if (!Hushed) _audio?.Play(Pick(ActionSounds.Achievement), _viewPosition, 0.7f, 1f);
+
+        _justEarned.Clear();
+    }
+
+    /// <summary>
+    /// The achievements that are states rather than moments: what is carried and worn, the level,
+    /// the depth, the biome underfoot.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ <b>The first pass after a load is quiet.</b> A world saved before achievements existed —
+    /// or one reset from the Progress tab — already holds iron and diamonds, and a corner full of
+    /// toasts for things done weeks ago is noise. They are earned, and said nothing about.
+    /// </remarks>
+    private void StepAchievements(float dt)
+    {
+        if (!_spawned || !_walking || _atStartScreen || _items is null) return;
+
+        if (_inventory.Version != _achievedPockets)
+        {
+            _achievedPockets = _inventory.Version;
+            for (var slot = 0; slot < Inventory.Slots; slot++)
+                if (!_inventory[slot].IsEmpty)
+                    Achieve(AchievementEvents.Obtain, _items[_inventory[slot].Item].Name);
+        }
+
+        if (_equipment.Version != _achievedWorn)
+        {
+            _achievedWorn = _equipment.Version;
+            for (var slot = 0; slot < Equipment.Slots; slot++)
+            {
+                var worn = _equipment.At(slot);
+                if (worn.IsEmpty) continue;
+                var name = _items[worn.Item].Name;
+                Achieve(AchievementEvents.Obtain, name);
+                if (slot != (int)EquipSlot.Offhand) Achieve(AchievementEvents.Wear, name);
+            }
+        }
+
+        for (; _achievedLevel < _character.Level; _achievedLevel++)
+            Achieve(AchievementEvents.Level, (_achievedLevel + 1).ToString());
+        for (; _achievedRank < _character.Rank; _achievedRank++)
+            Achieve(AchievementEvents.Rank, (_achievedRank + 1).ToString());
+        for (; _achievedLearned < _character.Learned.Count; _achievedLearned++)
+            Achieve(AchievementEvents.Learned, (_achievedLearned + 1).ToString());
+
+        _achievementScan -= dt;
+        if (_achievementScan > 0f) return;
+        _achievementScan = 1f;
+
+        foreach (var depth in AchievementEvents.DepthsAt(_player.Position.Y))
+            Achieve(AchievementEvents.Reach, depth);
+
+        // A biome is the ground's, so it is only "set foot in" near the ground — a cave under the
+        // dunes is not the dunes.
+        var x = (int)MathF.Floor(_player.Position.X);
+        var z = (int)MathF.Floor(_player.Position.Z);
+        var surface = _terrain.SurfaceHeight(x, z);
+        if (_player.Position.Y > surface - 6f)
+            Achieve(AchievementEvents.Enter, _terrain.BiomeAt(x, z, surface).ToString());
+
+        _achievementsQuiet = false;
     }
 
     private static string StructureName(StructureKind kind) => kind switch
@@ -10198,6 +10370,7 @@ public sealed class ClientHost : IDisposable
 
         quarry.Shorn = true;
         quarry.Regrows = CreatureVitals.RegrowSeconds;
+        Achieve(AchievementEvents.Shear, quarry.Kind);
 
         _audio?.Play(Pick(CreatureSounds.Shears), quarry.Middle, 0.55f, Wobble());
 
@@ -10260,6 +10433,7 @@ public sealed class ClientHost : IDisposable
 
         if (fromOffhand) SpendOffhand();
         else _inventory.SpendHeld();
+        Achieve(AchievementEvents.Eat, food.Name);
 
         // The bowl comes back, as the reference's does: a stew is a meal in a dish, not a dish eaten.
         if (food.Remains is { } remains) Spill(_items.Stack(remains, 1));
@@ -10571,6 +10745,17 @@ public sealed class ClientHost : IDisposable
         // system's arrow appeared over a screen full of squares, and every click landed on nothing.
         if (_hudScreen.IsOpen)
         {
+            if (button == MouseButton.Left
+                && _hudScreen.Kind == HudScreenKind.Player
+                && _hudScreen.Tab == (int)PlayerTab.Achievements
+                && _layout.At(_hudScreen.Pointer.X, _hudScreen.Pointer.Y) is { Kind: ZoneKind.AchievementCanvas or ZoneKind.Achievement })
+            {
+                _draggingAchievements = true;
+                _achievementDragOrigin = _hudScreen.Pointer;
+                _achievementPanAtDrag = _hudScreen.AchievementPan;
+                return;
+            }
+
             if (_hudScreen.Kind == HudScreenKind.Player
                 && _hudScreen.Tab == (int)PlayerTab.Map
                 && _layout.At(_hudScreen.Pointer.X, _hudScreen.Pointer.Y) is { Kind: ZoneKind.Map })
@@ -10794,6 +10979,7 @@ public sealed class ClientHost : IDisposable
                 _draggingScrollbar = false;
                 if (_draggingMap && !_mapDragMoved) SetMapWaypoint(_mapDragOrigin);
                 _draggingMap = false;
+                _draggingAchievements = false;
                 _draggingSkinPreview = false;
                 _draggingFigure = false;
                 if (_draggingMagicWindow is not null) SaveMagicWindowSettings();
@@ -10865,6 +11051,12 @@ public sealed class ClientHost : IDisposable
             {
                 foreach (var zone in _layout.Zones)
                     if (zone.Kind == ZoneKind.Scrollbar) DragScrollbar(zone);
+            }
+
+            if (_draggingAchievements)
+            {
+                _hudScreen.AchievementPan = _achievementPanAtDrag + (_hudScreen.Pointer - _achievementDragOrigin);
+                RefreshScreen();
             }
 
             if (_draggingMap)
@@ -11237,6 +11429,18 @@ public sealed class ClientHost : IDisposable
             return;
         }
 
+        if (_hudScreen.Kind == HudScreenKind.Player && _hudScreen.Tab == (int)PlayerTab.Achievements)
+        {
+            if (horizontal != 0 || vertical != 0)
+            {
+                _hudScreen.AchievementPan -= new Vector2(horizontal, vertical) * 32f;
+                RefreshScreen();
+            }
+            if (_controller.Pressed(ControllerControl.West)) TurnAchievementPage(_hudScreen.AchievementPage - 1);
+            if (_controller.Pressed(ControllerControl.North)) TurnAchievementPage(_hudScreen.AchievementPage + 1);
+            return;
+        }
+
         if (_hudScreen.Kind == HudScreenKind.Player && _hudScreen.Tab == (int)PlayerTab.Map)
         {
             if (horizontal != 0) _hudScreen.MapPan.X += horizontal;
@@ -11424,6 +11628,7 @@ public sealed class ClientHost : IDisposable
         StepInhabitants((float)dt);
         StepExploration();
         StepProgressionRewards((float)dt);
+        StepAchievements((float)dt);
         StepCarts((float)dt);
         StepToasts((float)dt);
         StepAmbience((float)dt);
@@ -11658,6 +11863,7 @@ public sealed class ClientHost : IDisposable
 
     private void ResolveSpell(SpellCastEvent cast, SpellDefinition spell)
     {
+        Achieve(AchievementEvents.Cast, spell.StableName);
         var value = spell.AtRank(cast.Rank);
         var power = SpellPower(value.Primary);
         var creature = CreatureById(cast.Target.Id);
@@ -13138,6 +13344,7 @@ public sealed class ClientHost : IDisposable
             }
 
             _ridingCart = cart;
+            Achieve(AchievementEvents.Ride, "cart");
             return true;
         }
 
@@ -13317,6 +13524,7 @@ public sealed class ClientHost : IDisposable
         _streamer.EditBlock(hit.X, hit.Y + 1, hit.Z, planted);
 
         _inventory.SpendHeld();
+        Achieve(AchievementEvents.Plant, held.Name);
         InteractionParticleEffects.Planted(
             _particles, _registry[ground],
             new Vector3(hit.X + 0.5f, hit.Y + 1.02f, hit.Z + 0.5f));
@@ -13347,6 +13555,7 @@ public sealed class ClientHost : IDisposable
         _streamer.EditBlock(hit.X, hit.Y + 1, hit.Z, planted);
 
         _inventory.SpendHeld();
+        Achieve(AchievementEvents.Plant, held.Name);
         InteractionParticleEffects.Planted(
             _particles, _registry[ground],
             new Vector3(hit.X + 0.5f, hit.Y + 1.02f, hit.Z + 0.5f));
@@ -13439,6 +13648,7 @@ public sealed class ClientHost : IDisposable
                 return false;
 
             _inventory.SpendHeld();
+            Achieve(AchievementEvents.Grow, "bonemeal");
             InteractionParticleEffects.Grew(
                 _particles, new Vector3(hit.X + 0.5f, hit.Y + 0.5f, hit.Z + 0.5f), 18);
             PlaySound(
@@ -13451,6 +13661,7 @@ public sealed class ClientHost : IDisposable
 
         _streamer.EditBlock(hit.X, hit.Y, hit.Z, _growth.Next(crop));
         _inventory.SpendHeld();
+        Achieve(AchievementEvents.Grow, "bonemeal");
 
         InteractionParticleEffects.Grew(
             _particles, new Vector3(hit.X + 0.5f, hit.Y + 0.12f, hit.Z + 0.5f), 10);
@@ -13696,6 +13907,7 @@ public sealed class ClientHost : IDisposable
         _awake = 0f;
         _bedSpawn = new Vector3(x + 0.5f, y + 0.6f, z + 0.5f);
         _character.SetBind(_bedSpawn);
+        Achieve(AchievementEvents.Sleep, "bed");
 
         PlaySound(SoundMaterial.Cloth, SoundEvent.Place, new Vector3(x + 0.5f, y + 0.5f, z + 0.5f), 0.7f);
         Notice("slept till morning — you will wake here", null);
@@ -14720,7 +14932,8 @@ public sealed class ClientHost : IDisposable
     private readonly record struct Shot(
         int Frame, string Name, string Item, ViewMode View, bool Strike, ShotScreen Screen = ShotScreen.None,
         bool Creature = false, string Wears = "", string Offhand = "", bool Guard = false,
-        bool Signs = false, bool Gates = false, bool Fishing = false, string[]? Lineup = null);
+        bool Signs = false, bool Gates = false, bool Fishing = false, string[]? Lineup = null,
+        int Achievements = 0);
 
     /// <summary>Which interface, if any, is up when the picture is taken.</summary>
     private enum ShotScreen
@@ -14732,6 +14945,7 @@ public sealed class ClientHost : IDisposable
         Furnace,
         Chest,
         Sign,
+        Achievements,
     }
 
     /// <summary>
@@ -14822,6 +15036,12 @@ public sealed class ClientHost : IDisposable
             Lineup: ["zombie", "husk", "drowned", "skeleton", "spider", "crawler", "farwalker", "slime"]),
         new(1360, "33-monsters-new", "stick", ViewMode.First, false,
             Lineup: ["zombie_villager", "stray", "bogged", "cave_spider", "witch", "silverfish", "phantom"]),
+
+        // ⛳ Achievements (2026-10-25): three earned at once stacking in the corner, then the tree on
+        // two of its pages — the second with a many-part one hovered, so its count is in frame.
+        new(1420, "34-achievement-toasts", "stick", ViewMode.First, false, Achievements: 1),
+        new(1450, "35-achievements", "stick", ViewMode.First, false, ShotScreen.Achievements, Achievements: 2),
+        new(1480, "36-achievements-adventure", "stick", ViewMode.First, false, ShotScreen.Achievements, Achievements: 3),
     ];
 
     /// <summary>
@@ -14959,7 +15179,11 @@ public sealed class ClientHost : IDisposable
                 if (shot.Strike) _animator.Strike();
                 OpenForShot(shot.Screen);
                 WearForShot(shot.Wears, shot.Offhand, shot.Guard);
+                if (shot.Achievements > 0) EarnForShot(shot.Achievements);
             }
+
+            // The hover has to wait for the page to be laid out, which is a frame after it opens.
+            if (shot.Achievements == 3 && _shotFrame == shot.Frame - 2) HoverForShot("monsters_hunted");
 
             // ⛔ A LONG way ahead of the picture, and four frames is nowhere near enough. Walking the
             // body somewhere else moves the streamer's centre with it, and until the chunks round
@@ -15122,7 +15346,53 @@ public sealed class ClientHost : IDisposable
             case ShotScreen.Sign when _shotSign is var (sx, sy, sz):
                 OpenSign(sx, sy, sz);
                 break;
+
+            case ShotScreen.Achievements:
+                OpenPlayer(PlayerTab.Achievements, atBench: false, default);
+                break;
         }
+    }
+
+    /// <summary>What each achievement shot has earned by the time it is taken.</summary>
+    private void EarnForShot(int stage)
+    {
+        _shotAchievements = stage == 1;
+        switch (stage)
+        {
+            case 1:
+                Achieve(AchievementEvents.Obtain, "driftoak_log");
+                Achieve(AchievementEvents.Kill, "zombie");
+                break;
+
+            case 2:
+                foreach (var name in (ReadOnlySpan<string>)["bench", "rubble", "stone_pickaxe", "furnace", "iron_ingot"])
+                    Achieve(AchievementEvents.Obtain, name);
+                _hudScreen.AchievementPage = 0;
+                break;
+
+            case 3:
+                foreach (var kind in (ReadOnlySpan<string>)["skeleton", "spider", "crawler"])
+                    Achieve(AchievementEvents.Kill, kind);
+                Achieve(AchievementEvents.Sleep, "bed");
+                TurnAchievementPage(1);
+                break;
+        }
+        _shotAchievements = false;
+    }
+
+    /// <summary>Puts the pointer over one achievement's frame, so its tooltip is in the picture.</summary>
+    private void HoverForShot(string id)
+    {
+        if (_achievementBook is null) return;
+        var index = _achievementBook.All.ToList().FindIndex(one => one.Id == id);
+        foreach (var zone in _layout.Zones)
+            if (zone.Kind == ZoneKind.Achievement && zone.Index == index)
+            {
+                _hudScreen.Pointer = new Vector2(zone.CentreX, zone.CentreY);
+                Console.WriteLine($"shot hover  {id} at {zone.CentreX:F0},{zone.CentreY:F0}");
+                return;
+            }
+        Console.WriteLine($"shot hover  {id} is not on screen");
     }
 
     /// <summary>

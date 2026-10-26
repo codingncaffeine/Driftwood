@@ -6,6 +6,7 @@ using Driftwood.Core.Gen;
 using Driftwood.Core.Items;
 using Driftwood.Core.Magic;
 using Driftwood.Core.Physics;
+using Driftwood.Core.Players;
 using Driftwood.Core.Textures;
 using Driftwood.Core.Ui;
 using Driftwood.Core.World;
@@ -100,6 +101,9 @@ public enum PlayerTab
 
     /// <summary>What this player has done in this world, and what the recipe tree has revealed.</summary>
     Progress,
+
+    /// <summary>The achievement tree: the reference's pages, earned in this world.</summary>
+    Achievements,
 
     /// <summary>Every item and the ways it is made, found, used, worn, burned, or placed.</summary>
     Handbook,
@@ -227,6 +231,18 @@ public sealed class HudScreen
     public string[] RecipeCosts = [];
 
     /// <summary>Exploration map state. Pan is in chunks; zoom is layout units per tile.</summary>
+    public AchievementBook? Achievements;
+
+    public AchievementLog? AchievementLog;
+
+    /// <summary>Which page of the tree is open, by its place in <see cref="AchievementBook.Tabs"/>.</summary>
+    public int AchievementPage;
+
+    /// <summary>How far the tree has been dragged from where it starts, in layout units.</summary>
+    public Vector2 AchievementPan;
+
+    public Vector4 AchievementBounds;
+
     public WorldMap? Map;
 
     public Vector2 MapPlayer;
@@ -654,6 +670,19 @@ public sealed class HudRenderer : IDisposable
     private readonly List<float> _backdrop = new(64);
     private readonly List<float> _plain = new(4096);
     private readonly List<float> _blocks = new(2048);
+
+    /// <summary>
+    /// Flat quads, then block-textured ones, drawn OVER <see cref="_blocks"/> — for flat shapes that
+    /// stand on a block-textured ground, and the pictures inside them. The achievement tree is
+    /// exactly that: a tiled ground, frames and lines on it, items in the frames.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ Its own pair, because neither existing order works. In <see cref="_blocks"/> the ground
+    /// goes down after every flat quad and covers the frames; in a list under the flat quads the
+    /// journal's own pane fill covers the ground.
+    /// </remarks>
+    private readonly List<float> _plainOver = new(1024);
+    private readonly List<float> _blocksOver = new(512);
     private readonly List<float> _iconQuads = new(2048);
     private readonly List<float> _cursorQuads = new(64);
     private readonly List<float> _text = new(8192);
@@ -841,6 +870,8 @@ public sealed class HudRenderer : IDisposable
         _backdrop.Clear();
         _plain.Clear();
         _blocks.Clear();
+        _plainOver.Clear();
+        _blocksOver.Clear();
         _iconQuads.Clear();
         _cursorQuads.Clear();
         _text.Clear();
@@ -1041,6 +1072,8 @@ public sealed class HudRenderer : IDisposable
         // order: a plate goes over the body it is worn on and under the thing the hand is holding.
         Flush(_armourQuads, textured: true, _armour);
         Flush(_blocks, textured: true, blocks);
+        Flush(_plainOver, textured: false, null);
+        Flush(_blocksOver, textured: true, blocks);
         Flush(_iconQuads, textured: true, _icons);
         Flush(_guiOver, textured: true, _gui);
         Flush(_text, textured: true, _font);
@@ -1694,6 +1727,19 @@ public sealed class HudRenderer : IDisposable
                 MapScreen(screen, layout, w, h, new Vector4(mx + 16f, mtop + 44f, mcontent - 32f, mbottom - mtop - 50f));
             else
                 MapScreen(screen, layout, w, h);
+            Footer(screen, w, h);
+            return;
+        }
+
+        if (screen.Kind == HudScreenKind.Player && screen.Tab == (int)PlayerTab.Achievements)
+        {
+            if (MenuFrame(screen, layout, w, h, 560f, "journal", true, out var ax, out var atop, out var acontent, out var abottom))
+                AchievementScreen(catalogue, screen, layout, new Vector4(ax + 16f, atop + 44f, acontent - 32f, abottom - atop - 50f));
+            else
+            {
+                Tabs(screen, layout, 16f, 24f, w - 32f);
+                AchievementScreen(catalogue, screen, layout, new Vector4(16f, 50f, w - 32f, h - 110f));
+            }
             Footer(screen, w, h);
             return;
         }
@@ -2465,6 +2511,239 @@ public sealed class HudRenderer : IDisposable
             face.B.X, face.B.Y, face.Ub.X, vb,
             face.C.X, face.C.Y, face.Uc.X, vc,
             face.D.X, face.D.Y, face.Ud.X, vd);
+    }
+
+    // ── The achievement tree ──────────────────────────────────────────────────────────────────
+
+    private const float AchievementTile = 32f;
+    private const float AchievementColumn = 54f;
+    private const float AchievementRow = 32f;
+    private const float AchievementFrameSize = 26f;
+
+    private static readonly Vector4 AchievementGold = new(0.95f, 0.76f, 0.26f, 1f);
+    private static readonly Vector4 AchievementGrey = new(0.52f, 0.52f, 0.54f, 1f);
+    private static readonly Vector4 AchievementLine = new(0.86f, 0.86f, 0.86f, 1f);
+    private static readonly Vector4 AchievementShadow = new(0.05f, 0.05f, 0.06f, 1f);
+
+    /// <summary>The block a page's canvas is tiled with — the reference gives each page its ground.</summary>
+    private static string AchievementGround(AchievementTab tab) => tab switch
+    {
+        AchievementTab.Adventure => "driftoak_planks",
+        AchievementTab.Husbandry => "dirt",
+        AchievementTab.Emberdeep => "emberstone",
+        _ => "rubble",
+    };
+
+    /// <summary>
+    /// The tree: page tabs along the top, then a canvas of frames joined by lines that drags.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ <b>The reference's layout:</b> each page is one tree, root at the left, children to
+    /// the right of what they follow, a frame per achievement in the shape of its kind — square for
+    /// a step, rounded for a goal, spiked for a challenge — gold when earned.</para>
+    /// <para>⚠ <b>Nothing is drawn across the canvas's edge.</b> The quads have no scissor, so a frame
+    /// that would cross it is left out and a line is cut to it by hand; the canvas is a whole number
+    /// of tiles for the same reason, so its ground never squashes at the edge.</para>
+    /// </remarks>
+    private void AchievementScreen(ItemRegistry catalogue, HudScreen screen, ScreenLayout layout, Vector4 pane)
+    {
+        if (screen.Achievements is not { } book || screen.AchievementLog is not { } log) return;
+        var tabs = book.Tabs.ToArray();
+        if (tabs.Length == 0) return;
+        var page = Math.Clamp(screen.AchievementPage, 0, tabs.Length - 1);
+        var tab = tabs[page];
+
+        // The pages.
+        var tabWidth = MathF.Floor(MathF.Min(118f, (pane.Z - (tabs.Length - 1) * 4f) / tabs.Length));
+        for (var i = 0; i < tabs.Length; i++)
+        {
+            var x = pane.X + i * (tabWidth + 4f);
+            var open = i == page;
+            var hot = screen.Hovered is { Kind: ZoneKind.AchievementTab } over && over.Index == i;
+            var themed = ThemedButton(x, pane.Y, tabWidth, 20f, open || hot);
+            if (!themed)
+                Rect(_plain, x, pane.Y, tabWidth, 20f, open ? MenuLit with { W = 0.85f } : hot ? MenuHot : MenuSide with { W = 0.75f });
+            if (open) Rect(_plain, x, pane.Y + 18f, tabWidth, 2f, AchievementGold);
+
+            var root = book.On(tabs[i]).First(one => one.Parent.Length == 0);
+            if (catalogue.TryByName(root.Icon, out var rootItem))
+                Rect(_blocks, x + 4f, pane.Y + 3f, 14f, 14f, Vector4.One, rootItem.IconLayer);
+            ShadowText(FitText(AchievementBook.TabName(tabs[i]), tabWidth - 26f, MenuGlyph),
+                x + 22f, pane.Y + 6f, open ? Vector4.One : hot ? Ink : InkDim, themed);
+            layout.Add(ZoneKind.AchievementTab, i, x, pane.Y, tabWidth, 20f);
+        }
+
+        // The canvas, a whole number of tiles.
+        var room = pane.W - 26f - 20f;
+        var width = MathF.Max(AchievementTile * 4f, MathF.Floor(pane.Z / AchievementTile) * AchievementTile);
+        var height = MathF.Max(AchievementTile * 3f, MathF.Floor(room / AchievementTile) * AchievementTile);
+        var left = MathF.Round(pane.X + (pane.Z - width) * 0.5f);
+        var top = pane.Y + 28f;
+        // A rim rather than a bevelled panel: a panel is a flat fill, and the flat quads go down over
+        // the ground — which is the whole canvas painted out grey.
+        var lightRim = new Vector4(0.62f, 0.62f, 0.62f, 1f);
+        var darkRim = new Vector4(0.16f, 0.16f, 0.17f, 1f);
+        Rect(_plain, left - 4f, top - 4f, width + 8f, 4f, lightRim);
+        Rect(_plain, left - 4f, top, 4f, height + 4f, lightRim);
+        Rect(_plain, left, top + height, width + 4f, 4f, darkRim);
+        Rect(_plain, left + width, top - 4f, 4f, height + 4f, darkRim);
+        screen.AchievementBounds = new Vector4(left, top, width, height);
+
+        var ground = catalogue.TryByName(AchievementGround(tab), out var groundItem) ? groundItem.IconLayer : -1;
+        for (var ty = 0f; ty < height; ty += AchievementTile)
+        for (var tx = 0f; tx < width; tx += AchievementTile)
+        {
+            if (ground >= 0)
+                Rect(_blocks, left + tx, top + ty, AchievementTile, AchievementTile, new Vector4(0.34f, 0.34f, 0.34f, 1f), ground);
+            else
+                Rect(_plainOver, left + tx, top + ty, AchievementTile, AchievementTile, new Vector4(0.10f, 0.10f, 0.11f, 1f));
+        }
+        layout.Add(ZoneKind.AchievementCanvas, 0, left, top, width, height);
+
+        // Where everything goes: the tree centred down the canvas, root a little in from the left.
+        var placed = book.Layout(tab);
+        var rows = placed.Values.Max(at => at.Row) + 1f;
+
+        // Rows close up to fit a tall page in the window when they can, down to a whisker apart.
+        var pitch = rows > 1f ? Math.Clamp((height - 40f) / (rows - 1f), AchievementFrameSize + 2f, AchievementRow) : AchievementRow;
+        var originX = left + 22f + screen.AchievementPan.X;
+        var originY = top + MathF.Max(20f, (height - (rows - 1f) * pitch) * 0.5f) + screen.AchievementPan.Y;
+        Vector2 Centre(string id) =>
+            new(MathF.Round(originX + placed[id].Column * AchievementColumn),
+                MathF.Round(originY + placed[id].Row * pitch));
+
+        var bounds = screen.AchievementBounds;
+
+        // The lines first, so the frames sit over their ends: out of the parent, down, into the child.
+        foreach (var one in book.On(tab))
+        {
+            if (one.Parent.Length == 0) continue;
+            var from = Centre(one.Parent);
+            var to = Centre(one.Id);
+            var mid = MathF.Round(from.X + AchievementColumn * 0.5f);
+            var lit = log.Has(one.Id) ? AchievementLine : AchievementGrey;
+            foreach (var (thick, colour) in (ReadOnlySpan<(float, Vector4)>)[(4f, AchievementShadow), (2f, lit)])
+            {
+                var half = thick * 0.5f;
+                ClippedRect(bounds, from.X, from.Y - half, mid - from.X + half, thick, colour);
+                ClippedRect(bounds, mid - half, MathF.Min(from.Y, to.Y) - half, thick, MathF.Abs(to.Y - from.Y) + thick, colour);
+                ClippedRect(bounds, mid - half, to.Y - half, to.X - mid + half, thick, colour);
+            }
+        }
+
+        var index = 0;
+        foreach (var one in book.All)
+        {
+            var at = index++;
+            if (one.Tab != tab) continue;
+
+            var centre = Centre(one.Id);
+            var size = AchievementFrameSize;
+            var x = centre.X - size * 0.5f;
+            var y = centre.Y - size * 0.5f;
+            if (x + size + 3f < bounds.X || y + size + 3f < bounds.Y
+                || x - 3f > bounds.X + bounds.Z || y - 3f > bounds.Y + bounds.W) continue;
+
+            var earned = log.Has(one.Id);
+            var hot = screen.Hovered is { Kind: ZoneKind.Achievement } over && over.Index == at;
+            AchievementFrame(bounds, x, y, size, one.Frame, earned ? AchievementGold : AchievementGrey, hot);
+
+            // ⚠ A frame is cut at the edge; its picture is all or nothing, since a quad's texture can
+            // only be cut along one axis here. Hovering waits for it to be wholly in view too.
+            var whole = x >= bounds.X && y >= bounds.Y
+                        && x + size <= bounds.X + bounds.Z && y + size <= bounds.Y + bounds.W;
+            if (!whole) continue;
+
+            if (catalogue.TryByName(one.Icon, out var item))
+                Rect(_blocksOver, x + 5f, y + 5f, 16f, 16f,
+                    earned ? Vector4.One : new Vector4(0.62f, 0.62f, 0.62f, 1f), item.IconLayer);
+
+            layout.Add(ZoneKind.Achievement, at, x, y, size, size);
+        }
+
+        // The tally under it.
+        var onPage = book.On(tab).ToList();
+        var caption = $"{onPage.Count(one => log.Has(one.Id))} of {onPage.Count} on this page · "
+                      + $"{log.Earned.Count(id => book.ById(id) is not null)} of {book.All.Count} in all";
+        Text(FitText(caption, width - 6f, 6f), left + 3f, top + height + 7f, 6f, InkDim);
+    }
+
+    /// <summary>A frame in the shape of its kind: square, rounded, or spiked at the corners.</summary>
+    private void AchievementFrame(Vector4 box, float x, float y, float size, AchievementFrame kind, Vector4 rim, bool hot)
+    {
+        var fill = hot ? new Vector4(0.30f, 0.28f, 0.22f, 1f) : new Vector4(0.13f, 0.12f, 0.11f, 1f);
+        if (kind != Core.Players.AchievementFrame.Goal)
+            ClippedRect(box, x - 1f, y - 1f, size + 2f, size + 2f, AchievementShadow);
+
+        switch (kind)
+        {
+            case Core.Players.AchievementFrame.Goal:
+                // Rounded: the corners cut away — shadow, rim and fill alike.
+                ClippedRect(box, x + 1f, y - 1f, size - 2f, size + 2f, AchievementShadow);
+                ClippedRect(box, x - 1f, y + 1f, size + 2f, size - 2f, AchievementShadow);
+                ClippedRect(box, x + 2f, y, size - 4f, size, rim);
+                ClippedRect(box, x, y + 2f, size, size - 4f, rim);
+                ClippedRect(box, x + 4f, y + 2f, size - 8f, size - 4f, fill);
+                ClippedRect(box, x + 2f, y + 4f, size - 4f, size - 8f, fill);
+                break;
+
+            case Core.Players.AchievementFrame.Challenge:
+                // Spiked: a point out of each corner.
+                foreach (var (cx, cy) in (ReadOnlySpan<(float, float)>)[(-3f, -3f), (size - 1f, -3f), (-3f, size - 1f), (size - 1f, size - 1f)])
+                {
+                    ClippedRect(box, x + cx - 1f, y + cy - 1f, 6f, 6f, AchievementShadow);
+                    ClippedRect(box, x + cx, y + cy, 4f, 4f, rim);
+                }
+                ClippedRect(box, x, y, size, size, rim);
+                ClippedRect(box, x + 2f, y + 2f, size - 4f, size - 4f, fill);
+                break;
+
+            default:
+                ClippedRect(box, x, y, size, size, rim);
+                ClippedRect(box, x + 2f, y + 2f, size - 4f, size - 4f, fill);
+                break;
+        }
+    }
+
+    /// <summary>A flat rectangle cut to a box, or nothing when none of it is inside.</summary>
+    private void ClippedRect(Vector4 box, float x, float y, float w, float h, Vector4 colour)
+    {
+        if (w < 0f) { x += w; w = -w; }
+        var x0 = MathF.Max(x, box.X);
+        var y0 = MathF.Max(y, box.Y);
+        var x1 = MathF.Min(x + w, box.X + box.Z);
+        var y1 = MathF.Min(y + h, box.Y + box.W);
+        if (x1 <= x0 || y1 <= y0) return;
+        Rect(_plainOver, x0, y0, x1 - x0, y1 - y0, colour);
+    }
+
+    /// <summary>What a hovered achievement says: what it asks, and how far along it is.</summary>
+    private static TooltipText AchievementTip(HudScreen screen, int index)
+    {
+        if (screen.Achievements is not { } book || screen.AchievementLog is not { } log
+            || (uint)index >= (uint)book.All.Count) return default;
+
+        var one = book.All[index];
+        var said = one.Description;
+        if (log.Has(one.Id)) said += ". Earned.";
+        else if (one.All)
+        {
+            var met = log.MetCount(one);
+            said += $". {met} of {one.Criteria.Length}";
+            var missing = one.Criteria.Where(criterion => !log.IsMet(one, criterion))
+                .Select(criterion => criterion.Subject.Replace('_', ' ').ToLowerInvariant()).ToList();
+            if (missing.Count is > 0 and <= 8) said += " — still to go: " + string.Join(", ", missing);
+            said += ".";
+        }
+        else said += ".";
+
+        var kind = one.Frame switch
+        {
+            Core.Players.AchievementFrame.Goal => "goal",
+            Core.Players.AchievementFrame.Challenge => "challenge",
+            _ => "",
+        };
+        return new TooltipText(kind.Length > 0 ? $"{one.Title} ({kind})" : one.Title, said);
     }
 
     /// <summary>The visited surface, centred on the player unless it has been panned away.</summary>
@@ -3891,8 +4170,11 @@ public sealed class HudRenderer : IDisposable
             var room = width - textOffset - 6f;
             var left = MathF.Round(w - width - 8f);
 
+            // ⛔ Under the icon, not over it. Both went into the over-list, which goes down after the
+            // block-textured icons — so every toast with a themed slot had an empty square where
+            // its picture belonged. The under-list keeps panel, slot, icon, words in that order.
             if (HasGui(GuiTextureSet.Layer.ToastBackground))
-                NineSlice(_guiOver, left, top, width, Height, GuiTextureSet.Layer.ToastBackground,
+                NineSlice(_guiUnder, left, top, width, Height, GuiTextureSet.Layer.ToastBackground,
                     160f, 32f, 5f, new Vector4(1f, 1f, 1f, alpha));
             else
                 Bevel(left, top, width, Height, raised: true, PanelFill with { W = PanelFill.W * alpha });
@@ -3901,7 +4183,7 @@ public sealed class HudRenderer : IDisposable
             if (toast.Icon >= 0)
             {
                 if (HasGui(GuiTextureSet.Layer.ToastSlot))
-                    NineSlice(_guiOver, left + 5f, top + 5f, 20f, 20f,
+                    NineSlice(_guiUnder, left + 5f, top + 5f, 20f, 20f,
                         GuiTextureSet.Layer.ToastSlot, 20f, 20f, 3f,
                         new Vector4(1f, 1f, 1f, alpha));
                 else
@@ -4884,7 +5166,11 @@ public sealed class HudRenderer : IDisposable
         }
 
         TooltipText told;
-        if (zone.Kind == ZoneKind.TradeInventory
+        if (zone.Kind == ZoneKind.Achievement)
+        {
+            told = AchievementTip(screen, zone.Index);
+        }
+        else if (zone.Kind == ZoneKind.TradeInventory
             && (uint)zone.Index < Inventory.Slots)
         {
             told = Tooltip.Of(inventory[zone.Index], catalogue);

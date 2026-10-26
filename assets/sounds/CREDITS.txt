@@ -4,6 +4,9 @@ enemies/spider_attack.wav and enemies/zombie.wav are original Driftwood recordin
 enemies/arrow_hit.wav and enemies/arrow_miss.wav were supplied for Driftwood by the project owner on
 2026-10-17 as MP3 and converted to WAV; the MP3 sources are not distributed.
 
+ui/achievement.wav was supplied for Driftwood by the project owner on 2026-10-25 as MP3 and converted
+to WAV; the MP3 source is not distributed.
+
 Third-party sound packs are not distributed with Driftwood. Players may download their own
 original pack archives from the Audio tab; those archives and their license metadata remain in
 the player's AppData sound-pack shelf and are never copied into Driftwood's executable or source.

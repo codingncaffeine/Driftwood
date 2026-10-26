@@ -1931,6 +1931,15 @@ public static class WorldAudit
                 ? "two sheets pick two skeletons, jointed over flat, v2 over v1.8, never a namesake"
                 : $"{matchFaults.Count} faults: {matchFaults[0]}");
 
+        var achievementBook = new AchievementBook(items);
+        var achievementFaults = achievementBook.Validate(items);
+        achievementFaults.AddRange(AchievementLogFaults(achievementBook));
+        Check("every achievement can be earned and is kept", achievementFaults.Count == 0,
+            achievementFaults.Count == 0
+                ? $"{achievementBook.All.Count} achievements on {achievementBook.Tabs.Count()} tabs, every name real, "
+                  + "one root a tab, part-met ones counted, and both kinds survive a save"
+                : $"{achievementFaults.Count} faults: {achievementFaults[0]}");
+
         var mipFaults = MipChain.Validate();
         Check("a cut-out keeps its colour as it shrinks", mipFaults.Count == 0,
             mipFaults.Count == 0
@@ -14293,6 +14302,43 @@ public static class WorldAudit
 
         if (MathF.Abs(PlayerAnimator.Wrap(90f - turner.BodyYawDegrees)) > 2f)
             faults.Add($"walking left the body at {turner.BodyYawDegrees:F0} instead of 90");
+
+        return faults;
+    }
+
+    /// <summary>
+    /// The log's own behaviour: an any-of earns on one, an all-of only on the last, nothing twice,
+    /// and a save keeps both what is earned and what is part-way.
+    /// </summary>
+    private static List<string> AchievementLogFaults(AchievementBook book)
+    {
+        var faults = new List<string>();
+        var log = new AchievementLog();
+        var earned = new List<Achievement>();
+
+        log.Record(book, AchievementEvents.Obtain, "cherry_log", earned);
+        if (!earned.Any(one => one.Id == "driftwood")) faults.Add("a cherry log did not earn Driftwood");
+        earned.Clear();
+        log.Record(book, AchievementEvents.Obtain, "cherry_log", earned);
+        if (earned.Count != 0) faults.Add("the same log earned something twice");
+
+        var diet = book.ById("balanced_diet")!;
+        log.Record(book, AchievementEvents.Eat, diet.Criteria[0].Subject, earned);
+        if (log.Has("balanced_diet")) faults.Add("one meal finished A Balanced Diet");
+        if (log.MetCount(diet) != 1) faults.Add($"one meal counted {log.MetCount(diet)} of A Balanced Diet");
+        if (!log.Has("husbandry")) faults.Add("eating did not earn Husbandry");
+
+        var stream = new MemoryStream();
+        log.Write(new BinaryWriter(stream));
+        stream.Position = 0;
+        var back = new AchievementLog();
+        if (back.Read(new BinaryReader(stream)) is { } fault) faults.Add("the log would not read back: " + fault);
+        if (!back.Has("driftwood") || !back.Has("husbandry")) faults.Add("earned achievements were lost in a save");
+        if (back.MetCount(diet) != 1) faults.Add("a part-met achievement was lost in a save");
+
+        foreach (var criterion in diet.Criteria.Skip(1))
+            back.Record(book, criterion.Event, criterion.Subject, earned);
+        if (!back.Has("balanced_diet")) faults.Add("eating everything did not finish A Balanced Diet");
 
         return faults;
     }

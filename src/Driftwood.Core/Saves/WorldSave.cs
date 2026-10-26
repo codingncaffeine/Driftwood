@@ -77,6 +77,9 @@ public sealed record WorldState(
     /// <summary>What is written on the world's signs.</summary>
     public SignBank Signs { get; set; } = new();
 
+    /// <summary>The achievements earned in this world, and the part-met ones (2026-10-25).</summary>
+    public AchievementLog Achievements { get; set; } = new();
+
     /// <summary>The animals standing in the world, both ways through a save.</summary>
     /// <remarks>
     /// ⛳ A list rather than the herd itself, because the herd does not exist until the world has
@@ -471,6 +474,10 @@ public static class WorldSave
                         foreach (var line in lines) signs.Write(line);
                     }
                 }));
+
+                // ⛳ Achievements (2026-10-25), on the same discipline: a build from before them
+                // skips the section by its length and the world opens with none earned.
+                SaveSection.Write(into, "ACHV", Bytes(state.Achievements.Write));
             }
 
             File.Move(temporary, path, overwrite: true);
@@ -487,6 +494,7 @@ public static class WorldSave
             state.Inhabitants.Settled();
             state.Character.Settled();
             state.Companions.Settled();
+            state.Achievements.Settled();
             return null;
         }
         catch (Exception fault)
@@ -613,6 +621,7 @@ public static class WorldSave
             byte[]? exploration = null;
             byte[]? inhabitants = null;
             byte[]? magic = null;
+            byte[]? achievements = null;
 
             while (SaveSection.TryRead(from, out var tag, out var payload))
             {
@@ -659,6 +668,7 @@ public static class WorldSave
                     // The holds wait for the item palette, exactly as the chests do.
                     case "CRGO": cargo = payload; break;
                     case "SIGN": signText = payload; break;
+                    case "ACHV": achievements = payload; break;
 
                     // Written by a newer build than this one. Skipped, and deliberately not an
                     // error: the length said how far, which is the whole reason sections carry one.
@@ -796,6 +806,12 @@ public static class WorldSave
                         saved.ReadInt32(), saved.ReadInt32(), saved.ReadInt32(),
                         saved.ReadInt32(), saved.ReadInt32(), saved.ReadInt32()));
                 into.Inhabitants.Reload(people);
+            }
+
+            if (achievements is not null)
+            {
+                using var saved = Reader(achievements);
+                if (into.Achievements.Read(saved) is { } achievementFault) return achievementFault;
             }
 
             into.World.Settled();

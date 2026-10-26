@@ -123,6 +123,9 @@ public static class ActionSounds
     public static readonly string[] ToastIn = ["ui/toast/in"];
     public static readonly string[] ToastOut = ["ui/toast/out"];
 
+    /// <summary>An achievement earned — the owner's own chime (2026-10-25), shipped with the game.</summary>
+    public static readonly string[] Achievement = ["ui/achievement"];
+
     // ── The world's own noises ─────────────────────────────────────────────────────────────────
 
     public static readonly string[] LavaPop = ["liquid/lavapop", "liquid/lavapop2", "liquid/lavapop3", "liquid/lavapop4"];
@@ -158,7 +161,7 @@ public static class ActionSounds
                 AnvilUse, ComposterFill, ComposterRaise, ComposterReady, ComposterEmpty,
                 FallSmall, FallBig, DrownGasp, BurnHurt, BubblePop,
                 Submerge, Surface, LadderStep, SwimStroke, Pickup,
-                Click, ToastIn, ToastOut, LavaPop,
+                Click, ToastIn, ToastOut, Achievement, LavaPop,
             };
 
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);

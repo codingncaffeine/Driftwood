@@ -74,6 +74,10 @@
     <EmbeddedResource Include="..\..\assets\sounds\enemies\arrow_miss.wav"
                       LogicalName="Driftwood.Core.Sounds.enemies/arrow_miss.wav" />
 
+    <!-- The achievement chime (2026-10-25): supplied by the owner as MP3 and converted the same way. -->
+    <EmbeddedResource Include="..\..\assets\sounds\ui\achievement.wav"
+                      LogicalName="Driftwood.Core.Sounds.ui/achievement.wav" />
+
     <!-- The rain loop (2026-08-22): a 48-second seamless mono excerpt of the recording the owner
          supplied as assets/sounds/ambient/weather/rain.mp3 (the source stays out of git). -->
     <EmbeddedResource Include="..\..\assets\sounds\ambient\weather\rain.ogg"

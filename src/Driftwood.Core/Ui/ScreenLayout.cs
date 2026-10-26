@@ -112,6 +112,15 @@ public enum ZoneKind
     /// ⚠ Added after its row, since the later zone is the one on top.
     /// </remarks>
     Field,
+
+    /// <summary>One page tab over the achievement tree; the index is the page.</summary>
+    AchievementTab,
+
+    /// <summary>The achievement tree's canvas, which drags.</summary>
+    AchievementCanvas,
+
+    /// <summary>One achievement's frame; the index is its place in the book.</summary>
+    Achievement,
 }
 
 /// <summary>Player-positionable pieces of the P10.5 interface.</summary>
