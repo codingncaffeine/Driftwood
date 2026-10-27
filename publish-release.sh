@@ -100,6 +100,10 @@ run --audit --seed driftwood --chunks 12 || fail "AUDIT FAILED - not shipping th
 echo "[6/8] checking every interface reaches the screen..."
 for size in "400 480" "1600 900" "1920 1440"; do
   set -- $size
+  # Each size starts from empty folders: the check expects a fresh world, and the size before it
+  # leaves its saves behind.
+  rm -rf -- "$GATE"/{config,data,cache,state}
+  mkdir -p "$GATE"/{config,data,cache,state}
   xvfb-run -a -s "-screen 0 1920x1440x24" \
     dbus-run-session --config-file="$ROOT/tools/linux/isolated-bus.conf" -- \
     "$ROOT/$OUT/Driftwood" --ui-check --chunks 6 --seed driftwood --width "$1" --height "$2" \
