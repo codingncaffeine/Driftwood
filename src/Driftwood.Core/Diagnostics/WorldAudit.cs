@@ -967,6 +967,10 @@ public static class WorldAudit
             environmentFaults.Count == 0
                 ? environmentDetail : $"{environmentFaults.Count} faults: {environmentFaults[0]}");
 
+        var pointerFaults = PointerOwner.SelfTest(out var pointerDetail);
+        Check("a shivering mouse cannot take a screen from the controller", pointerFaults.Count == 0,
+            pointerFaults.Count == 0 ? pointerDetail : $"{pointerFaults.Count} faults: {pointerFaults[0]}");
+
         var weatherFaults = WeatherCycle.SelfTest(out var weatherDetail);
         Check("weather changes gently and repeats from the seed", weatherFaults.Count == 0,
             weatherFaults.Count == 0 ? weatherDetail : $"{weatherFaults.Count} faults: {weatherFaults[0]}");

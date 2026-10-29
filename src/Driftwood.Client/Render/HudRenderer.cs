@@ -468,6 +468,12 @@ public sealed class HudScreen
     /// <summary>Where the pointer is, in layout units. The hotspot is the top left of the tile.</summary>
     public Vector2 Pointer;
 
+    /// <summary>
+    /// True while the controller or the arrow keys steer and the mouse has not moved since: the
+    /// arrow is not drawn, and the square it would point at gets a focus edge instead.
+    /// </summary>
+    public bool PointerAsleep;
+
     /// <summary>Wheel notches not yet taken by a scrolled column; positive scrolls down.</summary>
     public float Wheel;
 
@@ -4972,7 +4978,13 @@ public sealed class HudRenderer : IDisposable
             // states — one is "this is what you would click", the other is "this is in your hand" —
             // so the hand keeps the hard lit edge and the pointer gets a wash.
             if (screen.Hovered is { Kind: ZoneKind.Slot } hot && hot == zone)
+            {
                 Rect(_plain, zone.X, zone.Y, zone.W, zone.H, new Vector4(1f, 1f, 1f, 0.22f));
+
+                // With no arrow drawn (the pad is steering) a wash alone is easy to lose, so the
+                // square also gets an edge — inside it, clear of the bar's own lit selection ring.
+                if (screen.PointerAsleep) Focus(zone.X, zone.Y, zone.W, zone.H);
+            }
 
             if (zone.Role == SlotRole.Pocket && zone.Index == inventory.Selected)
                 Select(zone.X, zone.Y, zone.W, zone.H);
@@ -5689,6 +5701,10 @@ public sealed class HudRenderer : IDisposable
                 Number(screen.Carried.Count, hx + held, hy + held - 6f, MathF.Max(5f, held * 0.42f));
         }
 
+        // ⛔ USER, 2026-10-29: "the mouse just goes away when the game detects controller movement."
+        // What is carried still rides on the square the pad is on; only the arrow goes.
+        if (screen.PointerAsleep) return;
+
         DrawCursor(screen, at, size);
     }
 
@@ -5936,6 +5952,24 @@ public sealed class HudRenderer : IDisposable
         Rect(_plain, x + 4f, y + 4f, 1f, 6f, PanelLight with { W = 0.48f });
         Rect(_plain, x + w - 12f, y + h - 5f, 8f, 1f, PanelDark with { W = 0.78f });
         Rect(_plain, x + w - 5f, y + h - 10f, 1f, 6f, PanelDark with { W = 0.78f });
+    }
+
+    /// <summary>
+    /// The square the pad is on while no arrow is drawn: a white edge just inside it, so it never
+    /// overlaps the lit ring <see cref="Select"/> draws outside the bar's chosen slot.
+    /// </summary>
+    private void Focus(float x, float y, float w, float h)
+    {
+        x = MathF.Round(x);
+        y = MathF.Round(y);
+        w = MathF.Round(w);
+        h = MathF.Round(h);
+        var edge = new Vector4(1f, 1f, 1f, 0.9f);
+
+        Rect(_plain, x, y, w, 1f, edge);
+        Rect(_plain, x, y + h - 1f, w, 1f, edge);
+        Rect(_plain, x, y + 1f, 1f, h - 2f, edge);
+        Rect(_plain, x + w - 1f, y + 1f, 1f, h - 2f, edge);
     }
 
     /// <summary>

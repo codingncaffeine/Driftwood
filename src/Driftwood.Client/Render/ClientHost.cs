@@ -579,8 +579,7 @@ public sealed class ClientHost : IDisposable
     private readonly ControllerRepeat _padVerticalRepeat = new();
     private Vector2 _controllerMove;
     private Vector2 _controllerLook;
-    private bool _lastInputWasController;
-    private bool _movingControllerPointer;
+    private readonly PointerOwner _pointer = new();
     private bool _firstFrameDrawn;
     private bool _mouseBreakHeld;
     private bool _mousePlaceHeld;
@@ -3644,7 +3643,7 @@ public sealed class ClientHost : IDisposable
 
     private void OnKeyDown(Key key)
     {
-        _lastInputWasController = false;
+        _pointer.KeyPressed();
 
         // Keyboard escape is still an exit from a controller listen. A player who reached this
         // tab with the mouse should never need the pad in hand merely to change their mind.
@@ -4839,12 +4838,10 @@ public sealed class ClientHost : IDisposable
         _hudScreen.Pointer = new Vector2(_layout.Zones[best].CentreX, _layout.Zones[best].CentreY);
         _hudScreen.Hovered = _layout.Zones[best];
 
-        // The window's own pointer goes with it, so picking a square with the arrows and then
-        // reaching for the mouse does not teleport the cursor back to where it was left.
-        var scale = HudRenderer.ScaleFor(_window.Size.Y);
-        _movingControllerPointer = _lastInputWasController;
-        _input.MoveTo(_hudScreen.Pointer * scale);
-        _movingControllerPointer = false;
+        // ⛔ The window's own cursor is NOT moved after it (2026-10-29). Wayland refuses to, so the
+        // real one stayed behind and its next shiver snapped the pointer back off the square. The
+        // mouse is put to sleep instead, and comes back where it really is once it is moved.
+        _pointer.Steered();
     }
 
     /// <summary>How many recipes a row of the book holds. The same number the overlay lays out.</summary>
@@ -5770,7 +5767,7 @@ public sealed class ClientHost : IDisposable
         if (_rebinding is { } waiting)
             return $"press a key for {GameActions.Label(waiting)}, or escape to leave it alone";
 
-        if (_lastInputWasController && _controller.Current.Connected)
+        if (_pointer.Pad && _controller.Current.Connected)
         {
             if (_hudScreen.IsContainer)
                 return $"{_controller.Label(ControllerControl.South)} takes and puts, "
@@ -12502,7 +12499,7 @@ public sealed class ClientHost : IDisposable
     private void OnScroll(float wheelY)
     {
         if (wheelY == 0f) return;
-        _lastInputWasController = false;
+        WakeMouse();
 
         if (_hudScreen.Kind == HudScreenKind.Player
             && _hudScreen.Tab == (int)PlayerTab.Map)
@@ -12688,7 +12685,7 @@ public sealed class ClientHost : IDisposable
     /// </remarks>
     private void OnMouseDown(MouseButton button)
     {
-        _lastInputWasController = false;
+        WakeMouse();
         if (_bench is not null) return;
 
         // The controls tab is listening: a mouse button binds like a key. The click that started
@@ -12952,7 +12949,6 @@ public sealed class ClientHost : IDisposable
 
     private void OnMouseUp(MouseButton button)
     {
-        _lastInputWasController = false;
         switch (button)
         {
             case MouseButton.Left:
@@ -13003,23 +12999,39 @@ public sealed class ClientHost : IDisposable
             : CursorMode.Normal);
 
         _haveMouseAnchor = false;
+        _pointer.Reanchor();
+    }
+
+    /// <summary>
+    /// A mouse button or the wheel while the pad had the pointer: the arrow comes back where the
+    /// mouse really is, and the click or scroll lands there rather than on the pad's square.
+    /// </summary>
+    private void WakeMouse()
+    {
+        var wasAsleep = _pointer.MouseAsleep;
+        _pointer.MouseClicked();
+        if (!wasAsleep || _pointer.Reported is not { } at || !(_hudScreen.IsOpen || _spellCursorOpen)) return;
+
+        var scale = HudRenderer.ScaleFor(_window.Size.Y);
+        _hudScreen.Pointer = new Vector2(
+            Math.Clamp(at.X / scale, 0f, _window.Size.X / scale),
+            Math.Clamp(at.Y / scale, 0f, _window.Size.Y / scale));
+        _hudScreen.Hovered = _layout.At(_hudScreen.Pointer.X, _hudScreen.Pointer.Y);
     }
 
     private void OnMouseMove(Vector2 position)
     {
-        // A GLFW cursor warp can report on this call or a later one. Keep controller prompts when
-        // that report lands exactly where snap navigation put the shared pointer.
-        var controllerWarp = (_hudScreen.IsOpen || _spellCursorOpen)
-            && _lastInputWasController
-            && Vector2.DistanceSquared(
-                position,
-                _hudScreen.Pointer * HudRenderer.ScaleFor(_window.Size.Y)) <= 1f;
-        if (!_movingControllerPointer && !controllerWarp) _lastInputWasController = false;
+        // ⛔ USER, 2026-10-29: "the mouse fights for priority." While the pad has the pointer, a
+        // report has to travel PointerOwner.WakeDistance before it is the mouse moving at all; a
+        // hand resting on it, or a sensor's shiver, no longer takes the screen off the pad.
+        var counts = _pointer.Moved(position);
+
         // Under a screen the position is real window coordinates, so the pointer is simply where
         // the mouse is, divided down into layout units. No accumulation, nothing to drift, and
         // nothing to re-anchor when the window is resized under it.
         if (_hudScreen.IsOpen || _spellCursorOpen)
         {
+            if (!counts) { _haveMouseAnchor = false; return; }
             var scale = HudRenderer.ScaleFor(_window.Size.Y);
             _hudScreen.Pointer = new Vector2(
                 Math.Clamp(position.X / scale, 0f, _window.Size.X / scale),
@@ -13166,7 +13178,7 @@ public sealed class ClientHost : IDisposable
 
         _controllerMove = ControllerTuning.Stick(_controller.Current.Move, _settings.ControllerDeadzone);
         _controllerLook = ControllerTuning.Stick(_controller.Current.Look, _settings.ControllerDeadzone);
-        if (_controller.HadInputThisFrame) _lastInputWasController = true;
+        if (_controller.HadInputThisFrame) _pointer.PadTouched();
 
         // Once discovered, a disabled controller remains able to turn itself back on from this
         // screen. It cannot move, look, or act on the world while off.
@@ -13376,8 +13388,9 @@ public sealed class ClientHost : IDisposable
         // frame a pad was connected, and in a container it snapped the pointer back onto the nearest
         // square whenever the mouse rested anywhere else, such as the book's search box. Now the
         // screen is the pad's only while the pad was the last thing touched; a pad press or stick
-        // push makes it so the same frame, and any mouse or key gives it back.
-        if (!_lastInputWasController) return;
+        // push makes it so the same frame, and a key, a click or a real mouse move gives it back
+        // (2026-10-29: a mouse shiver no longer does — see PointerOwner).
+        if (!_pointer.Pad) return;
 
         if (_controller.Pressed(ControllerControl.East)
             || _controller.Pressed(ControllerAction.OpenInventory, _settings.Pad)
@@ -13482,10 +13495,6 @@ public sealed class ClientHost : IDisposable
         if (nearest is not { } at) return;
         _hudScreen.Pointer = new Vector2(at.CentreX, at.CentreY);
         _hudScreen.Hovered = at;
-        var scale = HudRenderer.ScaleFor(_window.Size.Y);
-        _movingControllerPointer = true;
-        _input.MoveTo(_hudScreen.Pointer * scale);
-        _movingControllerPointer = false;
     }
 
     private void PushToast(string title, string line, bool playSound = true)
@@ -13675,7 +13684,11 @@ public sealed class ClientHost : IDisposable
         // What the pointer is over, from the layout the overlay built last frame. A frame behind on
         // purpose — the alternative is laying the whole screen out twice — and at sixty a second
         // nothing about a highlight is visible one frame late.
-        _hudScreen.Hovered = _hudScreen.IsOpen || _spellCursorOpen
+        // ⚠ While the mouse sleeps, only a container's pointer is anyone's: the pad and the arrow
+        // keys walk it from square to square. Everywhere else the pad picks rows, and a highlight
+        // under a hidden arrow would be a second selection arguing with the row it picked.
+        var pointerIdle = _pointer.MouseAsleep && _hudScreen.IsOpen && !_hudScreen.IsContainer;
+        _hudScreen.Hovered = (_hudScreen.IsOpen || _spellCursorOpen) && !pointerIdle
             ? _layout.At(_hudScreen.Pointer.X, _hudScreen.Pointer.Y)
             : null;
 
@@ -18418,6 +18431,7 @@ public sealed class ClientHost : IDisposable
         _hudScreen.Character = _character;
         _hudScreen.Companion = _companions.For(LocalPlayerId);
         _hudScreen.SpellCursor = _spellCursorOpen;
+        _hudScreen.PointerAsleep = _pointer.MouseAsleep;
 
         // ⛳ The bank's overlay waits for a real hold (or a cast), so a bumper tapped to walk the
         // hotbar does not flash the spell overlay for a frame or two.
@@ -18739,6 +18753,7 @@ public sealed class ClientHost : IDisposable
         // for the pocket to be laid out and then for the box to be drawn; four fixed frames worked
         // until the day the world got three times taller and stopped lining up with them.
         if (_tipStage is > 0 and < 5 && _uiCheckFrame < 118) StepTooltipProbe(size);
+        else if (_tipStage == 5 && _sleepStage < 4 && _uiCheckFrame < 119) StepSleepProbe();
 
         // ⚠ Polled every frame and ended by the clock rather than by a frame number, then the window
         // is closed from here. Written into the switch below it would be a window in FRAMES around a
@@ -19883,6 +19898,69 @@ public sealed class ClientHost : IDisposable
 
     /// <summary>0 before the probe, 5 once it is done. Never a frame number.</summary>
     private int _tipStage;
+
+    /// <summary>
+    /// Steers the inventory without the mouse, shivers the mouse, then really moves it — through
+    /// the host's own key and mouse handlers, with the frames drawn in between.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ USER, 2026-10-29: "inventory management isn't currently possible with a controller, the
+    /// mouse fights for priority." Under Wayland the real cursor stays where the mouse was left, so
+    /// the shiver is reported from there, far from the square the pad picked. That is exactly what
+    /// this reproduces: a real report well away from the square, steering, then shivers around it.
+    /// <para>⛔ <b>Both arms on one screen.</b> The shivers must leave the square and hide the arrow;
+    /// the real move must then take the pointer and bring the arrow back. A build that ignores the
+    /// mouse for good passes the first arm alone.</para>
+    /// </remarks>
+    private void StepSleepProbe()
+    {
+        var scale = HudRenderer.ScaleFor(_window.Size.Y);
+        var mouse = new Vector2(6f, 6f);
+        switch (_sleepStage)
+        {
+            case 0:
+                // The mouse rests in a corner, awake, and is then left there.
+                OnMouseMove(mouse);
+                if (!PointAt(SlotRole.Pocket, 0)) return;
+                OnKeyDown(Key.Right);
+                _sleepSteeredTo = _hudScreen.Hovered;
+
+                // A hand on the mouse: a few one- and two-pixel reports, all from the corner.
+                foreach (var shiver in (ReadOnlySpan<Vector2>)[new(2f, 1f), new(-1f, 2f), new(1f, -1f), new(0f, 0f)])
+                    OnMouseMove(mouse + shiver);
+                _sleepKeptSquare = _sleepSteeredTo is { Kind: ZoneKind.Slot } steered
+                    && _hudScreen.Hovered == steered
+                    && _hudScreen.Pointer == new Vector2(steered.CentreX, steered.CentreY);
+                _sleepStage = 1;
+                break;
+
+            // A frame drawn while asleep: no arrow, and the per-frame hover still on the square.
+            case 1:
+                _sleepArrowHidden = _hudScreen.CursorBox.Z <= 0f && _hudScreen.Hovered == _sleepSteeredTo;
+                OnMouseMove(mouse + new Vector2(40f, 30f));
+                _sleepWokeAt = _hudScreen.Pointer;
+                _sleepStage = 2;
+                break;
+
+            case 2:
+                _sleepArrowBack = _hudScreen.CursorBox.Z > 0f
+                    && Vector2.Distance(_sleepWokeAt, (mouse + new Vector2(40f, 30f)) / scale) < 0.01f;
+                _hudScreen.Pointer = Vector2.Zero;
+                _hudScreen.Hovered = null;
+                _sleepStage = 4;
+                Console.WriteLine(
+                    $"ui-check    sleep  square kept through shivers {_sleepKeptSquare}, arrow hidden "
+                    + $"{_sleepArrowHidden}, a real move brings it back {_sleepArrowBack}");
+                break;
+        }
+    }
+
+    private int _sleepStage;
+    private Zone? _sleepSteeredTo;
+    private bool _sleepKeptSquare;
+    private bool _sleepArrowHidden;
+    private bool _sleepArrowBack;
+    private Vector2 _sleepWokeAt;
 
     /// <returns>False when the layout has no such square yet, so the caller can wait.</returns>
     private bool PointAt(SlotRole role, int index, bool gutter = false)
@@ -21691,6 +21769,15 @@ public sealed class ClientHost : IDisposable
         else if (!_handsCameUp)
             faults.Add("a hand stayed held after its button came up, with no controller running");
         Console.WriteLine($"ui-check    hands  held on click {_handsWentDown}, let go on release {_handsCameUp}");
+
+        if (_sleepStage != 4)
+            faults.Add($"the mouse-sleep probe never finished (stage {_sleepStage})");
+        else if (!_sleepKeptSquare)
+            faults.Add("a shivering mouse took the inventory's square away from the keys that picked it");
+        else if (!_sleepArrowHidden)
+            faults.Add("the arrow was still drawn while something other than the mouse steered");
+        else if (!_sleepArrowBack)
+            faults.Add("a real mouse move did not bring the arrow back where the mouse is");
 
         var resolved = _visuals.ReadResolvedPixel(_visuals.Width / 2, _visuals.Height / 2);
         if (!_visuals.Available || !_visuals.HistoryReady)
