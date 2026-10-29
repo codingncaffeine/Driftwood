@@ -1586,12 +1586,11 @@ public sealed class CreatureHerd
             // nothing ever walked off a ledge and a two-block cliff was a wall. A wanderer still
             // declines a fall of more than three; a hunter takes
             // whatever its health will stand, which is the reference's own rule.
-            // ⛔ USER, 2026-10-29: a spider "clearly saw me but was jittering at a slightly higher
-            // elevation, it would have been a drop to get to me but nothing crazy." A climber with
-            // no path left walks straight at its target and takes whatever drop is in the way —
-            // the reference's wall-climber navigation, which steers at the target once its path
-            // is spent. Held to the walker's rule, a scratched spider stood at the lip of a four-
-            // block drop pressing at it and sliding along it for as long as the player stayed.
+            // ⛳ Found while chasing the user's stuck spider (2026-10-29; theirs was whole, and its
+            // causes are in Footing and TouchingWall). A climber with no path left walks straight
+            // at its target and takes whatever drop is in the way — the reference's wall-climber
+            // navigation, which steers at the target once its path is spent. Held to the walker's
+            // rule, a half-health spider stood at the lip of a four-block drop for good.
             var drop = !hunting ? WanderDrop
                 : creature.Path is null && CreatureVitals.Climbs(creature.Kind) ? AnyDrop
                 : ChaseDrop(creature);
