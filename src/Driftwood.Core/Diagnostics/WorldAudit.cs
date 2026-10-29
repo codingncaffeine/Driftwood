@@ -2028,6 +2028,67 @@ public static class WorldAudit
             + $"{trial.HuntersReached} of {trial.Hunters} hunters reach a player across the wall (want 10), "
             + $"in {trial.MeanSecondsToReach:F1} s on average");
 
+        // ⛔ USER, 2026-10-29: a whole-health spider in sight of them, a little higher, "unable to
+        // reach me". Every drop to six with the player at the foot and six out: a spider of either
+        // health comes down; a whole zombie does too, a half-health one keeps to three — the
+        // reference's walker rule, and the control that the drop limit is still being asked.
+        var ledges = CreatureMovementTrial.RunLedges();
+        var ledgeFaults = ledges
+            .Where(c => (c.ReachedAt is not null) != (c.Kind == "spider" || !c.Wounded || c.Drop <= 3))
+            .Select(c => $"a {(c.Wounded ? "half-health" : "whole")} {c.Kind} {(c.ReachedAt is null ? "never came down" : "came down")} "
+                + $"a {c.Drop}-block drop to a player {c.Out} out")
+            .ToList();
+        var faceClimb = CreatureMovementTrial.SpiderAtFaceClimbs();
+        if (faceClimb < 2f)
+            ledgeFaults.Add($"a spider pressed to a two-block face, 0.08 short of it, rose only {faceClimb:F2}");
+        Check("a hunter comes down a ledge it may take, and only one it may", ledgeFaults.Count == 0,
+            ledgeFaults.Count == 0
+                ? $"{ledges.Count} cases: spiders of either health and whole zombies take drops to six, "
+                  + $"half-health zombies keep to three; a spider pressed to a face climbs it ({faceClimb:F1})"
+                : $"{ledgeFaults.Count} faults: {ledgeFaults[0]}");
+
+        // The same question on the audit's own generated ground, where the user met it: leaves,
+        // overhangs, holes and faces rather than one clean cliff.
+        var treeParts = new bool[registry.Count];
+        for (var id = 1; id < registry.Count; id++)
+        {
+            var name = registry[(ushort)id].Name;
+            treeParts[id] = name.Contains("_log", StringComparison.Ordinal) || name.Contains("leaves", StringComparison.Ordinal);
+        }
+        bool GroundSolid(int x, int y, int z) => registry[world.GetBlock(x, y, z)].Solid;
+        bool GroundWater(int x, int y, int z) => registry[world.GetBlock(x, y, z)].Fluid == FluidKind.Water;
+        int? StandAt(int x, int z)
+        {
+            for (var y = TerrainGenerator.WorldTop - 1; y > TerrainGenerator.WorldBottom; y--)
+            {
+                var block = world.GetBlock(x, y, z);
+                if (GroundWater(x, y, z) || treeParts[block.Value]) return null;
+                if (registry[block].Solid) return y + 1;
+            }
+            return null;
+        }
+        var terrainFaults = new List<string>();
+        var terrainSaid = new List<string>();
+        foreach (var (hunterKind, want) in new[]
+                 {
+                     (new SpawnKind("spider", new Vector3(1.4f, 0.9f, 1.4f), Hostile: true), 0.95f),
+                     (new SpawnKind("zombie", new Vector3(0.6f, 1.95f, 0.6f), Hostile: true), 0.85f),
+                 })
+        {
+            var ground = CreatureMovementTrial.RunOnTerrain(
+                GroundSolid, GroundWater, StandAt, minBlock + 20, maxBlock - 20, hunterKind, 100, 5);
+            terrainSaid.Add($"{ground.Reached}/{ground.Tried} {hunterKind.Name}s");
+            if (ground.Tried < 80) terrainFaults.Add($"only {ground.Tried} {hunterKind.Name} starts found on the ground");
+            if (ground.Reached < ground.Tried * want)
+                terrainFaults.Add($"{ground.Reached}/{ground.Tried} {hunterKind.Name}s reached (want {want:P0}); first miss {ground.FirstMiss}");
+            if (ground.SankThrough > 0)
+                terrainFaults.Add($"{ground.SankThrough} {hunterKind.Name}s sank through the ground");
+        }
+        Check("hunters reach a player in sight below them on real ground", terrainFaults.Count == 0,
+            terrainFaults.Count == 0
+                ? $"{string.Join(", ", terrainSaid)} reached a player one to six below and eight to sixteen off; none sank"
+                : $"{terrainFaults.Count} faults: {terrainFaults[0]}");
+
         var ember = EmberdeepFaults(out var emberSaid);
         Check("the Emberdeep's own fight the way they should", ember.Count == 0,
             ember.Count == 0 ? emberSaid : $"{ember.Count} faults: {ember[0]}");

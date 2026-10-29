@@ -568,6 +568,9 @@ public sealed class CreatureHerd
     /// <summary>The furthest a wanderer will walk off an edge. The reference's three blocks.</summary>
     public const int WanderDrop = 3;
 
+    /// <summary>A step that takes any drop at all: a climber walking straight at what it hunts.</summary>
+    private const int AnyDrop = int.MaxValue;
+
     /// <summary>
     /// Half the width a body takes against the terrain.
     /// </summary>
@@ -1583,7 +1586,15 @@ public sealed class CreatureHerd
             // nothing ever walked off a ledge and a two-block cliff was a wall. A wanderer still
             // declines a fall of more than three; a hunter takes
             // whatever its health will stand, which is the reference's own rule.
-            var drop = hunting ? ChaseDrop(creature) : WanderDrop;
+            // ⛔ USER, 2026-10-29: a spider "clearly saw me but was jittering at a slightly higher
+            // elevation, it would have been a drop to get to me but nothing crazy." A climber with
+            // no path left walks straight at its target and takes whatever drop is in the way —
+            // the reference's wall-climber navigation, which steers at the target once its path
+            // is spent. Held to the walker's rule, a scratched spider stood at the lip of a four-
+            // block drop pressing at it and sliding along it for as long as the player stayed.
+            var drop = !hunting ? WanderDrop
+                : creature.Path is null && CreatureVitals.Climbs(creature.Kind) ? AnyDrop
+                : ChaseDrop(creature);
             if (Walk(creature, speed * magicMovement * dt, solid, drop))
             {
                 creature.Clinging = false;
@@ -1946,10 +1957,39 @@ public sealed class CreatureHerd
         {
             // ⚠ Never a floor above the feet: a corner of the box touching a wall would otherwise
             // read the wall's top as ground and lift the body onto it.
-            if (TryGround(solid, x, z, from, out var y) && y <= at.Y + 0.02f && y > best) best = y;
+            if (FloorBelow(solid, x, z, from, at.Y + 0.02f, out var y) && y > best) best = y;
         }
 
         return best;
+    }
+
+    /// <summary>
+    /// The top of the first solid cell at or below <paramref name="from"/> that is no higher than
+    /// <paramref name="feet"/>: what a falling body lands on, whatever is above it.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ USER, 2026-10-29: a spider "clearly saw me but was jittering at a slightly higher
+    /// elevation". Since <c>2fc9748</c> this was <see cref="TryGround(Func{int, int, int, bool}, int, int, int, out float)"/>,
+    /// which is the SPAWN question and skips any floor without three cells of head room over it. A
+    /// creature walking under leaves, an overhang or a two-high tunnel had the floor under its feet
+    /// refused, fell through the rock to the next floor with room above it, and clawed at the walls
+    /// it was buried in. Head room is for placing a body; a body already standing has its own
+    /// collision to keep its head out of the rock.
+    /// <para>⚠ A solid cell above the feet is stepped past, not taken as the end of the column: a
+    /// leaf at head height over a spider is no reason to look for its floor anywhere else.</para>
+    /// </remarks>
+    private static bool FloorBelow(Func<int, int, int, bool> solid, int x, int z, int from, float feet, out float y)
+    {
+        var lowest = Math.Max(Gen.TerrainGenerator.WorldBottom, from - 160);
+        for (var at = from; at > lowest; at--)
+        {
+            if (!solid(x, at, z) || at + 1 > feet) continue;
+            y = at + 1;
+            return true;
+        }
+
+        y = 0f;
+        return false;
     }
 
     /// <summary>
@@ -2890,7 +2930,7 @@ public sealed class CreatureHerd
     /// <summary>Whether a step from one point to another has ground within the drop it will take.</summary>
     private static bool Floored(Func<int, int, int, bool> solid, Vector3 start, Vector3 at, int maxDrop)
     {
-        if (at.Y > start.Y + 0.01f) return true;
+        if (at.Y > start.Y + 0.01f || maxDrop == AnyDrop) return true;
 
         var x = (int)MathF.Floor(at.X);
         var z = (int)MathF.Floor(at.Z);
@@ -2907,7 +2947,8 @@ public sealed class CreatureHerd
     {
         var tall = Tall(creature);
         var up = creature.Position with { Y = creature.Position.Y + ClimbSpeed * dt };
-        if (!Fits(solid, up, tall) || !TouchingWall(solid, creature.Position, tall)) return false;
+        var half = HalfOf(creature);
+        if (!Fits(solid, up, tall, half) || !TouchingWall(solid, creature.Position, tall, half)) return false;
 
         creature.Position = up;
         creature.Clinging = true;
@@ -2916,9 +2957,15 @@ public sealed class CreatureHerd
     }
 
     /// <summary>Whether a wall is within reach of the body's sides at any height it stands.</summary>
-    private static bool TouchingWall(Func<int, int, int, bool> solid, Vector3 at, int tall)
+    /// <remarks>
+    /// ⛔ From the body's OWN half-width (2026-10-29). Reached from the old fixed 0.3 after
+    /// <see cref="HalfOf"/> widened a spider to 0.45, the reach ended short of the face its own sides
+    /// stopped it at, so a spider pressed against a two-block wall with the player on top of it
+    /// stood there for good.
+    /// </remarks>
+    private static bool TouchingWall(Func<int, int, int, bool> solid, Vector3 at, int tall, float half)
     {
-        const float reach = BodyHalf + 0.15f;
+        var reach = half + 0.15f;
         var y0 = (int)MathF.Floor(at.Y + 0.01f);
 
         for (var y = y0; y < y0 + tall; y++)
@@ -3140,7 +3187,7 @@ public sealed class CreatureHerd
             creature.Leaping = false;
 
         // A climber holding a wall does not fall off it.
-        if (creature.Clinging && creature.FallSpeed >= 0f && TouchingWall(solid, creature.Position, Tall(creature)))
+        if (creature.Clinging && creature.FallSpeed >= 0f && TouchingWall(solid, creature.Position, Tall(creature), HalfOf(creature)))
         {
             creature.FallSpeed = 0f;
             creature.FellFor = 0f;
