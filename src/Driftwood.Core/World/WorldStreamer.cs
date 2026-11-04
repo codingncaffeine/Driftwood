@@ -293,6 +293,33 @@ public sealed class WorldStreamer : IDisposable
         Fluids?.Touch(x, y, z, urgent: true);
     }
 
+    /// <summary>
+    /// A cell the co-op host says changed, applied on a guest.
+    /// </summary>
+    /// <remarks>
+    /// <para>Written like a signal (block, light, mesh, fluid) and NOT like a player's edit: the host
+    /// already rewired, reshaped and powered everything around it and sends those cells too, so
+    /// redoing that work here would only race the host's own answer.</para>
+    /// <para>⚠ A chunk that has not been generated here takes the cell as a saved edit does —
+    /// waiting for generation — because a write into it now would be filled in over the top.</para>
+    /// </remarks>
+    public void ApplyRemote(int wx, int wy, int wz, BlockId id)
+    {
+        if (!TerrainGenerator.InWorld(wy)) return;
+
+        var pos = ChunkPos.FromWorld(wx, wy, wz);
+        if (!_generated.ContainsKey(pos))
+        {
+            _world.Restore(wx, wy, wz, id);
+            return;
+        }
+
+        _world.SetBlock(wx, wy, wz, id);
+        _editQueue.Enqueue((wx, wy, wz));
+        _lightWork.Release();
+        Fluids?.Touch(wx, wy, wz, urgent: true);
+    }
+
     /// <summary>Lets the gates think, at whatever cadence the caller owns.</summary>
     /// <returns>How many gates changed state.</returns>
     public int TickSignals() =>

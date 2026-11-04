@@ -172,7 +172,7 @@ public readonly record struct MenuRow(
     string Label, string Value = "", bool Heading = false, string Note = "", TextField? Edits = null,
     float Progress = -1f, MenuPane Pane = MenuPane.List, bool Card = false, bool Action = false,
     int Icon = -1, bool NarrowOnly = false, MenuControl Control = MenuControl.Button,
-    float ControlAmount = 0f, int Thumb = -1, bool Pinned = false);
+    float ControlAmount = 0f, int Thumb = -1, bool Pinned = false, int Art = -1);
 
 /// <summary>One complete merchant listing, already phrased by the gameplay side.</summary>
 public readonly record struct TradeListing(
@@ -207,6 +207,9 @@ public sealed class ScrollState
 
 public sealed class HudScreen
 {
+    /// <summary>Co-op: other players' names, at their heads in framebuffer pixels, filled by the host each frame.</summary>
+    public List<(Vector2 At, string Name)> NameTags { get; } = [];
+
     public HudScreenKind Kind;
 
     /// <summary>Which tab, as an index into <see cref="TabNames"/>.</summary>
@@ -707,6 +710,11 @@ public sealed class HudRenderer : IDisposable
     /// <summary>The drawn pointers' own batch and texture (2026-10-26) — see <see cref="CursorArt"/>.</summary>
     private readonly List<float> _artCursorQuads = new(64);
     private BlockTextureArray _cursorArt;
+
+    /// <summary>The start menu's plank buttons (<see cref="MenuButtonArt"/>), one layer per word.</summary>
+    private readonly BlockTextureArray _menuButtons;
+    private readonly List<float> _menuButtonQuads = new(256);
+    private readonly List<float> _menuButtonGlow = new(256);
     private readonly byte[][] _cursorTiles;
 
     /// <summary>
@@ -865,6 +873,7 @@ public sealed class HudRenderer : IDisposable
         _sparkles = [.. _cursorTiles.Select(CursorArt.SparkleColours)];
         _shownCursorTiles = [.. _cursorTiles, .. _bareCursorTiles];
         _cursorArt = new BlockTextureArray(gl, _shownCursorTiles, CursorArt.Tile);
+        _menuButtons = new BlockTextureArray(gl, MenuButtonArt.Layers(), MenuButtonArt.Layer, smooth: true);
         _advance = TileGen.FontAdvance();
 
         _vao = _gl.GenVertexArray();
@@ -954,6 +963,8 @@ public sealed class HudRenderer : IDisposable
         _packIconQuads.Clear();
         _skinThumbQuads.Clear();
         _guiWidgets.Clear();
+        _menuButtonQuads.Clear();
+        _menuButtonGlow.Clear();
         _packCardQuads.Clear();
         _packHeroQuads.Clear();
         _packPreviewQuads.Clear();
@@ -1041,6 +1052,7 @@ public sealed class HudRenderer : IDisposable
         }
         else
         {
+            NameTags(screen, scale);
             Crosshair(w, h);
             AttackIndicator(screen, w, h);
             if (BossName is { } boss) BossBar(boss, BossFraction, w);
@@ -1135,6 +1147,8 @@ public sealed class HudRenderer : IDisposable
         Flush(_guiUnder, textured: true, _gui);
         Flush(_plain, textured: false, null);
         Flush(_guiWidgets, textured: true, _gui);
+        Flush(_menuButtonQuads, textured: true, _menuButtons);
+        Flush(_menuButtonGlow, textured: false, null);
         Flush(_packIconQuads, textured: true, _packIcons);
         Flush(_skinThumbQuads, textured: true, _skinThumbs);
         Flush(_packCardQuads, textured: true, _packCards);
@@ -1225,6 +1239,22 @@ public sealed class HudRenderer : IDisposable
     /// plain dark one vanishes down a cave, and those are the two places a player spends the most
     /// time aiming carefully. An outline costs four more quads and works against both.
     /// </remarks>
+    /// <summary>Co-op: each other player's name over their head, on a dark plate so it reads on snow and sky.</summary>
+    private void NameTags(HudScreen screen, float scale)
+    {
+        const float Size = 8f;
+        foreach (var (at, name) in screen.NameTags)
+        {
+            var x = at.X / scale;
+            var y = at.Y / scale;
+            var width = TextWidth(name, Size);
+            var left = MathF.Round(x - width / 2f);
+            var top = MathF.Round(y - Size - 4f);
+            Rect(_plain, left - 3f, top - 2f, width + 6f, Size + 5f, new Vector4(0f, 0f, 0f, 0.45f));
+            Text(name, left, top, Size, new Vector4(1f, 1f, 1f, 0.95f), shadow: false);
+        }
+    }
+
     private void Crosshair(float w, float h)
     {
         var cx = MathF.Round(w / 2f);
@@ -3791,6 +3821,14 @@ public sealed class HudRenderer : IDisposable
             return;
         }
 
+        // ⛳ A page with the user's plank buttons on it is laid out by height, not by row count: a
+        // picture keeps its own shape, so its row is taller than a line of text.
+        if (screen.Rows.Exists(row => row.Art >= 0))
+        {
+            ArtRows(screen, layout, left, top, width, bottom);
+            return;
+        }
+
         var lines = ScreenLayout.MenuLines(h);
         var shown = Math.Min(lines, total);
         var first = Math.Clamp(screen.Scroll, 0, Math.Max(0, total - lines));
@@ -3804,6 +3842,86 @@ public sealed class HudRenderer : IDisposable
 
         for (var i = first; i < first + shown; i++)
             MenuRowAt(screen, layout, i, left, top + (i - first) * (line + gap), rowWidth, line, buttons);
+    }
+
+    private const float ArtGap = 5f;
+    private const float ArtTextRow = 24f;
+
+    /// <summary>
+    /// A start page with plank buttons: every row in one smoothly scrolled column, the buttons
+    /// centred at their own shape and as large as fits all of them at once (2026-11-04).
+    /// </summary>
+    private void ArtRows(HudScreen screen, ScreenLayout layout, float left, float top, float width, float bottom)
+    {
+        var rows = screen.Rows;
+        var view = bottom - top;
+        var buttons = 0;
+        var others = 0f;
+        foreach (var row in rows)
+        {
+            if (row.Art >= 0) buttons++;
+            else others += (row.Heading ? 18f : ArtTextRow) + ArtGap;
+        }
+
+        // ⛔ As large as lets the WHOLE page fit. The title menu's rule (the ui-check holds it) is that
+        // every choice on it can be landed on at once — the worlds listed under the buttons too — so
+        // the buttons give up size first, down to where the carved word still reads (22 units).
+        var spare = view - others - (buttons - 1) * ArtGap;
+        var tall = Math.Clamp(spare / Math.Max(1, buttons), 22f, 46f);
+        var wide = MathF.Min(width, tall * MenuButtonArt.Aspect);
+        tall = wide / MenuButtonArt.Aspect;
+
+        var state = BeginScroll(screen, $"art:{screen.Kind}", left, top, width, view);
+        var pen = 0f;
+        for (var i = 0; i < rows.Count; i++)
+        {
+            var row = rows[i];
+            var rowTall = row.Art >= 0 ? tall : row.Heading ? 18f : ArtTextRow;
+            var y = top + pen - state.Offset;
+            if (y + rowTall > top && y < bottom)
+            {
+                if (row.Art >= 0) ArtButtonAt(screen, layout, i, left + MathF.Round((width - wide) / 2f), y, wide, tall);
+                else MenuRowAt(screen, layout, i, left, y, width - 10f, rowTall, buttons: true);
+            }
+            ScrollToPick(screen, state, i, pen, pen + rowTall, view);
+            pen += rowTall + ArtGap;
+        }
+        EndScroll(screen, layout, state, left, top, width, view, pen - ArtGap);
+    }
+
+    /// <summary>
+    /// One plank button. ⛳ Picked or under the pointer it glows (the user, 2026-11-04: "a bit of a
+    /// highlight ... when hovering"): the wood brightens warm and a gold edge rings the iron, a touch
+    /// stronger for the keyboard's pick than for a passing pointer so both read at once.
+    /// </summary>
+    private void ArtButtonAt(HudScreen screen, ScreenLayout layout, int i, float x, float y, float w, float h)
+    {
+        var row = screen.Rows[i];
+        var lit = i == screen.Selected;
+        var hot = screen.Hovered is { Kind: ZoneKind.Row } over && over.Index == i;
+
+        var colour = lit ? new Vector4(1.22f, 1.14f, 0.98f, 1f)
+            : hot ? new Vector4(1.12f, 1.07f, 0.98f, 1f)
+            : new Vector4(0.92f, 0.92f, 0.92f, 1f);
+        RectUv(_menuButtonQuads, x, y, w, h, 0f, 0f, 1f, MenuButtonArt.V, colour, row.Art);
+
+        if (lit || hot)
+        {
+            var gold = new Vector4(1f, 0.78f, 0.34f, lit ? 0.95f : 0.65f);
+            var halo = gold with { W = lit ? 0.30f : 0.18f };
+            Outline(_menuButtonGlow, x - 1.5f, y - 1.5f, w + 3f, h + 3f, 1.5f, gold);
+            Outline(_menuButtonGlow, x - 3f, y - 3f, w + 6f, h + 6f, 1.5f, halo);
+        }
+
+        ClippedZone(layout, ZoneKind.Row, i, x, y, w, h);
+    }
+
+    private static void Outline(List<float> into, float x, float y, float w, float h, float t, Vector4 colour)
+    {
+        Rect(into, x, y, w, t, colour);
+        Rect(into, x, y + h - t, w, t, colour);
+        Rect(into, x, y + t, t, h - 2f * t, colour);
+        Rect(into, x + w - t, y + t, t, h - 2f * t, colour);
     }
 
     /// <summary>One row of the reworked menu: a heading, a setting, a field or a button.</summary>
@@ -7161,6 +7279,7 @@ public sealed class HudRenderer : IDisposable
         _icons.Dispose();
         _font.Dispose();
         _cursorArt.Dispose();
+        _menuButtons.Dispose();
         _skin?.Dispose();
         _previewSkin?.Dispose();
         _packIcons?.Dispose();

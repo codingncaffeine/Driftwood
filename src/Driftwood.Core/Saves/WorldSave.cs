@@ -40,6 +40,19 @@ public readonly record struct SaveHeader(
 /// A record of references rather than a copy. Saving reads them on the thread that owns them and
 /// writes bytes; nothing here is held past that.
 /// </remarks>
+/// <summary>Which half of a save: the place, or the person in it.</summary>
+[Flags]
+public enum SaveParts
+{
+    /// <summary>Terrain edits, containers, signs, creatures, carts, boats — everything shared.</summary>
+    World = 1,
+
+    /// <summary>Pockets, armour, health, recipes, statistics, magic, the map, achievements.</summary>
+    Character = 2,
+
+    All = World | Character,
+}
+
 public sealed record WorldState(
     string Seed,
     ItemRegistry Catalogue,
@@ -365,6 +378,55 @@ public static class WorldSave
         {
             Directory.CreateDirectory(Folder);
 
+            var path = PathFor(name);
+            var temporary = path + ".writing";
+
+            using (var file = File.Create(temporary)) WriteTo(file, name, state, SaveParts.All);
+
+            File.Move(temporary, path, overwrite: true);
+
+            // Both, and the second is easy to forget. Picking something up can announce a recipe
+            // without changing a block, so a periodic save that only watched the world would never
+            // notice it had something to write.
+            state.World.Settled();
+            state.Unlocks.Settled();
+            state.Progress.Settled();
+            state.Map.Settled();
+            state.Signs.Settled();
+            state.Exploration.Settled();
+            state.Inhabitants.Settled();
+            state.Character.Settled();
+            state.Companions.Settled();
+            state.Achievements.Settled();
+            return null;
+        }
+        catch (Exception fault)
+        {
+            return fault.Message;
+        }
+    }
+
+    /// <summary>
+    /// The same bytes a save file would hold, in memory and nothing marked as saved — what a host
+    /// hands a guest who joins, and what a guest hands back as its character.
+    /// </summary>
+    public static byte[] WriteBytes(string name, WorldState state, SaveParts parts)
+    {
+        using var buffer = new MemoryStream();
+        WriteTo(buffer, name, state, parts);
+        return buffer.ToArray();
+    }
+
+    /// <summary>
+    /// Writes the save format. ⛳ The world parts and the character parts are separable because a
+    /// co-op host keeps one world and many characters (2026-11-04): the palette and header go with
+    /// either, so a character on its own is still a file the ordinary reader opens.
+    /// </summary>
+    private static void WriteTo(Stream stream, string name, WorldState state, SaveParts parts)
+    {
+        var world = (parts & SaveParts.World) != 0;
+        var character = (parts & SaveParts.Character) != 0;
+        {
             var blocks = new Palette();
             var items = new Palette();
 
@@ -373,18 +435,14 @@ public static class WorldSave
             // ⛔ The cargo holds belong in this walk too — built inline in the section block, their
             // names entered the palette AFTER it had been written, and every stack came back as
             // nothing. The save check caught it the day it was written.
-            var edits = EditBytes(state.World, blocks);
+            var edits = world ? EditBytes(state.World, blocks) : [];
             var furnaces = FurnaceBytes(state.Furnaces, items, state.Catalogue);
             var chests = ChestBytes(state.Chests, items, state.Catalogue);
             var brewing = BrewingBytes(state.Brewing, items, state.Catalogue);
             var cargo = CargoBytes(state.Carts, items, state.Catalogue);
             var player = PlayerBytes(state, items);
 
-            var path = PathFor(name);
-            var temporary = path + ".writing";
-
-            using (var file = File.Create(temporary))
-            using (var into = new BinaryWriter(file))
+            using (var into = new BinaryWriter(stream, System.Text.Encoding.UTF8, leaveOpen: true))
             {
                 into.Write(SaveSection.Magic);
                 into.Write(SaveSection.Version);
@@ -402,12 +460,12 @@ public static class WorldSave
 
                 SaveSection.Write(into, "PALB", Bytes(blocks.Write));
                 SaveSection.Write(into, "PALI", Bytes(items.Write));
-                SaveSection.Write(into, "EDIT", edits);
-                SaveSection.Write(into, "FURN", furnaces);
-                SaveSection.Write(into, "CHST", chests);
-                SaveSection.Write(into, "PLYR", player);
+                if (world) SaveSection.Write(into, "EDIT", edits);
+                if (world) SaveSection.Write(into, "FURN", furnaces);
+                if (world) SaveSection.Write(into, "CHST", chests);
+                if (character) SaveSection.Write(into, "PLYR", player);
 
-                SaveSection.Write(into, "UNLK", Bytes(unlocked =>
+                if (character) SaveSection.Write(into, "UNLK", Bytes(unlocked =>
                 {
                     unlocked.Write(state.Unlocks.Names.Count);
                     foreach (var recipe in state.Unlocks.Names) unlocked.Write(recipe);
@@ -415,7 +473,7 @@ public static class WorldSave
 
                 // Separate sections rather than fields appended to PLYR. Old builds skip both and
                 // still recover the player; new builds read an old save as an empty record/map.
-                SaveSection.Write(into, "STAT", Bytes(stats =>
+                if (character) SaveSection.Write(into, "STAT", Bytes(stats =>
                 {
                     stats.Write(state.Progress.BlocksBroken);
                     stats.Write(state.Progress.BlocksPlaced);
@@ -429,14 +487,14 @@ public static class WorldSave
 
                 // Stable spell names and owned companion identities get a length-delimited section
                 // of their own. Old builds skip it; old saves simply create a level-one character.
-                SaveSection.Write(into, "MAGC", Bytes(magic =>
+                if (character) SaveSection.Write(into, "MAGC", Bytes(magic =>
                 {
                     magic.Write(1); // container version
                     state.Character.Write(magic);
                     state.Companions.Write(magic);
                 }));
 
-                SaveSection.Write(into, "MAPS", Bytes(map =>
+                if (character) SaveSection.Write(into, "MAPS", Bytes(map =>
                 {
                     map.Write(state.Map.Tiles.Count);
                     foreach (var tile in state.Map.Tiles.OrderBy(tile => tile.Z).ThenBy(tile => tile.X))
@@ -461,7 +519,7 @@ public static class WorldSave
                     }
                 }));
 
-                SaveSection.Write(into, "EXPL", Bytes(exploration =>
+                if (world) SaveSection.Write(into, "EXPL", Bytes(exploration =>
                 {
                     exploration.Write(1); // payload version
                     exploration.Write(state.Exploration.Brushed.Count);
@@ -479,7 +537,7 @@ public static class WorldSave
                     }
                 }));
 
-                SaveSection.Write(into, "INHB", Bytes(inhabitants =>
+                if (world) SaveSection.Write(into, "INHB", Bytes(inhabitants =>
                 {
                     var saved = state.Inhabitants.Capture();
                     inhabitants.Write(saved.Count);
@@ -502,11 +560,11 @@ public static class WorldSave
                 // ⛳ A section an older build has never heard of, and that is the compatibility
                 // story: the reader skips unknown tags, so a save with animals in it opens
                 // everywhere — an old build re-rolls its herds, which is what it always did.
-                SaveSection.Write(into, "CRTR", Bytes(beasts => WriteCreatures(beasts, state.Creatures)));
+                if (world) SaveSection.Write(into, "CRTR", Bytes(beasts => WriteCreatures(beasts, state.Creatures)));
 
                 // The carts, on the same discipline: its own section, skipped clean by any build
                 // that has never heard of a track.
-                SaveSection.Write(into, "CART", Bytes(carts =>
+                if (world) SaveSection.Write(into, "CART", Bytes(carts =>
                 {
                     carts.Write(state.Carts.Count);
                     foreach (var (x, y, z, t, velocity, _) in state.Carts)
@@ -519,7 +577,7 @@ public static class WorldSave
                     }
                 }));
 
-                SaveSection.Write(into, "BEAC", Bytes(beacons =>
+                if (world) SaveSection.Write(into, "BEAC", Bytes(beacons =>
                 {
                     beacons.Write(state.Beacons.Count);
                     foreach (var (x, y, z) in state.Beacons)
@@ -530,7 +588,7 @@ public static class WorldSave
                     }
                 }));
 
-                SaveSection.Write(into, "BOAT", Bytes(boats =>
+                if (world) SaveSection.Write(into, "BOAT", Bytes(boats =>
                 {
                     boats.Write(state.Boats.Count);
                     foreach (var (x, y, z, yaw, cherry) in state.Boats)
@@ -546,11 +604,11 @@ public static class WorldSave
                 // ⛳ The cargo carts' holds, as their OWN section rather than new fields in CART:
                 // fields are positional and sections carry their length, so a build from before
                 // cargo skips the holds and still reads every cart as a plain one.
-                SaveSection.Write(into, "CRGO", cargo);
+                if (world) SaveSection.Write(into, "CRGO", cargo);
 
                 // ⛳ The signs' words (2026-10-16), by cell. A build from before signs skips the
                 // section by its length, as it skips anything it does not know.
-                SaveSection.Write(into, "SIGN", Bytes(signs =>
+                if (world) SaveSection.Write(into, "SIGN", Bytes(signs =>
                 {
                     signs.Write(1); // payload version
                     signs.Write(state.Signs.Count);
@@ -565,40 +623,19 @@ public static class WorldSave
                 }));
 
                 // ⛳ The Core (2026-10-25): whether the wyrm has fallen, a section of its own to grow.
-                SaveSection.Write(into, "CORE", Bytes(core =>
+                if (world) SaveSection.Write(into, "CORE", Bytes(core =>
                 {
                     core.Write(1); // payload version
                     core.Write(state.WyrmDefeated);
                 }));
 
                 // ⛳ The brewing stands (2026-10-25), their bottles and their dust.
-                SaveSection.Write(into, "BREW", brewing);
+                if (world) SaveSection.Write(into, "BREW", brewing);
 
                 // ⛳ Achievements (2026-10-25), on the same discipline: a build from before them
                 // skips the section by its length and the world opens with none earned.
-                SaveSection.Write(into, "ACHV", Bytes(state.Achievements.Write));
+                if (character) SaveSection.Write(into, "ACHV", Bytes(state.Achievements.Write));
             }
-
-            File.Move(temporary, path, overwrite: true);
-
-            // Both, and the second is easy to forget. Picking something up can announce a recipe
-            // without changing a block, so a periodic save that only watched the world would never
-            // notice it had something to write.
-            state.World.Settled();
-            state.Unlocks.Settled();
-            state.Progress.Settled();
-            state.Map.Settled();
-            state.Signs.Settled();
-            state.Exploration.Settled();
-            state.Inhabitants.Settled();
-            state.Character.Settled();
-            state.Companions.Settled();
-            state.Achievements.Settled();
-            return null;
-        }
-        catch (Exception fault)
-        {
-            return fault.Message;
         }
     }
 
@@ -707,7 +744,36 @@ public static class WorldSave
         try
         {
             using var file = File.OpenRead(path);
-            using var from = new BinaryReader(file);
+            return Read(file, registry, catalogue, into, missing);
+        }
+        catch (Exception fault)
+        {
+            return fault.Message;
+        }
+    }
+
+    /// <summary>
+    /// Reads the save format from memory: a world a host sent, or a character on its own. Only the
+    /// sections present are touched, so a world and then a character can be read into one state.
+    /// </summary>
+    public static string? Read(
+        byte[] bytes, BlockRegistry registry, ItemRegistry catalogue, WorldState into, List<string> missing)
+    {
+        try
+        {
+            return Read(new MemoryStream(bytes, false), registry, catalogue, into, missing);
+        }
+        catch (Exception fault)
+        {
+            return fault.Message;
+        }
+    }
+
+    private static string? Read(
+        Stream stream, BlockRegistry registry, ItemRegistry catalogue, WorldState into, List<string> missing)
+    {
+        {
+            using var from = new BinaryReader(stream, System.Text.Encoding.UTF8, leaveOpen: true);
 
             if (!Opens(from)) return "this is not a Driftwood world";
 
@@ -817,7 +883,9 @@ public static class WorldSave
             if (brewing is not null) ReadBrewing(Reader(brewing), into.Brewing, toItem);
             if (cargo is not null) ReadCargo(Reader(cargo), into, toItem);
 
-            into.Signs.Clear();
+            // ⚠ Only a world clears the signs. A character read on top of a world has no SIGN section
+            // and must not wipe the ones the world just brought.
+            if (signText is not null || edits is not null) into.Signs.Clear();
             if (signText is not null)
             {
                 using var saved = Reader(signText);
@@ -947,10 +1015,6 @@ public static class WorldSave
 
             into.World.Settled();
             return null;
-        }
-        catch (Exception fault)
-        {
-            return fault.Message;
         }
     }
 

@@ -11,6 +11,7 @@ using Driftwood.Core.Entities;
 using Driftwood.Core.Exploration;
 using Driftwood.Core.Gen;
 using Driftwood.Core.Items;
+using Driftwood.Core.Net;
 using Driftwood.Core.Lighting;
 using Driftwood.Core.Magic;
 using Driftwood.Core.Meshing;
@@ -193,6 +194,15 @@ public sealed record ClientOptions
     /// <summary>Opens no audio device at all. The benchmark sets this for itself.</summary>
     public bool Mute { get; init; }
 
+    /// <summary>Co-op: a host's address to join instead of opening a world here (<c>--join</c>).</summary>
+    public string? JoinAddress { get; init; }
+
+    /// <summary>Co-op: opens the world to friends on this port as it loads (<c>--host</c>, <c>--port</c>). 0 = alone.</summary>
+    public int HostPort { get; init; }
+
+    /// <summary>Co-op: the name other players see (<c>--name</c>). Null = the login name.</summary>
+    public string? PlayerName { get; init; }
+
     /// <summary>
     /// A folder to write pictures of the hand into, then quit. Null runs the game normally.
     /// </summary>
@@ -233,7 +243,7 @@ public enum ViewMode
 /// the up-front pass with a load/mesh queue keyed on camera position; the render loop below does
 /// not need to know the difference.
 /// </remarks>
-public sealed class ClientHost : IDisposable
+public sealed partial class ClientHost : IDisposable
 {
     private static readonly string ProductVersion =
         typeof(ClientHost).Assembly.GetName().Version?.ToString(3) ?? "unknown";
@@ -1466,6 +1476,10 @@ public sealed class ClientHost : IDisposable
 
         BuildWorld();
 
+        // Co-op: a guest walks straight into the host's world; a host opens its own to friends.
+        if (IsGuest) StartPlaying();
+        else if (_options.HostPort > 0) StartHosting(_options.HostPort);
+
         // Last, because it wants the camera, the window and the audio device to all exist. Doing
         // it here rather than in half a dozen constructors also means there is exactly one place
         // that turns a setting into an effect, which is the place to look when one does nothing.
@@ -2316,6 +2330,7 @@ public sealed class ClientHost : IDisposable
         _boatSystem = new BoatSystem(registry, _ids);
         _shipSystem = new ShipSystem(registry, new BlockTurns(registry, _items), _ids);
         _shipMesher = new ChunkMesher(registry);
+        _streamer.World.Edited += OnWorldEdited;
 
         var reach = viewRadius * Chunk.Size;
         _fogEnd = MathF.Min(reach * 0.90f, 700f);
@@ -2470,6 +2485,9 @@ public sealed class ClientHost : IDisposable
     {
         _seed = _options.Seed;
 
+        // Co-op: a guest's world is the host's, when the host let us in.
+        if (_options.JoinAddress is not null && OpenJoinedWorld()) return;
+
         if (_options.BenchSeconds > 0 || _options.UiCheck) return;
 
         // Anything that drives the game itself rather than being played. ⛳ The rule lives in
@@ -2541,7 +2559,10 @@ public sealed class ClientHost : IDisposable
         var state = CaptureState();
         var missing = new List<string>();
 
-        if (WorldSave.Read(WorldSave.PathFor(_worldName), _registry, _items, state, missing) is { } fault)
+        var fault = _welcome is not null
+            ? ReadJoinedWorld(state, missing)
+            : WorldSave.Read(WorldSave.PathFor(_worldName), _registry, _items, state, missing);
+        if (fault is not null)
         {
             // The header opened and the body did not. Refusing to carry on loses the session;
             // carrying on and then saving over it loses the world. So: play, and keep nothing.
@@ -2678,6 +2699,14 @@ public sealed class ClientHost : IDisposable
     /// <returns>True when something was written.</returns>
     private bool SaveWorld(string why)
     {
+        // Co-op: a guest's world is the host's to save. What a guest keeps is its character, kept BY
+        // the host — handed over here wherever this machine would have saved.
+        if (IsGuest)
+        {
+            SendCoopCharacter();
+            return true;
+        }
+
         if (_worldName.Length == 0 || _streamer is null || _items is null) return false;
 
         // A ship under way holds blocks the world does not: the save moors her first, forcibly if
@@ -3415,6 +3444,7 @@ public sealed class ClientHost : IDisposable
         _hudScreen.Scroll = 0;
         _startListing = false;
         _startCreating = false;
+        _startFriends = false;
         _startWorld = null;
         _startDeleting = false;
 
@@ -5032,6 +5062,7 @@ public sealed class ClientHost : IDisposable
 
     private void OpenFurnace(int x, int y, int z)
     {
+        if (GuestCannot("Furnaces")) return;
         _hudScreen.Kind = HudScreenKind.Furnace;
         _hudScreen.TabNames = [];
         _hudScreen.Tab = 0;
@@ -5063,6 +5094,7 @@ public sealed class ClientHost : IDisposable
     /// <summary>A brewing stand: three bottles, the ingredient over them, and the dust that fires it.</summary>
     private void OpenBrewing(int x, int y, int z)
     {
+        if (GuestCannot("Brewing stands")) return;
         _hudScreen.Kind = HudScreenKind.BrewingStand;
         _hudScreen.TabNames = [];
         _hudScreen.Tab = 0;
@@ -5191,6 +5223,7 @@ public sealed class ClientHost : IDisposable
     /// <summary>A cargo cart's hold: the chest screen, on a chest that happens to roll.</summary>
     private void OpenCartHold(Cart cart, Chest hold)
     {
+        if (GuestCannot("Cart holds")) return;
         _hudScreen.Kind = HudScreenKind.Chest;
         _hudScreen.TabNames = [];
         _hudScreen.Tab = 0;
@@ -5338,6 +5371,7 @@ public sealed class ClientHost : IDisposable
     /// <summary>A chest: twenty seven slots, and the player's own pockets under them.</summary>
     private void OpenChest(int x, int y, int z)
     {
+        if (GuestCannot("Chests")) return;
         // A generated chest becomes state the first time it is opened. ChestBank keeps even an
         // emptied chest, so revisiting or save/load can never roll it a second time.
         var authored = WorldLoot.TryFindChest(
@@ -5496,6 +5530,13 @@ public sealed class ClientHost : IDisposable
                 LeaveWorldPage();
             }
 
+            return;
+        }
+
+        if (_hudScreen.Kind == HudScreenKind.Start && _startFriends)
+        {
+            _startFriends = false;
+            BackToStartMenu(FriendsRow);
             return;
         }
 
@@ -5811,7 +5852,9 @@ public sealed class ClientHost : IDisposable
             };
         }
 
-        var close = _settings.Keys.Primary(
+        // ⚠ The start menu was opened by nothing, so it names the key that always works there rather
+        // than the inventory key (it read "I goes back").
+        var close = _hudScreen.Kind == HudScreenKind.Start ? "Escape" : _settings.Keys.Primary(
             _hudScreen.Kind == HudScreenKind.Game ? GameAction.OpenOptions
             : _hudScreen.Kind == HudScreenKind.Player && _hudScreen.Tab == (int)PlayerTab.Map
                 ? GameAction.OpenMap
@@ -5829,7 +5872,7 @@ public sealed class ClientHost : IDisposable
         return _hudScreen.Kind switch
         {
             // No "closes" — there is nothing behind it to go back to yet.
-            HudScreenKind.Start when _startListing || _startCreating || _startWorld is not null =>
+            HudScreenKind.Start when _startListing || _startCreating || _startFriends || _startWorld is not null =>
                 $"up and down pick, enter chooses{wheel}, {close} goes back",
             HudScreenKind.Start => $"up and down pick, enter chooses{wheel}",
             HudScreenKind.Game when _atStartScreen =>
@@ -5891,7 +5934,7 @@ public sealed class ClientHost : IDisposable
             _hudScreen.Rows.Add(new MenuRow(open ? $"{world} (current)" : world, Heading: true));
             _hudScreen.Rows.Add(new MenuRow(
                 PlayRow,
-                header is { } h ? $"{h.PlayedFor} · {h.Saved.ToLocalTime():d MMM HH:mm}" : "",
+                header is { } h ? $"{h.PlayedFor} · {h.Saved.ToLocalTime():d MMM HH:mm}" : "", Art: MenuButtonArt.Play,
                 Note: header is { } seen ? $"Seed {seen.Seed}, {seen.Edits} changes" : ""));
             _hudScreen.Rows.Add(new MenuRow(
                 RenameRow, Edits: _renameBox,
@@ -5901,7 +5944,13 @@ public sealed class ClientHost : IDisposable
                 Note: open
                     ? "This is the world that's open. Play another one first to delete this one"
                     : "Asks first. The world and its backups are removed for good"));
-            _hudScreen.Rows.Add(new MenuRow(BackRow, "", Note: _startWorldFromList ? "Back to all worlds" : "Back to the main menu"));
+            _hudScreen.Rows.Add(new MenuRow(BackRow, "", Art: MenuButtonArt.Back, Note: _startWorldFromList ? "Back to all worlds" : "Back to the main menu"));
+            return;
+        }
+
+        if (_startFriends)
+        {
+            BuildFriendsRows();
             return;
         }
 
@@ -5935,7 +5984,7 @@ public sealed class ClientHost : IDisposable
                 _hudScreen.Rows.Add(new MenuRow(
                     bad.File, "can't be read", Note: $"{bad.Why}. {SavesFolderNote}"));
 
-            _hudScreen.Rows.Add(new MenuRow(BackRow, "", Note: "Back to the main menu"));
+            _hudScreen.Rows.Add(new MenuRow(BackRow, "", Art: MenuButtonArt.Back, Note: "Back to the main menu"));
             return;
         }
 
@@ -5955,7 +6004,7 @@ public sealed class ClientHost : IDisposable
                     : _worldName.Length > 0 && _loadedWorld
                         ? $"Saves {_worldName} first, then opens the new world"
                         : "Opens the new world"));
-            _hudScreen.Rows.Add(new MenuRow(CancelRow, "", Note: "Back to the main menu"));
+            _hudScreen.Rows.Add(new MenuRow(CancelRow, "", Art: MenuButtonArt.Back, Note: "Back to the main menu"));
             return;
         }
 
@@ -5965,14 +6014,22 @@ public sealed class ClientHost : IDisposable
         // most recent save — and it is the row the menu starts on. A world that would not load is
         // played honestly: nothing of it can be kept.
         var lastPlayed = _saved.Where(w => w.Name == _worldName).Select(w => (DateTime?)w.Saved).FirstOrDefault();
+
+        // ⛳ The user's plank buttons (2026-11-04), in the order of their mock-up: Play, Create New
+        // World, Multiplayer, Options, Quit. The picture carries the word, so which world Play opens
+        // is said in its note.
         _hudScreen.Rows.Add(_loadedWorld
-            ? new MenuRow(PlayRow, _worldName,
-                Note: $"Your last world. Played for {Spoken(_playedBefore)}"
+            ? new MenuRow(PlayRow, _worldName, Art: MenuButtonArt.Play,
+                Note: $"{_worldName}, your last world. Played for {Spoken(_playedBefore)}"
                       + (lastPlayed is { } last ? $", last on {last.ToLocalTime():d MMM}" : ""))
             : _worldName.Length > 0
-                ? new MenuRow(PlayRow, _worldName, Note: $"A brand new world, seed {_seed}")
-                : new MenuRow(PlayRow, "won't be saved",
+                ? new MenuRow(PlayRow, _worldName, Art: MenuButtonArt.Play, Note: $"{_worldName}, a brand new world, seed {_seed}")
+                : new MenuRow(PlayRow, "won't be saved", Art: MenuButtonArt.Play,
                     Note: "Your world couldn't be loaded, so this one is a visit: nothing in it will be saved"));
+        _hudScreen.Rows.Add(new MenuRow(CreateWorldRow, "", Art: MenuButtonArt.CreateWorld, Note: "Choose a name and, if you like, a seed"));
+        _hudScreen.Rows.Add(new MenuRow(FriendsRow, "", Art: MenuButtonArt.Multiplayer, Note: "Join a friend's world, or open yours to them"));
+        _hudScreen.Rows.Add(new MenuRow(OptionsRow, "", Art: MenuButtonArt.Options, Note: "Controls, video, sound, packs and skins"));
+        _hudScreen.Rows.Add(new MenuRow(QuitRow, "", Art: MenuButtonArt.Quit));
 
         // ⛳ Your other worlds, right here, most recent first (2026-10-26, the user: "make it
         // easier to see other worlds") — a few on the menu itself, and the rest one row away.
@@ -5998,11 +6055,6 @@ public sealed class ClientHost : IDisposable
                 $"{_saved.Count} saved" + (_unreadable.Count > 0 ? $", {_unreadable.Count} can't be read" : ""),
                 Note: "Every saved world, to play, rename or delete"));
         }
-
-        _hudScreen.Rows.Add(new MenuRow("", Heading: true));
-        _hudScreen.Rows.Add(new MenuRow(CreateWorldRow, "", Note: "Choose a name and, if you like, a seed"));
-        _hudScreen.Rows.Add(new MenuRow(OptionsRow, "", Note: "Controls, video, sound, packs and skins"));
-        _hudScreen.Rows.Add(new MenuRow(QuitRow, ""));
     }
 
     /// <summary>The name a new world would be saved under: what was typed, or the next free one.</summary>
@@ -6481,6 +6533,7 @@ public sealed class ClientHost : IDisposable
 
             // ⛳ The way home (2026-10-26, the user's ask): one row, and then the question.
             case GameTab.Menu:
+                if (!_menuArmed) BuildCoopMenuRows();
                 if (!_menuArmed)
                 {
                     _hudScreen.Rows.Add(new MenuRow("leave this world", Heading: true));
@@ -7040,7 +7093,18 @@ public sealed class ClientHost : IDisposable
                         CloseScreen();
                         return;
                     case MainMenuYesRow:
+                        if (IsGuest)
+                        {
+                            // The host's world is not this machine's to go back to the menu over.
+                            LeaveCoop();
+                            ReturnToMenuAfterCoop();
+                            return;
+                        }
                         ReturnToMainMenu();
+                        return;
+                    case OpenToFriendsRow:
+                        StartHosting(TcpTransport.DefaultPort);
+                        RefreshScreen();
                         return;
                     default: return;
                 }
@@ -10145,6 +10209,12 @@ public sealed class ClientHost : IDisposable
             return;
         }
 
+        if (_startFriends)
+        {
+            ChooseOnFriendsPage(row.Label);
+            return;
+        }
+
         if (_startCreating)
         {
             switch (row.Label)
@@ -10187,6 +10257,9 @@ public sealed class ClientHost : IDisposable
             case CreateWorldRow:
                 _nameBox.Text = NextWorldName();
                 ShowStartPage(listing: false, creating: true, select: 1);
+                return;
+            case FriendsRow:
+                OpenFriendsPage();
                 return;
 
             case MoreWorldsRow:
@@ -13541,7 +13614,9 @@ public sealed class ClientHost : IDisposable
 
     /// <summary>Whether the world is held still: the game menu is open over a world being played.</summary>
     private bool Paused =>
-        _hudScreen.Kind == HudScreenKind.Game && !_atStartScreen && _bench is null && !_options.UiCheck;
+        _hudScreen.Kind == HudScreenKind.Game && !_atStartScreen && _bench is null && !_options.UiCheck
+        // ⛳ Co-op: a world other people are standing in does not stop for one player's menu.
+        && _coopHost is null && _coopGuest is null;
 
     private void OnUpdate(double dt)
     {
@@ -13671,15 +13746,20 @@ public sealed class ClientHost : IDisposable
         StepVitals((float)sim);
         StepFluid((float)sim);
         _signalNow += sim;
-        StepSignals(_signalNow, (float)sim);
-        StepFuses((float)sim);
-        StepLeaffall((float)sim);
-        StepFurnaces((float)sim);
-        StepBrewing((float)sim);
+
+        // ⛳ Co-op: what the host owns runs only on the host, and its answers arrive as cells.
+        if (!IsGuest)
+        {
+            StepSignals(_signalNow, (float)sim);
+            StepFuses((float)sim);
+            StepLeaffall((float)sim);
+            StepFurnaces((float)sim);
+            StepBrewing((float)sim);
+        }
         StepProjectiles((float)sim);
-        StepCreatures((float)sim);
+        if (!IsGuest) StepCreatures((float)sim);
         StepMagic((float)sim);
-        StepInhabitants((float)sim);
+        if (!IsGuest) StepInhabitants((float)sim);
         StepExploration();
         StepProgressionRewards((float)sim);
         StepAchievements((float)sim);
@@ -13692,7 +13772,8 @@ public sealed class ClientHost : IDisposable
         StepRain((float)sim);
         StepAutosave(dt);
         _particles.Update(_streamer.World, (float)sim);
-        StepFires((float)sim);
+        if (!IsGuest) StepFires((float)sim);
+        StepCoop(dt);
 
         // ⛳ The file chooser's answer, whenever it arrives. It runs on a thread of its own so the
         // world keeps drawing behind it, which means nothing here waits — this is one volatile read
@@ -17271,7 +17352,7 @@ public sealed class ClientHost : IDisposable
         int Frame, string Name, string Item, ViewMode View, bool Strike, ShotScreen Screen = ShotScreen.None,
         bool Creature = false, string Wears = "", string Offhand = "", bool Guard = false,
         bool Signs = false, bool Gates = false, bool Fishing = false, string[]? Lineup = null,
-        int Achievements = 0, string? Visit = null);
+        int Achievements = 0, string? Visit = null, bool Friend = false);
 
     /// <summary>Which interface, if any, is up when the picture is taken.</summary>
     private enum ShotScreen
@@ -17285,6 +17366,9 @@ public sealed class ClientHost : IDisposable
         Sign,
         Achievements,
         Brewing,
+        Friends,
+        CoopMenu,
+        Start,
     }
 
     /// <summary>
@@ -17411,6 +17495,16 @@ public sealed class ClientHost : IDisposable
         // ⛳ S2's ship (2026-10-25): a hull with a mast and a sail, lifted at its helm and swung
         // off square, seen from over the steersman's shoulder — the shader's turn on a whole deck.
         new(3500, "46-ship", "stick", ViewMode.ThirdBehind, false, Visit: "ship"),
+
+        // ⛳ Co-op (2026-11-04): the start menu's friends page with an address typed, and the pause
+        // menu of a world open to friends — the two new surfaces, looked at before they ship.
+        new(3700, "47-coop-menu", "stick", ViewMode.First, false, ShotScreen.CoopMenu),
+        new(3800, "48-friends", "stick", ViewMode.First, false, ShotScreen.Friends),
+        new(3900, "49-start-menu", "stick", ViewMode.First, false, ShotScreen.Start),
+
+        // ⛳ And a friend in the world: this game hosts, a guest in the same process joins over the
+        // loopback and stands in front of the camera — the drawn player and the name over them.
+        new(4100, "50-coop-friend", "stick", ViewMode.First, false, Friend: true),
     ];
 
     /// <summary>
@@ -17592,6 +17686,8 @@ public sealed class ClientHost : IDisposable
             // all — which came out as a photograph of animals standing in an empty blue sky with one
             // stone block in the corner. The creatures were right; the ground had not arrived.
             if (shot.Creature && _shotFrame == shot.Frame - CreatureLead) StandBesideACreature();
+            if (shot.Friend && _shotFrame == shot.Frame - CreatureLead) StartShotFriend();
+            if (shot.Friend && _shotFrame > shot.Frame - CreatureLead && _shotFrame <= shot.Frame) StepShotFriend();
             // ⚠ A longer lead than the creature's: the edits have to be meshed before the picture,
             // and a spot in a canopy took longer than thirty frames — the words floated on nothing.
             if (shot.Signs && _shotFrame == shot.Frame - SignLead) PutUpSigns();
@@ -17755,6 +17851,23 @@ public sealed class ClientHost : IDisposable
 
             case ShotScreen.Achievements:
                 OpenPlayer(PlayerTab.Achievements, atBench: false, default);
+                break;
+
+            case ShotScreen.CoopMenu:
+                StartHosting(0);
+                OpenGame(GameTab.Menu);
+                break;
+
+            case ShotScreen.Start:
+                ShowStartMenu();
+                _hudScreen.Selected = _hudScreen.Rows.FindIndex(row => row.Label == FriendsRow);
+                break;
+
+            case ShotScreen.Friends:
+                ShowStartMenu();
+                OpenFriendsPage();
+                _joinBox.Text = "192.168.1.20";
+                RefreshScreen();
                 break;
 
             case ShotScreen.Brewing:
@@ -22901,6 +23014,8 @@ public sealed class ClientHost : IDisposable
             }
         }
 
+        DrawRemotePlayers(viewProj, sky, _coopFrameDt);
+
         // Third person only means anything when there is a body to stand behind, which is the same
         // condition PlaceCamera uses to decide whether to run the boom out. The two have to agree,
         // or the camera pulls back from a player it is not drawing.
@@ -23069,6 +23184,7 @@ public sealed class ClientHost : IDisposable
         // fills them with whatever it is photographing — none of which is anybody's game, and all of
         // which would be written into a world file with a name in the list on the menu.
         if (!_atStartScreen && _options.ShotPath is null) SaveWorld("on quit");
+        LeaveCoop();
 
         // The window's size, which is written once here rather than on every step of a drag.
         KeepWindowSize();

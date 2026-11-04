@@ -35,7 +35,7 @@ public sealed class BlockTextureArray : IDisposable
     /// Per layer, whether it has fully transparent pixels the shader discards rather than blends.
     /// Those layers get their mip chain rebuilt here; see the remark below.
     /// </param>
-    public unsafe BlockTextureArray(GL gl, byte[][] tiles, int size, bool[]? cutout = null)
+    public unsafe BlockTextureArray(GL gl, byte[][] tiles, int size, bool[]? cutout = null, bool smooth = false)
     {
         _gl = gl;
         Size = size;
@@ -84,14 +84,15 @@ public sealed class BlockTextureArray : IDisposable
             }
         }
 
+        // ⚠ Smooth for painted art drawn at sizes it was not made at (the menu's plank buttons):
+        // nearest sampling of a scaled painting crawls. Clamped too, so an edge never wraps round.
         _gl.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMinFilter,
-            (int)TextureMinFilter.NearestMipmapLinear);
+            (int)(smooth ? TextureMinFilter.LinearMipmapLinear : TextureMinFilter.NearestMipmapLinear));
         _gl.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMagFilter,
-            (int)TextureMagFilter.Nearest);
-        _gl.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureWrapS,
-            (int)TextureWrapMode.Repeat);
-        _gl.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureWrapT,
-            (int)TextureWrapMode.Repeat);
+            (int)(smooth ? TextureMagFilter.Linear : TextureMagFilter.Nearest));
+        var wrap = smooth ? TextureWrapMode.ClampToEdge : TextureWrapMode.Repeat;
+        _gl.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureWrapS, (int)wrap);
+        _gl.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureWrapT, (int)wrap);
 
         _gl.BindTexture(TextureTarget.Texture2DArray, 0);
     }

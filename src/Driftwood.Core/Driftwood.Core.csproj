@@ -40,6 +40,15 @@
          only the first is read, and it is FOUND rather than measured into a constant. -->
     <EmbeddedResource Include="..\..\assets\health.png" LogicalName="Driftwood.Core.health.png" />
 
+    <!-- The start menu's plank buttons, the user's own art (2026-11-04): see MenuButtonArt. -->
+    <EmbeddedResource Include="..\..\assets\menu\button_play.png" LogicalName="Driftwood.Core.menu-button-play.png" />
+    <EmbeddedResource Include="..\..\assets\menu\button_create_world.png" LogicalName="Driftwood.Core.menu-button-create_world.png" />
+    <EmbeddedResource Include="..\..\assets\menu\button_multiplayer.png" LogicalName="Driftwood.Core.menu-button-multiplayer.png" />
+    <EmbeddedResource Include="..\..\assets\menu\button_options.png" LogicalName="Driftwood.Core.menu-button-options.png" />
+    <EmbeddedResource Include="..\..\assets\menu\button_quit.png" LogicalName="Driftwood.Core.menu-button-quit.png" />
+    <EmbeddedResource Include="..\..\assets\menu\button_back.png" LogicalName="Driftwood.Core.menu-button-back.png" />
+    <EmbeddedResource Include="..\..\assets\menu\button_join.png" LogicalName="Driftwood.Core.menu-button-join.png" />
+
     <!-- ⛳ And the hunger bar, which the user drew as a PAIR: foodbar.png is a finished full-colour
          drumstick and emptyfood.png is the same shape as a hollow outline. So this bar needs no
          derivation at all — the two states are both drawn, where the heart had to have its middle

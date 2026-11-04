@@ -201,6 +201,12 @@ public sealed class GameSettings
     /// <summary>The player skin to wear, by name on <see cref="Textures.SkinLibrary"/>.</summary>
     public string PlayerSkin { get; set; } = "";
 
+    /// <summary>The name other players see in co-op. Empty = the login name.</summary>
+    public string PlayerName { get; set; } = "";
+
+    /// <summary>The last address typed to join a friend's world.</summary>
+    public string JoinAddress { get; set; } = "";
+
     public Bindings Keys { get; set; } = Bindings.Defaults();
 
     /// <summary>Lines the reader did not recognise, kept so a newer build's file survives an older one.</summary>
@@ -337,6 +343,8 @@ public sealed class GameSettings
                 case "world.creaturegeometry": settings.CreatureGeometry = value; break;
                 case "video.texturepack": settings.TexturePack = value; break;
                 case "player.skin": settings.PlayerSkin = value; break;
+                case "player.name": settings.PlayerName = value; break;
+                case "coop.join": settings.JoinAddress = value; break;
                 default: settings._unknown[key] = value; break;
             }
         }
@@ -486,6 +494,13 @@ public sealed class GameSettings
         if (PlayerSkin.Length > 0)
         {
             text.AppendLine($"player.skin={PlayerSkin}");
+            text.AppendLine();
+        }
+
+        if (PlayerName.Length > 0 || JoinAddress.Length > 0)
+        {
+            if (PlayerName.Length > 0) text.AppendLine($"player.name={PlayerName}");
+            if (JoinAddress.Length > 0) text.AppendLine($"coop.join={JoinAddress}");
             text.AppendLine();
         }
 

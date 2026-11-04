@@ -1,3 +1,4 @@
+using Driftwood.Core.Net;
 using Driftwood.Client.Audio;
 using Driftwood.Client.Platform;
 using Driftwood.Client.Render;
@@ -43,6 +44,14 @@ public static class Program
         try
         {
             var options = ParseArgs(args);
+
+            if (args.Contains("--net-check"))
+            {
+                var version = typeof(Program).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
+                var result = Driftwood.Core.Diagnostics.NetCheck.Run(version);
+                Console.WriteLine(result.Report);
+                return result.Passed ? 0 : 1;
+            }
 
             if (args.Contains("--audit"))
             {
@@ -244,6 +253,9 @@ public static class Program
             // ⛔ Not a using: a fault inside the render loop leaves the window mid-frame, its Dispose
             // then throws "cannot call Reset inside of the render loop", and a using lets that second
             // exception REPLACE the first — every crash in play reported as the same useless line.
+            // Co-op: the handshake with the host starts now and runs while the window loads.
+            if (options.JoinAddress is not null) ClientHost.BeginJoin(options);
+
             var host = new ClientHost(options);
             try
             {
@@ -773,6 +785,18 @@ public static class Program
                 case "--stall":
                     options = options with { StallMs = ParseInt(Next(args, ref i, "--stall"), 0, 1000) };
                     break;
+                case "--join":
+                    options = options with { JoinAddress = Next(args, ref i, "--join") };
+                    break;
+                case "--host":
+                    options = options with { HostPort = options.HostPort > 0 ? options.HostPort : TcpTransport.DefaultPort };
+                    break;
+                case "--port":
+                    options = options with { HostPort = ParseInt(Next(args, ref i, "--port"), 1, 65535) };
+                    break;
+                case "--name":
+                    options = options with { PlayerName = Next(args, ref i, "--name") };
+                    break;
                 case "--sound-log":
                     options = options with { SoundLog = true };
                     break;
@@ -806,6 +830,7 @@ public static class Program
                     if (i + 1 < args.Length && !args[i + 1].StartsWith('-')) i++;
                     break;
                 case "--audit":
+                case "--net-check":
                 case "--version":
                 case "--controller-check":
                 case "--magic-check":
@@ -902,6 +927,11 @@ public static class Program
               --vsync           cap to the display refresh rate, for this run only
               --mute            open no audio device at all
               --sound-log       every ten seconds, print which sounds played and how often
+              --host            open this world to friends as it loads (port 47790)
+              --port <n>        host on this port instead
+              --join <address>  join a friend's world at host or host:port instead of opening one here
+              --name <name>     the name other players see
+              --net-check       run a host and guests over this machine's network, check them, then exit
               --version         print this build's Driftwood version and exit
               --audit           generate and mesh headlessly, print a census and checks, then exit
               --audio-check [sound-pack.zip]

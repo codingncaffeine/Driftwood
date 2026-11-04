@@ -52,6 +52,12 @@ public sealed class VoxelWorld
     /// <summary>The cells of <see cref="Edits"/>, filed by the chunk they are in.</summary>
     private readonly Dictionary<ChunkPos, HashSet<(int X, int Y, int Z)>> _editsByChunk = [];
 
+    /// <summary>
+    /// Every cell anybody changed, as it is changed — what a co-op host passes on to its guests.
+    /// </summary>
+    /// <remarks>Raised by <see cref="SetBlock"/> only: never by generation, fluid, or a restore.</remarks>
+    public event Action<int, int, int, BlockId>? Edited;
+
     private void Remember(int wx, int wy, int wz, BlockId id)
     {
         _edits[(wx, wy, wz)] = id;
@@ -206,6 +212,7 @@ public sealed class VoxelWorld
 
         Remember(wx, wy, wz, id);
         Changed = true;
+        Edited?.Invoke(wx, wy, wz, id);
     }
 
     /// <summary>
