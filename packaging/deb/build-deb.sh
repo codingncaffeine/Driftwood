@@ -36,6 +36,8 @@ ROOT=$WORK/root
 install -dm755 "$ROOT/usr/lib/$PKG" "$ROOT/usr/bin" "$ROOT/DEBIAN"
 install -m755 "$SRC/Driftwood" "$ROOT/usr/lib/$PKG/Driftwood"
 install -m644 "$SRC"/lib*.so* "$ROOT/usr/lib/$PKG/"
+# Epic, the co-op meeting place: the module and the game's credentials sit beside the program.
+install -m644 "$SRC/Driftwood.Net.Eos.dll" "$SRC/eos.txt" "$ROOT/usr/lib/$PKG/"
 ln -s "../lib/$PKG/Driftwood" "$ROOT/usr/bin/$PKG"
 install -Dm644 "$SRC/$ID.desktop" "$ROOT/usr/share/applications/$ID.desktop"
 install -Dm644 "$SRC/$ID.metainfo.xml" "$ROOT/usr/share/metainfo/$ID.metainfo.xml"

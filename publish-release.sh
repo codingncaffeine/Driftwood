@@ -33,6 +33,16 @@ dotnet build Driftwood.sln -c Release -v quiet --nologo || fail "BUILD FAILED."
 
 # dotnet publish does not clear its output directory, so an old loose file could ride along into a
 # later release. Remove exactly this generated directory first, and nothing that is not it.
+# ⛔ Epic goes into every release: the SDK (Epic's, outside the repo) and the user's credentials
+# (EOS/driftwood-eos.txt beside it, never in git) must both be there, all five values filled in.
+EOS_SDK=$(cd .. && pwd)/EOS/SDK
+EOS_CREDS=$(cd .. && pwd)/EOS/driftwood-eos.txt
+[ -d "$EOS_SDK/Source/Core" ] || fail "EPIC MISSING - no Epic SDK at $EOS_SDK."
+for key in product_id sandbox_id deployment_id client_id client_secret; do
+  grep -Eq "^[[:space:]]*$key[[:space:]]*=[[:space:]]*[^[:space:]]" "$EOS_CREDS" 2>/dev/null \
+    || fail "EPIC MISSING - $EOS_CREDS has no $key."
+done
+
 echo "[2/8] publishing a self-contained $RID build..."
 case "$OUT" in artifacts/Driftwood-linux-x64) ;; *) fail "PUBLISH FAILED - refusing to clean an unexpected path." ;; esac
 rm -rf -- "$OUT"
@@ -57,7 +67,9 @@ SDL=$(tools/linux/build-sdl3.sh) || fail "PUBLISH FAILED - SDL3 could not be bui
 cp -f -- "$SDL" "$OUT/libSDL3.so"
 
 # Exactly the expected payload: a new native dependency is a reviewed decision, not a passenger.
-expected="Driftwood libSDL3.so libglfw.so.3 libopenal.so"
+# The Epic module, Epic's library and the game's credentials are part of every release (N6, the
+# user 2026-11-04): without them "Friends' Worlds" is empty for every player.
+expected="Driftwood libSDL3.so libglfw.so.3 libopenal.so Driftwood.Net.Eos.dll libEOSSDK-Linux-Shipping.so eos.txt"
 actual=$(cd "$OUT" && ls -A | sort | tr '\n' ' ' | sed 's/ $//')
 [ "$actual" = "$(echo $expected | tr ' ' '\n' | sort | tr '\n' ' ' | sed 's/ $//')" ] \
   || fail "PUBLISH FAILED - the payload is [$actual], not [$expected]."
@@ -119,7 +131,7 @@ dotnet tools/IconForge/bin/Release/net11.0/IconForge.dll --hicolor assets/driftw
   || fail "PACKAGE FAILED - the icon theme could not be written."
 cp packaging/linux/$ID.desktop packaging/linux/$ID.metainfo.xml packaging/linux/install.sh LICENSE "$STAGE/"
 chmod 755 "$STAGE/Driftwood" "$STAGE/install.sh"
-chmod 644 "$STAGE"/lib*.so* "$STAGE"/*.desktop "$STAGE"/*.xml "$STAGE/LICENSE"
+chmod 644 "$STAGE"/lib*.so* "$STAGE"/*.desktop "$STAGE"/*.xml "$STAGE/LICENSE" "$STAGE/Driftwood.Net.Eos.dll" "$STAGE/eos.txt"
 find "$STAGE/icons" -type d -exec chmod 755 {} + && find "$STAGE/icons" -type f -exec chmod 644 {} +
 
 echo "[8/8] packaging the public release asset..."

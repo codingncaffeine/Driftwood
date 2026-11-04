@@ -134,7 +134,9 @@ public static class MeetingPlaces
         }
         catch (Exception error)
         {
-            why = $"the Epic module failed to load: {error.GetBaseException().Message}";
+            why = error.GetBaseException() is InvalidOperationException said
+                ? said.Message
+                : $"the Epic module failed to load: {error.GetBaseException().Message}";
             return null;
         }
     }

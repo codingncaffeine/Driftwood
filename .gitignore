@@ -52,4 +52,6 @@ Desktop.ini
 
 # Epic Online Services credentials (local only, never committed)
 eos.txt
+live.txt
+*-eos.txt
 eos_config.txt

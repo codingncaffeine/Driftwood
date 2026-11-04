@@ -21,6 +21,7 @@ public sealed record EosConfig(string ProductId, string SandboxId, string Deploy
             if (eq > 0)
             {
                 var value = Unwrap(line[(eq + 1)..]);
+                if (value.Length == 0) continue; // the template's blank: still missing
                 switch (line[..eq].Trim().ToLowerInvariant())
                 {
                     case "product_id": product = value; break;

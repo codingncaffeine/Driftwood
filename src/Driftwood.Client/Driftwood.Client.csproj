@@ -46,6 +46,7 @@
   <PropertyGroup>
     <EosSdkRoot Condition="'$(EosSdkRoot)' == ''">$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../../../EOS/SDK'))</EosSdkRoot>
     <WithEos Condition="'$(WithEos)' == '' and Exists('$(EosSdkRoot)/Source/Core')">true</WithEos>
+    <EosCredentials Condition="'$(EosCredentials)' == ''">$([System.IO.Path]::GetFullPath('$(EosSdkRoot)/../driftwood-eos.txt'))</EosCredentials>
     <EosNative Condition="'$(RuntimeIdentifier)' != '' and $(RuntimeIdentifier.StartsWith('win'))">EOSSDK-Win64-Shipping.dll</EosNative>
     <EosNative Condition="'$(EosNative)' == '' and '$(RuntimeIdentifier)' == '' and $([MSBuild]::IsOSPlatform('Windows'))">EOSSDK-Win64-Shipping.dll</EosNative>
     <EosNative Condition="'$(EosNative)' == ''">libEOSSDK-Linux-Shipping.so</EosNative>
@@ -60,8 +61,10 @@
                       AdditionalProperties="EosSdkRoot=$(EosSdkRoot);EosPlatform=$(EosPlatformName)" />
     <None Include="$(EosSdkRoot)/Bin/$(EosNative)" Link="$(EosNative)" CopyToOutputDirectory="PreserveNewest"
           CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
-    <!-- The game's credentials (gitignored, the user's): the program reads them from beside itself. -->
-    <None Include="..\..\eos.txt" Condition="Exists('..\..\eos.txt')" Link="eos.txt" CopyToOutputDirectory="PreserveNewest"
+    <!-- The game's Epic credentials: the user's, kept OUTSIDE the repository beside the SDK
+         (EosCredentials, default EOS/driftwood-eos.txt) and copied beside the program as eos.txt,
+         where the game reads them. Never in git. -->
+    <None Include="$(EosCredentials)" Condition="Exists('$(EosCredentials)')" Link="eos.txt" CopyToOutputDirectory="PreserveNewest"
           CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
   </ItemGroup>
 

@@ -58,11 +58,8 @@ public sealed class EpicMeetingPlace : IMeetingPlace
     public static IMeetingPlace? Start(string configPath, string cacheFolder, string playerName)
     {
         var config = EosConfig.Read(configPath, out var why);
-        if (config is null)
-        {
-            Console.Error.WriteLine($"driftwood: Epic: {why}");
-            return null;
-        }
+        // The reason travels up as the exception's message: MeetingPlaces.Start reports it.
+        if (config is null) throw new InvalidOperationException(why);
 
         return new EpicMeetingPlace(config, cacheFolder, playerName);
     }
