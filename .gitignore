@@ -49,3 +49,7 @@ Desktop.ini
 /assets/sounds/enemies/arrow hit.mp3
 /assets/sounds/enemies/arrow miss.mp3
 /achivement.mp3
+
+# Epic Online Services credentials (local only, never committed)
+eos.txt
+eos_config.txt
