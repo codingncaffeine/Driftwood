@@ -5665,6 +5665,13 @@ public static class WorldAudit
             Settle(streamer, new Vector3(far.X + 0.5f, 0f, far.Z + 0.5f));
             Judge("six hundred blocks out", far, streamer);
 
+            // ⛳ And back again (2026-11-04). The walk out dropped the spawn's chunks, so coming back
+            // regenerates them from the seed — and an edit is only worth anything if it is put back
+            // into the chunk every time that chunk is made, not just the first time after a load.
+            // Before this, a build was gone on returning until the world was next opened.
+            Settle(streamer, new Vector3(0.5f, 0f, 0.5f));
+            Judge("back at the spawn after walking away", near, streamer);
+
             detail = faults.Count > 0
                 ? faults[0]
                 : $"a bench saved at spawn and one at {far.X},{far.Z} both come back, "

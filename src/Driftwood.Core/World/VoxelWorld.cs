@@ -49,6 +49,17 @@ public sealed class VoxelWorld
 
     private readonly Dictionary<(int X, int Y, int Z), BlockId> _edits = [];
 
+    /// <summary>The cells of <see cref="Edits"/>, filed by the chunk they are in.</summary>
+    private readonly Dictionary<ChunkPos, HashSet<(int X, int Y, int Z)>> _editsByChunk = [];
+
+    private void Remember(int wx, int wy, int wz, BlockId id)
+    {
+        _edits[(wx, wy, wz)] = id;
+        var pos = ChunkPos.FromWorld(wx, wy, wz);
+        if (!_editsByChunk.TryGetValue(pos, out var cells)) _editsByChunk[pos] = cells = [];
+        cells.Add((wx, wy, wz));
+    }
+
     /// <summary>True once anything has been changed that a save would have to remember.</summary>
     public bool Changed { get; private set; }
 
@@ -100,7 +111,7 @@ public sealed class VoxelWorld
     /// </remarks>
     public void Restore(int wx, int wy, int wz, BlockId id)
     {
-        _edits[(wx, wy, wz)] = id;
+        Remember(wx, wy, wz, id);
 
         var pos = ChunkPos.FromWorld(wx, wy, wz);
 
@@ -148,7 +159,25 @@ public sealed class VoxelWorld
     public Chunk GetOrCreateChunk(ChunkPos pos) => _chunks.GetOrAdd(pos, static p => new Chunk(p));
 
     /// <summary>Drops a chunk from the store. Used by streaming when it leaves the load radius.</summary>
-    public bool RemoveChunk(ChunkPos pos) => _chunks.TryRemove(pos, out _);
+    /// <remarks>
+    /// ⛔ <b>Its edits go back to waiting for it</b> (2026-11-04). Coming back regenerates the chunk
+    /// from the seed, and <see cref="ApplyPending"/> only has anything to put back if the edits are
+    /// waiting again — before this, everything built in a chunk vanished on returning to it and
+    /// reappeared only when the world was next opened from its save.
+    /// </remarks>
+    public bool RemoveChunk(ChunkPos pos)
+    {
+        if (!_chunks.TryRemove(pos, out _)) return false;
+
+        if (_editsByChunk.TryGetValue(pos, out var cells) && cells.Count > 0)
+        {
+            var held = new List<(int X, int Y, int Z, BlockId Id)>(cells.Count);
+            foreach (var cell in cells) held.Add((cell.X, cell.Y, cell.Z, _edits[cell]));
+            lock (_pending) _pending[pos] = held;
+        }
+
+        return true;
+    }
 
     /// <summary>Reads a world block. Unloaded space reads as air.</summary>
     public BlockId GetBlock(int wx, int wy, int wz)
@@ -175,7 +204,7 @@ public sealed class VoxelWorld
     {
         Write(wx, wy, wz, id, create: true);
 
-        _edits[(wx, wy, wz)] = id;
+        Remember(wx, wy, wz, id);
         Changed = true;
     }
 
