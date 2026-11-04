@@ -48,6 +48,12 @@
     <EmbeddedResource Include="..\..\assets\menu\button_quit.png" LogicalName="Driftwood.Core.menu-button-quit.png" />
     <EmbeddedResource Include="..\..\assets\menu\button_back.png" LogicalName="Driftwood.Core.menu-button-back.png" />
     <EmbeddedResource Include="..\..\assets\menu\button_join.png" LogicalName="Driftwood.Core.menu-button-join.png" />
+    <EmbeddedResource Include="..\..\assets\menu\button_field_name.png" LogicalName="Driftwood.Core.menu-button-field_name.png" />
+    <EmbeddedResource Include="..\..\assets\menu\button_field_address.png" LogicalName="Driftwood.Core.menu-button-field_address.png" />
+    <EmbeddedResource Include="..\..\assets\menu\button_open_world.png" LogicalName="Driftwood.Core.menu-button-open_world.png" />
+    <EmbeddedResource Include="..\..\assets\menu\button_cancel.png" LogicalName="Driftwood.Core.menu-button-cancel.png" />
+    <EmbeddedResource Include="..\..\assets\menu\button_confirm_join.png" LogicalName="Driftwood.Core.menu-button-confirm_join.png" />
+    <EmbeddedResource Include="..\..\assets\menu\button_panel.png" LogicalName="Driftwood.Core.menu-button-panel.png" />
 
     <!-- ⛳ And the hunger bar, which the user drew as a PAIR: foodbar.png is a finished full-colour
          drumstick and emptyfood.png is the same shape as a hollow outline. So this bar needs no

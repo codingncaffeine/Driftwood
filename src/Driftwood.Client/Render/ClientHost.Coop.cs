@@ -431,11 +431,12 @@ public sealed partial class ClientHost
     private const string JoinAddressRow = "Friend's Address";
     private const string JoinRow = "Join";
     private const string OpenToFriendsRow = "Open to Friends";
+    private const string OpenYourWorldRow = "Open Your World";
 
     private bool _startFriends;
     private int _hostPort;
-    private readonly TextField _coopNameBox = new(24);
-    private readonly TextField _joinBox = new(80);
+    private readonly TextField _coopNameBox = new(24) { Placeholder = "enter name" };
+    private readonly TextField _joinBox = new(80) { Placeholder = "enter address" };
 
     private void OpenFriendsPage()
     {
@@ -452,10 +453,14 @@ public sealed partial class ClientHost
 
     private void BuildFriendsRows()
     {
+        // ⛳ All the user's own planks (2026-11-04: "more buttons ... to replace the old ones"): two
+        // fields with their labels carved in, then Join, Open Your World and Back.
         _hudScreen.Rows.Add(new MenuRow(FriendsRow, Heading: true));
-        _hudScreen.Rows.Add(new MenuRow(CoopNameRow, Edits: _coopNameBox, Note: "The name other players see over your head"));
         _hudScreen.Rows.Add(new MenuRow(
-            JoinAddressRow, Edits: _joinBox,
+            CoopNameRow, Edits: _coopNameBox, Art: MenuButtonArt.FieldName,
+            Note: "The name over your head that other players see"));
+        _hudScreen.Rows.Add(new MenuRow(
+            JoinAddressRow, Edits: _joinBox, Art: MenuButtonArt.FieldAddress,
             Note: "The address your friend's game shows when they open their world, like 192.168.1.20 or name:port"));
         _hudScreen.Rows.Add(new MenuRow(
             JoinRow, "", Art: MenuButtonArt.Join,
@@ -464,10 +469,11 @@ public sealed partial class ClientHost
                 : _worldName.Length > 0 && _loadedWorld
                     ? $"Saves {_worldName} first, then joins {_joinBox.Text.Trim()}"
                     : $"Joins {_joinBox.Text.Trim()}"));
-        _hudScreen.Rows.Add(new MenuRow("To host", Heading: true));
         _hudScreen.Rows.Add(new MenuRow(
-            "Open your world", "in game",
-            Note: "Play a world, open the menu (Esc) and choose Open to Friends. Your world, and every visitor's things, stay on your machine"));
+            OpenYourWorldRow, "", Art: MenuButtonArt.OpenWorld,
+            Note: _worldName.Length > 0
+                ? $"Plays {_worldName} and opens it to friends at once. Your world, and every visitor's things, stay on your machine"
+                : "This world isn't being kept, so it can't be opened to friends"));
         _hudScreen.Rows.Add(new MenuRow(BackRow, "", Art: MenuButtonArt.Back, Note: "Back to the main menu"));
     }
 
@@ -493,6 +499,16 @@ public sealed partial class ClientHost
                 return;
             case JoinRow:
                 JoinFromMenu(_joinBox.Text.Trim());
+                return;
+            case OpenYourWorldRow:
+                if (_worldName.Length == 0)
+                {
+                    ShowSelectedRow();
+                    return;
+                }
+                _startFriends = false;
+                StartPlaying();
+                StartHosting(TcpTransport.DefaultPort);
                 return;
             case BackRow:
                 _startFriends = false;

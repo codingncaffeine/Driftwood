@@ -3868,19 +3868,20 @@ public sealed class HudRenderer : IDisposable
         // the buttons give up size first, down to where the carved word still reads (22 units).
         var spare = view - others - (buttons - 1) * ArtGap;
         var tall = Math.Clamp(spare / Math.Max(1, buttons), 22f, 46f);
-        var wide = MathF.Min(width, tall * MenuButtonArt.Aspect);
-        tall = wide / MenuButtonArt.Aspect;
 
         var state = BeginScroll(screen, $"art:{screen.Kind}", left, top, width, view);
         var pen = 0f;
         for (var i = 0; i < rows.Count; i++)
         {
             var row = rows[i];
-            var rowTall = row.Art >= 0 ? tall : row.Heading ? 18f : ArtTextRow;
+            // Every piece keeps its own shape: the long planks fill the column at this height, the
+            // small ones (Cancel) come out narrower, never taller.
+            var wide = row.Art >= 0 ? MathF.Min(width, tall * MenuButtonArt.Aspect(row.Art)) : 0f;
+            var rowTall = row.Art >= 0 ? MathF.Min(tall, wide / MenuButtonArt.Aspect(row.Art)) : row.Heading ? 18f : ArtTextRow;
             var y = top + pen - state.Offset;
             if (y + rowTall > top && y < bottom)
             {
-                if (row.Art >= 0) ArtButtonAt(screen, layout, i, left + MathF.Round((width - wide) / 2f), y, wide, tall);
+                if (row.Art >= 0) ArtButtonAt(screen, layout, i, left + MathF.Round((width - wide) / 2f), y, wide, rowTall);
                 else MenuRowAt(screen, layout, i, left, y, width - 10f, rowTall, buttons: true);
             }
             ScrollToPick(screen, state, i, pen, pen + rowTall, view);
@@ -3903,7 +3904,15 @@ public sealed class HudRenderer : IDisposable
         var colour = lit ? new Vector4(1.22f, 1.14f, 0.98f, 1f)
             : hot ? new Vector4(1.12f, 1.07f, 0.98f, 1f)
             : new Vector4(0.92f, 0.92f, 0.92f, 1f);
-        RectUv(_menuButtonQuads, x, y, w, h, 0f, 0f, 1f, MenuButtonArt.V, colour, row.Art);
+        RectUv(_menuButtonQuads, x, y, w, h, 0f, 0f, 1f, MenuButtonArt.V(row.Art), colour, row.Art);
+
+        if (row.Edits is { } field && MenuButtonArt.FieldBox(row.Art) is var (bl, bt, br, bb))
+        {
+            var boxX = x + w * bl;
+            var boxY = y + h * bt;
+            FieldText(screen, field, boxX, boxY, w * (br - bl), h * (bb - bt));
+            ClippedZone(layout, ZoneKind.Field, i, boxX, boxY, w * (br - bl), h * (bb - bt));
+        }
 
         if (lit || hot)
         {
@@ -3914,6 +3923,50 @@ public sealed class HudRenderer : IDisposable
         }
 
         ClippedZone(layout, ZoneKind.Row, i, x, y, w, h);
+    }
+
+    /// <summary>Carved ink for what is typed into a plank field: dark on the wood, like its label.</summary>
+    private static readonly Vector4 CarvedInk = new(0.15f, 0.09f, 0.04f, 1f);
+
+    /// <summary>
+    /// What a plank field holds, written in its recessed box: the same windowing and caret as
+    /// <see cref="Box"/>, sized to the box, in carved ink; the placeholder fainter while it is empty.
+    /// </summary>
+    private void FieldText(HudScreen screen, TextField field, float x, float y, float w, float h)
+    {
+        var glyph = MathF.Max(8f, MathF.Floor(h * 0.62f));
+        var pad = MathF.Round(h * 0.22f);
+        var inside = w - pad * 2f;
+        var ty = MathF.Round(y + (h - glyph) / 2f);
+        var focused = ReferenceEquals(screen.Typing, field);
+        var text = field.Text.AsSpan();
+
+        var from = 0;
+        while (from < field.Caret && TextWidth(text[from..field.Caret], glyph) > inside) from++;
+        var shown = text[from..];
+        while (shown.Length > 0 && TextWidth(shown, glyph) > inside) shown = shown[..^1];
+
+        // Carved: a pale lip under each stroke, then the dark cut over it, like the labels in the art.
+        var lip = new Vector4(0.86f, 0.70f, 0.48f, 0.55f);
+        if (text.Length == 0 && !focused && field.Placeholder.Length > 0)
+        {
+            var hint = FitText(field.Placeholder, inside, glyph);
+            Text(hint, x + pad, ty + 1f, glyph, lip with { W = 0.25f }, shadow: false);
+            Text(hint, x + pad, ty, glyph, CarvedInk with { W = 0.5f }, shadow: false);
+        }
+        else
+        {
+            Text(shown, x + pad, ty + 1f, glyph, lip, shadow: false);
+            Text(shown, x + pad, ty, glyph, CarvedInk, shadow: false);
+        }
+
+        // ⚠ Into the batch drawn OVER the planks: the plain batch goes down before them and a caret
+        // there would be painted over by the wood.
+        if (focused && screen.Clock % 1f < 0.5f)
+        {
+            var at = x + pad + TextWidth(text[from..field.Caret], glyph);
+            Rect(_menuButtonGlow, at, ty - 1f, 1.5f, glyph + 2f, CarvedInk);
+        }
     }
 
     private static void Outline(List<float> into, float x, float y, float w, float h, float t, Vector4 colour)

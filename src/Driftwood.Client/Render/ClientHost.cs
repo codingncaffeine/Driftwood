@@ -5998,13 +5998,13 @@ public sealed partial class ClientHost : IDisposable
                 SeedRowLabel, Edits: _seedBox,
                 Note: "Optional. Type a word or number to make the same world again, or leave it blank for a random one"));
             _hudScreen.Rows.Add(new MenuRow(
-                CreateRow, "",
+                CreateRow, "", Art: MenuButtonArt.CreateWorld,
                 Note: NewWorldTaken() is { } taken
                     ? $"A world called {taken} already exists. Pick another name, or load it from Load World"
                     : _worldName.Length > 0 && _loadedWorld
                         ? $"Saves {_worldName} first, then opens the new world"
                         : "Opens the new world"));
-            _hudScreen.Rows.Add(new MenuRow(CancelRow, "", Art: MenuButtonArt.Back, Note: "Back to the main menu"));
+            _hudScreen.Rows.Add(new MenuRow(CancelRow, "", Art: MenuButtonArt.Cancel, Note: "Back to the main menu"));
             return;
         }
 
@@ -17369,6 +17369,7 @@ public sealed partial class ClientHost : IDisposable
         Friends,
         CoopMenu,
         Start,
+        Create,
     }
 
     /// <summary>
@@ -17505,6 +17506,7 @@ public sealed partial class ClientHost : IDisposable
         // ⛳ And a friend in the world: this game hosts, a guest in the same process joins over the
         // loopback and stands in front of the camera — the drawn player and the name over them.
         new(4100, "50-coop-friend", "stick", ViewMode.First, false, Friend: true),
+        new(4300, "51-create", "stick", ViewMode.First, false, ShotScreen.Create),
     ];
 
     /// <summary>
@@ -17861,6 +17863,12 @@ public sealed partial class ClientHost : IDisposable
             case ShotScreen.Start:
                 ShowStartMenu();
                 _hudScreen.Selected = _hudScreen.Rows.FindIndex(row => row.Label == FriendsRow);
+                break;
+
+            case ShotScreen.Create:
+                ShowStartMenu();
+                _nameBox.Text = NextWorldName();
+                ShowStartPage(listing: false, creating: true, select: 1);
                 break;
 
             case ShotScreen.Friends:
