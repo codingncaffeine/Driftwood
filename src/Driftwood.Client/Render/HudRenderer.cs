@@ -873,7 +873,11 @@ public sealed class HudRenderer : IDisposable
         _sparkles = [.. _cursorTiles.Select(CursorArt.SparkleColours)];
         _shownCursorTiles = [.. _cursorTiles, .. _bareCursorTiles];
         _cursorArt = new BlockTextureArray(gl, _shownCursorTiles, CursorArt.Tile);
-        _menuButtons = new BlockTextureArray(gl, MenuButtonArt.Layers(), MenuButtonArt.Layer, smooth: true);
+        // Cut-out: the planks are cut to the frame's own shape (notches beside the corner bolts), so
+        // their mips are alpha-weighted like leaves' are, or the cut edge goes dark when drawn small.
+        var buttonLayers = MenuButtonArt.Layers();
+        _menuButtons = new BlockTextureArray(gl, buttonLayers, MenuButtonArt.Layer,
+            cutout: Enumerable.Repeat(true, buttonLayers.Length).ToArray(), smooth: true);
         _advance = TileGen.FontAdvance();
 
         _vao = _gl.GenVertexArray();
@@ -3904,6 +3908,18 @@ public sealed class HudRenderer : IDisposable
         var colour = lit ? new Vector4(1.22f, 1.14f, 0.98f, 1f)
             : hot ? new Vector4(1.12f, 1.07f, 0.98f, 1f)
             : new Vector4(0.92f, 0.92f, 0.92f, 1f);
+
+        // ⛳ The glow follows the frame's own cut (2026-11-04, the user: the corners are notched, not
+        // square): the same picture a little larger, behind, tinted far past white so it clamps to a
+        // gold silhouette — a rectangle round it would square the corners off again.
+        if (lit || hot)
+        {
+            var spread = lit ? 3f : 2f;
+            var gold = new Vector4(4f, 3.1f, 1.3f, lit ? 0.9f : 0.6f);
+            RectUv(_menuButtonQuads, x - spread, y - spread, w + spread * 2f, h + spread * 2f,
+                0f, 0f, 1f, MenuButtonArt.V(row.Art), gold, row.Art);
+        }
+
         RectUv(_menuButtonQuads, x, y, w, h, 0f, 0f, 1f, MenuButtonArt.V(row.Art), colour, row.Art);
 
         if (row.Edits is { } field && MenuButtonArt.FieldBox(row.Art) is var (bl, bt, br, bb))
@@ -3912,14 +3928,6 @@ public sealed class HudRenderer : IDisposable
             var boxY = y + h * bt;
             FieldText(screen, field, boxX, boxY, w * (br - bl), h * (bb - bt));
             ClippedZone(layout, ZoneKind.Field, i, boxX, boxY, w * (br - bl), h * (bb - bt));
-        }
-
-        if (lit || hot)
-        {
-            var gold = new Vector4(1f, 0.78f, 0.34f, lit ? 0.95f : 0.65f);
-            var halo = gold with { W = lit ? 0.30f : 0.18f };
-            Outline(_menuButtonGlow, x - 1.5f, y - 1.5f, w + 3f, h + 3f, 1.5f, gold);
-            Outline(_menuButtonGlow, x - 3f, y - 3f, w + 6f, h + 6f, 1.5f, halo);
         }
 
         ClippedZone(layout, ZoneKind.Row, i, x, y, w, h);
@@ -3967,14 +3975,6 @@ public sealed class HudRenderer : IDisposable
             var at = x + pad + TextWidth(text[from..field.Caret], glyph);
             Rect(_menuButtonGlow, at, ty - 1f, 1.5f, glyph + 2f, CarvedInk);
         }
-    }
-
-    private static void Outline(List<float> into, float x, float y, float w, float h, float t, Vector4 colour)
-    {
-        Rect(into, x, y, w, t, colour);
-        Rect(into, x, y + h - t, w, t, colour);
-        Rect(into, x, y + t, t, h - 2f * t, colour);
-        Rect(into, x + w - t, y + t, t, h - 2f * t, colour);
     }
 
     /// <summary>One row of the reworked menu: a heading, a setting, a field or a button.</summary>
