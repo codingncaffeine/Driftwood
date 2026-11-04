@@ -602,7 +602,9 @@ public sealed partial class ClientHost
             _hudScreen.Rows.Add(new MenuRow(
                 OpenToFriendsRow, "",
                 Note: _worldName.Length > 0
-                    ? $"Lets friends join this world at your address, port {TcpTransport.DefaultPort}"
+                    ? MeetingPlaces.FindConfig(UserFolders.Config) is not null && File.Exists(Path.Combine(AppContext.BaseDirectory, MeetingPlaces.ModuleFile))
+                        ? $"Lists this world for friends to pick from Multiplayer, Join. They can also type your address, port {TcpTransport.DefaultPort}"
+                        : $"Lets friends join this world at your address, port {TcpTransport.DefaultPort}"
                     : "This world isn't being kept, so it can't be opened to friends"));
             return;
         }

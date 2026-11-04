@@ -71,9 +71,20 @@ public sealed class EpicMeetingPlace : IMeetingPlace
     {
         SdkThread.Post(() =>
         {
-            if (!Boot(config, cacheFolder)) return;
-            SdkThread.Add(this);
-            SignIn(playerName);
+            try
+            {
+                if (!Boot(config, cacheFolder)) return;
+                SdkThread.Add(this);
+                SignIn(playerName);
+            }
+            catch (Exception error)
+            {
+                // ⚠ Epic ships no musl (Alpine) library: loading it throws here, and the place must
+                // say so rather than "signing in" for ever.
+                Fail(error is DllNotFoundException or BadImageFormatException
+                    ? "Epic's library does not run on this system"
+                    : $"Epic would not start: {error.GetBaseException().Message}");
+            }
         });
     }
 
@@ -146,6 +157,16 @@ public sealed class EpicMeetingPlace : IMeetingPlace
             OutgoingPacketQueueMaxSizeBytes = Epic.OnlineServices.P2P.P2PInterface.MAX_QUEUE_SIZE_UNLIMITED,
         };
         _platform.GetP2PInterface().SetPacketQueueSize(ref queues);
+
+        // For checking the path friends behind strict routers take: everything through Epic's relays.
+        if (Environment.GetEnvironmentVariable("DRIFTWOOD_EOS_RELAYS") == "force")
+        {
+            var relays = new Epic.OnlineServices.P2P.SetRelayControlOptions
+                { RelayControl = Epic.OnlineServices.P2P.RelayControl.ForceRelays };
+            _platform.GetP2PInterface().SetRelayControl(ref relays);
+            Console.WriteLine("epic        relays forced (DRIFTWOOD_EOS_RELAYS=force)");
+        }
+
         return true;
     }
 
