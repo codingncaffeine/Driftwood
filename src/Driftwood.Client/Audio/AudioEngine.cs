@@ -68,6 +68,32 @@ public sealed unsafe class AudioEngine : IDisposable
     /// <summary>Sounds started since the world opened, for the frame report.</summary>
     public int Played { get; private set; }
 
+    /// <summary>True to count every start by name, for <see cref="TakeTally"/>. Off costs nothing.</summary>
+    public bool Tally { get; set; }
+
+    private readonly Dictionary<string, int> _tally = new(StringComparer.Ordinal);
+
+    private void Count(string name)
+    {
+        if (Tally) _tally[name] = _tally.GetValueOrDefault(name) + 1;
+    }
+
+    /// <summary>
+    /// What started since the last call, most frequent first, as "name ×count" — or null for nothing.
+    /// </summary>
+    public string? TakeTally(int most = 8)
+    {
+        if (_tally.Count == 0) return null;
+        var said = string.Join(", ", _tally
+            .OrderByDescending(pair => pair.Value)
+            .ThenBy(pair => pair.Key, StringComparer.Ordinal)
+            .Take(most)
+            .Select(pair => $"{pair.Key} ×{pair.Value}"));
+        if (_tally.Count > most) said += $", and {_tally.Count - most} more";
+        _tally.Clear();
+        return said;
+    }
+
     public AudioEngine(SoundLibrary library)
     {
         _library = library;
@@ -165,6 +191,7 @@ public sealed unsafe class AudioEngine : IDisposable
         _al.SourcePlay(source);
 
         Played++;
+        Count(name);
     }
 
     /// <summary>Starts a non-positional interface cue that stays centred on every camera.</summary>
@@ -185,6 +212,7 @@ public sealed unsafe class AudioEngine : IDisposable
         _al.SetSourceProperty(source, SourceFloat.Pitch, Math.Clamp(pitch, 0.25f, 4f));
         _al.SourcePlay(source);
         Played++;
+        Count(name);
     }
 
     /// <summary>
@@ -226,6 +254,7 @@ public sealed unsafe class AudioEngine : IDisposable
         _al.SetSourceProperty(source, SourceFloat.Pitch, Math.Clamp(pitch, 0.25f, 4f));
         _al.SourcePlay(source);
         Played++;
+        Count($"loop start {name}");
     }
 
     public void UpdateLoop(string owner, Vector3 at, float volume = 1f, float pitch = 1f)
@@ -240,6 +269,7 @@ public sealed unsafe class AudioEngine : IDisposable
     public void StopLoop(string owner)
     {
         if (!_loops.Remove(owner, out var index) || _al is null) return;
+        Count($"loop stop {owner}");
         var source = _sources[index];
         _al.SourceStop(source);
         _al.SetSourceProperty(source, SourceBoolean.Looping, false);

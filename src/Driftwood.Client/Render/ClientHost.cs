@@ -182,6 +182,14 @@ public sealed record ClientOptions
     /// <summary>Seconds in a full day. Short values are how a sunset gets looked at twice.</summary>
     public float DayLength { get; init; } = SkyClock.DefaultDayLength;
 
+    /// <summary>Every ten seconds, prints which sounds started and how many times (2026-10-29).</summary>
+    /// <remarks>
+    /// ⛳ USER: "when i get near the beach the water sound is playing ... the sound is rapidly
+    /// repeating", and "it might be rain sound but it's not raining, not sure." A sound pack can
+    /// make a crackle, a pop and a downpour sound alike; the name is the only thing that tells.
+    /// </remarks>
+    public bool SoundLog { get; init; }
+
     /// <summary>Opens no audio device at all. The benchmark sets this for itself.</summary>
     public bool Mute { get; init; }
 
@@ -1351,6 +1359,7 @@ public sealed class ClientHost : IDisposable
         {
             _audio = new AudioEngine(new SoundLibrary(
                 SoundLibrary.FindRoot(), _packPath, _soundPackPath));
+            _audio.Tally = _options.SoundLog;
             Console.WriteLine($"sound       {_audio.Summary}");
         }
 
@@ -7182,6 +7191,7 @@ public sealed class ClientHost : IDisposable
         if (_options.BenchSeconds > 0 || _options.Mute) return;
         _audio = new AudioEngine(new SoundLibrary(
             SoundLibrary.FindRoot(), _packPath, _soundPackPath));
+        _audio.Tally = _options.SoundLog;
         ApplySettings();
         Console.WriteLine($"sound       {_audio.Summary}");
     }
@@ -10662,6 +10672,25 @@ public sealed class ClientHost : IDisposable
     private float _rainPitch = 1f;
     private bool _rainLoop;
 
+    /// <summary>With <c>--sound-log</c>: every ten seconds, what started, with the weather beside it.</summary>
+    private void StepSoundLog(float dt)
+    {
+        if (!_options.SoundLog || _audio is null) return;
+        _soundReport -= dt;
+        if (_soundReport > 0f) return;
+        _soundReport = 10f;
+
+        var weather = WeatherCycle.Sample(_seed.Value, _elapsed, _viewPosition.Y);
+        var started = _audio.TakeTally() ?? "nothing";
+        Console.WriteLine(
+            $"sounds      last 10s: {started} — weather {weather.Kind.ToString().ToLowerInvariant()} "
+            + $"{weather.Strength:F2}, rain loop {(_rainLoop ? $"on at {_rainLevel * 0.6f:F2}" : "off")}, "
+            + $"at {_viewPosition.X:F0} {_viewPosition.Y:F0} {_viewPosition.Z:F0}");
+        Console.Out.Flush();
+    }
+
+    private float _soundReport = 10f;
+
     /// <summary>
     /// Plays the noises the world makes on its own: every few seconds the nearest lit fire
     /// crackles in its own voice, lava mutters and pops, and — rarely, and only buried in the
@@ -13659,6 +13688,7 @@ public sealed class ClientHost : IDisposable
         StepShips((float)sim);
         StepToasts((float)dt);
         StepAmbience((float)sim);
+        StepSoundLog((float)sim);
         StepRain((float)sim);
         StepAutosave(dt);
         _particles.Update(_streamer.World, (float)sim);

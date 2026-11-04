@@ -773,6 +773,9 @@ public static class Program
                 case "--stall":
                     options = options with { StallMs = ParseInt(Next(args, ref i, "--stall"), 0, 1000) };
                     break;
+                case "--sound-log":
+                    options = options with { SoundLog = true };
+                    break;
                 case "--mute":
                     options = options with { Mute = true };
                     break;
@@ -898,6 +901,7 @@ public static class Program
               --daylength <s>   seconds in a full day (default 1200); short values walk a sunset
               --vsync           cap to the display refresh rate, for this run only
               --mute            open no audio device at all
+              --sound-log       every ten seconds, print which sounds played and how often
               --version         print this build's Driftwood version and exit
               --audit           generate and mesh headlessly, print a census and checks, then exit
               --audio-check [sound-pack.zip]
