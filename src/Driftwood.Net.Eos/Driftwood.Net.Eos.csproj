@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    N6: Epic Online Services as the co-op meeting place (lobbies + relayed P2P). Compiles Epic's C#
+    SDK source, which is Epic's licensed code and is NEVER in this repository, together with our thin
+    module implementing Driftwood.Core.Net.IMeetingPlace. Not in Driftwood.sln: the client builds it
+    only when the SDK is found (EosSdkRoot, default EOS/SDK beside the repo folder) and loads it at run
+    time by reflection, so a checkout without the SDK builds and plays direct-address co-op unchanged.
+  -->
+  <PropertyGroup>
+    <RootNamespace>Driftwood.Net.Eos</RootNamespace>
+    <EosSdkRoot Condition="'$(EosSdkRoot)' == ''">$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../../../EOS/SDK'))</EosSdkRoot>
+    <!-- Which native library the module binds follows the artifact, not the build machine. -->
+    <EosPlatform Condition="'$(EosPlatform)' == '' and '$(RuntimeIdentifier)' != '' and $(RuntimeIdentifier.StartsWith('win'))">Windows64</EosPlatform>
+    <EosPlatform Condition="'$(EosPlatform)' == '' and '$(RuntimeIdentifier)' == '' and $([MSBuild]::IsOSPlatform('Windows'))">Windows64</EosPlatform>
+    <EosPlatform Condition="'$(EosPlatform)' == ''">Linux</EosPlatform>
+    <DefineConstants Condition="'$(EosPlatform)' == 'Linux'">EOS_PLATFORM_LINUX;$(DefineConstants)</DefineConstants>
+    <DefineConstants Condition="'$(EosPlatform)' == 'Windows64'">EOS_PLATFORM_WINDOWS_64;$(DefineConstants)</DefineConstants>
+    <!-- Epic's generated source trips nullable/obsolete analyzers; our own files stay strict. -->
+    <NoWarn>$(NoWarn);CS0618;CS8600;CS8601;CS8602;CS8603;CS8604;CS8605;CS8618;CS8625;CS8629;CS8765;CS8767;CS0219;CS0414;CS0649;CS0169</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Driftwood.Core\Driftwood.Core.csproj" Private="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="$(EosSdkRoot)/Source/Core/**/*.cs" Link="EosSdk/Core/%(RecursiveDir)%(Filename)%(Extension)" />
+    <Compile Include="$(EosSdkRoot)/Source/Generated/**/*.cs" Link="EosSdk/Generated/%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <Target Name="RequireEosSdk" BeforeTargets="CoreCompile" Condition="!Exists('$(EosSdkRoot)/Source/Core')">
+    <Error Text="No Epic Online Services SDK at $(EosSdkRoot) - set EosSdkRoot, or build without the Epic module." />
+  </Target>
+
+</Project>

@@ -61,7 +61,7 @@ internal static class ProcessConsole
         "--help" or "-h" or "--version" or "--audit" or "--audio-check"
             or "--controller-check" or "--icon-sheet" or "--packs" or "--recipes"
             or "--pack-report" or "--atlas" or "--creatures" or "--pack-coverage"
-            or "--magic-check" or "--magic-reference"
+            or "--magic-check" or "--magic-reference" or "--net-check" or "--eos-check"
             or "--ui-check" or "--shot" or "--bench" or "--play" => true,
         _ => false,
     };

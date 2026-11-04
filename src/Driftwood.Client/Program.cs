@@ -53,6 +53,21 @@ public static class Program
                 return result.Passed ? 0 : 1;
             }
 
+            if (Array.IndexOf(args, "--eos-check-guest") is var guestAt and >= 0 && guestAt + 2 < args.Length)
+            {
+                var version = typeof(Program).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
+                return Driftwood.Core.Diagnostics.EosCheck.RunGuest(
+                    version, Driftwood.Core.Settings.UserFolders.Config, args[guestAt + 1], args[guestAt + 2]);
+            }
+
+            if (args.Contains("--eos-check"))
+            {
+                var version = typeof(Program).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
+                var result = Driftwood.Core.Diagnostics.EosCheck.Run(version, Driftwood.Core.Settings.UserFolders.Config);
+                Console.WriteLine(result.Report);
+                return result.Passed ? 0 : 1;
+            }
+
             if (args.Contains("--audit"))
             {
                 var terrainAt = Array.IndexOf(args, "--terrain");
@@ -831,6 +846,11 @@ public static class Program
                     break;
                 case "--audit":
                 case "--net-check":
+                case "--eos-check":
+                    break;
+                case "--eos-check-guest":
+                    i += 2;
+                    break;
                 case "--version":
                 case "--controller-check":
                 case "--magic-check":
@@ -932,6 +952,7 @@ public static class Program
               --join <address>  join a friend's world at host or host:port instead of opening one here
               --name <name>     the name other players see
               --net-check       run a host and guests over this machine's network, check them, then exit
+              --eos-check       sign two players in to Epic, list, find and join a world, send both ways, then exit
               --version         print this build's Driftwood version and exit
               --audit           generate and mesh headlessly, print a census and checks, then exit
               --audio-check [sound-pack.zip]

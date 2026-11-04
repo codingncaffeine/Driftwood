@@ -39,4 +39,30 @@
     <ProjectReference Include="..\Driftwood.Core\Driftwood.Core.csproj" />
   </ItemGroup>
 
+  <!-- N6: the optional Epic module (co-op meeting place). Built and copied beside the game only when
+       Epic's SDK is unpacked at EosSdkRoot (default: EOS/SDK beside the repo folder) — the SDK is
+       Epic's and never in this repository. The game loads the module by reflection, so a build
+       without it plays direct-address co-op unchanged. WithEos=false leaves it out on purpose. -->
+  <PropertyGroup>
+    <EosSdkRoot Condition="'$(EosSdkRoot)' == ''">$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../../../EOS/SDK'))</EosSdkRoot>
+    <WithEos Condition="'$(WithEos)' == '' and Exists('$(EosSdkRoot)/Source/Core')">true</WithEos>
+    <EosNative Condition="'$(RuntimeIdentifier)' != '' and $(RuntimeIdentifier.StartsWith('win'))">EOSSDK-Win64-Shipping.dll</EosNative>
+    <EosNative Condition="'$(EosNative)' == '' and '$(RuntimeIdentifier)' == '' and $([MSBuild]::IsOSPlatform('Windows'))">EOSSDK-Win64-Shipping.dll</EosNative>
+    <EosNative Condition="'$(EosNative)' == ''">libEOSSDK-Linux-Shipping.so</EosNative>
+    <EosPlatformName Condition="'$(EosNative)' == 'EOSSDK-Win64-Shipping.dll'">Windows64</EosPlatformName>
+    <EosPlatformName Condition="'$(EosPlatformName)' == ''">Linux</EosPlatformName>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(WithEos)' == 'true'">
+    <ProjectReference Include="..\Driftwood.Net.Eos\Driftwood.Net.Eos.csproj" ReferenceOutputAssembly="false"
+                      OutputItemType="Content" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest"
+                      ExcludeFromSingleFile="true" SetRuntimeIdentifier="false" GlobalPropertiesToRemove="SelfContained;PublishSingleFile"
+                      AdditionalProperties="EosSdkRoot=$(EosSdkRoot);EosPlatform=$(EosPlatformName)" />
+    <None Include="$(EosSdkRoot)/Bin/$(EosNative)" Link="$(EosNative)" CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
+    <!-- The game's credentials (gitignored, the user's): the program reads them from beside itself. -->
+    <None Include="..\..\eos.txt" Condition="Exists('..\..\eos.txt')" Link="eos.txt" CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
+  </ItemGroup>
+
 </Project>
