@@ -79,15 +79,26 @@ public sealed partial class ClientHost
         s_pendingJoin = Task.Run(async () =>
         {
             Console.WriteLine($"co-op       joining {address} as {name}");
-            TcpTransport link;
+            INetTransport link;
             try
             {
-                using var dialing = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-                link = await TcpTransport.ConnectAsync(address, dialing.Token).ConfigureAwait(false);
+                if (EpicAddressIn(address) is { } epicHost)
+                {
+                    // Signing in and finding a way between the machines can take a while on a slow link.
+                    using var meeting = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                    link = await ConnectThroughEpic(epicHost, name, meeting.Token).ConfigureAwait(false);
+                }
+                else
+                {
+                    using var dialing = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                    link = await TcpTransport.ConnectAsync(address, dialing.Token).ConfigureAwait(false);
+                }
             }
             catch (Exception error)
             {
-                return ((CoopGuest?)null, (string?)$"could not reach {address}: {error.Message}");
+                return ((CoopGuest?)null, (string?)(EpicAddressIn(address) is not null
+                    ? $"could not reach your friend through Epic: {error.GetBaseException().Message}"
+                    : $"could not reach {address}: {error.Message}"));
             }
 
             var guest = new CoopGuest(link, new HelloMessage(Protocol.Version, build.GameVersion, build.Registry, key, name));
@@ -169,15 +180,16 @@ public sealed partial class ClientHost
 
         try
         {
-            var link = TcpTransport.Listen(port);
-            _hostPort = link.Port;
+            var tcp = TcpTransport.Listen(port);
+            _hostPort = tcp.Port;
+            var link = HostLinks(tcp);
             var records = new GuestRecords(GuestRecords.FolderFor(WorldSave.PathFor(_worldName)));
             _coopHost = new CoopHost(
                 link, new HostedWorld(this), records, BuildIdentity.Of(ProductVersion, _registry, _items),
                 MyCoopName());
             Console.WriteLine(
-                $"co-op       hosting '{_worldName}' on port {link.Port}; {records.Count} visitors remembered");
-            PushToast("Open to friends", $"Port {link.Port}");
+                $"co-op       hosting '{_worldName}' on port {tcp.Port}; {records.Count} visitors remembered");
+            PushToast("Open to friends", s_meeting is null ? $"Port {tcp.Port}" : $"Port {tcp.Port}, and listed on Epic");
         }
         catch (Exception error)
         {
@@ -197,6 +209,7 @@ public sealed partial class ClientHost
     private void StepCoop(double dt)
     {
         _coopFrameDt = (float)dt;
+        StepEpic(dt);
         if (_joinFault is { } fault)
         {
             _joinFault = null;
@@ -397,6 +410,8 @@ public sealed partial class ClientHost
             host.Dispose();
             _coopHost = null;
         }
+
+        CloseEpicRoom();
     }
 
     /// <summary>The host is gone: back to this machine's own start screen, by the relaunch every world change uses.</summary>
@@ -442,7 +457,9 @@ public sealed partial class ClientHost
     {
         _coopNameBox.Text = MyCoopName();
         _joinBox.Text = _settings.JoinAddress;
+        Meeting(MyCoopName());
         _startFriends = true;
+        _startBrowsing = false;
         _startListing = false;
         _startCreating = false;
         _hudScreen.Selected = 1;
@@ -465,7 +482,9 @@ public sealed partial class ClientHost
         _hudScreen.Rows.Add(new MenuRow(
             JoinRow, "", Art: MenuButtonArt.Join,
             Note: _joinBox.Text.Trim().Length == 0
-                ? "Type your friend's address first"
+                ? s_meeting is not null || !s_meetingTried
+                    ? "Shows the worlds your friends have open. Or type an address above to join one directly"
+                    : "Type your friend's address first"
                 : _worldName.Length > 0 && _loadedWorld
                     ? $"Saves {_worldName} first, then joins {_joinBox.Text.Trim()}"
                     : $"Joins {_joinBox.Text.Trim()}"));
@@ -498,7 +517,9 @@ public sealed partial class ClientHost
                 });
                 return;
             case JoinRow:
-                JoinFromMenu(_joinBox.Text.Trim());
+                // ⛳ No address typed: pick a friend's world from Epic's list instead.
+                if (_joinBox.Text.Trim().Length == 0 && Meeting(MyCoopName()) is not null) OpenBrowsePage();
+                else JoinFromMenu(_joinBox.Text.Trim());
                 return;
             case OpenYourWorldRow:
                 if (_worldName.Length == 0)
@@ -589,6 +610,10 @@ public sealed partial class ClientHost
         _hudScreen.Rows.Add(new MenuRow(
             "open at", string.Join("  ", LocalAddresses().Take(2).Select(a => _hostPort == TcpTransport.DefaultPort ? a : $"{a}:{_hostPort}")),
             Note: "Friends on your network type this. Over the internet, forward this port on your router to this machine"));
+        if (_epicRoomStatus is { } epic)
+            _hudScreen.Rows.Add(new MenuRow(
+                "Epic", epic.StartsWith("listed") ? $"listed as {_worldName}" : epic,
+                Note: "Friends anywhere pick this world from Multiplayer, Join — no address or port needed"));
         if (host.Players.Count == 0)
             _hudScreen.Rows.Add(new MenuRow("nobody yet", "", Note: "Players who join appear here"));
         foreach (var player in host.Players.Values)

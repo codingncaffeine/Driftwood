@@ -172,7 +172,8 @@ public readonly record struct MenuRow(
     string Label, string Value = "", bool Heading = false, string Note = "", TextField? Edits = null,
     float Progress = -1f, MenuPane Pane = MenuPane.List, bool Card = false, bool Action = false,
     int Icon = -1, bool NarrowOnly = false, MenuControl Control = MenuControl.Button,
-    float ControlAmount = 0f, int Thumb = -1, bool Pinned = false, int Art = -1);
+    float ControlAmount = 0f, int Thumb = -1, bool Pinned = false, int Art = -1,
+    bool Beside = false, string Value2 = "");
 
 /// <summary>One complete merchant listing, already phrased by the gameplay side.</summary>
 public readonly record struct TradeListing(
@@ -3859,11 +3860,27 @@ public sealed class HudRenderer : IDisposable
     {
         var rows = screen.Rows;
         var view = bottom - top;
+
+        // Lines: a row and every Beside row after it (the browser's panel grid, Cancel | Confirm Join).
+        var lines = new List<(int First, int Count)>();
+        for (var i = 0; i < rows.Count; i++)
+        {
+            if (i > 0 && rows[i].Beside && lines.Count > 0) lines[^1] = (lines[^1].First, lines[^1].Count + 1);
+            else lines.Add((i, 1));
+        }
+
+        // ⛳ A panel keeps the grid's column, three across, whatever the line holds, so a last line of
+        // one or two worlds is the same size as the full ones above it.
+        var panelWide = MathF.Floor((width - ArtGap * (PanelColumns - 1)) / PanelColumns);
+        var panelTall = MathF.Floor(panelWide / MenuButtonArt.Aspect(MenuButtonArt.Panel));
+
         var buttons = 0;
         var others = 0f;
-        foreach (var row in rows)
+        foreach (var (first, _) in lines)
         {
-            if (row.Art >= 0) buttons++;
+            var row = rows[first];
+            if (row.Art == MenuButtonArt.Panel) others += panelTall + ArtGap;
+            else if (row.Art >= 0) buttons++;
             else others += (row.Heading ? 18f : ArtTextRow) + ArtGap;
         }
 
@@ -3875,23 +3892,67 @@ public sealed class HudRenderer : IDisposable
 
         var state = BeginScroll(screen, $"art:{screen.Kind}", left, top, width, view);
         var pen = 0f;
-        for (var i = 0; i < rows.Count; i++)
+        foreach (var (first, count) in lines)
         {
-            var row = rows[i];
-            // Every piece keeps its own shape: the long planks fill the column at this height, the
-            // small ones (Cancel) come out narrower, never taller.
-            var wide = row.Art >= 0 ? MathF.Min(width, tall * MenuButtonArt.Aspect(row.Art)) : 0f;
-            var rowTall = row.Art >= 0 ? MathF.Min(tall, wide / MenuButtonArt.Aspect(row.Art)) : row.Heading ? 18f : ArtTextRow;
-            var y = top + pen - state.Offset;
-            if (y + rowTall > top && y < bottom)
+            var lead = rows[first];
+            float lineTall;
+            if (lead.Art == MenuButtonArt.Panel)
             {
-                if (row.Art >= 0) ArtButtonAt(screen, layout, i, left + MathF.Round((width - wide) / 2f), y, wide, rowTall);
-                else MenuRowAt(screen, layout, i, left, y, width - 10f, rowTall, buttons: true);
+                lineTall = panelTall;
             }
-            ScrollToPick(screen, state, i, pen, pen + rowTall, view);
-            pen += rowTall + ArtGap;
+            else if (lead.Art >= 0)
+            {
+                lineTall = 0f;
+                for (var i = first; i < first + count; i++)
+                    lineTall = MathF.Max(lineTall, ArtSize(rows[i].Art, count, width, tall).Tall);
+            }
+            else
+            {
+                lineTall = lead.Heading ? 18f : ArtTextRow;
+            }
+
+            var y = top + pen - state.Offset;
+            if (y + lineTall > top && y < bottom)
+            {
+                if (lead.Art == MenuButtonArt.Panel)
+                {
+                    for (var i = first; i < first + count; i++)
+                        ArtButtonAt(screen, layout, i, left + (i - first) * (panelWide + ArtGap), y, panelWide, panelTall);
+                }
+                else if (lead.Art >= 0)
+                {
+                    // Every piece keeps its own shape: the long planks fill the column at this height,
+                    // the small ones (Cancel) come out narrower, never taller; a pair is centred together.
+                    var total = (count - 1) * ArtGap;
+                    for (var i = first; i < first + count; i++) total += ArtSize(rows[i].Art, count, width, tall).Wide;
+                    var x = left + MathF.Round((width - total) / 2f);
+                    for (var i = first; i < first + count; i++)
+                    {
+                        var (wide, rowTall) = ArtSize(rows[i].Art, count, width, tall);
+                        ArtButtonAt(screen, layout, i, x, y + MathF.Round((lineTall - rowTall) / 2f), wide, rowTall);
+                        x += wide + ArtGap;
+                    }
+                }
+                else
+                {
+                    MenuRowAt(screen, layout, first, left, y, width - 10f, lineTall, buttons: true);
+                }
+            }
+
+            for (var i = first; i < first + count; i++) ScrollToPick(screen, state, i, pen, pen + lineTall, view);
+            pen += lineTall + ArtGap;
         }
         EndScroll(screen, layout, state, left, top, width, view, pen - ArtGap);
+    }
+
+    private const int PanelColumns = 3;
+
+    /// <summary>A plank's size on a line of <paramref name="count"/>: its own shape, at most the button height.</summary>
+    private static (float Wide, float Tall) ArtSize(int art, int count, float width, float tall)
+    {
+        var column = (width - (count - 1) * ArtGap) / count;
+        var wide = MathF.Min(column, tall * MenuButtonArt.Aspect(art));
+        return (wide, MathF.Min(tall, wide / MenuButtonArt.Aspect(art)));
     }
 
     /// <summary>
@@ -3902,7 +3963,7 @@ public sealed class HudRenderer : IDisposable
     private void ArtButtonAt(HudScreen screen, ScreenLayout layout, int i, float x, float y, float w, float h)
     {
         var row = screen.Rows[i];
-        var lit = i == screen.Selected;
+        var lit = i == screen.Selected || row.Pinned;
         var hot = screen.Hovered is { Kind: ZoneKind.Row } over && over.Index == i;
 
         var colour = lit ? new Vector4(1.22f, 1.14f, 0.98f, 1f)
@@ -3922,6 +3983,8 @@ public sealed class HudRenderer : IDisposable
 
         RectUv(_menuButtonQuads, x, y, w, h, 0f, 0f, 1f, MenuButtonArt.V(row.Art), colour, row.Art);
 
+        if (row.Art == MenuButtonArt.Panel) PanelText(row, x, y, w, h);
+
         if (row.Edits is { } field && MenuButtonArt.FieldBox(row.Art) is var (bl, bt, br, bb))
         {
             var boxX = x + w * bl;
@@ -3931,6 +3994,59 @@ public sealed class HudRenderer : IDisposable
         }
 
         ClippedZone(layout, ZoneKind.Row, i, x, y, w, h);
+    }
+
+    /// <summary>
+    /// A browser panel's world: its name carved large across the boards, the host and head count
+    /// smaller under it, inside the iron frame (the board is the middle ~70% of the picture).
+    /// </summary>
+    private void PanelText(MenuRow row, float x, float y, float w, float h)
+    {
+        var inside = w * 0.72f;
+        var centre = x + w / 2f;
+        var lip = new Vector4(0.86f, 0.70f, 0.48f, 0.55f);
+
+        // The name as large as fits, on one line or broken over two at a space; then the host's line.
+        var big = MathF.Floor(h * 0.15f);
+        var lines = new List<string> { row.Label };
+        while (big > 7f && TextWidth(row.Label, big) > inside)
+        {
+            if (lines.Count == 1 && BreakInTwo(row.Label) is var (a, b) && TextWidth(a, big) <= inside && TextWidth(b, big) <= inside)
+            {
+                lines = [a, b];
+                break;
+            }
+
+            big--;
+        }
+
+        var small = MathF.Min(MathF.Floor(h * 0.11f), big);
+        var block = lines.Count * (big + 2f) + (row.Value.Length > 0 ? small + 4f : 0f);
+        var pen = MathF.Round(y + (h - block) / 2f);
+        foreach (var line in lines)
+        {
+            CarvedCentred(FitText(line, inside, big), centre, pen, big, lip);
+            pen += big + 2f;
+        }
+
+        if (row.Value.Length > 0) CarvedCentred(FitText(row.Value, inside, small), centre, pen + 2f, small, lip);
+    }
+
+    /// <summary>A name split at the space nearest its middle, or null for one word.</summary>
+    private static (string, string)? BreakInTwo(string text)
+    {
+        var best = -1;
+        for (var i = 0; i < text.Length; i++)
+            if (text[i] == ' ' && (best < 0 || Math.Abs(i - text.Length / 2) < Math.Abs(best - text.Length / 2)))
+                best = i;
+        return best > 0 ? (text[..best], text[(best + 1)..]) : null;
+    }
+
+    private void CarvedCentred(string line, float centreX, float y, float glyph, Vector4 lip)
+    {
+        var x = MathF.Round(centreX - TextWidth(line, glyph) / 2f);
+        Text(line, x, y + 1f, glyph, lip, shadow: false);
+        Text(line, x, y, glyph, CarvedInk, shadow: false);
     }
 
     /// <summary>Carved ink for what is typed into a plank field: dark on the wood, like its label.</summary>

@@ -179,7 +179,7 @@ public sealed class EpicMeetingPlace : IMeetingPlace
                 _me.ToString(out var text);
                 _myAddress = text?.ToString();
                 _state = MeetingState.Ready;
-                Console.WriteLine($"epic        signed in as {Short(_myAddress)}");
+                Console.WriteLine($"epic        signed in as {_myAddress}");
                 _ready.TrySetResult(true);
             });
         });

@@ -3445,6 +3445,7 @@ public sealed partial class ClientHost : IDisposable
         _startListing = false;
         _startCreating = false;
         _startFriends = false;
+        _startBrowsing = false;
         _startWorld = null;
         _startDeleting = false;
 
@@ -5533,6 +5534,13 @@ public sealed partial class ClientHost : IDisposable
             return;
         }
 
+        if (_hudScreen.Kind == HudScreenKind.Start && _startBrowsing)
+        {
+            _startBrowsing = false;
+            OpenFriendsPage();
+            return;
+        }
+
         if (_hudScreen.Kind == HudScreenKind.Start && _startFriends)
         {
             _startFriends = false;
@@ -5872,7 +5880,7 @@ public sealed partial class ClientHost : IDisposable
         return _hudScreen.Kind switch
         {
             // No "closes" — there is nothing behind it to go back to yet.
-            HudScreenKind.Start when _startListing || _startCreating || _startFriends || _startWorld is not null =>
+            HudScreenKind.Start when _startListing || _startCreating || _startFriends || _startBrowsing || _startWorld is not null =>
                 $"up and down pick, enter chooses{wheel}, {close} goes back",
             HudScreenKind.Start => $"up and down pick, enter chooses{wheel}",
             HudScreenKind.Game when _atStartScreen =>
@@ -5945,6 +5953,12 @@ public sealed partial class ClientHost : IDisposable
                     ? "This is the world that's open. Play another one first to delete this one"
                     : "Asks first. The world and its backups are removed for good"));
             _hudScreen.Rows.Add(new MenuRow(BackRow, "", Art: MenuButtonArt.Back, Note: _startWorldFromList ? "Back to all worlds" : "Back to the main menu"));
+            return;
+        }
+
+        if (_startBrowsing)
+        {
+            BuildBrowseRows();
             return;
         }
 
@@ -10206,6 +10220,12 @@ public sealed partial class ClientHost : IDisposable
             }
 
             ShowSelectedRow();
+            return;
+        }
+
+        if (_startBrowsing)
+        {
+            ChooseOnBrowsePage(row);
             return;
         }
 
@@ -17370,6 +17390,7 @@ public sealed partial class ClientHost : IDisposable
         CoopMenu,
         Start,
         Create,
+        Browse,
     }
 
     /// <summary>
@@ -17507,6 +17528,10 @@ public sealed partial class ClientHost : IDisposable
         // loopback and stands in front of the camera — the drawn player and the name over them.
         new(4100, "50-coop-friend", "stick", ViewMode.First, false, Friend: true),
         new(4300, "51-create", "stick", ViewMode.First, false, ShotScreen.Create),
+
+        // ⛳ N6's browser (2026-11-04, the user's multiplayer.jpg): five friends' worlds in the panel
+        // grid, one picked, Cancel | Confirm Join under them — without Epic, from a fixed list.
+        new(4500, "52-browse", "stick", ViewMode.First, false, ShotScreen.Browse),
     ];
 
     /// <summary>
@@ -17869,6 +17894,11 @@ public sealed partial class ClientHost : IDisposable
                 ShowStartMenu();
                 _nameBox.Text = NextWorldName();
                 ShowStartPage(listing: false, creating: true, select: 1);
+                break;
+
+            case ShotScreen.Browse:
+                ShowStartMenu();
+                ShowBrowseShot();
                 break;
 
             case ShotScreen.Friends:
