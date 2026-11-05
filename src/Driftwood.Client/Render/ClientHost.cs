@@ -22029,7 +22029,7 @@ public sealed partial class ClientHost : IDisposable
     private unsafe void SampleTitle(Vector2D<int> size)
     {
         var scale = HudRenderer.ScaleFor(size.Y);
-        var cell = HudRenderer.TitleCell(size.X / scale);
+        var cell = _hudScreen.TitleCellDrawn;
 
         (byte R, byte G, byte B) At(Vector2 at)
         {

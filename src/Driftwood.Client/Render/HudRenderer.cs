@@ -532,6 +532,9 @@ public sealed class HudScreen
     /// </remarks>
     public Vector2 TitleInk = new(-1f, -1f), TitleGap = new(-1f, -1f);
 
+    /// <summary>The title's cell size as last drawn: the start menu shrinks it on a short window.</summary>
+    public float TitleCellDrawn;
+
     public bool IsOpen => Kind != HudScreenKind.None;
 
     /// <summary>
@@ -3790,10 +3793,22 @@ public sealed class HudRenderer : IDisposable
         var column = MathF.Min(280f, w - 40f);
         var left = MathF.Round((w - column) / 2f);
         var titleTop = MathF.Max(10f, h * 0.10f);
+        var bottom = h - 70f;
+
+        // ⛔ Every choice on the title menu fits at once (the ui-check holds it), so on a short window
+        // — a 1366x768 laptop at full screen is 2x and 384 units tall — the title gives up its top
+        // margin and then its size before a button scrolls out of sight. Seen 2026-11-05 on the
+        // Windows gate, whose desktop is 1024x768. Windows where the page fits are drawn as before.
+        if (screen.Rows.Exists(row => row.Art >= 0))
+        {
+            var need = ArtPageMinimum(screen.Rows, column);
+            if (titleTop + TitleArt.LetterHeight * cell + 22f + need > bottom) titleTop = 10f;
+            while (cell > 2f && titleTop + TitleArt.LetterHeight * cell + 22f + need > bottom) cell--;
+        }
+
         Title(screen, w * 0.5f, titleTop, cell, screen.Drift);
 
         var top = titleTop + TitleArt.LetterHeight * cell + 22f;
-        var bottom = h - 70f;
         MenuRows(screen, layout, left, top, column, bottom, h, buttons: true);
         MenuNote(screen, left, MathF.Min(bottom + 6f, h - 60f), column, h - 46f);
     }
@@ -3852,28 +3867,10 @@ public sealed class HudRenderer : IDisposable
     private const float ArtGap = 5f;
     private const float ArtTextRow = 24f;
 
-    /// <summary>
-    /// A start page with plank buttons: every row in one smoothly scrolled column, the buttons
-    /// centred at their own shape and as large as fits all of them at once (2026-11-04).
-    /// </summary>
-    private void ArtRows(HudScreen screen, ScreenLayout layout, float left, float top, float width, float bottom)
+    /// <summary>The plank buttons on a page, and the height of everything else on it with its gaps.</summary>
+    private static (int Buttons, float Others) ArtPageParts(
+        List<MenuRow> rows, List<(int First, int Count)> lines, float panelTall)
     {
-        var rows = screen.Rows;
-        var view = bottom - top;
-
-        // Lines: a row and every Beside row after it (the browser's panel grid, Cancel | Confirm Join).
-        var lines = new List<(int First, int Count)>();
-        for (var i = 0; i < rows.Count; i++)
-        {
-            if (i > 0 && rows[i].Beside && lines.Count > 0) lines[^1] = (lines[^1].First, lines[^1].Count + 1);
-            else lines.Add((i, 1));
-        }
-
-        // ⛳ A panel keeps the grid's column, three across, whatever the line holds, so a last line of
-        // one or two worlds is the same size as the full ones above it.
-        var panelWide = MathF.Floor((width - ArtGap * (PanelColumns - 1)) / PanelColumns);
-        var panelTall = MathF.Floor(panelWide / MenuButtonArt.Aspect(MenuButtonArt.Panel));
-
         var buttons = 0;
         var others = 0f;
         foreach (var (first, _) in lines)
@@ -3883,6 +3880,49 @@ public sealed class HudRenderer : IDisposable
             else if (row.Art >= 0) buttons++;
             else others += (row.Heading ? 18f : ArtTextRow) + ArtGap;
         }
+
+        return (buttons, others);
+    }
+
+    /// <summary>Lines: a row and every Beside row after it (the browser's panel grid, Cancel | Confirm Join).</summary>
+    private static List<(int First, int Count)> ArtLines(List<MenuRow> rows)
+    {
+        var lines = new List<(int First, int Count)>();
+        for (var i = 0; i < rows.Count; i++)
+        {
+            if (i > 0 && rows[i].Beside && lines.Count > 0) lines[^1] = (lines[^1].First, lines[^1].Count + 1);
+            else lines.Add((i, 1));
+        }
+
+        return lines;
+    }
+
+    /// <summary>The least height a plank-button page fits in whole: every button at its smallest (22 units).</summary>
+    private static float ArtPageMinimum(List<MenuRow> rows, float width)
+    {
+        var panelWide = MathF.Floor((width - ArtGap * (PanelColumns - 1)) / PanelColumns);
+        var panelTall = MathF.Floor(panelWide / MenuButtonArt.Aspect(MenuButtonArt.Panel));
+        var (buttons, others) = ArtPageParts(rows, ArtLines(rows), panelTall);
+        return others + buttons * 22f + Math.Max(0, buttons - 1) * ArtGap;
+    }
+
+    /// <summary>
+    /// A start page with plank buttons: every row in one smoothly scrolled column, the buttons
+    /// centred at their own shape and as large as fits all of them at once (2026-11-04).
+    /// </summary>
+    private void ArtRows(HudScreen screen, ScreenLayout layout, float left, float top, float width, float bottom)
+    {
+        var rows = screen.Rows;
+        var view = bottom - top;
+
+        var lines = ArtLines(rows);
+
+        // ⛳ A panel keeps the grid's column, three across, whatever the line holds, so a last line of
+        // one or two worlds is the same size as the full ones above it.
+        var panelWide = MathF.Floor((width - ArtGap * (PanelColumns - 1)) / PanelColumns);
+        var panelTall = MathF.Floor(panelWide / MenuButtonArt.Aspect(MenuButtonArt.Panel));
+
+        var (buttons, others) = ArtPageParts(rows, lines, panelTall);
 
         // ⛔ As large as lets the WHOLE page fit. The title menu's rule (the ui-check holds it) is that
         // every choice on it can be landed on at once — the worlds listed under the buttons too — so
@@ -7275,6 +7315,7 @@ public sealed class HudRenderer : IDisposable
 
     private void Title(HudScreen screen, float centreX, float top, float cell, float drift)
     {
+        screen.TitleCellDrawn = cell;
         var depth = MathF.Max(1f, MathF.Round(cell * 0.9f));
         var width = TitleArt.Cells * cell;
         var left = centreX - width * 0.5f;
