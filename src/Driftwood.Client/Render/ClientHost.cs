@@ -20730,8 +20730,14 @@ public sealed partial class ClientHost : IDisposable
         _uiFigureHeldItems = _hudScreen.FigureHeldItems;
         _uiFigureFront = ReadFrame(size);
         _uiFigureRegion = FramebufferRect(_hudScreen.FigureBox, size);
+        // Pixels per design unit is the UI scale times the panel's own zoom, and the floors below were
+        // set where that is 2 (400x480 at 1x, zoom 2). ⚠ It counted the UI scale alone, which is right
+        // at all three gate sizes (zoom 2 there) and four times too strict on a short window, where
+        // the panel drops to zoom 1 and the preview is half as wide: 1028x749 at 2x failed on a
+        // preview that swapped its skin perfectly (2026-11-05, the Windows gate's 1024x768 desktop).
         var scale = HudRenderer.ScaleFor(size.Y);
-        _uiFigurePixelScale = Math.Max(1, (int)MathF.Round(scale * scale));
+        var perUnit = scale * _layout.Zoom;
+        _uiFigurePixelScale = Math.Max(1, (int)MathF.Round(perUnit * perUnit / 4f));
     }
 
     private void RemoveFigureArmourForControl()
@@ -20818,7 +20824,7 @@ public sealed partial class ClientHost : IDisposable
             + $"{_uiFigureArmourFaces} armour ({_uiFigureEquipmentPixels} px), "
             + $"{_uiFigureHeldItems} held ({_uiFigureHeldPixels} px), slim {_uiFigureSlim}; "
             + $"turn {_uiFigureTurnPixels} px vs {_uiFigureTurnNoise} held, "
-            + $"live skin/model {_uiFigureLivePixels} px");
+            + $"live skin/model {_uiFigureLivePixels} px; floors x{_uiFigurePixelScale}");
         Console.Out.Flush();
 
         if (_uiFigureOriginalSkin is not null) ApplySkinRenderers(_uiFigureOriginalSkin);
