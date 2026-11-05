@@ -148,5 +148,6 @@ echo
 echo "OK  $PACKAGE"
 echo "    $CHECKSUM"
 echo
-echo "Next: test the tarball on the distro containers, publish the GitHub release with both files,"
-echo "then run packaging/aur/update-aur.sh to put the same version on the AUR."
+echo "Next: packaging/check-packages.sh (both packages built and co-op started from each), test the"
+echo "tarball on the distro containers, publish the GitHub release with both files, then run"
+echo "packaging/aur/update-aur.sh to put the same version on the AUR."

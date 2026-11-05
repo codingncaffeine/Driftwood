@@ -31,6 +31,8 @@ package() {
     install -dm755 "$pkgdir/usr/lib/driftwood-game" "$pkgdir/usr/bin"
     install -m755 "$src/Driftwood" "$pkgdir/usr/lib/driftwood-game/Driftwood"
     install -m644 "$src"/lib*.so* "$pkgdir/usr/lib/driftwood-game/"
+    # Epic, the co-op meeting place: the module and the game's credentials sit beside the program.
+    install -m644 "$src/Driftwood.Net.Eos.dll" "$src/eos.txt" "$pkgdir/usr/lib/driftwood-game/"
     ln -s /usr/lib/driftwood-game/Driftwood "$pkgdir/usr/bin/driftwood-game"
 
     # The tarball carries these for a player who unpacks it by hand and runs install.sh; here they
