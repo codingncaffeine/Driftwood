@@ -1088,8 +1088,9 @@ public sealed class WorldStreamer : IDisposable
     /// the same way and always did — they are permanently empty.
     /// <para>Safe because <see cref="QueueGeneration"/> fills <see cref="_requested"/> for the whole
     /// wanted set before anything is promoted, so "not requested" means "outside the set" rather than
-    /// "not asked for yet". A neighbour that becomes wanted later can only make this chunk brighter,
-    /// which the flood carries in on its own.</para>
+    /// "not asked for yet". A neighbour that becomes wanted later is put right when it lights: light it
+    /// adds the flood carries in, and sun the generator over-guessed under its trees
+    /// <c>LightEngine.TakeBackGuessedSun</c> takes back.</para>
     /// </remarks>
     private bool Neighbourhood<T>(ChunkPos pos, System.Collections.Concurrent.ConcurrentDictionary<ChunkPos, T> done)
     {

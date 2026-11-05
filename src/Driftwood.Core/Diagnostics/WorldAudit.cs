@@ -14034,6 +14034,7 @@ public static class WorldAudit
 
         var produced = new Dictionary<ChunkPos, (int Verts, int Indices)>();
         var loaded = new HashSet<ChunkPos>();
+        VoxelWorld streamedWorld;
 
         using (var streamer = new WorldStreamer(registry, new TerrainGenerator(seed, ids, oceanCoverage, TerrainVersion), radius))
         {
@@ -14080,6 +14081,7 @@ public static class WorldAudit
             // cannot see. Measured: chunk (0,−2,0) came back 9,372 verts against 9,684, and nothing
             // whatever was wrong with the streaming.
             foreach (var chunk in streamer.World.Chunks) loaded.Add(chunk.Position);
+            streamedWorld = streamer.World;
         }
 
         // Reference world: the same chunks, generated up front rather than as the player walked.
@@ -14112,12 +14114,42 @@ public static class WorldAudit
             if (streamed.Verts == refVerts && streamed.Indices == refIndices) continue;
 
             detail = $"chunk {pos} differs: streamed {streamed.Verts} verts / {streamed.Indices} indices, "
-                   + $"batch {refVerts} / {refIndices} — likely meshed before a neighbour generated";
+                   + $"batch {refVerts} / {refIndices}; " + FirstDifference(streamedWorld, batchWorld, pos);
             return false;
         }
 
         detail = $"{produced.Count} streamed meshes identical to batch";
         return true;
+    }
+
+    /// <summary>
+    /// Where two worlds part over everything a chunk's mesh reads (the chunk and a one-block shell):
+    /// the first cell whose block or light differs, and how many do.
+    /// </summary>
+    private static string FirstDifference(VoxelWorld streamed, VoxelWorld batch, ChunkPos pos)
+    {
+        string? first = null;
+        int blocks = 0, lights = 0;
+        var x0 = pos.X * Chunk.Size;
+        var y0 = pos.Y * Chunk.Size;
+        var z0 = pos.Z * Chunk.Size;
+        for (var y = y0 - 1; y <= y0 + Chunk.Size; y++)
+        for (var z = z0 - 1; z <= z0 + Chunk.Size; z++)
+        for (var x = x0 - 1; x <= x0 + Chunk.Size; x++)
+        {
+            var (sb, bb) = (streamed.GetBlock(x, y, z), batch.GetBlock(x, y, z));
+            var (sl, bl) = (streamed.GetLight(x, y, z), batch.GetLight(x, y, z));
+            if (sb != bb) blocks++;
+            else if (sl != bl) lights++;
+            else continue;
+            first ??= sb != bb
+                ? $"block at {x},{y},{z} streamed {streamed.Registry[sb].Name}, batch {batch.Registry[bb].Name}"
+                : $"light at {x},{y},{z} streamed 0x{sl:X4}, batch 0x{bl:X4}";
+        }
+
+        return first is null
+            ? "the worlds agree on every cell it reads, so the streamed mesh is stale (built before a change it never saw)"
+            : $"{blocks} blocks and {lights} lights differ, first {first}";
     }
 
     /// <summary>

@@ -725,7 +725,9 @@ public sealed class TerrainGenerator
     /// <para>⚠ <b>It does not know about player edits</b>, so a shaft dug from the surface down to the
     /// deep reads as solid rock here. That is survivable and self-correcting: the chunks a shaft
     /// passes through are loaded whenever the player is in it, and a loaded chunk's real light is
-    /// preferred to this. Anything this gets wrong is corrected the moment the chunk above arrives.
+    /// preferred to this. Anything this gets wrong is corrected the moment the chunk above is lit —
+    /// too dark by the flood, too bright (it does not know trees) by
+    /// <c>LightEngine.TakeBackGuessedSun</c>, since a flood alone never takes light back.
     /// </para>
     /// </remarks>
     public int SkyLightAt(int wx, int wy, int wz)

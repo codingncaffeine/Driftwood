@@ -207,7 +207,76 @@ public sealed class LightEngine
         ReleaseBulkCapacity();
 
         chunk.Lit = true;
+        TakeBackGuessedSun(world, pos);
     }
+
+    /// <summary>
+    /// Darkens the top of an already-lit chunk below wherever it holds more sunlight than this
+    /// chunk, now lit, lets through.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛔ <b>The generator's sky is a guess that can be too bright, and a flood never takes light
+    /// back.</b> A chunk lit before the one above it asks <see cref="TerrainGenerator.SkyLightAt"/>,
+    /// which knows ground and sea but not what decoration grows on them, so under a canopy it says
+    /// full sun. Seen 2026-11-05: on four or eight cores the release audit's chunk (-3,1,0) lit
+    /// before (-3,2,0) and kept sky 15 under driftoak leaves, where the batch world has 14 — on 16
+    /// cores the order happened to be top down and it passed. The chunk above arriving later is
+    /// usual, not rare: a player walking up into range, or a worker finishing out of turn.</para>
+    /// <para>A top cell brighter than any neighbour can carry it — straight down from above at no
+    /// cost only while the beam is whole, one less from anywhere else — has nothing holding it up,
+    /// and is relit the way an edit is: its light taken out and whatever really supports it let back
+    /// in. Everything that light reached comes out with it.</para>
+    /// </remarks>
+    private void TakeBackGuessedSun(VoxelWorld world, ChunkPos pos)
+    {
+        if (!world.TryGetChunk(pos.Offset(0, -1, 0), out var below) || !below.Lit) return;
+
+        var (ox, oy, oz) = pos.Origin;
+        var wy = oy - 1;
+        if (!TerrainGenerator.InWorld(wy)) return;
+
+        ResetChunkCache();
+        List<(int X, int Z)>? unsupported = null;
+        for (var lz = 0; lz < Chunk.Size; lz++)
+        for (var lx = 0; lx < Chunk.Size; lx++)
+        {
+            var (wx, wz) = (ox + lx, oz + lz);
+            var sky = Channel(GetLight(world, wx, wy, wz), ChannelSky);
+            if (sky > 0 && sky > SkySupport(world, wx, wy, wz)) (unsupported ??= []).Add((wx, wz));
+        }
+
+        if (unsupported is null) return;
+
+        // Each relight starts its own counts; the chunk's stay the total.
+        var visited = LastCellsVisited;
+        foreach (var (wx, wz) in unsupported)
+        {
+            UpdateBlock(world, wx, wy, wz);
+            visited += LastCellsVisited;
+        }
+        LastCellsVisited = visited;
+
+        // Light taken out spreads at most fifteen cells, so it stays in the two layers of chunks
+        // either side of the seam; any of them may have drawn a face against a cell that changed.
+        for (var dz = -1; dz <= 1; dz++)
+        for (var dx = -1; dx <= 1; dx++)
+        for (var dy = -1; dy <= 0; dy++)
+            if (world.TryGetChunk(pos.Offset(dx, dy, dz), out var near)) near.Dirty = true;
+    }
+
+    /// <summary>The most sunlight a cell's six neighbours could hand it, as the flood would.</summary>
+    private int SkySupport(VoxelWorld world, int wx, int wy, int wz)
+    {
+        var loss = _attenuation[BlockAt(world, wx, wy, wz)];
+        if (loss >= LightValue.Max) return 0;
+
+        var best = Attenuate(Channel(GetLight(world, wx, wy + 1, wz), ChannelSky), loss, ChannelSky, down: true);
+        foreach (var (dx, dy, dz) in Sideways)
+            best = Math.Max(best, Channel(GetLight(world, wx + dx, wy + dy, wz + dz), ChannelSky) - 1 - loss);
+        return best;
+    }
+
+    private static readonly (int X, int Y, int Z)[] Sideways = [(1, 0, 0), (-1, 0, 0), (0, 0, 1), (0, 0, -1), (0, -1, 0)];
 
     /// <summary>
     /// Hands each of a chunk's 1,024 world columns the sunlight arriving at its ceiling, and walks
@@ -247,9 +316,9 @@ public sealed class LightEngine
     /// <remarks>
     /// ⚠ <b>The loaded chunk wins, and only when it is lit.</b> A chunk that is present but dark has
     /// no answer yet — reading it would seed the chunk below with zero and leave it dark for good,
-    /// since nothing re-lights a chunk that has already been lit. Falling back to the generator is
-    /// safe in the other direction: the flood carries the real answer down when the chunk above
-    /// lights, and light arriving later only ever brightens.
+    /// since nothing re-lights a chunk that has already been lit. The generator's answer is put right
+    /// when the chunk above lights: the flood carries in light it under-guessed, and
+    /// <see cref="TakeBackGuessedSun"/> takes out light it over-guessed (it does not know trees).
     /// </remarks>
     private int SkyInflow(VoxelWorld world, int wx, int wy, int wz)
     {
