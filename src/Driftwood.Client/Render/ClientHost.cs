@@ -1683,6 +1683,8 @@ public sealed partial class ClientHost : IDisposable
 
     private void TopUpCreatures(float dt)
     {
+        // ⛔ Co-op (N5): a guest's herd is the host's, mirrored — nothing here may fill it or let go of it.
+        if (IsGuest) return;
         if (_creatureRenderer is null || _creatureRenderer.Count == 0 || !_spawned) return;
 
         if (_herd is null)
@@ -1707,7 +1709,8 @@ public sealed partial class ClientHost : IDisposable
         // counts what is left — the order that keeps the slots following the player.
         // ⚠ Only the dark's own and the cave's: an animal or a resident is never let go.
         _herd.Despawn(_player.Position, dt,
-            creature => FamilyOf(creature.Kind) is CreatureFamily.Hostile or CreatureFamily.Cave);
+            creature => FamilyOf(creature.Kind) is CreatureFamily.Hostile or CreatureFamily.Cave,
+            _coopHost is null ? null : _coopOthers);
         TopUpHostiles(dt);
 
         _creatureTopUp -= dt;
@@ -2326,6 +2329,12 @@ public sealed partial class ClientHost : IDisposable
 
             // And what keeps the track joined up when a rail lands or leaves.
             Rails = new RailTable(registry),
+
+            // Co-op D3: every chunk's terrain summed as it is made — a host may be opened to friends at
+            // any moment and must answer for chunks made before then; a guest sends its sums to be checked.
+            KeepTerrainSums = true,
+            ReportTerrainSums = _welcome is not null,
+            TerrainFault = TerrainFaultForChecks(),
         };
 
         _signalTable = _streamer.Signals!.Table;
@@ -5477,6 +5486,7 @@ public sealed partial class ClientHost : IDisposable
 
     private void SpawnEncounter(StructureSite site, string kind, int count, float radius)
     {
+        if (IsGuest) return; // N5: only the host's herd is real
         if (_herd is null || _creatureRenderer is null
             || !_creatureRenderer.TryMeasure(kind, out var size)) return;
         var spawn = new SpawnKind(kind, size, Hostile: true, CreatureSet.MoveFor(kind));
@@ -10924,36 +10934,21 @@ public sealed partial class ClientHost : IDisposable
             dt, SolidForCreature, _walking && _lineup.Count == 0 ? _player.Position : null, Sunlit,
             known: (x, y, z) => _streamer.World.TryGetChunk(ChunkPos.FromWorld(x, y, z), out _),
             water: (x, y, z) => _registry[_streamer.World.GetBlock(x, y, z)].Fluid == FluidKind.Water,
-            scorch: SustainSunlightBurn);
+            scorch: SustainSunlightBurn,
+            others: _coopHost is null ? null : _coopOthers);
 
         foreach (var blow in _herd.TakeAttacks())
         {
-            var pet = _companions.For(LocalPlayerId);
-            var intercepted = pet is { Alive: true }
-                              && Vector3.DistanceSquared(pet.Position, blow.Position) <= 3.25f * 3.25f;
-            if (intercepted)
+            // ⛳ Co-op (N5): the creature was chasing a guest, and the blow is theirs to take.
+            if (blow.Target > 0)
             {
-                _companions.Hurt(LocalPlayerId, blow.HalfHearts, $"hostile:{blow.Kind}");
-            }
-            else
-            {
-                HurtPlayer(blow.HalfHearts);
-                Rumble(0.72f, 1f, 150);
-
-                // The cave spider's bite is the reference's poison: seven seconds of it.
-                if (blow.Kind == "cave_spider") Ail(Ailment.Poison, 7f);
-
-                // And a bee's sting, ten (2026-10-26).
-                if (blow.Kind == "bee") Ail(Ailment.Poison, 10f);
-
-                // And the charred skeleton's blade is its wither: ten seconds.
-                if (blow.Kind == "charred_skeleton") Ail(Ailment.Withering, 10f);
+                if (blow.Target - 1 < _coopOtherIds.Count)
+                    _coopHost?.HurtGuest(_coopOtherIds[blow.Target - 1], new HurtMessage(blow.Kind, blow.HalfHearts, blow.Position));
+                _audio?.Play(Pick(CreatureSounds.Blows), blow.Position, 0.62f, Wobble());
+                continue;
             }
 
-            _audio?.Play(Pick(CreatureSounds.Blows), blow.Position, 0.62f, Wobble());
-
-            var cry = CreatureSounds.AngryFor(blow.Kind);
-            if (cry.Length > 0) _audio?.Play(Pick(cry), blow.Position, 0.8f, 1.1f);
+            TakeCreatureBlow(blow.Kind, blow.HalfHearts, blow.Position);
         }
 
         foreach (var blast in _herd.TakeBlasts()) Detonate(blast.Position);
@@ -11953,7 +11948,7 @@ public sealed partial class ClientHost : IDisposable
     /// </summary>
     private void RouseBees(int x, int y, int z)
     {
-        if (_herd is null || Smoked(x, y, z)) return;
+        if (IsGuest || _herd is null || Smoked(x, y, z)) return; // N5: a guest's bees are the host's
 
         var house = (x, y, z);
         var middle = new Vector3(x + 0.5f, y + 0.5f, z + 0.5f);
@@ -12014,7 +12009,7 @@ public sealed partial class ClientHost : IDisposable
     /// </summary>
     private void TryRaiseAshwraith(int x, int y, int z)
     {
-        if (_herd is null || KindFor("ashwraith") is not { } kind) return;
+        if (IsGuest || _herd is null || KindFor("ashwraith") is not { } kind) return;
         var world = _streamer.World;
         var skull = _registry.ByName("charred_skull_block").Id;
         var sand = _ids.Ashsand;
@@ -12354,6 +12349,13 @@ public sealed partial class ClientHost : IDisposable
             Rumble(1f, 0.75f, 280);
         }
 
+        // And every guest standing in it, by the same rule from their own middle (N5).
+        for (var i = 0; i < _coopOthers.Count && _coopHost is not null; i++)
+        {
+            var toll = Explosion.HurtAt(centre, _coopOthers[i] + new Vector3(0f, 0.9f, 0f), strength);
+            if (toll > 0) _coopHost.HurtGuest(_coopOtherIds[i], new HurtMessage(HurtMessage.Explosion, toll, centre));
+        }
+
         if (_herd is not null)
         {
             foreach (var creature in _herd.All)
@@ -12544,6 +12546,47 @@ public sealed partial class ClientHost : IDisposable
         return true;
     }
 
+    /// <summary>
+    /// A creature's blow landing on this player: one of the herd's here, or — on a co-op guest — the
+    /// host's word that one of its creatures struck (<see cref="HurtMessage"/>).
+    /// </summary>
+    private void TakeCreatureBlow(string kind, int halfHearts, Vector3 from)
+    {
+        if (kind == HurtMessage.Explosion)
+        {
+            HurtPlayer(halfHearts);
+            Rumble(1f, 0.75f, 280);
+            return;
+        }
+
+        var pet = _companions.For(LocalPlayerId);
+        var intercepted = pet is { Alive: true }
+                          && Vector3.DistanceSquared(pet.Position, from) <= 3.25f * 3.25f;
+        if (intercepted)
+        {
+            _companions.Hurt(LocalPlayerId, halfHearts, $"hostile:{kind}");
+        }
+        else
+        {
+            HurtPlayer(halfHearts);
+            Rumble(0.72f, 1f, 150);
+
+            // The cave spider's bite is the reference's poison: seven seconds of it.
+            if (kind == "cave_spider") Ail(Ailment.Poison, 7f);
+
+            // And a bee's sting, ten (2026-10-26).
+            if (kind == "bee") Ail(Ailment.Poison, 10f);
+
+            // And the charred skeleton's blade is its wither: ten seconds.
+            if (kind == "charred_skeleton") Ail(Ailment.Withering, 10f);
+        }
+
+        _audio?.Play(Pick(CreatureSounds.Blows), from, 0.62f, Wobble());
+
+        var cry = CreatureSounds.AngryFor(kind);
+        if (cry.Length > 0) _audio?.Play(Pick(cry), from, 0.8f, 1.1f);
+    }
+
     /// <summary>Lands one blow on an animal, with whatever is in hand behind it.</summary>
     /// <remarks>
     /// ⚠ <b>The tool wears from a swing that connects, and only from one that connects.</b> Same rule
@@ -12560,10 +12603,21 @@ public sealed partial class ClientHost : IDisposable
             damage = Math.Max(damage + 1, (int)MathF.Round(damage * 1.5f));
         var before = quarry.Health;
 
-        _herd.Hurt(quarry, damage, _viewPosition);
+        // ⛳ Co-op (N5): a guest's creatures are the host's. The blow is worked out here, by this
+        // player's own stats, and the host lands it; the next set shows the flinch and the health.
+        if (IsGuest)
+        {
+            if (_creatureMirror?.IdOf(quarry) is not { } id || quarry.HurtFor > 0f) return;
+            _coopGuest!.SendStrike(new StrikeMessage(id, damage, _viewPosition));
+            quarry.HurtFor = CreatureHerd.HurtSeconds;
+        }
+        else
+        {
+            _herd.Hurt(quarry, damage, _viewPosition);
 
-        // Still ringing from the last blow, so nothing happened and nothing should be heard.
-        if (quarry.Health == before) return;
+            // Still ringing from the last blow, so nothing happened and nothing should be heard.
+            if (quarry.Health == before) return;
+        }
 
         // ⛳ A guardian's spikes (2026-10-25): struck while it holds still, it pricks back.
         if (quarry.Kind is "guardian" or "elder_guardian" && !quarry.Moving) HurtPlayer(2);
@@ -14660,7 +14714,7 @@ public sealed partial class ClientHost : IDisposable
             _harvested.Clear();
             if (infested)
             {
-                if (_herd is not null && KindFor("silverfish") is { } fish)
+                if (!IsGuest && _herd is not null && KindFor("silverfish") is { } fish)
                     _herd.SpawnAt(fish, centre - new Vector3(0f, 0.5f, 0f), (float)(Random.Shared.NextDouble() * 360.0));
             }
             else

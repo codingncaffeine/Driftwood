@@ -168,6 +168,57 @@ public sealed class WorldStreamer : IDisposable
     private readonly SemaphoreSlim _lightWork = new(0);
 
     private ChunkPos _lastCentre = new(int.MinValue, int.MinValue, int.MinValue);
+
+    /// <summary>
+    /// Where the other players are, on a co-op host: one small ring each, generated and lit, never meshed.
+    /// </summary>
+    /// <remarks>
+    /// <para>⛳ <b>The host is the world, so the world has to exist wherever a guest is standing</b> —
+    /// a guest's block in a chunk the host never loaded used to vanish, and anything the host
+    /// simulates (water, wiring, later creatures) can only run where the host has the chunks. A guest
+    /// sees with its own generator; the host only needs the cells round it to be real.</para>
+    /// <para>Smaller than the host's own: <see cref="VisitorRadius"/> chunks, lit a ring and a half
+    /// inside that so every lit chunk's neighbours are generated, and forgotten two rings beyond.</para>
+    /// </remarks>
+    private readonly List<Ring> _visitors = [];
+
+    private bool _visitorsChanged;
+
+    /// <summary>The co-op host's simulation reach round each guest, in chunks (32 blocks each).</summary>
+    public const int VisitorRadius = 4;
+
+    private const int VisitorLoad = VisitorRadius * VisitorRadius;
+    private static readonly int VisitorLight = Square(VisitorRadius - 1.5f);
+    private static readonly int VisitorKeep = Square(VisitorRadius + 2f);
+
+    private readonly record struct Ring(ChunkPos Centre, bool Surface);
+
+    /// <summary>
+    /// Each chunk's terrain as the generator made it — before any edit — as a 64-bit sum, kept for
+    /// as long as this streamer lives once <see cref="KeepTerrainSums"/> is on.
+    /// </summary>
+    /// <remarks>
+    /// D3 of the co-op plan: <c>MathF.Pow</c>/<c>Sin</c>/<c>Cos</c> come from the C runtime, and
+    /// glibc, musl and Windows may round the last bit differently, so a guest's generator is not
+    /// trusted to have made the host's world. Kept past a drop so a guest far from the host can still
+    /// be answered for any chunk the host ever made: twenty bytes a chunk.
+    /// </remarks>
+    private readonly ConcurrentDictionary<ChunkPos, ulong> _terrainSums = new();
+
+    private readonly ConcurrentQueue<(ChunkPos Pos, ulong Sum)> _newSums = new();
+
+    /// <summary>Record <see cref="TryTerrainSum"/> for every chunk generated from now on (co-op only).</summary>
+    public bool KeepTerrainSums { get; set; }
+
+    /// <summary>Also queue each new sum for <see cref="TryTakeNewSum"/> — a co-op guest, which sends them.</summary>
+    /// <remarks>Off everywhere else, or the queue would only ever grow.</remarks>
+    public bool ReportTerrainSums { get; set; }
+
+    /// <summary>
+    /// ⚠ Instruments only: runs on each chunk between generation and its sum, to make a guest whose
+    /// generator disagrees with the host's — the control for the checksum repair.
+    /// </summary>
+    public Action<Chunk>? TerrainFault { get; set; }
     private int _generatingCount;
     private int _lightingCount;
     private int _meshingCount;
@@ -311,6 +362,7 @@ public sealed class WorldStreamer : IDisposable
         if (!_generated.ContainsKey(pos))
         {
             _world.Restore(wx, wy, wz, id);
+            CatchLateGeneration(pos, wx, wy, wz);
             return;
         }
 
@@ -423,13 +475,199 @@ public sealed class WorldStreamer : IDisposable
         // so it costs three noise stacks and needs nothing to be loaded to answer it.
         var horizon = by > _generator.SurfaceHeight(bx, bz) - SurfaceRingDepth;
 
-        if (centre == _lastCentre && horizon == _surfaceRing) return;
+        if (centre == _lastCentre && horizon == _surfaceRing && !_visitorsChanged) return;
 
         _lastCentre = centre;
         _surfaceRing = horizon;
+        _visitorsChanged = false;
 
         QueueGeneration(centre);
+        foreach (var ring in _visitors) QueueVisitor(ring);
         DropDistant(centre);
+    }
+
+    /// <summary>
+    /// Where the other players in a co-op session are, every frame, on the host. An empty list
+    /// (the default, and every single-player game) leaves the streamer exactly as it was.
+    /// </summary>
+    /// <remarks>Cheap: only a guest crossing into another chunk makes <see cref="Update"/> do any work.</remarks>
+    public void SetVisitors(IReadOnlyList<Vector3> players)
+    {
+        var rings = new List<Ring>(players.Count);
+        foreach (var at in players)
+        {
+            var bx = (int)MathF.Floor(at.X);
+            var by = (int)MathF.Floor(at.Y);
+            var bz = (int)MathF.Floor(at.Z);
+            var centre = ChunkPos.FromWorld(
+                bx, Math.Clamp(by, TerrainGenerator.WorldBottom, TerrainGenerator.WorldTop - 1), bz);
+            var ring = new Ring(centre, by > _generator.SurfaceHeight(bx, bz) - SurfaceRingDepth);
+            if (!rings.Contains(ring)) rings.Add(ring);
+        }
+
+        if (rings.SequenceEqual(_visitors)) return;
+        _visitors.Clear();
+        _visitors.AddRange(rings);
+        _visitorsChanged = true;
+    }
+
+    /// <summary>How many other players' rings the host is keeping.</summary>
+    public int VisitorCount => _visitors.Count;
+
+    /// <summary>True when a chunk is generated and its terrain complete — what a held edit waits for.</summary>
+    public bool IsGenerated(ChunkPos pos) => _generated.ContainsKey(pos);
+
+    /// <summary>True when a chunk has been asked for as part of a mesh (the host's own view).</summary>
+    public bool IsMeshWanted(ChunkPos pos) => _meshRequested.Contains(pos);
+
+    /// <summary>True when a chunk has been lit.</summary>
+    public bool IsLit(ChunkPos pos) => _litChunks.ContainsKey(pos);
+
+    private void QueueVisitor(Ring ring)
+    {
+        var wanted = new List<(ChunkPos Pos, int DistanceSquared)>();
+        for (var dz = -VisitorRadius; dz <= VisitorRadius; dz++)
+        for (var dx = -VisitorRadius; dx <= VisitorRadius; dx++)
+        {
+            if (dx * dx + dz * dz > VisitorLoad) continue;
+            for (var cy = TerrainGenerator.ChunkBottom; cy < TerrainGenerator.ChunkTop; cy++)
+            {
+                var pos = new ChunkPos(ring.Centre.X + dx, cy, ring.Centre.Z + dz);
+                var d2 = RingDistance(pos, ring.Centre, ring.Surface, VisitorLoad);
+                if (d2 < 0 || d2 > VisitorLoad) continue;
+                if (!_requested.Add(pos)) continue;
+                wanted.Add((pos, d2));
+            }
+        }
+
+        wanted.Sort(static (a, b) => a.DistanceSquared.CompareTo(b.DistanceSquared));
+        foreach (var (pos, _) in wanted)
+        {
+            _generateQueue.Enqueue(pos);
+            _work.Release();
+        }
+    }
+
+    /// <summary>True when any visitor's ring holds the chunk within <paramref name="limit"/>.</summary>
+    private bool VisitorWants(ChunkPos pos, int limit)
+    {
+        foreach (var ring in _visitors)
+        {
+            var d2 = RingDistance(pos, ring.Centre, ring.Surface, VisitorLoad);
+            if (d2 >= 0 && d2 <= limit) return true;
+        }
+        return false;
+    }
+
+    private bool VisitorKeeps(ChunkPos pos)
+    {
+        foreach (var ring in _visitors)
+            if (WorthKeeping(pos, ring.Centre, ring.Surface, VisitorKeep, VisitorKeep)) return true;
+        return false;
+    }
+
+    /// <summary>
+    /// A cell changed by somebody this machine trusts — a co-op guest, on the host — wherever it is.
+    /// </summary>
+    /// <remarks>
+    /// <para>In a generated chunk it is <see cref="EditBlock"/>, so wiring and rails answer it here.
+    /// Anywhere else it is held as a saved edit is (<see cref="VoxelWorld.Hold"/>): in the save at
+    /// once, and put in when that chunk is generated — never dropped, which is what
+    /// <see cref="EditBlock"/> alone does with an unloaded chunk.</para>
+    /// <para>⚠ A chunk can be mid-generation when the check is made: its held edits taken already and
+    /// the flag not yet set. Looking again after holding catches it — once the flag is up, nothing
+    /// else will ever take that list, so it is put in here.</para>
+    /// </remarks>
+    public void EditOrHold(int wx, int wy, int wz, BlockId id)
+    {
+        if (!TerrainGenerator.InWorld(wy)) return;
+
+        var pos = ChunkPos.FromWorld(wx, wy, wz);
+        if (_generated.ContainsKey(pos))
+        {
+            EditBlock(wx, wy, wz, id);
+            return;
+        }
+
+        _world.Hold(wx, wy, wz, id);
+        CatchLateGeneration(pos, wx, wy, wz);
+    }
+
+    private void CatchLateGeneration(ChunkPos pos, int wx, int wy, int wz)
+    {
+        if (!_generated.ContainsKey(pos) || !_world.TryGetChunk(pos, out var chunk)) return;
+        if (_world.ApplyPending(chunk) == 0) return;
+
+        chunk.Dirty = true;
+        _editQueue.Enqueue((wx, wy, wz));
+        _lightWork.Release();
+        Fluids?.Touch(wx, wy, wz, urgent: true);
+    }
+
+    /// <summary>The terrain sum of a chunk this streamer generated, if it kept one.</summary>
+    public bool TryTerrainSum(ChunkPos pos, out ulong sum) => _terrainSums.TryGetValue(pos, out sum);
+
+    /// <summary>Sums made since the last call, in the order chunks finished — what a guest sends.</summary>
+    public bool TryTakeNewSum(out (ChunkPos Pos, ulong Sum) made) => _newSums.TryDequeue(out made);
+
+    /// <summary>A copy of a generated chunk's blocks as they stand now, edits and all, or null.</summary>
+    public ushort[]? CurrentBlocks(ChunkPos pos) =>
+        _generated.ContainsKey(pos) && _world.TryGetChunk(pos, out var chunk) ? (ushort[])chunk.Raw.Clone() : null;
+
+    /// <summary>
+    /// Makes a generated chunk hold exactly these blocks: the host's, after this machine's generator
+    /// made something else. Returns how many cells differed, or -1 when the chunk is not here.
+    /// </summary>
+    /// <remarks>
+    /// <para>Each cell that differs goes through the edit queue, so light is fixed in the neighbours
+    /// too, the way a broken block's is. Written through <see cref="VoxelWorld.SetFluid"/> and NOT
+    /// <see cref="VoxelWorld.SetBlock"/>: these are not edits anybody made here, so they must not be
+    /// sent back to the host or logged as this player's changes.</para>
+    /// </remarks>
+    public int ReplaceChunk(ChunkPos pos, ReadOnlySpan<ushort> blocks)
+    {
+        if (blocks.Length != Chunk.Volume) return -1;
+        if (!_generated.ContainsKey(pos) || !_world.TryGetChunk(pos, out var chunk)) return -1;
+
+        var (ox, oy, oz) = pos.Origin;
+        var raw = chunk.Raw;
+        var edits = _world.Edits;
+        var differed = 0;
+
+        for (var i = 0; i < Chunk.Volume; i++)
+        {
+            if (raw[i] == blocks[i] || blocks[i] >= _registry.Count) continue;
+
+            var x = ox + (i & Chunk.SizeMask);
+            var z = oz + ((i >> Chunk.SizeLog2) & Chunk.SizeMask);
+            var y = oy + (i >> (Chunk.SizeLog2 * 2));
+
+            // ⛔ Terrain only. An edited cell is the cell messages' business, and they are already in
+            // step: the host may have taken these blocks just BEFORE it applied this guest's newest
+            // cell, and writing them would undo that cell here while the host keeps it.
+            if (edits.ContainsKey((x, y, z))) continue;
+
+            // Through the world's no-log write (the fluid's door), which dirties the seam neighbours too.
+            _world.SetFluid(x, y, z, new BlockId(blocks[i]));
+            _editQueue.Enqueue((x, y, z));
+            Fluids?.Touch(x, y, z, urgent: false);
+            differed++;
+        }
+
+        if (differed > 0) _lightWork.Release(differed);
+        return differed;
+    }
+
+    /// <summary>FNV-1a over the block numbers: the same on every machine for the same blocks.</summary>
+    public static ulong SumOf(ReadOnlySpan<ushort> blocks)
+    {
+        var hash = 14695981039346656037UL;
+        foreach (var block in blocks)
+        {
+            hash = (hash ^ (byte)block) * 1099511628211UL;
+            hash = (hash ^ (byte)(block >> 8)) * 1099511628211UL;
+        }
+        return hash;
     }
 
     private static int Square(float radius) => (int)MathF.Ceiling(radius * radius);
@@ -448,29 +686,34 @@ public sealed class WorldStreamer : IDisposable
     /// underground the surface ring is dropped altogether and only the ball is left, which is why
     /// standing in the Emberdeep costs about a third of standing in a field.</para>
     /// </remarks>
-    private int RingDistance(ChunkPos pos, ChunkPos centre)
+    private int RingDistance(ChunkPos pos, ChunkPos centre) => RingDistance(pos, centre, _surfaceRing, _deepLimit);
+
+    private int RingDistance(ChunkPos pos, ChunkPos centre, bool surfaceRing, int deepLimit)
     {
         var dx = pos.X - centre.X;
         var dz = pos.Z - centre.Z;
         var d2 = dx * dx + dz * dz;
 
-        if (d2 <= _deepLimit && Math.Abs(pos.Y - centre.Y) <= VerticalBand) return d2;
-        if (!_surfaceRing) return -1;
+        if (d2 <= deepLimit && Math.Abs(pos.Y - centre.Y) <= VerticalBand) return d2;
+        if (!surfaceRing) return -1;
 
         var (low, high) = SurfaceBand(pos.X, pos.Z);
         return pos.Y >= low && pos.Y <= high ? d2 : -1;
     }
 
     /// <summary>The same question with a margin on it, so walking a seam does not thrash.</summary>
-    private bool WorthKeeping(ChunkPos pos, ChunkPos centre)
+    private bool WorthKeeping(ChunkPos pos, ChunkPos centre) =>
+        WorthKeeping(pos, centre, _surfaceRing, _dropLimit, _deepLimit);
+
+    private bool WorthKeeping(ChunkPos pos, ChunkPos centre, bool surfaceRing, int dropLimit, int deepLimit)
     {
         var dx = pos.X - centre.X;
         var dz = pos.Z - centre.Z;
         var d2 = dx * dx + dz * dz;
-        if (d2 > _dropLimit) return false;
+        if (d2 > dropLimit) return false;
 
-        if (d2 <= _deepLimit && Math.Abs(pos.Y - centre.Y) <= VerticalDropBand) return true;
-        if (!_surfaceRing) return false;
+        if (d2 <= deepLimit && Math.Abs(pos.Y - centre.Y) <= VerticalDropBand) return true;
+        if (!surfaceRing) return false;
 
         var (low, high) = SurfaceBand(pos.X, pos.Z);
         return pos.Y >= low - 1 && pos.Y <= high + 1;
@@ -537,10 +780,27 @@ public sealed class WorldStreamer : IDisposable
     {
         List<ChunkPos>? stale = null;
 
+        List<ChunkPos>? unseen = null;
+
         foreach (var pos in _requested)
         {
             if (WorthKeeping(pos, centre)) continue;
+            if (_visitors.Count > 0 && VisitorKeeps(pos))
+            {
+                // Kept for a guest, but out of the host's own sight: its mesh goes, its blocks stay.
+                if (_meshRequested.Contains(pos)) (unseen ??= []).Add(pos);
+                continue;
+            }
             (stale ??= []).Add(pos);
+        }
+
+        if (unseen is not null)
+        {
+            foreach (var pos in unseen)
+            {
+                _meshRequested.Remove(pos);
+                _dropped.Enqueue(pos);
+            }
         }
 
         if (stale is not null)
@@ -608,6 +868,14 @@ public sealed class WorldStreamer : IDisposable
                     var chunk = _world.GetOrCreateChunk(genPos);
                     _generator.GenerateChunk(chunk);
                     _generator.DecorateChunk(chunk);
+                    TerrainFault?.Invoke(chunk);
+
+                    if (KeepTerrainSums)
+                    {
+                        var sum = SumOf(chunk.Raw);
+                        _terrainSums[genPos] = sum;
+                        if (ReportTerrainSums) _newSums.Enqueue((genPos, sum));
+                    }
 
                     // ⛳ Whatever a loaded save put here, on top of the terrain and before the chunk
                     // is declared generated. Everything downstream — the first light flood, the
@@ -750,7 +1018,7 @@ public sealed class WorldStreamer : IDisposable
             if (_lightRequested.Contains(pos)) continue;
 
             var d2 = RingDistance(pos, _lastCentre);
-            if (d2 < 0 || d2 > _lightLimit) continue;
+            if ((d2 < 0 || d2 > _lightLimit) && (_visitors.Count == 0 || !VisitorWants(pos, VisitorLight))) continue;
 
             if (!NeighbourhoodGenerated(pos)) continue;
 
@@ -849,12 +1117,15 @@ public sealed class WorldStreamer : IDisposable
     {
         while (_finishedMeshes.TryDequeue(out data!))
         {
-            if (_requested.Contains(data.Position)) return true;
+            if (_meshRequested.Contains(data.Position)) return true;
         }
 
         return false;
     }
 
+    /// <summary>
+    /// A chunk whose mesh is no longer wanted: forgotten, or (on a co-op host) kept only for a guest.
+    /// </summary>
     public bool TryDequeueDropped(out ChunkPos pos) => _dropped.TryDequeue(out pos);
 
     public void Dispose()

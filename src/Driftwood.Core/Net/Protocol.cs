@@ -38,6 +38,21 @@ public enum Msg : byte
 
     /// <summary>Guest → host: leaving on purpose, so the host says "left" rather than a socket error.</summary>
     Bye = 11,
+
+    /// <summary>Guest → host (v3): the terrain sums of chunks the guest's generator just made.</summary>
+    ChunkSums = 12,
+
+    /// <summary>Host → guest (v3): a chunk as the host holds it, because the guest's terrain differed.</summary>
+    ChunkBlocks = 13,
+
+    /// <summary>Host → guest (v3, N5): the creatures round that guest, as they stand. Unreliable, ten a second.</summary>
+    Creatures = 14,
+
+    /// <summary>Guest → host (v3, N5): I struck this creature, this hard, from here.</summary>
+    StrikeCreature = 15,
+
+    /// <summary>Host → guest (v3, N5): a creature landed a blow on you.</summary>
+    Hurt = 16,
 }
 
 /// <summary>
@@ -51,7 +66,7 @@ public enum Msg : byte
 /// </remarks>
 public static class Protocol
 {
-    public const int Version = 2;
+    public const int Version = 3;
 
     public static byte[] Build(Msg kind, Action<BinaryWriter> fields)
     {
@@ -265,4 +280,146 @@ public static class SimpleMessages
     public static byte[] Bye() => Protocol.Build(Msg.Bye, _ => { });
 
     public static byte[] Character(byte[] record) => Protocol.Build(Msg.Character, w => w.WriteBlob(record));
+}
+
+/// <summary>Guest → host: what this guest's generator made, chunk by chunk, as 64-bit sums (D3).</summary>
+public sealed record ChunkSumsMessage(IReadOnlyList<(World.ChunkPos Pos, ulong Sum)> Sums)
+{
+    /// <summary>Sums per message: 20 bytes each, so one message stays well inside a single Epic packet's few.</summary>
+    public const int MaxPerMessage = 256;
+
+    public byte[] Encode() => Protocol.Build(Msg.ChunkSums, w =>
+    {
+        w.Write(Sums.Count);
+        foreach (var (pos, sum) in Sums)
+        {
+            w.Write(pos.X);
+            w.Write(pos.Y);
+            w.Write(pos.Z);
+            w.Write(sum);
+        }
+    });
+
+    public static ChunkSumsMessage Decode(BinaryReader r)
+    {
+        var count = r.ReadInt32();
+        if (count < 0 || count > 4096) throw new InvalidDataException("a sum count that cannot be right");
+        var sums = new List<(World.ChunkPos, ulong)>(count);
+        for (var i = 0; i < count; i++) sums.Add((new World.ChunkPos(r.ReadInt32(), r.ReadInt32(), r.ReadInt32()), r.ReadUInt64()));
+        return new ChunkSumsMessage(sums);
+    }
+}
+
+/// <summary>Host → guest: one chunk's blocks as the host holds them, packed.</summary>
+public sealed record ChunkBlocksMessage(World.ChunkPos Pos, ushort[] Blocks)
+{
+    public byte[] Encode() => Protocol.Build(Msg.ChunkBlocks, w =>
+    {
+        w.Write(Pos.X);
+        w.Write(Pos.Y);
+        w.Write(Pos.Z);
+        w.WriteBlob(Protocol.Pack(System.Runtime.InteropServices.MemoryMarshal.AsBytes(Blocks.AsSpan()).ToArray()));
+    });
+
+    public static ChunkBlocksMessage Decode(BinaryReader r)
+    {
+        var pos = new World.ChunkPos(r.ReadInt32(), r.ReadInt32(), r.ReadInt32());
+        var raw = Protocol.Unpack(r.ReadBlob());
+        if (raw.Length != World.Chunk.Volume * sizeof(ushort)) throw new InvalidDataException("a chunk of the wrong size");
+        return new ChunkBlocksMessage(pos, System.Runtime.InteropServices.MemoryMarshal.Cast<byte, ushort>(raw).ToArray());
+    }
+}
+
+/// <summary>One creature as a guest is to draw it: the host's numbering, never the host's object.</summary>
+/// <param name="Id">The host's number for this creature for as long as it lives; never reused within a session.</param>
+public readonly record struct CreatureState(
+    int Id, string Kind, byte Bulk, Vector3 Position, float Yaw, short Health,
+    float HurtFor, float DyingFor, float Grown, float FuseFor);
+
+/// <summary>Host → guest: every creature within <see cref="Radius"/> of the guest. A creature missing from it is gone.</summary>
+/// <param name="Sequence">Counts up per guest; an older set arriving late (unreliable) is thrown away.</param>
+public sealed record CreaturesMessage(uint Sequence, IReadOnlyList<CreatureState> Creatures)
+{
+    /// <summary>Blocks round a guest whose creatures it is told about: about its fog at a normal view distance.</summary>
+    public const float Radius = 96f;
+
+    /// <summary>At most this many per message, nearest first, so a pen of a hundred sheep cannot make a message Epic drops.</summary>
+    public const int MaxPerMessage = 160;
+
+    public byte[] Encode() => Protocol.Build(Msg.Creatures, w =>
+    {
+        w.Write(Sequence);
+        w.Write(Creatures.Count);
+        foreach (var c in Creatures)
+        {
+            w.Write(c.Id);
+            w.Write(c.Kind);
+            w.Write(c.Bulk);
+            w.Write(c.Position);
+            w.Write((Half)c.Yaw);
+            w.Write(c.Health);
+            w.Write(Fraction(c.HurtFor, Entities.CreatureHerd.HurtSeconds));
+            w.Write(Fraction(c.DyingFor, Entities.CreatureHerd.DyingSeconds));
+            w.Write(Fraction(c.Grown, 1f));
+            w.Write(Fraction(c.FuseFor, Entities.CreatureHerd.FuseSeconds));
+        }
+    });
+
+    public static CreaturesMessage Decode(BinaryReader r)
+    {
+        var sequence = r.ReadUInt32();
+        var count = r.ReadInt32();
+        if (count < 0 || count > 4096) throw new InvalidDataException("a creature count that cannot be right");
+        var list = new List<CreatureState>(count);
+        for (var i = 0; i < count; i++)
+        {
+            list.Add(new CreatureState(
+                r.ReadInt32(), r.ReadString(), r.ReadByte(), r.ReadVector3(), (float)r.ReadHalf(), r.ReadInt16(),
+                Whole(r.ReadByte(), Entities.CreatureHerd.HurtSeconds), Whole(r.ReadByte(), Entities.CreatureHerd.DyingSeconds),
+                Whole(r.ReadByte(), 1f), Whole(r.ReadByte(), Entities.CreatureHerd.FuseSeconds)));
+        }
+        return new CreaturesMessage(sequence, list);
+    }
+
+    private static byte Fraction(float value, float of) => (byte)Math.Clamp((int)MathF.Round(value / of * 255f), 0, 255);
+
+    private static float Whole(byte value, float of) => value / 255f * of;
+}
+
+/// <summary>Guest → host: a blow on one of the host's creatures, already worked out by the guest's own stats.</summary>
+/// <param name="From">Where the blow came from (the guest's eye), for the knock-back and the host's reach check.</param>
+public readonly record struct StrikeMessage(int Creature, int HalfHearts, Vector3 From)
+{
+    public byte[] Encode()
+    {
+        var strike = this;
+        return Protocol.Build(Msg.StrikeCreature, w =>
+        {
+            w.Write(strike.Creature);
+            w.Write(strike.HalfHearts);
+            w.Write(strike.From);
+        });
+    }
+
+    public static StrikeMessage Decode(BinaryReader r) => new(r.ReadInt32(), r.ReadInt32(), r.ReadVector3());
+}
+
+/// <summary>Host → guest: a creature's blow landed on this guest.</summary>
+public readonly record struct HurtMessage(string Kind, int HalfHearts, Vector3 From)
+{
+    /// <summary>The kind a blast's hurt carries: no creature, no pet in the way, the blast's rumble.</summary>
+    public const string Explosion = "~explosion";
+
+    public byte[] Encode()
+    {
+        var hurt = this;
+        return Protocol.Build(Msg.Hurt, w =>
+        {
+            w.Write(hurt.Kind);
+            w.Write(hurt.HalfHearts);
+            w.Write(hurt.From);
+        });
+    }
+
+    public static HurtMessage Decode(BinaryReader r) => new(r.ReadString(), r.ReadInt32(), r.ReadVector3());
 }

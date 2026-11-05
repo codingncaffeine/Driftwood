@@ -43,6 +43,21 @@ public sealed partial class ClientHost
     private readonly Dictionary<int, PlayerAnimator> _remoteAnimators = [];
     private PlayerRenderer? _remoteRenderer;
     private double _sincePose;
+    /// <summary>
+    /// On a host: every guest's feet and number, in the same order, refreshed once a frame — what the
+    /// streamer keeps the world round (N4) and what the herd chases and hurts (N5). Empty otherwise.
+    /// </summary>
+    private readonly List<Vector3> _coopOthers = [];
+    private readonly List<int> _coopOtherIds = [];
+
+    /// <summary>N5 host: the herd's creatures numbered for the wire.</summary>
+    private readonly CreatureRoster _creatureRoster = new();
+    private double _sinceRosterPrune;
+
+    /// <summary>N5 guest: the host's creatures, stood up in this machine's never-stepped herd.</summary>
+    private CreatureMirror? _creatureMirror;
+    private int _chunksMendedHere;
+    private readonly List<(Core.World.ChunkPos Pos, ulong Sum)> _sumScratch = [];
     private double _sinceCharacter;
     private bool _coopEnded;
     private float _coopFrameDt;
@@ -242,6 +257,19 @@ public sealed partial class ClientHost
 
             host.SendCells(TakeOutgoing());
             if (Due(ref _sincePose, PoseInterval, dt)) host.SendPose(MyPose());
+
+            // N4: the world exists round every guest, not just round the host. N5: and the herd sees them.
+            _coopOthers.Clear();
+            _coopOtherIds.Clear();
+            foreach (var player in host.Players.Values)
+            {
+                if (player.Latest is not { } pose) continue;
+                _coopOthers.Add(pose.Position);
+                _coopOtherIds.Add(player.Id);
+            }
+            _streamer.SetVisitors(_coopOthers);
+
+            if (Due(ref _sinceRosterPrune, 5.0, dt) && _herd is not null) _creatureRoster.Prune(_herd.All);
             return;
         }
 
@@ -278,11 +306,38 @@ public sealed partial class ClientHost
             }
         }
 
+        // N5: the host's creatures, as the host has them, a fifth of a second behind.
+        if (guest.CreaturesHeard.Count > 0 || _creatureMirror is not null)
+        {
+            _herd ??= new CreatureHerd(_seed.Derive("creatures"));
+            _creatureMirror ??= new CreatureMirror(KindFor);
+            while (guest.CreaturesHeard.TryDequeue(out var set)) _creatureMirror.Heard(_elapsed, set, _herd);
+            _creatureMirror.Step(_elapsed);
+        }
+
+        while (guest.HurtHeard.TryDequeue(out var blow)) TakeCreatureBlow(blow.Kind, blow.HalfHearts, blow.From);
+
         if (guest.DayTimeHeard is { } day)
         {
             guest.DayTimeHeard = null;
             _clock.SetTime(day);
         }
+
+        // D3: this machine's generator may round differently from the host's. Each chunk it makes is
+        // summed and the host checks it; a chunk that differs comes back as the host's own blocks.
+        while (guest.ChunksHeard.TryDequeue(out var mended))
+        {
+            var differed = _streamer.ReplaceChunk(mended.Pos, mended.Blocks);
+            // The first few by name; the total is in the leave line, so a guest on another C library
+            // whose every chunk rounds differently does not fill the log.
+            if (differed > 0 && ++_chunksMendedHere <= 3)
+                Console.WriteLine($"co-op       chunk {mended.Pos} differed from the host's in {differed} cells; took the host's"
+                                  + (_chunksMendedHere == 3 ? " (further ones counted at leaving)" : ""));
+        }
+
+        _sumScratch.Clear();
+        while (_sumScratch.Count < 1024 && _streamer.TryTakeNewSum(out var made)) _sumScratch.Add(made);
+        if (_sumScratch.Count > 0) guest.SendSums(_sumScratch);
 
         guest.SendCells(TakeOutgoing());
         if (Due(ref _sincePose, PoseInterval, dt) && _spawned) guest.SendPose(MyPose());
@@ -410,7 +465,9 @@ public sealed partial class ClientHost
         {
             Console.WriteLine(
                 $"co-op       leaving: heard {guest.PosesHeard} poses and {guest.CellsHeardTotal} cells, "
-                + $"sent {guest.CellsSent} cells");
+                + $"sent {guest.CellsSent} cells; sent {guest.SumsSent} terrain sums, {guest.ChunksHeardTotal} chunks mended by the host; "
+                + $"creatures: {_creatureMirror?.SetsHeard ?? 0} sets ({_creatureMirror?.SetsLate ?? 0} late), "
+                + $"{_creatureMirror?.Count ?? 0} in sight, {guest.StrikesSent} blows struck");
             if (guest.Ended is null && _spawned) SendCoopCharacter();
             guest.Leave(TimeSpan.FromSeconds(2));
             guest.Dispose();
@@ -424,9 +481,14 @@ public sealed partial class ClientHost
         {
             Console.WriteLine(
                 $"co-op       closing: heard {host.PosesHeard} poses and {host.CellsHeard} cells from guests, "
-                + $"sent {host.CellsSent} cells");
+                + $"sent {host.CellsSent} cells; terrain sums {host.SumsAgreed}/{host.SumsChecked} agreed, "
+                + $"{host.ChunksMended} chunks mended, {host.SumsUnchecked} too far to check; "
+                + $"guests' blows {host.StrikesLanded} landed / {host.StrikesRefused} refused, guests hurt {host.GuestsHurt} times");
             host.Dispose();
             _coopHost = null;
+            _streamer?.SetVisitors([]);
+            _coopOthers.Clear();
+            _coopOtherIds.Clear();
         }
 
         CloseEpicRoom();
@@ -678,6 +740,18 @@ public sealed partial class ClientHost
         return found.Count > 0 ? found.Select(f => f.Text) : ["this machine's address"];
     }
 
+    /// <summary>
+    /// ⚠ Instruments only: <c>DRIFTWOOD_TERRAIN_FAULT=1</c> makes this machine's generator disagree with
+    /// every other — one cell in the middle of each chunk that has anything in it — so a smoke can
+    /// prove a guest's wrong terrain is caught and mended with the host's.
+    /// </summary>
+    private static Action<Core.World.Chunk>? TerrainFaultForChecks()
+    {
+        if (Environment.GetEnvironmentVariable("DRIFTWOOD_TERRAIN_FAULT") != "1") return null;
+        Console.Error.WriteLine("driftwood: DRIFTWOOD_TERRAIN_FAULT=1 — this terrain is wrong on purpose");
+        return static chunk => Core.World.TerrainFault.Plant(chunk);
+    }
+
     // ─── The shot instrument's friend ─────────────────────────────────────────────────────────────
 
     private CoopGuest? _shotFriend;
@@ -732,7 +806,9 @@ public sealed partial class ClientHost
                 // cell is taken back out of that, because the session passes it on to the others.
                 int before;
                 lock (game._outgoingLock) before = game._outgoingCells.Count;
-                game._streamer.EditBlock(cell.X, cell.Y, cell.Z, new BlockId(cell.Block));
+                // ⛳ N4: EditOrHold, not EditBlock — a guest can stand where the host's ring has not
+                // reached yet, and EditBlock drops a cell in a chunk that is not loaded.
+                game._streamer.EditOrHold(cell.X, cell.Y, cell.Z, new BlockId(cell.Block));
                 lock (game._outgoingLock)
                 {
                     var own = game._outgoingCells.FindIndex(before, c => c == cell);
@@ -744,5 +820,33 @@ public sealed partial class ClientHost
 
             return accepted;
         }
+
+        public bool TryTerrainSum(Core.World.ChunkPos pos, out ulong sum) => game._streamer.TryTerrainSum(pos, out sum);
+
+        public void CreaturesNear(Vector3 at, float radius, List<CreatureState> into)
+        {
+            if (game._herd is null)
+            {
+                into.Clear();
+                return;
+            }
+            game._creatureRoster.Near(game._herd.All, at, radius, into);
+        }
+
+        public bool StrikeCreature(int guest, Vector3 guestAt, StrikeMessage strike) =>
+            CoopRules.LandStrike(game._herd, game._creatureRoster, guestAt, strike, out var struck)
+            && PlayBlow(struck!);
+
+        private bool PlayBlow(Creature struck)
+        {
+            game._audio?.Play(Pick(CreatureSounds.Blows), struck.Middle, 0.62f, Wobble());
+            var cry = CreatureSounds.HurtFor(struck.Kind);
+            if (cry.Length > 0 && struck.Alive) game._audio?.Play(Pick(cry), struck.Middle, 0.85f, Wobble());
+            return true;
+        }
+
+        public bool IsLoaded(Core.World.ChunkPos pos) => game._streamer.IsGenerated(pos);
+
+        public ushort[]? CurrentBlocks(Core.World.ChunkPos pos) => game._streamer.CurrentBlocks(pos);
     }
 }

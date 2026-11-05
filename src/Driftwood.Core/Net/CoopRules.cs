@@ -1,4 +1,5 @@
 using System.Numerics;
+using Driftwood.Core.Entities;
 
 namespace Driftwood.Core.Net;
 
@@ -13,4 +14,25 @@ public static class CoopRules
 
     public static bool InReach(Vector3 eye, int x, int y, int z) =>
         Vector3.DistanceSquared(eye, new Vector3(x + 0.5f, y + 0.5f, z + 0.5f)) <= Reach * Reach;
+
+    /// <summary>The most a guest's single blow may claim: a little over the best weapon with every bonus.</summary>
+    public const int MaxStrike = 40;
+
+    /// <summary>
+    /// A guest's blow on one of the host's creatures, landed through the herd's own <c>Hurt</c> when it
+    /// is fair: the creature exists and lives, and is within <see cref="Reach"/> of the guest's last pose.
+    /// </summary>
+    /// <returns>True when the blow landed (the creature was not still ringing from the last).</returns>
+    public static bool LandStrike(CreatureHerd? herd, CreatureRoster roster, Vector3 guestAt, StrikeMessage strike, out Creature? struck)
+    {
+        struck = null;
+        if (herd is null || roster.Find(strike.Creature) is not { Alive: true } creature) return false;
+        if (Vector3.DistanceSquared(guestAt + new Vector3(0f, 1.6f, 0f), creature.Middle) > Reach * Reach) return false;
+
+        var before = creature.Health;
+        herd.Hurt(creature, Math.Clamp(strike.HalfHearts, 1, MaxStrike), strike.From);
+        if (creature.Health == before) return false;
+        struck = creature;
+        return true;
+    }
 }

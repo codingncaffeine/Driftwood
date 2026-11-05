@@ -14,7 +14,9 @@ public readonly record struct SpawnKind(
     string Name, Vector3 Size, bool Hostile = false, CreatureMove Move = CreatureMove.Walk);
 
 /// <summary>One blow a creature landed on the player, for whoever turns that into damage.</summary>
-public readonly record struct CreatureAttack(string Kind, Vector3 Position, int HalfHearts);
+/// <param name="Target">Whose blow it is: 0 the player passed to <see cref="CreatureHerd.Update"/>, n the
+/// n-th of its <c>others</c> (co-op guests) — the one this creature was chasing.</param>
+public readonly record struct CreatureAttack(string Kind, Vector3 Position, int HalfHearts, int Target = 0);
 
 /// <summary>One animal in the world: what it is, where it is, and which way it is pointing.</summary>
 public sealed class Creature
@@ -1087,7 +1089,8 @@ public sealed class CreatureHerd
     /// which averages forty seconds more — long enough that walking away from a fight and back finds
     /// it still there, short enough that the slots follow the player.</para>
     /// </remarks>
-    public int Despawn(Vector3 player, float dt, Func<Creature, bool> transient)
+    /// <param name="others">Co-op guests: a monster near ANY player is near, so distance is to the nearest.</param>
+    public int Despawn(Vector3 player, float dt, Func<Creature, bool> transient, IReadOnlyList<Vector3>? others = null)
     {
         var gone = 0;
         var far = SpawnRules.SpawnRadius * SpawnRules.SpawnRadius;
@@ -1099,6 +1102,8 @@ public sealed class CreatureHerd
             if (!creature.Alive || !transient(creature)) continue;
 
             var distance = Vector3.DistanceSquared(creature.Position, player);
+            if (others is not null)
+                foreach (var other in others) distance = MathF.Min(distance, Vector3.DistanceSquared(creature.Position, other));
 
             if (distance > far)
             {
@@ -1267,6 +1272,28 @@ public sealed class CreatureHerd
         return leave >= enter && leave >= 0f;
     }
 
+    /// <summary>Which player a creature's step is about — the attack target stamped on its blows.</summary>
+    private int _attackTarget;
+
+    /// <summary>The nearest of the player and the others, and its index (0 the player, n the n-th other).</summary>
+    private static Vector3? Nearest(Vector3 from, Vector3? player, IReadOnlyList<Vector3>? others, out int index)
+    {
+        index = 0;
+        if (others is null || others.Count == 0) return player;
+
+        Vector3? best = player;
+        var bestD = player is { } p ? Vector3.DistanceSquared(from, p) : float.PositiveInfinity;
+        for (var i = 0; i < others.Count; i++)
+        {
+            var d = Vector3.DistanceSquared(from, others[i]);
+            if (d >= bestD) continue;
+            bestD = d;
+            best = others[i];
+            index = i + 1;
+        }
+        return best;
+    }
+
     /// <summary>Walks the herd on by one step.</summary>
     /// <remarks>
     /// One decision every few seconds, a slow turn toward it, and a step forward that is refused when
@@ -1274,6 +1301,7 @@ public sealed class CreatureHerd
     /// that walks into a cliff wanders off along it instead of standing there pressing into the rock.
     /// </remarks>
     /// <param name="player">Where the player's feet are, or null when nobody is in the world.</param>
+    /// <param name="others">Co-op guests' feet: each creature chases whichever player is nearest.</param>
     /// <param name="sunlit">
     /// Whether a cell is standing in full daylight. Null means nothing burns — which is what the
     /// headless checks pass, and what a world at night amounts to.
@@ -1296,7 +1324,7 @@ public sealed class CreatureHerd
         float dt, Func<int, int, int, bool> solid,
         Vector3? player = null, Func<int, int, int, bool>? sunlit = null,
         Func<int, int, int, bool>? known = null, Func<int, int, int, bool>? water = null,
-        Action<Creature>? scorch = null)
+        Action<Creature>? scorch = null, IReadOnlyList<Vector3>? others = null)
     {
         // ⛔ The dead are swept HERE and never inside Hurt, because a fall calls Hurt from inside the
         // walk below — and taking a creature out of the list being walked is how a herd that loses
@@ -1332,7 +1360,10 @@ public sealed class CreatureHerd
             creature.FleeFor = MathF.Max(0f, creature.FleeFor - dt);
             var magicMovement = Math.Clamp(creature.MagicMovementScale, 0f, 1f);
 
-            if (creature.MagicallyFeared && player is { } fearedFrom)
+            // ⛳ Co-op (N5): each creature minds the NEAREST player, and a blow it lands says whose.
+            var chased = Nearest(creature.Position, player, others, out _attackTarget);
+
+            if (creature.MagicallyFeared && chased is { } fearedFrom)
             {
                 var away = creature.Position - fearedFrom;
                 away.Y = 0f;
@@ -1382,7 +1413,7 @@ public sealed class CreatureHerd
             if (creature.Kind == "phantom")
             {
                 Scorch(creature, dt, sunlit, scorch);
-                if (magicMovement > 0f) Swoop(creature, dt * magicMovement, player, solid);
+                if (magicMovement > 0f) Swoop(creature, dt * magicMovement, chased, solid);
                 continue;
             }
 
@@ -1390,40 +1421,40 @@ public sealed class CreatureHerd
             // looses volleys, the ashwail drifts the hollows and draws breath for a bolt.
             if (creature.Kind == "cinderwisp")
             {
-                if (magicMovement > 0f) Kindle(creature, dt * magicMovement, player, solid);
+                if (magicMovement > 0f) Kindle(creature, dt * magicMovement, chased, solid);
                 continue;
             }
 
             if (creature.Kind == "ashwail")
             {
-                if (magicMovement > 0f) Wail(creature, dt * magicMovement, player, solid);
+                if (magicMovement > 0f) Wail(creature, dt * magicMovement, chased, solid);
                 continue;
             }
 
             // ⛳ The Ashwraith (2026-10-25): wakes, bursts free, and hunts from the air.
             if (creature.Kind == "ashwraith")
             {
-                if (magicMovement > 0f) Haunt(creature, dt * magicMovement, player, solid);
+                if (magicMovement > 0f) Haunt(creature, dt * magicMovement, chased, solid);
                 continue;
             }
 
             // ⛳ The Deepwatch's keepers (2026-10-25): they swim their halls and fix the eye.
             if (creature.Kind is "guardian" or "elder_guardian")
             {
-                if (magicMovement > 0f) Watch(creature, dt * magicMovement, player, solid, water);
+                if (magicMovement > 0f) Watch(creature, dt * magicMovement, chased, solid, water);
                 continue;
             }
 
             // ⛳ The bees (2026-10-26): round their house by day, into it at dusk, at you if angered.
             if (creature.Kind == "bee")
             {
-                if (magicMovement > 0f) Buzz(creature, dt * magicMovement, player, solid);
+                if (magicMovement > 0f) Buzz(creature, dt * magicMovement, chased, solid);
                 continue;
             }
 
             if (creature.Kind == "core_wyrm")
             {
-                if (magicMovement > 0f) Rage(creature, dt * magicMovement, player);
+                if (magicMovement > 0f) Rage(creature, dt * magicMovement, chased);
                 continue;
             }
 
@@ -1439,7 +1470,7 @@ public sealed class CreatureHerd
                 // A hopper travels while it is in the air — the hop IS the stride. Straight along
                 // the yaw it launched with, no steering: it aimed on the ground.
                 if (creature.Move == CreatureMove.Hop || creature.Leaping)
-                    HopDrift(creature, dt, solid, creature.Targeting ? player : null);
+                    HopDrift(creature, dt, solid, creature.Targeting ? chased : null);
                 continue;
             }
 
@@ -1450,7 +1481,7 @@ public sealed class CreatureHerd
                 creature.BlinkRest = MathF.Max(0f, creature.BlinkRest - dt);
 
                 if (!creature.BlinkPending && !creature.Provoked && creature.BlinkRest <= 0f
-                    && player is { } near
+                    && chased is { } near
                     && Vector3.DistanceSquared(near, creature.Position) < BlinkCrowdRange * BlinkCrowdRange)
                 {
                     creature.BlinkPending = true;
@@ -1465,7 +1496,7 @@ public sealed class CreatureHerd
 
             // A timid kind bolts from an approach nothing has swung in — the fox's whole
             // character. Renewed while the walker keeps closing, so it stays ahead of them.
-            if (creature.FleeFor <= 0f && player is { } stroller
+            if (creature.FleeFor <= 0f && chased is { } stroller
                 && CreatureVitals.Timid(creature.Kind)
                 && Vector3.DistanceSquared(stroller, creature.Position) < ShyRange * ShyRange)
             {
@@ -1484,7 +1515,7 @@ public sealed class CreatureHerd
             }
 
             Scorch(creature, dt, sunlit, scorch);
-            var hunting = !creature.MagicallyFeared && Hunt(creature, dt, player, solid);
+            var hunting = !creature.MagicallyFeared && Hunt(creature, dt, chased, solid);
             var courting = !hunting && Court(creature, dt);
 
             creature.Thinks -= dt;
@@ -1915,7 +1946,7 @@ public sealed class CreatureHerd
         if (range <= reach && height <= 2f + (creature.Bulk - 1) * 0.5f && creature.Swings <= 0f)
         {
             creature.Swings = StrikeEvery;
-            _attacks.Add(new CreatureAttack(creature.Kind, creature.Middle, CreatureVitals.DamageFor(creature.Kind, creature.Bulk)));
+            _attacks.Add(new CreatureAttack(creature.Kind, creature.Middle, CreatureVitals.DamageFor(creature.Kind, creature.Bulk), _attackTarget));
         }
 
         return true;
@@ -2033,7 +2064,7 @@ public sealed class CreatureHerd
             if (Vector3.Distance(creature.Middle, chest) < 1.6f && creature.Swings <= 0f)
             {
                 creature.Swings = 1f;
-                _attacks.Add(new CreatureAttack(creature.Kind, creature.Middle, CreatureVitals.DamageFor(creature.Kind)));
+                _attacks.Add(new CreatureAttack(creature.Kind, creature.Middle, CreatureVitals.DamageFor(creature.Kind), _attackTarget));
                 EndSwoop(creature);
             }
             else if (creature.SwoopFor > 4f)
@@ -2225,7 +2256,7 @@ public sealed class CreatureHerd
             if (toward.Length() < 1.3f && creature.Swings <= 0f)
             {
                 creature.Swings = 1f;
-                _attacks.Add(new CreatureAttack(creature.Kind, creature.Middle, CreatureVitals.DamageFor(creature.Kind)));
+                _attacks.Add(new CreatureAttack(creature.Kind, creature.Middle, CreatureVitals.DamageFor(creature.Kind), _attackTarget));
                 creature.Stung = StungSeconds;
             }
 
@@ -2309,7 +2340,7 @@ public sealed class CreatureHerd
                     creature.Beam += dt;
                     if (creature.Beam >= BeamCharge(creature.Kind))
                     {
-                        _attacks.Add(new CreatureAttack(creature.Kind, creature.Middle, CreatureVitals.DamageFor(creature.Kind)));
+                        _attacks.Add(new CreatureAttack(creature.Kind, creature.Middle, CreatureVitals.DamageFor(creature.Kind), _attackTarget));
                         creature.Beam = 0f;
                         creature.Swings = 2f + (float)_random.NextDouble() * 2f;
                         creature.Spoke = true;
@@ -2564,7 +2595,7 @@ public sealed class CreatureHerd
             if (Vector3.Distance(creature.Middle, chest) < 4f && creature.Swings <= 0f)
             {
                 creature.Swings = 1f;
-                _attacks.Add(new CreatureAttack(creature.Kind, creature.Middle, CreatureVitals.DamageFor(creature.Kind)));
+                _attacks.Add(new CreatureAttack(creature.Kind, creature.Middle, CreatureVitals.DamageFor(creature.Kind), _attackTarget));
                 creature.Swooping = false;
             }
             else if (creature.SwoopFor > 4f) creature.Swooping = false;

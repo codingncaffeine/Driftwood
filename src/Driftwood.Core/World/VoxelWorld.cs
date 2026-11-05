@@ -129,6 +129,20 @@ public sealed class VoxelWorld
     }
 
     /// <summary>
+    /// A live edit for a chunk that is not here yet: held like a saved one, and worth a save.
+    /// </summary>
+    /// <remarks>
+    /// What a co-op host does with a guest's cell in a chunk it has not generated — the guest can be
+    /// further out than anything the host has loaded. Unlike <see cref="Restore"/> it marks the world
+    /// <see cref="Changed"/>, because it IS new: nothing on disk holds it yet.
+    /// </remarks>
+    public void Hold(int wx, int wy, int wz, BlockId id)
+    {
+        Restore(wx, wy, wz, id);
+        Changed = true;
+    }
+
+    /// <summary>
     /// Puts any loaded edits belonging to this chunk into it, and forgets them.
     /// </summary>
     /// <remarks>
