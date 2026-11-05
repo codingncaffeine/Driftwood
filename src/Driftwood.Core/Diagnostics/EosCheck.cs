@@ -82,8 +82,6 @@ public static class EosCheck
         start.ArgumentList.Add("--eos-check-guest");
         start.ArgumentList.Add(world);
         start.ArgumentList.Add(place.MyAddress!);
-        start.Environment["XDG_DATA_HOME"] = guestData;
-        start.Environment["DRIFTWOOD_EOS_CONFIG"] = MeetingPlaces.FindConfig(configFolder);
         start.RedirectStandardOutput = true;
         start.RedirectStandardError = true;
 
@@ -102,11 +100,18 @@ public static class EosCheck
                 return null;
             }
 
+            // ⚠ The environment block is left alone, so the account gets its own (its temp folder, its
+            // profile): this process's pointed the guest's temp at a folder it may not open. The guest
+            // finds the credentials beside the program, where every release carries them.
             start.UserName = user;
             start.PasswordInClearText = password;
             start.LoadUserProfile = true;
             start.WorkingDirectory = AppContext.BaseDirectory;
-            start.Environment.Remove("DRIFTWOOD_EOS_GUEST_PASSWORD");
+        }
+        else
+        {
+            start.Environment["XDG_DATA_HOME"] = guestData;
+            start.Environment["DRIFTWOOD_EOS_CONFIG"] = MeetingPlaces.FindConfig(configFolder);
         }
 
         var guest = Process.Start(start)!;
