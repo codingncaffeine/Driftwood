@@ -61,9 +61,15 @@ public sealed class MonsterSpawner
     /// ⚠ A ceiling on catch-up. A frame that stalled for two seconds owes forty ticks; running them
     /// all in one frame is a second stall caused by the first.
     /// </param>
+    /// <param name="others">
+    /// Co-op guests (N5). Each player gets the same samples a tick round their own feet, nothing lands
+    /// within <see cref="SpawnRules.MinRadius"/> of ANY player, and the cap is
+    /// <see cref="SpawnRules.MonsterCap"/> per player — the reference's cap grows with the chunks its
+    /// players hold, which for players apart is one cap each.
+    /// </param>
     public List<MonsterPlacement> Step(
         float dt, SpawnWorld world, Vector3 player, float daylight, int living,
-        IReadOnlyDictionary<string, SpawnKind> kinds, int ticksAtMost = 2)
+        IReadOnlyDictionary<string, SpawnKind> kinds, int ticksAtMost = 2, IReadOnlyList<Vector3>? others = null)
     {
         var placed = new List<MonsterPlacement>();
         if (kinds.Count == 0) return placed;
@@ -72,16 +78,35 @@ public sealed class MonsterSpawner
         var ticks = Math.Min((int)_tick, ticksAtMost);
         _tick -= (int)_tick;
 
+        _players.Clear();
+        _players.Add(player);
+        if (others is not null) _players.AddRange(others);
+        var cap = CapFor(_players.Count);
+
         for (var t = 0; t < ticks; t++)
+        foreach (var centre in _players)
         {
             for (var s = 0; s < SpawnRules.SamplesPerTick; s++)
             {
-                if (living + placed.Count >= SpawnRules.MonsterCap) return placed;
-                Sample(world, player, daylight, living, kinds, placed);
+                if (living + placed.Count >= cap) return placed;
+                Sample(world, centre, daylight, living, cap, kinds, placed);
             }
         }
 
         return placed;
+    }
+
+    /// <summary>The cap for this many players: one <see cref="SpawnRules.MonsterCap"/> each.</summary>
+    public static int CapFor(int players) => SpawnRules.MonsterCap * Math.Max(1, players);
+
+    /// <summary>Everyone a placement must keep its distance from, this step.</summary>
+    private readonly List<Vector3> _players = [];
+
+    private bool TooNearAnyone(Vector3 at)
+    {
+        foreach (var one in _players)
+            if (Vector3.DistanceSquared(at, one) < SpawnRules.MinRadius * SpawnRules.MinRadius) return true;
+        return false;
     }
 
     /// <summary>
@@ -93,7 +118,7 @@ public sealed class MonsterSpawner
     /// at the same height, so a pack lands on one floor and spreads along it.
     /// </remarks>
     private void Sample(
-        SpawnWorld world, Vector3 player, float daylight, int living,
+        SpawnWorld world, Vector3 player, float daylight, int living, int cap,
         IReadOnlyDictionary<string, SpawnKind> kinds, List<MonsterPlacement> placed)
     {
         Samples++;
@@ -135,8 +160,8 @@ public sealed class MonsterSpawner
 
                 var at = new Vector3(x + 0.5f, y, z + 0.5f);
                 var distance = Vector3.DistanceSquared(at, player);
-                if (distance < SpawnRules.MinRadius * SpawnRules.MinRadius) continue;
                 if (distance > SpawnRules.SpawnRadius * SpawnRules.SpawnRadius) continue;
+                if (TooNearAnyone(at)) continue;
 
                 if (entry is null)
                 {
@@ -157,7 +182,7 @@ public sealed class MonsterSpawner
                 here++;
 
                 if (here >= SpawnRules.MostPerSample) return;
-                if (living + placed.Count >= SpawnRules.MonsterCap) return;
+                if (living + placed.Count >= cap) return;
             }
         }
     }

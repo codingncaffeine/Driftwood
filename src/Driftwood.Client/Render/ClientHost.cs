@@ -1931,26 +1931,43 @@ public sealed partial class ClientHost : IDisposable
                         (int)MathF.Floor(p.X), (int)MathF.Floor(p.Y), (int)MathF.Floor(p.Z))) > 0) open++;
             }
 
-            Console.WriteLine($"monsters    {living} of {SpawnRules.MonsterCap} about ({near} within 32, "
+            Console.WriteLine($"monsters    {living} of {MonsterSpawner.CapFor(1 + (_coopHost is null ? 0 : _coopOthers.Count))} about ({near} within 32, "
                             + $"{open} under the sky), {_monsters.Placed} placed from {_monsters.Samples:N0} samples");
         }
 
-        if (living >= SpawnRules.MonsterCap) return;
+        var others = _coopHost is null ? null : _coopOthers;
+        if (living >= MonsterSpawner.CapFor(1 + (others?.Count ?? 0))) return;
 
         _spawnWorld ??= new SpawnWorld(
             SolidForCreature,
             TreeFreeSpawnSupport,
             (x, y, z) => _registry[_streamer.World.GetBlock(x, y, z)].Fluid != FluidKind.None,
             (x, y, z) => _registry[_streamer.World.GetBlock(x, y, z)].Fluid == FluidKind.Water,
-            (x, y, z) => _streamer.World.GetLight(x, y, z),
+            SpawnLight,
             (x, z) => _terrain.BiomeAt(x, z),
             InHold);
 
-        foreach (var placed in _monsters.Step(dt, _spawnWorld, _player.Position, Daylight, living, _monsterKinds))
+        foreach (var placed in _monsters.Step(dt, _spawnWorld, _player.Position, Daylight, living, _monsterKinds, others: others))
             _herd.SpawnAt(placed.Kind, placed.Position, placed.Yaw, BulkFor(placed));
     }
 
     private float _monsterReport = 10f;
+
+    /// <summary>Co-op guests' bodies for the flight pool, rebuilt each step from <see cref="_coopOthers"/>.</summary>
+    private readonly List<(Vector3 Min, Vector3 Max)> _guestBoxes = [];
+
+    /// <summary>
+    /// The light the spawner reads: the world's, but full daylight in a chunk not yet lit.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ An unlit chunk reads as pitch dark, which is a spawning ground in the middle of the day. The
+    /// host's own spawn disc sits inside its lit ring, but round a co-op guest (N5) the host lights only
+    /// a ring and a half of chunks and the disc reaches four — so "not lit yet" must mean "not dark".
+    /// </remarks>
+    private ushort SpawnLight(int x, int y, int z) =>
+        _streamer.IsLit(ChunkPos.FromWorld(x, y, z))
+            ? _streamer.World.GetLight(x, y, z)
+            : LightValue.Pack(LightValue.Max, 0, 0, 0);
 
     /// <summary>The Emberholds near enough to matter, refreshed once a second by <see cref="StepEmberholds"/>.</summary>
     private readonly List<StructureSite> _nearHolds = [];
@@ -11408,11 +11425,25 @@ public sealed partial class ClientHost : IDisposable
             ? (_player.Position - new Vector3(PlayerBody.Width * 0.5f, 0f, PlayerBody.Width * 0.5f),
                _player.Position + new Vector3(PlayerBody.Width * 0.5f, _player.CurrentHeight, PlayerBody.Width * 0.5f))
             : null;
-        _projectiles.Update(_streamer.World, _herd, dt, body);
+        _guestBoxes.Clear();
+        if (_coopHost is not null)
+            foreach (var feet in _coopOthers)
+                _guestBoxes.Add((feet - new Vector3(PlayerBody.Width * 0.5f, 0f, PlayerBody.Width * 0.5f),
+                                 feet + new Vector3(PlayerBody.Width * 0.5f, PlayerBody.Height, PlayerBody.Width * 0.5f)));
+        _projectiles.Update(_streamer.World, _herd, dt, body, _guestBoxes);
         StepFishing(dt);
 
         foreach (ref readonly var impact in _projectiles.Impacts)
         {
+            // ⛳ Co-op (N5): a creature's shot that found a guest is the guest's to take. A skull or a
+            // wail bolt still bursts below — the blast reaches guests by Detonate's own rule.
+            if (impact.Guest >= 0)
+            {
+                if (impact.Guest < _coopOtherIds.Count && HurtMessage.ForShot(impact.Kind, impact.Tag, impact.Damage) is { } shotHurt)
+                    _coopHost?.HurtGuest(_coopOtherIds[impact.Guest], shotHurt with { From = impact.Position });
+                if (impact.Kind is not (ProjectileKind.SkullBolt or ProjectileKind.WailBolt)) continue;
+            }
+
             if (impact.Kind == ProjectileKind.Farpearl)
             {
                 FarstepTo(impact);
@@ -12556,6 +12587,23 @@ public sealed partial class ClientHost : IDisposable
         {
             HurtPlayer(halfHearts);
             Rumble(1f, 0.75f, 280);
+            return;
+        }
+
+        // A creature's shot, as the host's own body takes each kind (see StepProjectiles).
+        if (HurtMessage.ShotOf(kind) is { } shot)
+        {
+            HurtPlayer(halfHearts);
+            Rumble(0.5f, 0.8f, 110);
+            switch (shot.Kind)
+            {
+                case ProjectileKind.SkullBolt: Ail(Ailment.Withering, 10f); break;
+                case ProjectileKind.Ember: _vitals.Ignite(5f); break;
+                case ProjectileKind.Arrow:
+                    _audio?.Play(Pick(CreatureSounds.ArrowHits), from, 0.85f, Wobble());
+                    LandTag(shot.Tag, 1f);
+                    break;
+            }
             return;
         }
 

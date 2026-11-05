@@ -3,6 +3,8 @@ using System.Numerics;
 using Driftwood.Core.Blocks;
 using Driftwood.Core.Entities;
 using Driftwood.Core.Gen;
+using Driftwood.Core.Lighting;
+using Driftwood.Core.Projectiles;
 using Driftwood.Core.Items;
 using Driftwood.Core.Net;
 using Driftwood.Core.Saves;
@@ -33,6 +35,7 @@ public static class NetCheck
             Directory.CreateDirectory(folder);
             Check(gameVersion, folder, faults, said);
             CheckStreaming(gameVersion, folder, faults, said);
+            CheckSpawnsAndShots(faults, said);
         }
         catch (Exception error)
         {
@@ -577,6 +580,89 @@ public static class NetCheck
         guestA.Leave(TimeSpan.FromSeconds(1));
         if (Until(() => !hostStreamer.IsGenerated(heldChunk), "the host to forget the world round a guest who left"))
             said.Add("streaming: a guest leaving lets the host forget its ring");
+    }
+
+    /// <summary>
+    /// N5, the host's own systems for more than one player: the dark spawns round each, never within the
+    /// near ring of any, under a cap per player; a creature's shot finds the nearest body on its line.
+    /// </summary>
+    private static void CheckSpawnsAndShots(List<string> faults, List<string> said)
+    {
+        // A dark flat floor everywhere, the audit's spawner world reduced.
+        static bool Solid(int x, int y, int z) => y < 0;
+        var world = new SpawnWorld(Solid, Solid, (x, y, z) => false, (x, y, z) => false,
+            (x, y, z) => LightValue.Pack(0, 0, 0, 0), (x, z) => Biome.Meadow);
+        var kinds = new Dictionary<string, SpawnKind>(StringComparer.Ordinal)
+        {
+            ["zombie"] = new("zombie", new Vector3(0.6f, 1.95f, 0.6f), true),
+        };
+
+        var host = new Vector3(0.5f, 0f, 0.5f);
+        var guest = new Vector3(1000.5f, 0f, 0.5f);
+        var beside = new Vector3(40.5f, 0f, 0.5f);   // a second guest inside the host's disc
+        var spawner = new MonsterSpawner(11);
+        int nearHost = 0, nearGuest = 0, tooNear = 0, total = 0;
+        for (var frame = 0; frame < 2000 && total < MonsterSpawner.CapFor(3); frame++)
+        {
+            foreach (var placed in spawner.Step(0.05f, world, host, 0f, total, kinds, others: [guest, beside]))
+            {
+                total++;
+                var p = placed.Position;
+                if (Vector3.Distance(p, host) <= SpawnRules.SpawnRadius) nearHost++;
+                if (Vector3.Distance(p, guest) <= SpawnRules.SpawnRadius) nearGuest++;
+                foreach (var one in new[] { host, guest, beside })
+                    if (Vector3.Distance(p, one) < SpawnRules.MinRadius) tooNear++;
+            }
+        }
+        // The near ring of a guest standing in the host's disc, by numbers: the living count held at
+        // nothing (the audit's way) so thousands land, and not one may land within 24 of either player.
+        var crowd = new MonsterSpawner(12);
+        var close = new Vector3(30.5f, 0f, 0.5f);
+        var crowded = 0;
+        for (var frame = 0; frame < 600; frame++)
+            foreach (var placed in crowd.Step(0.05f, world, host, 0f, 0, kinds, others: [close]))
+            {
+                if (Vector3.Distance(placed.Position, close) < SpawnRules.MinRadius
+                    || Vector3.Distance(placed.Position, host) < SpawnRules.MinRadius) crowded++;
+            }
+        tooNear += crowded;
+
+        if (nearGuest == 0) faults.Add("spawns: nothing came out of the dark round a guest 1000 blocks from the host");
+        if (tooNear > 0) faults.Add($"spawns: {tooNear} placed inside the near ring of a player");
+        if (total > MonsterSpawner.CapFor(3)) faults.Add($"spawns: {total} placed over a cap of {MonsterSpawner.CapFor(3)}");
+        if (total <= SpawnRules.MonsterCap) faults.Add($"spawns: three players were held to one player's cap ({total})");
+        if (faults.Count == 0 || !faults[^1].StartsWith("spawns"))
+            said.Add($"spawns: {total} for three players (cap {MonsterSpawner.CapFor(3)}), {nearHost} round the host, {nearGuest} round the far guest, none inside anyone's near ring ({crowd.Placed} more with a guest 30 blocks off: none within 24 of either)");
+
+        // A skeleton's arrow along +x: a guest at 6 blocks, the host at 12 behind them, then the other way round.
+        var registry = new BlockRegistry();
+        StarterBlocks.Register(registry);
+        var empty = new VoxelWorld(registry);
+        // Loaded and empty along the line: a shot into unloaded space is retired unflown, as in the game.
+        for (var cx = -1; cx <= 2; cx++)
+        for (var cz = -1; cz <= 0; cz++)
+            empty.GetOrCreateChunk(new ChunkPos(cx, 0, cz));
+        (Vector3, Vector3) Box(float x) => (new Vector3(x - 0.3f, 0f, -0.3f), new Vector3(x + 0.3f, 1.8f, 0.3f));
+        ProjectileImpact? Fly((Vector3, Vector3)? player, IReadOnlyList<(Vector3 Min, Vector3 Max)> guests)
+        {
+            var pool = new ProjectileSystem(registry);
+            pool.Spawn(ProjectileKind.Arrow, ProjectileOwner.Creature, new Vector3(0f, 1f, 0f), Vector3.UnitX,
+                ProjectileSystem.ArrowSpeed, 0f, 4, ShotTag.None);
+            for (var t = 0; t < 100; t++)
+            {
+                pool.Update(empty, null, 0.02f, player, guests);
+                if (pool.Impacts.Length > 0) return pool.Impacts[0];
+            }
+            return null;
+        }
+        var atGuest = Fly(Box(12f), [Box(30f), Box(6f)]);
+        var atHost = Fly(Box(6f), [Box(12f)]);
+        if (atGuest is not { Guest: 1, Player: false }) faults.Add($"shots: an arrow with a guest nearest on its line hit {atGuest}");
+        else if (atHost is not { Guest: -1, Player: true }) faults.Add($"shots: an arrow with the host nearest on its line hit {atHost}");
+        else if (HurtMessage.ForShot(ProjectileKind.Arrow, ShotTag.Slowing, 4) is not { } hurt
+                 || HurtMessage.ShotOf(hurt.Kind) is not { Kind: ProjectileKind.Arrow, Tag: ShotTag.Slowing })
+            faults.Add("shots: an arrow's hurt does not read back as an arrow with its tag");
+        else said.Add("shots: a creature's arrow finds the nearest body on its line, guest or host, and a guest's hurt names the arrow and its tag");
     }
 
     /// <summary>A host whose world is a real streamer, answering cells the way the game does.</summary>

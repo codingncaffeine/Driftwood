@@ -410,6 +410,27 @@ public readonly record struct HurtMessage(string Kind, int HalfHearts, Vector3 F
     /// <summary>The kind a blast's hurt carries: no creature, no pet in the way, the blast's rumble.</summary>
     public const string Explosion = "~explosion";
 
+    private const string ShotPrefix = "~shot:";
+
+    /// <summary>A creature's shot that struck a guest, or null for one that hurts nobody by itself (a flask splashes).</summary>
+    public static HurtMessage? ForShot(Projectiles.ProjectileKind kind, Entities.ShotTag tag, int damage) => kind switch
+    {
+        Projectiles.ProjectileKind.Arrow or Projectiles.ProjectileKind.Ember or Projectiles.ProjectileKind.SkullBolt
+            => new HurtMessage($"{ShotPrefix}{(int)kind}:{(int)tag}", damage, default),
+        Projectiles.ProjectileKind.WailBolt => new HurtMessage($"{ShotPrefix}{(int)kind}:0", 6, default),
+        _ => null,
+    };
+
+    /// <summary>The shot a hurt's kind names, or null for a blow or a blast.</summary>
+    public static (Projectiles.ProjectileKind Kind, Entities.ShotTag Tag)? ShotOf(string kind)
+    {
+        if (!kind.StartsWith(ShotPrefix, StringComparison.Ordinal)) return null;
+        var parts = kind[ShotPrefix.Length..].Split(':');
+        return parts.Length == 2 && int.TryParse(parts[0], out var k) && int.TryParse(parts[1], out var t)
+            ? ((Projectiles.ProjectileKind)k, (Entities.ShotTag)t)
+            : null;
+    }
+
     public byte[] Encode()
     {
         var hurt = this;

@@ -55,7 +55,8 @@ public readonly record struct ProjectileImpact(
     int Z,
     int Face,
     bool Player = false,
-    Entities.ShotTag Tag = Entities.ShotTag.None);
+    Entities.ShotTag Tag = Entities.ShotTag.None,
+    int Guest = -1);
 
 /// <summary>
 /// A fixed flight pool, swept against the world's real block shapes and every living creature.
@@ -181,7 +182,10 @@ public sealed class ProjectileSystem
     /// pool has no idea who fired it, and the first skeleton to shoot would have put the arrow in its
     /// own skull at the muzzle.
     /// </param>
-    public void Update(VoxelWorld world, CreatureHerd? herd, float dt, (Vector3 Min, Vector3 Max)? player = null)
+    /// <param name="guests">Co-op guests' boxes (N5): a creature's shot finds the nearest body along its
+    /// line, and one that finds a guest says which (<see cref="ProjectileImpact.Guest"/>, an index here).</param>
+    public void Update(VoxelWorld world, CreatureHerd? herd, float dt, (Vector3 Min, Vector3 Max)? player = null,
+        IReadOnlyList<(Vector3 Min, Vector3 Max)>? guests = null)
     {
         _impactCount = 0;
         if (dt <= 0f || Count == 0) return;
@@ -242,11 +246,23 @@ public sealed class ProjectileSystem
                 && CreatureHerd.RayBox(from, direction, box.Min, box.Max, out var into) && into <= distance)
                 playerAt = into;
 
+            var guest = -1;
+            if (shot.Owner == ProjectileOwner.Creature && guests is not null)
+            {
+                for (var g = 0; g < guests.Count; g++)
+                {
+                    if (!CreatureHerd.RayBox(from, direction, guests[g].Min, guests[g].Max, out var gAt)
+                        || gAt > distance || gAt >= playerAt) continue;
+                    playerAt = gAt;
+                    guest = g;
+                }
+            }
+
             if (playerAt < blockAt)
             {
                 var hit = from + direction * playerAt;
                 Impact(shot, hit, -direction, null, (int)MathF.Floor(hit.X), (int)MathF.Floor(hit.Y),
-                    (int)MathF.Floor(hit.Z), -1, player: true);
+                    (int)MathF.Floor(hit.Z), -1, player: guest < 0, guest: guest);
                 Retire(ref shot);
                 continue;
             }
@@ -297,7 +313,8 @@ public sealed class ProjectileSystem
         int y,
         int z,
         int face,
-        bool player = false)
+        bool player = false,
+        int guest = -1)
     {
         _impacts[_impactCount++] = new ProjectileImpact(
             shot.Kind,
@@ -312,7 +329,8 @@ public sealed class ProjectileSystem
             z,
             face,
             player,
-            shot.Tag);
+            shot.Tag,
+            guest);
     }
 
     /// <summary>
