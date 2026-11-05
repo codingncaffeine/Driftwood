@@ -30,7 +30,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [basics, audit, ui-400x480, ui-1600x900, ui-1920x1440, coop]
+        shard: [basics, audit, ui-400x480, ui-1028x749, ui-1600x900, coop, installer]
     defaults:
       run:
         shell: bash
@@ -40,6 +40,8 @@ jobs:
       # The null device: OpenAL starts, nothing plays (the runner has no sound card anyway).
       ALSOFT_DRIVERS: null
       DRIFTWOOD_TRACE: "1"
+      # Git Bash would turn /S, /v and friends into paths; Windows programs here take them literally.
+      MSYS_NO_PATHCONV: "1"
       # Mesa's software rasteriser for the interface check: the runner has no OpenGL 3.3 driver.
       MESA_VERSION: 26.2.4
       MESA_SHA256: 351fc8c8b695878ffb3eaa044b3ead08672a48b1a045e3c3e3975811df0f6695
@@ -61,6 +63,14 @@ jobs:
           unzip -q release.zip
           dir=$(ls -d Driftwood-v*-win-x64)
           echo "GAME=$PWD/$dir" >> "$GITHUB_ENV"
+          setup_url=$(asset "-win-x64-setup.exe"); setup_sum=$(asset "-win-x64-setup.exe.sha256")
+          if [ -n "$setup_url" ] && [ -n "$setup_sum" ]; then
+            gh api -H "Accept: application/octet-stream" "$setup_url" > setup.exe
+            gh api -H "Accept: application/octet-stream" "$setup_sum" > setup.exe.sha256
+            [ "$(cut -d' ' -f1 setup.exe.sha256)" = "$(sha256sum setup.exe | cut -d' ' -f1)" ] || { echo "installer sha256 mismatch"; exit 1; }
+            # The installer must carry the zip's exe, byte for byte (checked after installing).
+            echo "SETUP=$PWD/setup.exe" >> "$GITHUB_ENV"
+          fi
           echo "VERSION=$(sed -E 's/^Driftwood-v(.*)-win-x64$/\1/' <<<"$dir")" >> "$GITHUB_ENV"
 
       - name: Software OpenGL beside the exe (gate copy only, never shipped)
@@ -89,12 +99,25 @@ jobs:
         if: matrix.shard == 'audit'
         run: cd "$GAME" && ./Driftwood.exe --audit --seed driftwood --chunks 12
 
+      # The runner's desktop is 1024x768, which clamps a bigger window. Ask for more; the check below
+      # fails if the window still did not get the size it asked for.
+      - name: Desktop large enough for the window
+        if: matrix.shard == 'ui-1600x900'
+        shell: pwsh
+        run: |
+          try { Set-DisplayResolution -Width 1920 -Height 1080 -Force -ErrorAction Stop } catch { Write-Host "Set-DisplayResolution: $_" }
+          Add-Type -AssemblyName System.Windows.Forms
+          Write-Host "desktop now $([System.Windows.Forms.Screen]::PrimaryScreen.Bounds)"
+
       - name: Every interface reaches the screen
         if: startsWith(matrix.shard, 'ui-')
         run: |
           set -euo pipefail
           size=${{ matrix.shard }}; size=${size#ui-}
-          cd "$GAME" && ./Driftwood.exe --ui-check --chunks 6 --seed driftwood --width "${size%x*}" --height "${size#*x}"
+          cd "$GAME"
+          ./Driftwood.exe --ui-check --chunks 6 --seed driftwood --width "${size%x*}" --height "${size#*x}" 2>&1 | tee ui.log
+          # A window the desktop clamped is a different check that passed under this one's name.
+          grep -q "^overlay     ${size} at" ui.log || { echo "the window was not ${size}: $(grep -m1 '^overlay ' ui.log)"; exit 1; }
 
       - name: Co-op over the network and through Epic
         if: matrix.shard == 'coop'
@@ -102,4 +125,41 @@ jobs:
           set -euo pipefail
           cd "$GAME"
           ./Driftwood.exe --net-check
-          ./Driftwood.exe --eos-check
+          # Epic keeps its device identity per Windows ACCOUNT, so the check's guest runs as a second,
+          # throwaway one (two machines' worth of identity on one runner).
+          password="Dw-$(openssl rand -hex 12)-Aa9"
+          echo "::add-mask::$password"
+          net user dwguest "$password" /add > /dev/null
+          icacls "$(cygpath -w "$GAME")" /grant "dwguest:(OI)(CI)RX" /T /Q > /dev/null
+          DRIFTWOOD_EOS_GUEST_USER=dwguest DRIFTWOOD_EOS_GUEST_PASSWORD="$password" ./Driftwood.exe --eos-check
+
+      # Per-user install with no prompt, the installed game runs, the uninstaller removes the program
+      # and its Apps & Features entry and leaves the player's worlds alone.
+      - name: Installer installs, runs and uninstalls
+        if: matrix.shard == 'installer'
+        run: |
+          set -euo pipefail
+          [ -n "${SETUP:-}" ] || { echo "the release has no installer"; exit 1; }
+          programs="$(cygpath -u "$LOCALAPPDATA")/Programs/Driftwood"
+          saves="$(cygpath -u "$APPDATA")/Driftwood"
+          mkdir -p "$saves" && echo keep > "$saves/a-world-of-mine.txt"
+          "$SETUP" /S
+          for f in Driftwood.exe SDL3.dll glfw3.dll soft_oal.dll Driftwood.Net.Eos.dll EOSSDK-Win64-Shipping.dll eos.txt LICENSE.txt "Uninstall Driftwood.exe"; do
+            [ -f "$programs/$f" ] || { echo "not installed: $f"; exit 1; }
+          done
+          cmp "$programs/Driftwood.exe" "$GAME/Driftwood.exe" || { echo "the installer's exe is not the zip's"; exit 1; }
+          [ -f "$(cygpath -u "$APPDATA")/Microsoft/Windows/Start Menu/Programs/Driftwood.lnk" ] || { echo "no Start menu shortcut"; exit 1; }
+          reg query 'HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\Driftwood' /v DisplayVersion | grep -q "$VERSION" \
+            || { echo "Apps & Features entry missing or wrong version"; exit 1; }
+          said=$("$programs/Driftwood.exe" --version); echo "installed: $said"
+          [ "$said" = "Driftwood v$VERSION" ] || exit 1
+          # _?= runs the uninstaller in place, so this waits for it (it then cannot delete itself).
+          "$programs/Uninstall Driftwood.exe" /S "_?=$(cygpath -w "$programs")"
+          for f in Driftwood.exe SDL3.dll Driftwood.Net.Eos.dll eos.txt LICENSE.txt; do
+            [ ! -e "$programs/$f" ] || { echo "left behind: $f"; exit 1; }
+          done
+          ! reg query 'HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\Driftwood' >/dev/null 2>&1 \
+            || { echo "Apps & Features entry left behind"; exit 1; }
+          [ ! -e "$(cygpath -u "$APPDATA")/Microsoft/Windows/Start Menu/Programs/Driftwood.lnk" ] || { echo "Start menu shortcut left behind"; exit 1; }
+          [ "$(cat "$saves/a-world-of-mine.txt")" = keep ] || { echo "the uninstaller touched the player's saves"; exit 1; }
+          echo "installer PASSED"

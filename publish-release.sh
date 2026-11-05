@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Builds Release, publishes a self-contained linux-x64 build, runs every release gate on it, and
-# packages the public tarball. The Linux counterpart of publish-release.bat, step for step.
+# packages the public tarball. The Windows zip and installer are built
+# here too (step 9) and gated on Windows by .github/workflows/windows-gate.yml.
 # Run once after the complete change batch, immediately before publishing it.
 #
 # Needs: the .NET 11 SDK, xvfb-run (Arch xorg-server-xvfb, Debian/Ubuntu xvfb), dbus-run-session,
@@ -112,7 +113,8 @@ run --audit --seed driftwood --chunks 12 || fail "AUDIT FAILED - not shipping th
 # private session bus. Mesa's software rasteriser draws it, so the gate needs no GPU and runs the
 # same on any machine; it still exercises the exact shaders and every screen state.
 echo "[6/9] checking every interface reaches the screen..."
-for size in "400 480" "1600 900" "1920 1440"; do
+# 1028x749 is a 1366x768 laptop at full screen: 2x on a short page (caught a title menu that did not fit).
+for size in "400 480" "1028 749" "1600 900" "1920 1440"; do
   set -- $size
   # Each size starts from empty folders: the check expects a fresh world, and the size before it
   # leaves its saves behind.
@@ -150,11 +152,12 @@ staged=$(cd "$GATE/stage" && find "$STEM" -type f | sort)
 # .github/workflows/windows-gate.yml before the release goes public: one build is what ships.
 echo "[9/9] building, checking and packaging the Windows download..."
 packaging/windows/build-zip.sh "$VERSION" || fail "WINDOWS FAILED - see above."
+packaging/windows/build-installer.sh "$VERSION" || fail "WINDOWS FAILED - the installer, see above."
 
 echo
 echo "OK  $PACKAGE"
 echo "    $CHECKSUM"
-echo "    artifacts/Driftwood-v$VERSION-win-x64.zip (+ .sha256)"
+echo "    artifacts/Driftwood-v$VERSION-win-x64.zip + -setup.exe (each with .sha256)"
 echo
 echo "Next: packaging/check-packages.sh (both packages built and co-op started from each), test the"
 echo "tarball on the distro containers, publish the GitHub release with both files, then run"
