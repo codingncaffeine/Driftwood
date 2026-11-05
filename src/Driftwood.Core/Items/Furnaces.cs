@@ -117,13 +117,16 @@ public sealed class FurnaceBank
     /// </remarks>
     public int Update(
         float dt, List<(int X, int Y, int Z, bool Lit)> relit,
-        Func<int, int, int, FurnaceKind>? kindOf = null)
+        Func<int, int, int, FurnaceKind>? kindOf = null,
+        Func<(int X, int Y, int Z), bool>? include = null)
     {
         relit.Clear();
         var made = 0;
 
         foreach (var (cell, furnace) in _at)
         {
+            // Co-op (N5): a furnace lent to a guest is that guest's to tick until it is handed back.
+            if (include is not null && !include(cell)) continue;
             var wasLit = furnace.Lit;
             made += Step(furnace, dt, kindOf?.Invoke(cell.X, cell.Y, cell.Z) ?? FurnaceKind.Furnace);
             if (furnace.Lit != wasLit) relit.Add((cell.X, cell.Y, cell.Z, furnace.Lit));

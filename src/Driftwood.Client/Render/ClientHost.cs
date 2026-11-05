@@ -5093,7 +5093,7 @@ public sealed partial class ClientHost : IDisposable
 
     private void OpenFurnace(int x, int y, int z)
     {
-        if (GuestCannot("Furnaces")) return;
+        if (AskHostFor(ContainerKind.Furnace, x, y, z) || LentAway(x, y, z)) return;
         _hudScreen.Kind = HudScreenKind.Furnace;
         _hudScreen.TabNames = [];
         _hudScreen.Tab = 0;
@@ -5125,7 +5125,7 @@ public sealed partial class ClientHost : IDisposable
     /// <summary>A brewing stand: three bottles, the ingredient over them, and the dust that fires it.</summary>
     private void OpenBrewing(int x, int y, int z)
     {
-        if (GuestCannot("Brewing stands")) return;
+        if (AskHostFor(ContainerKind.BrewingStand, x, y, z) || LentAway(x, y, z)) return;
         _hudScreen.Kind = HudScreenKind.BrewingStand;
         _hudScreen.TabNames = [];
         _hudScreen.Tab = 0;
@@ -5145,7 +5145,8 @@ public sealed partial class ClientHost : IDisposable
     private void StepBrewing(float dt)
     {
         _brewed.Clear();
-        if (_brewing.Update(dt, _brewed) == 0) return;
+        if (!StationFilter(ContainerKind.BrewingStand, out var include)) return;
+        if (_brewing.Update(dt, _brewed, include) == 0) return;
 
         foreach (var (x, y, z) in _brewed)
         {
@@ -5402,7 +5403,7 @@ public sealed partial class ClientHost : IDisposable
     /// <summary>A chest: twenty seven slots, and the player's own pockets under them.</summary>
     private void OpenChest(int x, int y, int z)
     {
-        if (GuestCannot("Chests")) return;
+        if (AskHostFor(ContainerKind.Chest, x, y, z) || LentAway(x, y, z)) return;
         // A generated chest becomes state the first time it is opened. ChestBank keeps even an
         // emptied chest, so revisiting or save/load can never roll it a second time.
         var authored = WorldLoot.TryFindChest(
@@ -11104,6 +11105,7 @@ public sealed partial class ClientHost : IDisposable
             if (heard > 0f) _audio?.Play(Pick(CreatureSounds.Deaths), death.Position, 0.68f * heard, Wobble());
 
             var contributed = _playerContributions.Remove(death.RuntimeId);
+            CreditGuests(death);
             if (death.Kind == "core_wyrm") WyrmSlain(death);
             if (_returnedTo.Remove(death.RuntimeId) && contributed)
                 Achieve(AchievementEvents.Returned, death.Kind);
@@ -12353,9 +12355,7 @@ public sealed partial class ClientHost : IDisposable
             }
 
             // A station in the crater spills what it held, exactly as mining it does.
-            foreach (var spilled in _furnaces.Remove(x, y, z)) _drops.Drop(spilled, at);
-            foreach (var spilled in _brewing.Remove(x, y, z)) _drops.Drop(spilled, at);
-            foreach (var spilled in EmptyChestAt(x, y, z)) _drops.Drop(spilled, at);
+            SpillStation(x, y, z, at);
 
             // The cell keeps the water a wet block stood in — a blast under the sea leaves sea.
             _streamer.EditBlock(x, y, z, _waterlogging.Remains(was));
@@ -12697,9 +12697,10 @@ public sealed partial class ClientHost : IDisposable
     private void StepFurnaces(float dt)
     {
         if (_furnaces.Count == 0) return;
+        if (!StationFilter(ContainerKind.Furnace, out var include)) return;
 
         var made = _furnaces.Update(
-            dt, _relit, (x, y, z) => _smelterKind[_streamer.World.GetBlock(x, y, z).Value]);
+            dt, _relit, (x, y, z) => _smelterKind[_streamer.World.GetBlock(x, y, z).Value], include);
         if (made > 0) _progress.Smelted(made);
 
         foreach (var (x, y, z, lit) in _relit)
@@ -13881,9 +13882,10 @@ public sealed partial class ClientHost : IDisposable
             StepSignals(_signalNow, (float)sim);
             StepFuses((float)sim);
             StepLeaffall((float)sim);
-            StepFurnaces((float)sim);
-            StepBrewing((float)sim);
         }
+        // N5: a guest ticks only the station lent to it; the host ticks every one it has not lent.
+        StepFurnaces((float)sim);
+        StepBrewing((float)sim);
         StepProjectiles((float)sim);
         if (!IsGuest) StepCreatures((float)sim);
         StepMagic((float)sim);
@@ -13937,7 +13939,10 @@ public sealed partial class ClientHost : IDisposable
             ? _player.Position + new Vector3(0f, PlayerBody.Height * 0.5f, 0f)
             : (Vector3?)null;
 
-        var picked = _drops.Update(_streamer.World, (float)sim, collector, collector is null ? null : _inventory);
+        // N5: on a guest the ground is the host's: shown through the mirror, picked up by asking.
+        var picked = IsGuest
+            ? StepGuestDrops((float)sim, collector)
+            : _drops.Update(_streamer.World, (float)sim, collector, collector is null ? null : _inventory);
         if (picked > 0 && collector is { } where)
         {
             _audio?.Play(Pick(ActionSounds.Pickup), where, 0.45f, Wobble());
@@ -15364,9 +15369,7 @@ public sealed partial class ClientHost : IDisposable
         // The state lives beside the world rather than in the cell, so nothing else would ever
         // clean it up — and a player who mines one mid-smelt has lost both the ore and the coal.
         var centre = new Vector3(hit.X + 0.5f, hit.Y + 0.5f, hit.Z + 0.5f);
-        foreach (var spilled in _furnaces.Remove(hit.X, hit.Y, hit.Z)) _drops.Drop(spilled, centre);
-        foreach (var spilled in _brewing.Remove(hit.X, hit.Y, hit.Z)) _drops.Drop(spilled, centre);
-        foreach (var spilled in EmptyChestAt(hit.X, hit.Y, hit.Z)) _drops.Drop(spilled, centre);
+        SpillStation(hit.X, hit.Y, hit.Z, centre);
         var shattered = _streamer.World.GetBlock(hit.X, hit.Y, hit.Z) == _ids.EmberCrystal;
 
         // The cell keeps the water a wet block stood in — breaking a wet fence is a hole in the
@@ -16086,7 +16089,7 @@ public sealed partial class ClientHost : IDisposable
         // spills when it is mined. A player who smothers a fire mid-cook has lost the time, not the
         // meat.
         var here = new Vector3(hit.X + 0.5f, hit.Y + 0.5f, hit.Z + 0.5f);
-        foreach (var spilled in _furnaces.Remove(hit.X, hit.Y, hit.Z)) _drops.Drop(spilled, here);
+        SpillStation(hit.X, hit.Y, hit.Z, here);
 
         _streamer.EditBlock(hit.X, hit.Y, hit.Z, out_);
         _audio?.Play(Pick(ActionSounds.FireOut), here, 0.8f, Wobble());

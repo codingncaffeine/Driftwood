@@ -92,6 +92,24 @@ public interface ICoopWorld
     /// <summary>N5: a guest's blow on one of the host's creatures. The host checks reach and lands it, or not.</summary>
     /// <returns>True when the blow landed.</returns>
     bool StrikeCreature(int guest, Vector3 guestAt, StrikeMessage strike);
+
+    /// <summary>N5: the stacks on the host's ground within <paramref name="radius"/> of a guest.</summary>
+    void DropsNear(Vector3 at, float radius, List<DropState> into);
+
+    /// <summary>N5: a guest walked into a stack. Lifted off the host's ground when fair, for the guest's pockets.</summary>
+    bool TakeDrop(int guest, Vector3 guestAt, uint id, out Items.ItemStack stack);
+
+    /// <summary>N5: a stack a guest threw out, to lie on the host's ground.</summary>
+    void PlaceDrop(int guest, Vector3 guestAt, DropItemMessage drop);
+
+    /// <summary>
+    /// N5: a guest opens a container. Its contents, or null and why not (no such container there, out
+    /// of reach, the host's own screen is on it). Lending is the session's business, not the world's.
+    /// </summary>
+    byte[]? ReadContainer(int guest, Vector3 guestAt, ContainerAt at, out string refusal);
+
+    /// <summary>N5: the container a guest holds, as it now stands. False when it is gone (broken while lent).</summary>
+    bool WriteContainer(int guest, ContainerAt at, byte[] contents);
 }
 
 /// <summary>Every check a hello has to pass, named the same on both ends.</summary>
@@ -170,6 +188,18 @@ public sealed class CoopHost : IDisposable
     public int StrikesRefused { get; private set; }
     public int GuestsHurt { get; private set; }
 
+    /// <summary>N5 totals: stacks handed to guests off the ground, stacks guests threw down, kills credited, containers lent.</summary>
+    public int DropsGiven { get; private set; }
+    public int DropsPlaced { get; private set; }
+    public int KillsCredited { get; private set; }
+    public int ContainersLent { get; private set; }
+    public int ContainerWrites { get; private set; }
+
+    /// <summary>N5: which containers are lent to which guest — the host's game asks before opening or ticking one.</summary>
+    public ContainerLeases Leases { get; } = new();
+
+    private readonly List<DropState> _dropScratch = [];
+
     public CoopHost(INetTransport link, ICoopWorld world, GuestRecords records, BuildIdentity build, string hostName)
     {
         _link = link;
@@ -234,6 +264,8 @@ public sealed class CoopHost : IDisposable
                 if (player.Latest is not { } pose || !_guests.TryGetValue(peer, out var guest)) continue;
                 _world.CreaturesNear(pose.Position, CreaturesMessage.Radius, _creatureScratch);
                 _link.Send(peer, new CreaturesMessage(++guest.CreatureSequence, _creatureScratch).Encode(), Delivery.Unreliable);
+                _world.DropsNear(pose.Position, DropsMessage.Radius, _dropScratch);
+                _link.Send(peer, new DropsMessage(++guest.DropSequence, _dropScratch).Encode(), Delivery.Unreliable);
             }
         }
 
@@ -349,6 +381,61 @@ public sealed class CoopHost : IDisposable
                 break;
             }
 
+            case Msg.PickUp:
+            {
+                var id = r.ReadUInt32();
+                if (_world.TakeDrop(peer, player.Latest?.Position ?? _world.Spawn, id, out var stack) && !stack.IsEmpty)
+                {
+                    _link.Send(peer, ContainerMessages.Given(stack), Delivery.Reliable);
+                    DropsGiven++;
+                }
+                break;
+            }
+
+            case Msg.DropItem:
+                _world.PlaceDrop(peer, player.Latest?.Position ?? _world.Spawn, DropItemMessage.Decode(r));
+                DropsPlaced++;
+                break;
+
+            case Msg.ContainerOpen:
+            {
+                var at = ContainerAt.Read(r);
+                if (Leases.HolderOf(at.Cell) is { } holder && holder != peer)
+                {
+                    var who = _players.TryGetValue(holder, out var them) ? them.Name : "someone";
+                    _link.Send(peer, ContainerMessages.Grant(at, null, $"{who} is using it"), Delivery.Reliable);
+                    break;
+                }
+                if (_world.ReadContainer(peer, player.Latest?.Position ?? _world.Spawn, at, out var refusal) is not { } contents)
+                {
+                    _link.Send(peer, ContainerMessages.Grant(at, null, refusal), Delivery.Reliable);
+                    break;
+                }
+                Leases.Lend(peer, at);
+                ContainersLent++;
+                _link.Send(peer, ContainerMessages.Grant(at, contents), Delivery.Reliable);
+                break;
+            }
+
+            case Msg.ContainerWrite:
+            {
+                var at = ContainerAt.Read(r);
+                var contents = r.ReadBlob();
+                var closing = r.ReadBoolean();
+                // ⛔ Only from the holder: a write for a container somebody does not hold (it was broken and
+                // spilled, or never lent) would conjure its contents a second time.
+                if (!Leases.Holds(peer, at)) break;
+                ContainerWrites++;
+                if (!_world.WriteContainer(peer, at, contents))
+                {
+                    Leases.Return(at.Cell);
+                    _link.Send(peer, ContainerMessages.Shut(at), Delivery.Reliable);
+                    break;
+                }
+                if (closing) Leases.Return(at.Cell);
+                break;
+            }
+
             case Msg.Bye:
                 _link.Disconnect(peer, "left");
                 Drop(peer, "left");
@@ -410,6 +497,8 @@ public sealed class CoopHost : IDisposable
 
     private void Drop(int peer, string reason)
     {
+        // What a guest held goes back as it last wrote it: its screen is gone with it.
+        Leases.ReturnAll(peer);
         _guests.Remove(peer);
         if (!_players.Remove(peer, out var player)) return;
         Broadcast(SimpleMessages.Left(peer), Delivery.Reliable);
@@ -435,6 +524,26 @@ public sealed class CoopHost : IDisposable
         GuestsHurt++;
     }
 
+    /// <summary>N5: a creature this guest struck died; the kill is theirs too.</summary>
+    public void CreditKill(int peer, KillMessage kill)
+    {
+        if (!_players.ContainsKey(peer)) return;
+        _link.Send(peer, kill.Encode(), Delivery.Reliable);
+        KillsCredited++;
+    }
+
+    /// <summary>
+    /// N5: a container at this cell has gone from the host's world (broken, blown up, smothered). One
+    /// lent out is taken back, and its holder told to shut the screen; what it wrote last was spilled.
+    /// </summary>
+    public void ContainerGone((int X, int Y, int Z) cell)
+    {
+        if (Leases.HolderOf(cell) is not { } holder) return;
+        Leases.Return(cell);
+        if (_players.ContainsKey(holder))
+            _link.Send(holder, ContainerMessages.Shut(new ContainerAt(ContainerKind.Chest, cell.X, cell.Y, cell.Z)), Delivery.Reliable);
+    }
+
     public void SendChat(string text)
     {
         ChatHeard.Enqueue((HostName, text));
@@ -458,6 +567,8 @@ public sealed class CoopHost : IDisposable
 
         /// <summary>Counts the creature sets sent to this guest, so it can drop one that arrives late.</summary>
         public uint CreatureSequence;
+
+        public uint DropSequence;
     }
 }
 
@@ -501,6 +612,23 @@ public sealed class CoopGuest : IDisposable
     public Queue<HurtMessage> HurtHeard { get; } = new();
 
     public int StrikesSent { get; private set; }
+
+    /// <summary>N5: the host's ground round this player, newest last, for the game's <see cref="DropMirror"/>.</summary>
+    public Queue<DropsMessage> DropsHeard { get; } = new();
+
+    /// <summary>N5: stacks the host handed over, for the pockets.</summary>
+    public Queue<Items.ItemStack> GivenHeard { get; } = new();
+
+    /// <summary>N5: kills this player shared in.</summary>
+    public Queue<KillMessage> KillsHeard { get; } = new();
+
+    /// <summary>N5: answers to container opens, and containers taken back.</summary>
+    public Queue<ContainerGrant> GrantsHeard { get; } = new();
+    public Queue<ContainerAt> ShutsHeard { get; } = new();
+
+    public int PickUpsAsked { get; private set; }
+    public int DropsSent { get; private set; }
+    public int ContainerWritesSent { get; private set; }
 
     public float? DayTimeHeard { get; set; }
 
@@ -606,6 +734,32 @@ public sealed class CoopGuest : IDisposable
                 HurtHeard.Enqueue(HurtMessage.Decode(r));
                 break;
 
+            case Msg.Drops:
+                DropsHeard.Enqueue(DropsMessage.Decode(r));
+                while (DropsHeard.Count > 4) DropsHeard.Dequeue();
+                break;
+
+            case Msg.Given:
+                GivenHeard.Enqueue(r.ReadStack());
+                break;
+
+            case Msg.Kill:
+                KillsHeard.Enqueue(KillMessage.Decode(r));
+                break;
+
+            case Msg.ContainerGrant:
+            {
+                var at = ContainerAt.Read(r);
+                GrantsHeard.Enqueue(r.ReadBoolean()
+                    ? new ContainerGrant(at, r.ReadBlob(), "")
+                    : new ContainerGrant(at, null, r.ReadString()));
+                break;
+            }
+
+            case Msg.ContainerShut:
+                ShutsHeard.Enqueue(ContainerAt.Read(r));
+                break;
+
             case Msg.Chat:
             {
                 var from = r.ReadInt32();
@@ -648,6 +802,29 @@ public sealed class CoopGuest : IDisposable
     {
         _link.Send(INetTransport.HostPeer, strike.Encode(), Delivery.Reliable);
         StrikesSent++;
+    }
+
+    /// <summary>N5: may I have the stack with this number off the host's ground?</summary>
+    public void SendPickUp(uint id)
+    {
+        _link.Send(INetTransport.HostPeer, ContainerMessages.PickUp(id), Delivery.Reliable);
+        PickUpsAsked++;
+    }
+
+    /// <summary>N5: a stack thrown out here, for the host's ground.</summary>
+    public void SendDrop(DropItemMessage drop)
+    {
+        _link.Send(INetTransport.HostPeer, drop.Encode(), Delivery.Reliable);
+        DropsSent++;
+    }
+
+    public void SendContainerOpen(ContainerAt at) =>
+        _link.Send(INetTransport.HostPeer, ContainerMessages.Open(at), Delivery.Reliable);
+
+    public void SendContainerWrite(ContainerAt at, byte[] contents, bool closing)
+    {
+        _link.Send(INetTransport.HostPeer, ContainerMessages.Write(at, contents, closing), Delivery.Reliable);
+        ContainerWritesSent++;
     }
 
     public void SendCharacter(byte[] record) =>

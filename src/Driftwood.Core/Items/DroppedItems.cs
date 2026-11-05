@@ -22,6 +22,9 @@ public struct DroppedItem
     public float Collecting;
 
     public bool Grounded;
+
+    /// <summary>Co-op (N5): this stack's number for the wire, never reused within a session. 0 = none.</summary>
+    public uint Id;
 }
 
 /// <summary>
@@ -65,8 +68,15 @@ public sealed class DroppedItems
     private readonly ItemRegistry _catalogue;
     private readonly (Vector3 Min, Vector3 Max)[][] _shapes;
     private uint _rng;
+    private uint _nextId = 1;
 
     public int Count { get; private set; }
+
+    /// <summary>
+    /// Co-op (N5) on a guest: every drop goes to the host instead, which owns the ground. Given the
+    /// stack and where and how fast it was thrown; true when it was taken.
+    /// </summary>
+    public Func<ItemStack, Vector3, Vector3, bool>? Redirect { get; set; }
 
     /// <summary>Drops refused because the ground was already full.</summary>
     public int Refused { get; private set; }
@@ -87,6 +97,17 @@ public sealed class DroppedItems
     {
         if (stack.IsEmpty) return;
 
+        var position = at + new Vector3(Signed(), Unit() * 0.2f, Signed()) * 0.18f;
+        var velocity = new Vector3(Signed() * 1.4f, Unit() * 1.6f + 1.2f, Signed() * 1.4f) * scatter;
+        if (Redirect is { } elsewhere && elsewhere(stack, position, velocity)) return;
+        Place(stack, position, velocity);
+    }
+
+    /// <summary>Lays a stack exactly where and as fast as it was thrown — a guest's drop, on the host (N5).</summary>
+    public void Place(ItemStack stack, Vector3 position, Vector3 velocity)
+    {
+        if (stack.IsEmpty) return;
+
         if (Count >= Capacity)
         {
             Refused++;
@@ -95,13 +116,44 @@ public sealed class DroppedItems
 
         _items[Count++] = new DroppedItem
         {
-            Position = at + new Vector3(Signed(), Unit() * 0.2f, Signed()) * 0.18f,
-            Velocity = new Vector3(Signed() * 1.4f, Unit() * 1.6f + 1.2f, Signed() * 1.4f) * scatter,
+            Position = position,
+            Velocity = velocity,
             Stack = stack,
             Age = 0f,
             Delay = PickupDelay,
             Collecting = 0f,
+            Id = _nextId++,
         };
+    }
+
+    /// <summary>
+    /// Co-op (N5) on the host: lifts the stack with this number off the ground for a guest who walked
+    /// into it. Refused while it is too fresh, already flying at the host, or gone.
+    /// </summary>
+    public bool TryTake(uint id, Vector3 near, float reach, out ItemStack stack)
+    {
+        stack = ItemStack.Empty;
+        for (var i = 0; i < Count; i++)
+        {
+            ref var item = ref _items[i];
+            if (item.Id != id) continue;
+            if (item.Delay > 0f || item.Collecting > 0f) return false;
+            if (Vector3.DistanceSquared(item.Position, near) > reach * reach) return false;
+            stack = item.Stack;
+            _items[i] = _items[--Count];
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Co-op (N5) on a guest: the ground is the host's, so what is shown is replaced wholesale by
+    /// what the host last said (see <c>DropMirror</c>). Nothing here moves on its own afterwards.
+    /// </summary>
+    public void Show(IReadOnlyList<DroppedItem> seen)
+    {
+        Count = Math.Min(seen.Count, Capacity);
+        for (var i = 0; i < Count; i++) _items[i] = seen[i];
     }
 
     /// <summary>

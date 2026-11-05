@@ -18,6 +18,44 @@ public static class CoopRules
     /// <summary>How far a guest's arrow or spell may land: as far as it is told about creatures, and a little.</summary>
     public const float RangedReach = CreaturesMessage.Radius + 8f;
 
+    /// <summary>
+    /// How far from a guest's last pose a stack may be picked up (N5): the magnet's reach, and slack
+    /// for a pose a tenth of a second old at a sprint and a stack still settling.
+    /// </summary>
+    public const float PickupReach = 6f;
+
+    /// <summary>How far from a guest's last pose a stack it threw may appear: a throw, a spill, a block it broke.</summary>
+    public const float DropReach = Reach + 2f;
+
+    /// <summary>How far from a guest's last pose a container may be opened: a hand's reach and the same slack.</summary>
+    public const float ContainerReach = Reach;
+
+    /// <summary>A guest walked into a stack on the host's ground: lifted off it when it is near enough and ready.</summary>
+    public static bool TakeDrop(Items.DroppedItems ground, Vector3 guestAt, uint id, out Items.ItemStack stack) =>
+        ground.TryTake(id, guestAt + new Vector3(0f, 0.9f, 0f), PickupReach, out stack);
+
+    /// <summary>
+    /// A stack a guest threw, laid on the host's ground: where the guest says when that is beside the
+    /// guest, at the guest's middle otherwise; never more than one slot of it, never a wild speed.
+    /// </summary>
+    public static bool PlaceDrop(Items.DroppedItems ground, Items.ItemRegistry items, Vector3 guestAt, DropItemMessage drop)
+    {
+        var stack = drop.Stack;
+        if (stack.IsEmpty || stack.Item.Value >= items.Count) return false;
+        stack = stack with { Count = Math.Min(stack.Count, items[stack.Item].MaxStack) };
+
+        var middle = guestAt + new Vector3(0f, 0.9f, 0f);
+        var at = float.IsFinite(drop.Position.X + drop.Position.Y + drop.Position.Z)
+                 && Vector3.DistanceSquared(drop.Position, middle) <= DropReach * DropReach
+            ? drop.Position
+            : middle;
+        var velocity = float.IsFinite(drop.Velocity.X + drop.Velocity.Y + drop.Velocity.Z)
+            ? Vector3.Clamp(drop.Velocity, new Vector3(-12f), new Vector3(12f))
+            : Vector3.Zero;
+        ground.Place(stack, at, velocity);
+        return true;
+    }
+
     /// <summary>The most a guest's single blow may claim: a little over the best weapon with every bonus.</summary>
     public const int MaxStrike = 40;
 

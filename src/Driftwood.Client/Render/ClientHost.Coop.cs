@@ -4,8 +4,11 @@ using System.Net.Sockets;
 using System.Numerics;
 using Driftwood.Core.Blocks;
 using Driftwood.Core.Entities;
+using Driftwood.Core.Exploration;
 using Driftwood.Core.Items;
 using Driftwood.Core.Net;
+using Driftwood.Core.Audio;
+using Driftwood.Core.Particles;
 using Driftwood.Core.Physics;
 using Driftwood.Core.Saves;
 using Driftwood.Core.Settings;
@@ -269,7 +272,11 @@ public sealed partial class ClientHost
             }
             _streamer.SetVisitors(_coopOthers);
 
-            if (Due(ref _sinceRosterPrune, 5.0, dt) && _herd is not null) _creatureRoster.Prune(_herd.All);
+            if (Due(ref _sinceRosterPrune, 5.0, dt) && _herd is not null)
+            {
+                _creatureRoster.Prune(_herd.All);
+                PruneGuestContributions();
+            }
             return;
         }
 
@@ -317,6 +324,30 @@ public sealed partial class ClientHost
         }
 
         while (guest.HurtHeard.TryDequeue(out var blow)) TakeCreatureBlow(blow.Kind, blow.HalfHearts, blow.From);
+
+        // N5: what this player throws lies on the host's ground; what the host hands over goes in the pockets.
+        _drops.Redirect ??= (stack, at, velocity) =>
+        {
+            if (_coopGuest is not { Ended: null } live) return false;
+            live.SendDrop(new DropItemMessage(stack, at, velocity));
+            return true;
+        };
+        var gotAny = false;
+        while (guest.GivenHeard.TryDequeue(out var given))
+        {
+            var left = _inventory.Add(given);
+            if (!left.IsEmpty) _drops.Drop(left, _player.Position + new Vector3(0f, 1f, 0f), 0.4f);
+            gotAny = true;
+        }
+        if (gotAny)
+        {
+            var middle = _player.Position + new Vector3(0f, PlayerBody.Height * 0.5f, 0f);
+            _audio?.Play(Pick(ActionSounds.Pickup), middle, 0.45f, Wobble());
+            InteractionParticleEffects.ItemPickup(_particles, middle, 1);
+        }
+        while (guest.KillsHeard.TryDequeue(out var kill)) TakeKillCredit(kill);
+        StepGuestContainers(guest);
+        StepCoopProbe(dt);
 
         if (guest.DayTimeHeard is { } day)
         {
@@ -462,8 +493,8 @@ public sealed partial class ClientHost
     }
 
     /// <summary>
-    /// Containers are the host's (N5): until they are shared, a guest is told so rather than shown
-    /// a chest that only exists on its own screen.
+    /// What is not shared in co-op yet (a cart's hold — carts are N7): a guest is told so rather than
+    /// shown something that only exists on its own screen.
     /// </summary>
     private bool GuestCannot(string what)
     {
@@ -481,8 +512,11 @@ public sealed partial class ClientHost
                 $"co-op       leaving: heard {guest.PosesHeard} poses and {guest.CellsHeardTotal} cells, "
                 + $"sent {guest.CellsSent} cells; sent {guest.SumsSent} terrain sums, {guest.ChunksHeardTotal} chunks mended by the host; "
                 + $"creatures: {_creatureMirror?.SetsHeard ?? 0} sets ({_creatureMirror?.SetsLate ?? 0} late), "
-                + $"{_creatureMirror?.Count ?? 0} in sight, {guest.StrikesSent} blows struck");
+                + $"{_creatureMirror?.Count ?? 0} in sight, {guest.StrikesSent} blows struck; "
+                + $"ground: {_dropMirror?.SetsHeard ?? 0} sets, {guest.PickUpsAsked} pickups asked, {guest.DropsSent} stacks thrown; "
+                + $"{guest.ContainerWritesSent} container writes, {_killsShared} kills shared");
             if (guest.Ended is null && _spawned) SendCoopCharacter();
+            if (guest.Ended is null) FinishLease(guest);
             guest.Leave(TimeSpan.FromSeconds(2));
             guest.Dispose();
             _coopGuest = null;
@@ -497,7 +531,9 @@ public sealed partial class ClientHost
                 $"co-op       closing: heard {host.PosesHeard} poses and {host.CellsHeard} cells from guests, "
                 + $"sent {host.CellsSent} cells; terrain sums {host.SumsAgreed}/{host.SumsChecked} agreed, "
                 + $"{host.ChunksMended} chunks mended, {host.SumsUnchecked} too far to check; "
-                + $"guests' blows {host.StrikesLanded} landed / {host.StrikesRefused} refused, guests hurt {host.GuestsHurt} times");
+                + $"guests' blows {host.StrikesLanded} landed / {host.StrikesRefused} refused, guests hurt {host.GuestsHurt} times; "
+                + $"{host.DropsGiven} stacks given, {host.DropsPlaced} thrown by guests, {host.KillsCredited} kills shared, "
+                + $"{host.ContainersLent} containers lent ({host.ContainerWrites} writes)");
             host.Dispose();
             _coopHost = null;
             _streamer?.SetVisitors([]);
@@ -820,6 +856,12 @@ public sealed partial class ClientHost
                 // cell is taken back out of that, because the session passes it on to the others.
                 int before;
                 lock (game._outgoingLock) before = game._outgoingCells.Count;
+                // ⛳ N5: a cell that turns a station into something else spills what the HOST holds in it —
+                // the guest's own copy is only what it was sent — and takes it back from whoever has it open.
+                var was = game._streamer.World.GetBlock(cell.X, cell.Y, cell.Z);
+                if (was.Value != cell.Block && game._registry[was].Use != game._registry[new BlockId(cell.Block)].Use)
+                    game.SpillStation(cell.X, cell.Y, cell.Z, new Vector3(cell.X + 0.5f, cell.Y + 0.5f, cell.Z + 0.5f));
+
                 // ⛳ N4: EditOrHold, not EditBlock — a guest can stand where the host's ring has not
                 // reached yet, and EditBlock drops a cell in a chunk that is not loaded.
                 game._streamer.EditOrHold(cell.X, cell.Y, cell.Z, new BlockId(cell.Block));
@@ -847,9 +889,75 @@ public sealed partial class ClientHost
             game._creatureRoster.Near(game._herd.All, at, radius, into);
         }
 
-        public bool StrikeCreature(int guest, Vector3 guestAt, StrikeMessage strike) =>
-            CoopRules.LandStrike(game._herd, game._creatureRoster, guestAt, strike, out var struck)
-            && PlayBlow(struck!);
+        public bool StrikeCreature(int guest, Vector3 guestAt, StrikeMessage strike)
+        {
+            if (!CoopRules.LandStrike(game._herd, game._creatureRoster, guestAt, strike, out var struck)) return false;
+            // N5: whoever struck it shares the kill, as the host's own blows do.
+            if (!game._guestContributions.TryGetValue(struck!.RuntimeId, out var who))
+                game._guestContributions[struck.RuntimeId] = who = [];
+            who.Add(guest);
+            return PlayBlow(struck);
+        }
+
+        public void DropsNear(Vector3 at, float radius, List<DropState> into) => CoopDrops.Near(game._drops, at, radius, into);
+
+        public bool TakeDrop(int guest, Vector3 guestAt, uint id, out ItemStack stack) =>
+            CoopRules.TakeDrop(game._drops, guestAt, id, out stack);
+
+        public void PlaceDrop(int guest, Vector3 guestAt, DropItemMessage drop) =>
+            CoopRules.PlaceDrop(game._drops, game._items, guestAt, drop);
+
+        public byte[]? ReadContainer(int guest, Vector3 guestAt, ContainerAt at, out string refusal)
+        {
+            refusal = "";
+            if (!CoopRules.InReach(guestAt + new Vector3(0f, 1.6f, 0f), at.X, at.Y, at.Z))
+            {
+                refusal = "it is out of reach";
+                return null;
+            }
+            if (game.HostScreenOn(at.Cell))
+            {
+                refusal = $"{game.MyCoopName()} is using it";
+                return null;
+            }
+            if (!game.HoldsContainer(at))
+            {
+                refusal = "there is nothing to open there";
+                return null;
+            }
+
+            switch (at.Kind)
+            {
+                case ContainerKind.Chest:
+                    // A generated chest rolls its loot on the host, once, the first time anybody opens it.
+                    if (WorldLoot.TryFindChest(game._terrain.Exploration, at.X, at.Y, at.Z, out var site, out _))
+                    {
+                        if (site.Kind is StructureKind.StormVault or StructureKind.StarfallCrown)
+                        {
+                            refusal = $"{game.MyCoopName()} has to open this one";
+                            return null;
+                        }
+                        WorldLoot.TryInitialize(game._seed, game._terrain.Exploration, game._chests, game._items, at.X, at.Y, at.Z, out _);
+                    }
+                    return ContainerCodec.Write(game._chests.Open(at.X, at.Y, at.Z));
+                case ContainerKind.Furnace:
+                    return ContainerCodec.Write(game._furnaces.Open(at.X, at.Y, at.Z));
+                default:
+                    return ContainerCodec.Write(game._brewing.Open(at.X, at.Y, at.Z));
+            }
+        }
+
+        public bool WriteContainer(int guest, ContainerAt at, byte[] contents)
+        {
+            if (!game.HoldsContainer(at)) return false;
+            switch (at.Kind)
+            {
+                case ContainerKind.Chest: ContainerCodec.Read(contents, game._chests.Open(at.X, at.Y, at.Z)); break;
+                case ContainerKind.Furnace: ContainerCodec.Read(contents, game._furnaces.Open(at.X, at.Y, at.Z)); break;
+                default: ContainerCodec.Read(contents, game._brewing.Open(at.X, at.Y, at.Z)); break;
+            }
+            return true;
+        }
 
         private bool PlayBlow(Creature struck)
         {

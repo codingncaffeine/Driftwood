@@ -53,6 +53,33 @@ public enum Msg : byte
 
     /// <summary>Host → guest (v3, N5): a creature landed a blow on you.</summary>
     Hurt = 16,
+
+    /// <summary>Host → guest (v4, N5): the stacks on the ground round that guest. Unreliable, ten a second.</summary>
+    Drops = 17,
+
+    /// <summary>Guest → host (v4, N5): I walked into this stack; may I have it?</summary>
+    PickUp = 18,
+
+    /// <summary>Host → guest (v4, N5): this is yours now — into your pockets.</summary>
+    Given = 19,
+
+    /// <summary>Guest → host (v4, N5): I threw this out (a drop, a spill, what a broken block left).</summary>
+    DropItem = 20,
+
+    /// <summary>Host → guest (v4, N5): a creature you struck has died — your share of the credit.</summary>
+    Kill = 21,
+
+    /// <summary>Guest → host (v4, N5): may I open the chest (furnace, stand) at this cell?</summary>
+    ContainerOpen = 22,
+
+    /// <summary>Host → guest (v4, N5): yes and here is what is in it, or no and why.</summary>
+    ContainerGrant = 23,
+
+    /// <summary>Guest → host (v4, N5): the container I hold, as it stands now (and whether I have shut it).</summary>
+    ContainerWrite = 24,
+
+    /// <summary>Host → guest (v4, N5): the container you hold is gone (broken, blown up); shut its screen.</summary>
+    ContainerShut = 25,
 }
 
 /// <summary>
@@ -66,7 +93,7 @@ public enum Msg : byte
 /// </remarks>
 public static class Protocol
 {
-    public const int Version = 3;
+    public const int Version = 4;
 
     public static byte[] Build(Msg kind, Action<BinaryWriter> fields)
     {
@@ -95,6 +122,23 @@ public static class Protocol
 
     public static Vector3 ReadVector3(this BinaryReader from) =>
         new(from.ReadSingle(), from.ReadSingle(), from.ReadSingle());
+
+    /// <summary>A stack by this build's item numbers (the hello proved both builds agree).</summary>
+    public static void Write(this BinaryWriter into, Items.ItemStack stack)
+    {
+        into.Write(stack.IsEmpty ? (ushort)0 : stack.Item.Value);
+        into.Write(stack.IsEmpty ? 0 : stack.Count);
+        into.Write(stack.IsEmpty ? 0 : stack.Damage);
+    }
+
+    public static Items.ItemStack ReadStack(this BinaryReader from)
+    {
+        var item = from.ReadUInt16();
+        var count = from.ReadInt32();
+        var damage = from.ReadInt32();
+        if (count < 0 || count > 1 << 16) throw new InvalidDataException("a stack count that cannot be right");
+        return item == 0 || count == 0 ? Items.ItemStack.Empty : new Items.ItemStack(new Items.ItemId(item), count, damage);
+    }
 
     public static void WriteBlob(this BinaryWriter into, byte[] bytes)
     {
@@ -446,3 +490,135 @@ public readonly record struct HurtMessage(string Kind, int HalfHearts, Vector3 F
 
     public static HurtMessage Decode(BinaryReader r) => new(r.ReadString(), r.ReadInt32(), r.ReadVector3());
 }
+
+/// <summary>One stack on the host's ground, as a guest is to draw it and ask for it.</summary>
+/// <param name="Ready">Past its pickup delay on the host: asking before then is only refused.</param>
+public readonly record struct DropState(uint Id, Items.ItemStack Stack, Vector3 Position, bool Ready = true);
+
+/// <summary>Host → guest: every stack on the ground within <see cref="Radius"/> of the guest. One missing from it is gone.</summary>
+public sealed record DropsMessage(uint Sequence, IReadOnlyList<DropState> Drops)
+{
+    public const float Radius = 48f;
+
+    /// <summary>Nearest first, at most this many: 27 bytes each, a few Epic packets at worst.</summary>
+    public const int MaxPerMessage = 192;
+
+    public byte[] Encode() => Protocol.Build(Msg.Drops, w =>
+    {
+        w.Write(Sequence);
+        w.Write(Drops.Count);
+        foreach (var d in Drops)
+        {
+            w.Write(d.Id);
+            w.Write(d.Stack);
+            w.Write(d.Position);
+            w.Write(d.Ready);
+        }
+    });
+
+    public static DropsMessage Decode(BinaryReader r)
+    {
+        var sequence = r.ReadUInt32();
+        var count = r.ReadInt32();
+        if (count < 0 || count > 4096) throw new InvalidDataException("a drop count that cannot be right");
+        var list = new List<DropState>(count);
+        for (var i = 0; i < count; i++) list.Add(new DropState(r.ReadUInt32(), r.ReadStack(), r.ReadVector3(), r.ReadBoolean()));
+        return new DropsMessage(sequence, list);
+    }
+}
+
+/// <summary>Guest → host: a stack thrown out on the guest's machine, to lie on the host's ground.</summary>
+public readonly record struct DropItemMessage(Items.ItemStack Stack, Vector3 Position, Vector3 Velocity)
+{
+    public byte[] Encode()
+    {
+        var drop = this;
+        return Protocol.Build(Msg.DropItem, w =>
+        {
+            w.Write(drop.Stack);
+            w.Write(drop.Position);
+            w.Write(drop.Velocity);
+        });
+    }
+
+    public static DropItemMessage Decode(BinaryReader r) => new(r.ReadStack(), r.ReadVector3(), r.ReadVector3());
+}
+
+/// <summary>Host → guest: a creature this guest struck has died. The guest's character takes the credit.</summary>
+/// <param name="RuntimeId">The host's id for the creature, so a reward is settled once per kill.</param>
+public readonly record struct KillMessage(string RuntimeId, string Kind, bool Grown, bool Hostile)
+{
+    public byte[] Encode()
+    {
+        var kill = this;
+        return Protocol.Build(Msg.Kill, w =>
+        {
+            w.Write(kill.RuntimeId);
+            w.Write(kill.Kind);
+            w.Write(kill.Grown);
+            w.Write(kill.Hostile);
+        });
+    }
+
+    public static KillMessage Decode(BinaryReader r) => new(r.ReadString(), r.ReadString(), r.ReadBoolean(), r.ReadBoolean());
+}
+
+/// <summary>Which sort of container a cell holds, as the wire names it.</summary>
+public enum ContainerKind : byte
+{
+    Chest = 1,
+    Furnace = 2,
+    BrewingStand = 3,
+}
+
+/// <summary>One container's cell and sort: what every container message starts with.</summary>
+public readonly record struct ContainerAt(ContainerKind Kind, int X, int Y, int Z)
+{
+    public (int X, int Y, int Z) Cell => (X, Y, Z);
+
+    public void Write(BinaryWriter w)
+    {
+        w.Write((byte)Kind);
+        w.Write(X);
+        w.Write(Y);
+        w.Write(Z);
+    }
+
+    public static ContainerAt Read(BinaryReader r)
+    {
+        var kind = (ContainerKind)r.ReadByte();
+        if (kind is not (ContainerKind.Chest or ContainerKind.Furnace or ContainerKind.BrewingStand))
+            throw new InvalidDataException("a container of no known sort");
+        return new ContainerAt(kind, r.ReadInt32(), r.ReadInt32(), r.ReadInt32());
+    }
+}
+
+public static class ContainerMessages
+{
+    public static byte[] Open(ContainerAt at) => Protocol.Build(Msg.ContainerOpen, at.Write);
+
+    /// <param name="contents">The container's state (<see cref="ContainerCodec"/>), or null with a reason for no.</param>
+    public static byte[] Grant(ContainerAt at, byte[]? contents, string refusal = "") => Protocol.Build(Msg.ContainerGrant, w =>
+    {
+        at.Write(w);
+        w.Write(contents is not null);
+        if (contents is not null) w.WriteBlob(contents);
+        else w.Write(refusal);
+    });
+
+    public static byte[] Write(ContainerAt at, byte[] contents, bool closing) => Protocol.Build(Msg.ContainerWrite, w =>
+    {
+        at.Write(w);
+        w.WriteBlob(contents);
+        w.Write(closing);
+    });
+
+    public static byte[] Shut(ContainerAt at) => Protocol.Build(Msg.ContainerShut, at.Write);
+
+    public static byte[] Given(Items.ItemStack stack) => Protocol.Build(Msg.Given, w => w.Write(stack));
+
+    public static byte[] PickUp(uint id) => Protocol.Build(Msg.PickUp, w => w.Write(id));
+}
+
+/// <summary>A guest's answer to its <see cref="Msg.ContainerOpen"/>.</summary>
+public sealed record ContainerGrant(ContainerAt At, byte[]? Contents, string Refusal);

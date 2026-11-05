@@ -74,7 +74,7 @@ public static class NetCheck
         hostState.Signs.Set(3, 65, 3, ["hello", "", "guest", ""]);
         hostState.Pockets.Add(items.Stack("paper", 5)); // the host's own — must NOT reach a guest
 
-        var game = new FakeHostWorld(hostState, registry);
+        var game = new FakeHostWorld(hostState, registry, items);
         var records = new GuestRecords(Path.Combine(folder, "netcheck.players"));
         using var listener = TcpTransport.Listen(0);
         using var host = new CoopHost(listener, game, records, build, "Host");
@@ -231,6 +231,9 @@ public static class NetCheck
             // lands a blow on it, is refused one out of reach, is hurt by the host, and sees it go.
             CheckCreatures(game, host, guestA, Now, PumpUntil, faults, said);
 
+            // 3c. N5 things: the host's ground, containers lent one at a time, kills shared.
+            CheckItems(game, hostState, items, registry, host, guestA, guestB, Now, PumpUntil, faults, said);
+
             // 4. A's character is kept by the host and handed back on the next visit.
             var aState = NewState(registry, items, book, welcome.Seed);
             aState.Pockets.Add(items.Stack("brick", 42));
@@ -378,15 +381,258 @@ public static class NetCheck
         else said.Add("creatures: A sees the cow by it and not the far zombie, follows it, lands a blow, is refused one out of reach, takes the host's hurt, sees it go; a zombie strikes the guest beside it");
     }
 
+    /// <summary>
+    /// N5 things, end to end over the real session: every claim is read from the host's ground and
+    /// banks, never from the session's counters alone.
+    /// </summary>
+    private static void CheckItems(
+        FakeHostWorld game, WorldState hostState, ItemRegistry items, BlockRegistry registry, CoopHost host,
+        CoopGuest a, CoopGuest b, Func<double> now, Action<Func<bool>, string, CoopGuest[]> pumpUntil,
+        List<string> faults, List<string> said)
+    {
+        var brick = items.ByName("brick").Id;
+        var stick = items.ByName("stick").Id;
+        var stone = registry.ByName("stone").Id;
+        for (var x = 6; x <= 16; x++)
+            for (var z = 8; z <= 16; z++) hostState.World.SetBlock(x, 65, z, stone);
+
+        // A at (10,66,12) from the creature step; B beside it now, so both can reach what lies between.
+        b.SendPose(new PoseMessage(0, new Vector3(13f, 66f, 12f), 0f, 0f, PoseFlags.None, ""));
+        pumpUntil(() => host.Players.TryGetValue(b.MyId, out var bp) && bp.Latest is not null, "B's pose to reach the host", [a, b]);
+
+        // ── The ground ───────────────────────────────────────────────────────────────────────────
+        game.Ground.Place(items.Stack("brick", 5), new Vector3(11.5f, 66.2f, 12.5f), Vector3.Zero);
+        game.Ground.Place(items.Stack("brick", 7), new Vector3(300.5f, 66.2f, 300.5f), Vector3.Zero);
+        var farId = game.Ground.Live[1].Id;
+        game.Ground.Update(hostState.World, 0.6f, null, null);   // past the pickup delay, settled on the stone
+
+        var mirror = new DropMirror();
+        var shown = new DroppedItems(registry, items);
+        var ask = new List<uint>();
+        bool Seen(Func<bool> done)
+        {
+            while (a.DropsHeard.TryDequeue(out var set)) mirror.Heard(now(), set);
+            mirror.Step(now() + 1.0, 0.016f, null, _ => true, shown, ask);
+            return done();
+        }
+        pumpUntil(() => Seen(() => mirror.Count > 0), "the bricks beside A to be shown on A", [a, b]);
+        if (shown.Count != 1 || shown.Live[0].Stack.Count != 5)
+            faults.Add($"A shows {shown.Count} stacks ({string.Join(", ", shown.Live.ToArray().Select(d => d.Stack.Count))}); want the 5 bricks beside it, not the far 7");
+
+        // A walks into it: the mirror asks, the host hands it over and it leaves the host's ground.
+        var near = shown.Live[0].Position;
+        // Real time here: a stack not heard of for a second is not asked for (it may be long gone).
+        mirror.Step(now(), 0.016f, near, _ => true, shown, ask);
+        if (ask.Count != 1) faults.Add($"walking into the bricks asked for {ask.Count} stacks; want 1");
+        foreach (var id in ask) a.SendPickUp(id);
+        pumpUntil(() => a.GivenHeard.Count > 0, "the bricks to be handed to A", [a, b]);
+        var given = a.GivenHeard.Dequeue();
+        if (given.Item.Value != brick.Value || given.Count != 5) faults.Add($"A was handed {given}; want 5 bricks");
+        if (game.Ground.Live.ToArray().Any(d => d.Stack.Count == 5)) faults.Add("the bricks A picked up are still on the host's ground");
+
+        // A fresh stack (inside the host's pickup delay) is shown but not asked for: the host would only refuse.
+        game.Ground.Place(items.Stack("stick", 2), new Vector3(10.5f, 66.2f, 12.5f), Vector3.Zero);
+        var fresh = game.Ground.Live[^1].Id;
+        pumpUntil(() => Seen(() => shown.Live.ToArray().Any(d => d.Id == fresh)), "the fresh sticks to be shown on A", [a, b]);
+        mirror.Step(now(), 0.016f, shown.Live.ToArray().First(d => d.Id == fresh).Position, _ => true, shown, ask);
+        if (ask.Contains(fresh)) faults.Add("A asked for a stack still inside the host's pickup delay");
+        // Then out of the way of the counts below: once past its delay, lifted off the ground here.
+        game.Ground.Update(hostState.World, 0.6f, null, null);
+        if (!game.Ground.TryTake(fresh, new Vector3(10.5f, 66.2f, 12.5f), 99f, out _)) faults.Add("the fresh sticks could not be lifted once ready");
+
+        // ⛔ Not from 400 blocks away. Ordered link: once the throw after it has landed, it was decided.
+        var placed = host.DropsPlaced;
+        a.SendPickUp(farId);
+        a.SendDrop(new DropItemMessage(items.Stack("stick", 3), new Vector3(10.5f, 67f, 12.5f), new Vector3(0f, 1f, 0f)));
+        pumpUntil(() => host.DropsPlaced > placed, "A's throw to land on the host's ground", [a, b]);
+        if (a.GivenHeard.Count > 0 || !game.Ground.Live.ToArray().Any(d => d.Id == farId))
+            faults.Add("a stack 400 blocks from A was handed to A");
+        var thrown = game.Ground.Live.ToArray().Where(d => d.Stack.Item.Value == stick.Value).ToList();
+        if (thrown.Count != 1 || thrown[0].Stack.Count != 3 || Vector3.Distance(thrown[0].Position, new Vector3(10.5f, 67f, 12.5f)) > 0.01f)
+            faults.Add($"A's 3 sticks lie on the host's ground as {string.Join(", ", thrown.Select(d => $"{d.Stack.Count}@{d.Position}"))}");
+
+        // A throw claimed 400 blocks off lands at A instead.
+        placed = host.DropsPlaced;
+        a.SendDrop(new DropItemMessage(items.Stack("stick", 1), new Vector3(400f, 67f, 400f), Vector3.Zero));
+        pumpUntil(() => host.DropsPlaced > placed, "A's far throw to be decided", [a, b]);
+        var lone = game.Ground.Live.ToArray().Where(d => d.Stack.Item.Value == stick.Value && d.Stack.Count == 1).ToList();
+        if (lone.Count != 1 || Vector3.Distance(lone[0].Position, new Vector3(10f, 66.9f, 12f)) > 0.01f)
+            faults.Add($"a throw claimed 400 blocks off landed at {string.Join(", ", lone.Select(d => d.Position))}; want A's middle");
+
+        // ⛔ Two players, one stack: exactly one of them gets it.
+        game.Ground.Clear();
+        game.Ground.Place(items.Stack("brick", 9), new Vector3(11.5f, 66.2f, 12.5f), Vector3.Zero);
+        game.Ground.Update(hostState.World, 0.6f, null, null);
+        var contested = game.Ground.Live[0].Id;
+        var givenBefore = host.DropsGiven;
+        a.SendPickUp(contested);
+        b.SendPickUp(contested);
+        b.SendDrop(new DropItemMessage(items.Stack("stick", 1), new Vector3(13f, 67f, 12f), Vector3.Zero));
+        a.SendDrop(new DropItemMessage(items.Stack("stick", 1), new Vector3(10f, 67f, 12f), Vector3.Zero));
+        pumpUntil(() => game.Ground.Live.ToArray().Count(d => d.Stack.Item.Value == stick.Value) == 2,
+            "both guests' throws after the contested pickup", [a, b]);
+        // A fence: the host's cell reaches each guest after any stack it handed that guest (one ordered link each).
+        a.CellsHeard.Clear();
+        b.CellsHeard.Clear();
+        host.SendCells([(7, 70, 7, stone.Value)]);
+        pumpUntil(() => a.CellsHeard.Count > 0 && b.CellsHeard.Count > 0, "the fence after the contested pickup", [a, b]);
+        a.CellsHeard.Clear();
+        b.CellsHeard.Clear();
+        var bricksOut = a.GivenHeard.Concat(b.GivenHeard).Where(g => g.Item.Value == brick.Value).Sum(g => g.Count);
+        if (bricksOut != 9 || host.DropsGiven - givenBefore != 1)
+            faults.Add($"two guests asked for one stack of 9 bricks: {bricksOut} bricks handed out in {host.DropsGiven - givenBefore} stacks; want 9 in 1");
+        a.GivenHeard.Clear();
+        b.GivenHeard.Clear();
+        said.Add("ground: A sees the stack by it (not the far one), walks in and is handed it; a far pickup refused; throws land where thrown (at A when claimed far off); one stack, two askers, one winner");
+
+        // ── Containers ───────────────────────────────────────────────────────────────────────────
+        var cell = (X: 11, Y: 66, Z: 13);
+        hostState.Chests.Open(cell.X, cell.Y, cell.Z).Contents[0] = items.Stack("brick", 9);
+        var chestAt = new ContainerAt(ContainerKind.Chest, cell.X, cell.Y, cell.Z);
+
+        a.SendContainerOpen(chestAt);
+        pumpUntil(() => a.GrantsHeard.Count > 0, "A's chest to be lent", [a, b]);
+        var grant = a.GrantsHeard.Dequeue();
+        if (grant.Contents is null || ContainerCodec.CountOf(ContainerKind.Chest, grant.Contents, brick) != 9)
+        {
+            faults.Add($"A's chest open came back {(grant.Contents is null ? $"refused: {grant.Refusal}" : "without its 9 bricks")}");
+            return;
+        }
+
+        // ⛔ Lent to A, so B is refused, by name.
+        b.SendContainerOpen(chestAt);
+        pumpUntil(() => b.GrantsHeard.Count > 0, "B's open of A's chest to be answered", [a, b]);
+        var refused = b.GrantsHeard.Dequeue();
+        if (refused.Contents is not null) faults.Add("B was lent the chest A holds");
+        else if (!refused.Refusal.Contains("Ash")) faults.Add($"B's refusal did not name who holds it: {refused.Refusal}");
+
+        // A takes 4 bricks out; the host's chest follows. ⛔ B's write to a chest it does not hold is
+        // ignored — both while A holds it and after A has handed it back. Each fenced by a throw from B
+        // (B's one ordered link): once the throw has landed, the write before it was decided.
+        var aChest = new Chest();
+        ContainerCodec.Read(grant.Contents, aChest);
+        aChest.Contents[0] = items.Stack("brick", 5);
+        var bChest = new Chest();
+        bChest.Contents[0] = items.Stack("brick", 64);
+        bChest.Contents[1] = items.Stack("brick", 64);
+        int HostBricks() => ContainerCodec.CountOf(ContainerKind.Chest, ContainerCodec.Write(hostState.Chests.Open(cell.X, cell.Y, cell.Z)), brick);
+        void FencedByB(string what)
+        {
+            var before = host.DropsPlaced;
+            b.SendDrop(new DropItemMessage(items.Stack("stick", 1), new Vector3(13f, 67f, 12f), Vector3.Zero));
+            pumpUntil(() => host.DropsPlaced > before, what, [a, b]);
+        }
+
+        var writes = host.ContainerWrites;
+        a.SendContainerWrite(chestAt, ContainerCodec.Write(aChest), closing: false);
+        pumpUntil(() => host.ContainerWrites > writes, "A's write to its chest", [a, b]);
+        b.SendContainerWrite(chestAt, ContainerCodec.Write(bChest), closing: false);
+        FencedByB("B's write to A's chest to be decided");
+        if (HostBricks() != 5) faults.Add($"the host's chest holds {HostBricks()} bricks after A took 4 of 9 and B, not holding it, wrote 128");
+
+        a.SendContainerWrite(chestAt, ContainerCodec.Write(aChest), closing: true);
+        pumpUntil(() => !host.Leases.IsLent(chestAt.Cell), "A to hand the chest back", [a, b]);
+        b.SendContainerWrite(chestAt, ContainerCodec.Write(bChest), closing: true);
+        FencedByB("B's write to the chest nobody holds to be decided");
+        if (HostBricks() != 5) faults.Add($"the host's chest holds {HostBricks()} bricks after B wrote 128 to it while nobody held it");
+
+        // Handed back, so B may have it now — and when the "host" breaks it, B is told to shut it, and
+        // B's write after that conjures nothing.
+        b.SendContainerOpen(chestAt);
+        pumpUntil(() => b.GrantsHeard.Count > 0, "B's second open", [a, b]);
+        if (b.GrantsHeard.Dequeue().Contents is null) faults.Add("B was refused a chest nobody holds");
+        game.Broken.Add(chestAt.Cell);
+        hostState.Chests.Remove(cell.X, cell.Y, cell.Z).ToList();
+        host.ContainerGone(chestAt.Cell);
+        pumpUntil(() => b.ShutsHeard.Count > 0, "B to be told its chest is gone", [a, b]);
+        b.SendContainerWrite(chestAt, ContainerCodec.Write(bChest), closing: true);
+        FencedByB("B's throw after its late write");
+        if (hostState.Chests.TryGet(cell.X, cell.Y, cell.Z, out var ghost) && !ghost.IsEmpty)
+            faults.Add("a write to a broken chest put its contents back");
+
+        // Out of reach: a furnace 200 blocks from A.
+        a.SendContainerOpen(new ContainerAt(ContainerKind.Furnace, 210, 66, 12));
+        pumpUntil(() => a.GrantsHeard.Count > 0, "A's far furnace to be answered", [a, b]);
+        if (a.GrantsHeard.Dequeue().Contents is not null) faults.Add("A was lent a furnace 200 blocks away");
+
+        // A furnace, lent and handed back with its fire state, unchanged by the trip.
+        var furnaceAt = new ContainerAt(ContainerKind.Furnace, 9, 66, 13);
+        var hostFurnace = hostState.Furnaces.Open(9, 66, 13);
+        hostFurnace.Input = items.Stack("raw_iron", 4);
+        hostFurnace.BurnLeft = 3.25f;
+        hostFurnace.Progress = 1.5f;
+        a.SendContainerOpen(furnaceAt);
+        pumpUntil(() => a.GrantsHeard.Count > 0, "A's furnace to be lent", [a, b]);
+        var lent = a.GrantsHeard.Dequeue();
+        var aFurnace = new Furnace();
+        if (lent.Contents is not null) ContainerCodec.Read(lent.Contents, aFurnace);
+        if (aFurnace.Input.Count != 4 || aFurnace.BurnLeft != 3.25f || aFurnace.Progress != 1.5f)
+            faults.Add($"A's furnace arrived as {aFurnace.Input.Count} in, {aFurnace.BurnLeft} burn, {aFurnace.Progress} progress");
+        if (!host.Leases.IsLent(furnaceAt.Cell)) faults.Add("the furnace A opened is not marked lent (the host would tick it too)");
+        aFurnace.Input = items.Stack("raw_iron", 3);
+        aFurnace.Output = items.Stack("iron_ingot", 1);
+        a.SendContainerWrite(furnaceAt, ContainerCodec.Write(aFurnace), closing: true);
+        pumpUntil(() => !host.Leases.IsLent(furnaceAt.Cell), "A to hand the furnace back", [a, b]);
+        if (hostFurnace.Input.Count != 3 || hostFurnace.Output.Count != 1)
+            faults.Add($"the host's furnace came back as {hostFurnace.Input.Count} in, {hostFurnace.Output.Count} out; want 3 and 1");
+        said.Add("containers: lent to A alone (B refused by name), A's writes land, B's do not; handed back on close; a broken one shuts B and its late write is ignored; a far one refused; a furnace round-trips its fire");
+
+        // ── Kills ────────────────────────────────────────────────────────────────────────────────
+        host.CreditKill(a.MyId, new KillMessage("netcheck-kill", "zombie", Grown: true, Hostile: true));
+        pumpUntil(() => a.KillsHeard.Count > 0, "A's share of a kill", [a, b]);
+        if (a.KillsHeard.Dequeue() is not { Kind: "zombie", RuntimeId: "netcheck-kill", Hostile: true })
+            faults.Add("A's kill arrived wrong");
+        game.Ground.Clear();
+    }
+
     private static WorldState NewState(BlockRegistry registry, ItemRegistry items, RecipeBook book, string seed) =>
         new(seed, items, new VoxelWorld(registry), new FurnaceBank(items, book), new ChestBank(items),
             new Inventory(items), new Equipment(items), new PlayerVitals(registry), new RecipeUnlocks());
 
     /// <summary>The host's game, reduced to a world and a reach rule.</summary>
-    private sealed class FakeHostWorld(WorldState state, BlockRegistry registry) : ICoopWorld
+    private sealed class FakeHostWorld(WorldState state, BlockRegistry registry, ItemRegistry items) : ICoopWorld
     {
         public CreatureHerd Herd { get; } = new(5);
         public CreatureRoster Roster { get; } = new();
+        public DroppedItems Ground { get; } = new(registry, items);
+
+        /// <summary>Cells whose container the "host" has broken: a write to one must be refused.</summary>
+        public HashSet<(int X, int Y, int Z)> Broken { get; } = [];
+
+        public void DropsNear(Vector3 at, float radius, List<DropState> into) => CoopDrops.Near(Ground, at, radius, into);
+
+        public bool TakeDrop(int guest, Vector3 guestAt, uint id, out ItemStack stack) =>
+            CoopRules.TakeDrop(Ground, guestAt, id, out stack);
+
+        public void PlaceDrop(int guest, Vector3 guestAt, DropItemMessage drop) =>
+            CoopRules.PlaceDrop(Ground, items, guestAt, drop);
+
+        public byte[]? ReadContainer(int guest, Vector3 guestAt, ContainerAt at, out string refusal)
+        {
+            refusal = "";
+            if (!CoopRules.InReach(guestAt + new Vector3(0f, 1.6f, 0f), at.X, at.Y, at.Z))
+            {
+                refusal = "it is out of reach";
+                return null;
+            }
+            switch (at.Kind)
+            {
+                case ContainerKind.Chest: return ContainerCodec.Write(state.Chests.Open(at.X, at.Y, at.Z));
+                case ContainerKind.Furnace: return ContainerCodec.Write(state.Furnaces.Open(at.X, at.Y, at.Z));
+                default:
+                    refusal = "no stands here";
+                    return null;
+            }
+        }
+
+        public bool WriteContainer(int guest, ContainerAt at, byte[] contents)
+        {
+            if (Broken.Contains(at.Cell)) return false;
+            if (at.Kind == ContainerKind.Chest) ContainerCodec.Read(contents, state.Chests.Open(at.X, at.Y, at.Z));
+            else if (at.Kind == ContainerKind.Furnace) ContainerCodec.Read(contents, state.Furnaces.Open(at.X, at.Y, at.Z));
+            else return false;
+            return true;
+        }
 
         public void CreaturesNear(Vector3 at, float radius, List<CreatureState> into) => Roster.Near(Herd.All, at, radius, into);
 
@@ -726,5 +972,23 @@ public static class NetCheck
         public void CreaturesNear(Vector3 at, float radius, List<CreatureState> into) => into.Clear();
 
         public bool StrikeCreature(int guest, Vector3 guestAt, StrikeMessage strike) => false;
+
+        public void DropsNear(Vector3 at, float radius, List<DropState> into) => into.Clear();
+
+        public bool TakeDrop(int guest, Vector3 guestAt, uint id, out ItemStack stack)
+        {
+            stack = ItemStack.Empty;
+            return false;
+        }
+
+        public void PlaceDrop(int guest, Vector3 guestAt, DropItemMessage drop) { }
+
+        public byte[]? ReadContainer(int guest, Vector3 guestAt, ContainerAt at, out string refusal)
+        {
+            refusal = "not here";
+            return null;
+        }
+
+        public bool WriteContainer(int guest, ContainerAt at, byte[] contents) => false;
     }
 }

@@ -86,13 +86,15 @@ public sealed class BrewingBank
     /// Brews every stand on for <paramref name="dt"/>, and says how many brews finished — the host
     /// plays the sound and credits the achievement.
     /// </summary>
-    public int Update(float dt, List<(int X, int Y, int Z)>? finished = null)
+    /// <param name="include">Co-op (N5): which stands to brew; a stand lent to a guest is the guest's to brew.</param>
+    public int Update(float dt, List<(int X, int Y, int Z)>? finished = null, Func<(int X, int Y, int Z), bool>? include = null)
     {
         if (_items is null) return 0;
         var done = 0;
 
         foreach (var (at, stand) in _at)
         {
+            if (include is not null && !include(at)) continue;
             if (!CanBrew(stand))
             {
                 stand.Progress = 0f;
