@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Builds Release, publishes a self-contained linux-x64 build, runs every release gate on it, and
 # packages the public tarball. The Windows zip and installer are built
-# here too (step 9) and gated on Windows by .github/workflows/windows-gate.yml.
+# here too (step 3) and gated on Windows by .github/workflows/windows-gate.yml.
 # Run once after the complete change batch, immediately before publishing it.
 #
 # Needs: the .NET 11 SDK, xvfb-run (Arch xorg-server-xvfb, Debian/Ubuntu xvfb), dbus-run-session,
@@ -87,6 +87,14 @@ for binary in "$OUT"/*; do
   esac
 done
 
+# The Windows download is built HERE, from the same commit, and gated on a real Windows machine by
+# .github/workflows/windows-gate.yml before the release goes public: one build is what ships.
+# ⚠ Before the private homes below: the installer runs makensis in a container, and under the gate's
+# XDG_DATA_HOME podman built a whole image store there that the cleanup could not remove (2026-11-05).
+echo "[3/9] building, checking and packaging the Windows download..."
+packaging/windows/build-zip.sh "$VERSION" || fail "WINDOWS FAILED - see above."
+packaging/windows/build-installer.sh "$VERSION" || fail "WINDOWS FAILED - the installer, see above."
+
 # Private homes for every instrument, inside artifacts/ and removed afterwards.
 GATE=$(mktemp -d "$ROOT/artifacts/.gate-XXXXXX")
 trap 'rm -rf -- "$GATE"' EXIT
@@ -98,21 +106,21 @@ run() { "$ROOT/$OUT/Driftwood" "$@"; }
 
 # Gate on the published binary, not the build output: this is the thing that ships, and it catches
 # a publish that dropped a native dependency the build had sitting beside it.
-echo "[3/9] checking release identity, embedded offline audio and magic..."
+echo "[4/9] checking release identity, embedded offline audio and magic..."
 [ "$(run --version)" = "Driftwood v$VERSION" ] || fail "VERSION FAILED - the executable does not report Driftwood v$VERSION."
 run --audio-check || fail "AUDIO CHECK FAILED - the executable cannot decode its offline fallback."
 run --magic-check || fail "MAGIC CHECK FAILED - progression, spells, companions or persistence drifted."
 
-echo "[4/9] checking bundled SDL3 and controller interop..."
+echo "[5/9] checking bundled SDL3 and controller interop..."
 run --controller-check || fail "CONTROLLER CHECK FAILED - bundled SDL3 is unavailable."
 
-echo "[5/9] auditing the published build..."
+echo "[6/9] auditing the published build..."
 run --audit --seed driftwood --chunks 12 || fail "AUDIT FAILED - not shipping this build."
 
 # A hidden OpenGL window whose pixels are read back off the framebuffer, in a private X server on a
 # private session bus. Mesa's software rasteriser draws it, so the gate needs no GPU and runs the
 # same on any machine; it still exercises the exact shaders and every screen state.
-echo "[6/9] checking every interface reaches the screen..."
+echo "[7/9] checking every interface reaches the screen..."
 # 1028x749 is a 1366x768 laptop at full screen: 2x on a short page (caught a title menu that did not fit).
 for size in "400 480" "1028 749" "1600 900" "1920 1440"; do
   set -- $size
@@ -127,7 +135,7 @@ for size in "400 480" "1028 749" "1600 900" "1920 1440"; do
 done
 
 # The icon theme comes from the committed .ico, the same pixels the Windows build wears.
-echo "[7/9] staging the desktop entry, icons and licence..."
+echo "[8/9] staging the desktop entry, icons and licence..."
 STAGE=$GATE/stage/$STEM
 mkdir -p "$STAGE"
 cp -a "$OUT"/. "$STAGE/"
@@ -138,7 +146,7 @@ chmod 755 "$STAGE/Driftwood" "$STAGE/install.sh"
 chmod 644 "$STAGE"/lib*.so* "$STAGE"/*.desktop "$STAGE"/*.xml "$STAGE/LICENSE" "$STAGE/Driftwood.Net.Eos.dll" "$STAGE/eos.txt"
 find "$STAGE/icons" -type d -exec chmod 755 {} + && find "$STAGE/icons" -type f -exec chmod 644 {} +
 
-echo "[8/9] packaging the public release asset..."
+echo "[9/9] packaging the public release asset..."
 rm -f -- "$PACKAGE" "$CHECKSUM"
 tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="@$(git log -1 --format=%ct)" \
   -C "$GATE/stage" -czf "$PACKAGE" "$STEM" || fail "PACKAGE FAILED - the tarball was not written."
@@ -148,11 +156,6 @@ staged=$(cd "$GATE/stage" && find "$STEM" -type f | sort)
 [ "$listed" = "$staged" ] || fail "PACKAGE FAILED - the tarball does not match the staged files."
 (cd artifacts && sha256sum "$STEM.tar.gz" > "$STEM.sha256")
 
-# The Windows download is built HERE, from the same commit, and gated on a real Windows machine by
-# .github/workflows/windows-gate.yml before the release goes public: one build is what ships.
-echo "[9/9] building, checking and packaging the Windows download..."
-packaging/windows/build-zip.sh "$VERSION" || fail "WINDOWS FAILED - see above."
-packaging/windows/build-installer.sh "$VERSION" || fail "WINDOWS FAILED - the installer, see above."
 
 echo
 echo "OK  $PACKAGE"
