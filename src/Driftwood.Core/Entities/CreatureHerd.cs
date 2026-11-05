@@ -879,6 +879,10 @@ public sealed class CreatureHerd
         // they measure the same thing and two of them is one that can disagree.
         if (creature.HurtFor > HurtSeconds - HitCooldown) return false;
 
+        // ⛳ Co-op (N5): a guest's herd is the host's, mirrored. Every blow on it — a sword, an arrow,
+        // a spell, a splash — goes to the host to land, from this one door rather than from each.
+        if (HurtProxy is { } proxy) return proxy(creature, halfHearts, from);
+
         creature.Health = Math.Max(0, creature.Health - halfHearts);
         creature.HurtFor = HurtSeconds;
 
@@ -1072,6 +1076,12 @@ public sealed class CreatureHerd
 
         return true;
     }
+
+    /// <summary>
+    /// When set, <see cref="Hurt"/> hands every fair blow here instead of landing it — a co-op guest's
+    /// mirror of the host's herd, whose health is the host's to change.
+    /// </summary>
+    public Func<Creature, int, Vector3, bool>? HurtProxy { get; set; }
 
     /// <summary>Takes one out of the world without it having died — what a despawn is.</summary>
     public void Remove(Creature creature) => _creatures.Remove(creature);

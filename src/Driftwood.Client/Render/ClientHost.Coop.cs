@@ -311,6 +311,7 @@ public sealed partial class ClientHost
         {
             _herd ??= new CreatureHerd(_seed.Derive("creatures"));
             _creatureMirror ??= new CreatureMirror(KindFor);
+            _herd.HurtProxy ??= ForwardHurt;
             while (guest.CreaturesHeard.TryDequeue(out var set)) _creatureMirror.Heard(_elapsed, set, _herd);
             _creatureMirror.Step(_elapsed);
         }
@@ -342,6 +343,19 @@ public sealed partial class ClientHost
         guest.SendCells(TakeOutgoing());
         if (Due(ref _sincePose, PoseInterval, dt) && _spawned) guest.SendPose(MyPose());
         if (Due(ref _sinceCharacter, CharacterInterval, dt) && _spawned) SendCoopCharacter();
+    }
+
+    /// <summary>
+    /// N5 guest: every blow this player lands on a mirrored creature — a sword, an arrow, a spell —
+    /// goes to the host, and the creature flinches here until the host's next set says how it took it.
+    /// </summary>
+    private bool ForwardHurt(Creature creature, int halfHearts, Vector3 from)
+    {
+        if (_coopGuest is not { } guest || _creatureMirror?.IdOf(creature) is not { } id) return false;
+        var ranged = Vector3.Distance(_player.Position, creature.Middle) > Combat.Reach + 1.5f;
+        guest.SendStrike(new StrikeMessage(id, halfHearts, from, ranged));
+        creature.HurtFor = CreatureHerd.HurtSeconds;
+        return true;
     }
 
     private void Notice(string notice)

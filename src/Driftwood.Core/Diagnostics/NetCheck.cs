@@ -327,6 +327,33 @@ public static class NetCheck
         if (far.Health != farHealth) faults.Add("a blow from 400 blocks away landed");
         if (host.StrikesRefused < 1) faults.Add("the out-of-reach blow was not counted as refused");
 
+        // Ranged: fifty blocks off, a hand's blow is refused and an arrow's lands. Melee first, so
+        // once the ranged one has landed the melee one has been decided (one ordered link).
+        cow.Position = new Vector3(60.5f, 66f, 12.5f);
+        cow.HurtFor = 0f;
+        var refused = host.StrikesRefused;
+        landed = host.StrikesLanded;
+        health = cow.Health;
+        guest.SendStrike(new StrikeMessage(id, 2, new Vector3(10f, 67.6f, 12f)));
+        guest.SendStrike(new StrikeMessage(id, 2, new Vector3(59f, 67f, 12f), Ranged: true));
+        pumpUntil(() => host.StrikesLanded > landed, "A's arrow from fifty blocks to land", [guest]);
+        if (host.StrikesRefused != refused + 1 || health - cow.Health != 2)
+            faults.Add($"from fifty blocks: {host.StrikesRefused - refused} refused (want the hand's 1), {health - cow.Health} taken (want the arrow's 2)");
+
+        // The one door: a blow on the guest's mirror goes to the host through the herd's proxy.
+        mirrorHerd.HurtProxy = (creature, halfHearts, from) =>
+        {
+            guest.SendStrike(new StrikeMessage(mirror.IdOf(creature) ?? -1, halfHearts, from, Ranged: true));
+            return true;
+        };
+        pumpUntil(() => Mirrored(() => seen!.Position.X > 59f), "A's cow to follow it out to fifty blocks", [guest]);
+        cow.HurtFor = 0f;
+        seen!.HurtFor = 0f;
+        health = cow.Health;
+        if (!mirrorHerd.Hurt(seen, 1, new Vector3(58f, 67f, 12f))) faults.Add("a blow on the guest's mirror was not taken by its proxy");
+        pumpUntil(() => cow.Health != health, "a blow on A's mirror to reach the host's cow", [guest]);
+        said.Add("creatures: a hand's blow from fifty blocks refused, an arrow's landed; a blow on the guest's mirror reaches the host through the herd's own door");
+
         host.HurtGuest(guest.MyId, new HurtMessage("zombie", 5, cow.Position));
         pumpUntil(() => guest.HurtHeard.Count > 0, "the host's hurt to reach A", [guest]);
         if (guest.HurtHeard.Dequeue() is not { Kind: "zombie", HalfHearts: 5 }) faults.Add("A's hurt arrived wrong");

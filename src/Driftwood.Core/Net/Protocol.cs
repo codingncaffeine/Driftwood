@@ -387,8 +387,9 @@ public sealed record CreaturesMessage(uint Sequence, IReadOnlyList<CreatureState
 }
 
 /// <summary>Guest → host: a blow on one of the host's creatures, already worked out by the guest's own stats.</summary>
-/// <param name="From">Where the blow came from (the guest's eye), for the knock-back and the host's reach check.</param>
-public readonly record struct StrikeMessage(int Creature, int HalfHearts, Vector3 From)
+/// <param name="From">Where the blow came from, for the knock-back.</param>
+/// <param name="Ranged">An arrow's or a spell's, reaching as far as the guest can see; a hand's reaches a hand's length.</param>
+public readonly record struct StrikeMessage(int Creature, int HalfHearts, Vector3 From, bool Ranged = false)
 {
     public byte[] Encode()
     {
@@ -398,10 +399,11 @@ public readonly record struct StrikeMessage(int Creature, int HalfHearts, Vector
             w.Write(strike.Creature);
             w.Write(strike.HalfHearts);
             w.Write(strike.From);
+            w.Write(strike.Ranged);
         });
     }
 
-    public static StrikeMessage Decode(BinaryReader r) => new(r.ReadInt32(), r.ReadInt32(), r.ReadVector3());
+    public static StrikeMessage Decode(BinaryReader r) => new(r.ReadInt32(), r.ReadInt32(), r.ReadVector3(), r.ReadBoolean());
 }
 
 /// <summary>Host → guest: a creature's blow landed on this guest.</summary>

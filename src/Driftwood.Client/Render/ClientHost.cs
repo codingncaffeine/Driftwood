@@ -12655,9 +12655,7 @@ public sealed partial class ClientHost : IDisposable
         // player's own stats, and the host lands it; the next set shows the flinch and the health.
         if (IsGuest)
         {
-            if (_creatureMirror?.IdOf(quarry) is not { } id || quarry.HurtFor > 0f) return;
-            _coopGuest!.SendStrike(new StrikeMessage(id, damage, _viewPosition));
-            quarry.HurtFor = CreatureHerd.HurtSeconds;
+            if (!_herd.Hurt(quarry, damage, _viewPosition)) return;
         }
         else
         {

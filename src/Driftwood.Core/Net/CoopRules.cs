@@ -15,6 +15,9 @@ public static class CoopRules
     public static bool InReach(Vector3 eye, int x, int y, int z) =>
         Vector3.DistanceSquared(eye, new Vector3(x + 0.5f, y + 0.5f, z + 0.5f)) <= Reach * Reach;
 
+    /// <summary>How far a guest's arrow or spell may land: as far as it is told about creatures, and a little.</summary>
+    public const float RangedReach = CreaturesMessage.Radius + 8f;
+
     /// <summary>The most a guest's single blow may claim: a little over the best weapon with every bonus.</summary>
     public const int MaxStrike = 40;
 
@@ -27,7 +30,8 @@ public static class CoopRules
     {
         struck = null;
         if (herd is null || roster.Find(strike.Creature) is not { Alive: true } creature) return false;
-        if (Vector3.DistanceSquared(guestAt + new Vector3(0f, 1.6f, 0f), creature.Middle) > Reach * Reach) return false;
+        var reach = strike.Ranged ? RangedReach : Reach;
+        if (Vector3.DistanceSquared(guestAt + new Vector3(0f, 1.6f, 0f), creature.Middle) > reach * reach) return false;
 
         var before = creature.Health;
         herd.Hurt(creature, Math.Clamp(strike.HalfHearts, 1, MaxStrike), strike.From);
