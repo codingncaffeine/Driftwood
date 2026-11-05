@@ -110,6 +110,9 @@ public interface ICoopWorld
 
     /// <summary>N5: the container a guest holds, as it now stands. False when it is gone (broken while lent).</summary>
     bool WriteContainer(int guest, ContainerAt at, byte[] contents);
+
+    /// <summary>v5: a guest wrote a sign. Kept when the cell is a sign within reach; then passed on.</summary>
+    bool AcceptSign(int guest, Vector3 guestAt, SignMessage sign);
 }
 
 /// <summary>Every check a hello has to pass, named the same on both ends.</summary>
@@ -436,6 +439,14 @@ public sealed class CoopHost : IDisposable
                 break;
             }
 
+            case Msg.Sign:
+            {
+                var sign = SignMessage.Decode(r);
+                if (_world.AcceptSign(peer, player.Latest?.Position ?? _world.Spawn, sign))
+                    Broadcast(sign.Encode(), Delivery.Reliable, except: peer);
+                break;
+            }
+
             case Msg.Bye:
                 _link.Disconnect(peer, "left");
                 Drop(peer, "left");
@@ -522,6 +533,12 @@ public sealed class CoopHost : IDisposable
         if (!_players.ContainsKey(peer)) return;
         _link.Send(peer, hurt.Encode(), Delivery.Reliable);
         GuestsHurt++;
+    }
+
+    /// <summary>v5: the host wrote a sign; every guest is told.</summary>
+    public void SendSign(SignMessage sign)
+    {
+        if (_players.Count > 0) Broadcast(sign.Encode(), Delivery.Reliable);
     }
 
     /// <summary>N5: a creature this guest struck died; the kill is theirs too.</summary>
@@ -625,6 +642,9 @@ public sealed class CoopGuest : IDisposable
     /// <summary>N5: answers to container opens, and containers taken back.</summary>
     public Queue<ContainerGrant> GrantsHeard { get; } = new();
     public Queue<ContainerAt> ShutsHeard { get; } = new();
+
+    /// <summary>v5: signs written by the host or another guest.</summary>
+    public Queue<SignMessage> SignsHeard { get; } = new();
 
     public int PickUpsAsked { get; private set; }
     public int DropsSent { get; private set; }
@@ -760,6 +780,10 @@ public sealed class CoopGuest : IDisposable
                 ShutsHeard.Enqueue(ContainerAt.Read(r));
                 break;
 
+            case Msg.Sign:
+                SignsHeard.Enqueue(SignMessage.Decode(r));
+                break;
+
             case Msg.Chat:
             {
                 var from = r.ReadInt32();
@@ -817,6 +841,8 @@ public sealed class CoopGuest : IDisposable
         _link.Send(INetTransport.HostPeer, drop.Encode(), Delivery.Reliable);
         DropsSent++;
     }
+
+    public void SendSign(SignMessage sign) => _link.Send(INetTransport.HostPeer, sign.Encode(), Delivery.Reliable);
 
     public void SendContainerOpen(ContainerAt at) =>
         _link.Send(INetTransport.HostPeer, ContainerMessages.Open(at), Delivery.Reliable);

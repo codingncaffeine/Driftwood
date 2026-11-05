@@ -56,6 +56,19 @@ public static class CoopRules
         return true;
     }
 
+    /// <summary>A sign's lines as anyone may write them: four, each no longer than a sign holds, nothing unprintable.</summary>
+    public static string[] CleanSign(IReadOnlyList<string> lines)
+    {
+        var clean = new string[Blocks.SignBank.Lines];
+        for (var i = 0; i < clean.Length; i++)
+        {
+            var line = i < lines.Count ? lines[i] ?? "" : "";
+            line = new string(line.Where(c => !char.IsControl(c)).ToArray());
+            clean[i] = line.Length > Blocks.SignBank.MaxChars ? line[..Blocks.SignBank.MaxChars] : line;
+        }
+        return clean;
+    }
+
     /// <summary>The most a guest's single blow may claim: a little over the best weapon with every bonus.</summary>
     public const int MaxStrike = 40;
 

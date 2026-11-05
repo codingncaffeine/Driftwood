@@ -3136,6 +3136,7 @@ public sealed partial class ClientHost : IDisposable
         var eye = _camera.Position;
         var forward = _camera.Forward;
         var picked = _boatSystem.Pick(eye, forward, 5f);
+        if (IsGuest && (picked is not null || _inventory.HeldType is { Name: "boat" or "cherry_boat" })) return GuestCannot("Boats");
 
         if (_inventory.HeldType is not { Name: "boat" or "cherry_boat" } held)
         {
@@ -3192,6 +3193,7 @@ public sealed partial class ClientHost : IDisposable
     {
         if (_boatSystem.Pick(_camera.Position, _camera.Forward, Combat.Reach) is not { } boat) return false;
         if (boat == _ridingBoat) return false;
+        if (IsGuest) return GuestCannot("Boats");
 
         boat.Damage += 1.4f;
         boat.Hurt = 1f;
@@ -3212,6 +3214,7 @@ public sealed partial class ClientHost : IDisposable
     private void TakeHelm(int x, int y, int z)
     {
         if (_sailing is not null || _ridingBoat is not null || _ridingCart is not null) return;
+        if (GuestCannot("Ships")) return;
 
         var look = _camera.Forward;
         var ship = _shipSystem.Lift(_streamer.World, x, y, z, new Vector3(look.X, 0f, look.Z),
@@ -13893,9 +13896,14 @@ public sealed partial class ClientHost : IDisposable
         StepExploration();
         StepProgressionRewards((float)sim);
         StepAchievements((float)sim);
-        StepCarts((float)sim);
-        StepBoats((float)sim);
-        StepShips((float)sim);
+        // ⛳ Co-op: vehicles are the host's (not shared yet — N7). A guest's copies stand still rather than
+        // roll off a mined rail here and drop a cart the host still has.
+        if (!IsGuest)
+        {
+            StepCarts((float)sim);
+            StepBoats((float)sim);
+            StepShips((float)sim);
+        }
         StepToasts((float)dt);
         StepAmbience((float)sim);
         StepSoundLog((float)sim);
@@ -15354,6 +15362,7 @@ public sealed partial class ClientHost : IDisposable
         // A cart under the crosshair comes apart before any block behind it — it is nearer.
         if (_cartSystem.Pick(_streamer.World, _camera.Position, _camera.Forward, Combat.Reach) is { } cart)
         {
+            if (GuestCannot("Carts")) return;
             _cartSystem.All.Remove(cart);
             if (_ridingCart == cart) _ridingCart = null;
 
@@ -15663,6 +15672,9 @@ public sealed partial class ClientHost : IDisposable
     private bool TryCartUse()
     {
         if (_ridingCart is not null) return false;
+        if (IsGuest && (_inventory.HeldType is { Name: "cart" or "cargo_cart" }
+                        || _cartSystem.Pick(_streamer.World, _camera.Position, _camera.Forward, 5f) is not null))
+            return GuestCannot("Carts");
 
         // A click on a cart means the cart, whatever is in hand — but which cart decides what
         // the click does: a hold opens as the chest it is, a plain cart is boarded.
@@ -16840,6 +16852,11 @@ public sealed partial class ClientHost : IDisposable
 
         if (StarterBlocks.SignOf(_registry[_streamer.World.GetBlock(x, y, z)].Name) is null) return;
         _signs.Set(x, y, z, [.. _hudScreen.SignFields.Select(field => field.Text)]);
+
+        // Co-op (v5): the words are everyone's — the host passes them on, a guest asks the host to keep them.
+        var words = new SignMessage(x, y, z, CoopRules.CleanSign(_signs.Get(x, y, z)));
+        _coopHost?.SendSign(words);
+        _coopGuest?.SendSign(words);
     }
 
     /// <summary>Takes one off what is in the other hand, emptying the slot when it runs out.</summary>

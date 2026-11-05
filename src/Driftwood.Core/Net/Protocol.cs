@@ -80,6 +80,9 @@ public enum Msg : byte
 
     /// <summary>Host → guest (v4, N5): the container you hold is gone (broken, blown up); shut its screen.</summary>
     ContainerShut = 25,
+
+    /// <summary>Both ways (v5): a sign's four lines. From a guest it is a request; from the host, a fact.</summary>
+    Sign = 26,
 }
 
 /// <summary>
@@ -93,7 +96,7 @@ public enum Msg : byte
 /// </remarks>
 public static class Protocol
 {
-    public const int Version = 4;
+    public const int Version = 5;
 
     public static byte[] Build(Msg kind, Action<BinaryWriter> fields)
     {
@@ -622,3 +625,26 @@ public static class ContainerMessages
 
 /// <summary>A guest's answer to its <see cref="Msg.ContainerOpen"/>.</summary>
 public sealed record ContainerGrant(ContainerAt At, byte[]? Contents, string Refusal);
+
+/// <summary>A sign's words at a cell (v5).</summary>
+public sealed record SignMessage(int X, int Y, int Z, IReadOnlyList<string> Lines)
+{
+    public byte[] Encode() => Protocol.Build(Msg.Sign, w =>
+    {
+        w.Write(X);
+        w.Write(Y);
+        w.Write(Z);
+        w.Write((byte)Lines.Count);
+        foreach (var line in Lines) w.Write(line);
+    });
+
+    public static SignMessage Decode(BinaryReader r)
+    {
+        int x = r.ReadInt32(), y = r.ReadInt32(), z = r.ReadInt32();
+        var count = r.ReadByte();
+        if (count > 8) throw new InvalidDataException("a sign with more lines than a sign has");
+        var lines = new string[count];
+        for (var i = 0; i < count; i++) lines[i] = r.ReadString();
+        return new SignMessage(x, y, z, CoopRules.CleanSign(lines));
+    }
+}

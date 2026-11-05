@@ -577,6 +577,23 @@ public static class NetCheck
             faults.Add($"the host's furnace came back as {hostFurnace.Input.Count} in, {hostFurnace.Output.Count} out; want 3 and 1");
         said.Add("containers: lent to A alone (B refused by name), A's writes land, B's do not; handed back on close; a broken one shuts B and its late write is ignored; a far one refused; a furnace round-trips its fire");
 
+        // ── Signs (v5) ───────────────────────────────────────────────────────────────────────────
+        // A's sign beside it reaches the host and B; a far one does not (ordered: the near one after it).
+        a.SignsHeard.Clear();
+        b.SignsHeard.Clear();
+        a.SendSign(new SignMessage(400, 66, 400, ["far", "", "", ""]));
+        a.SendSign(new SignMessage(11, 66, 11, ["cave", "\u2193 down \u2193", "a line much longer than any sign could ever hold", "\u0007bell"]));
+        pumpUntil(() => b.SignsHeard.Count > 0, "A's sign to reach B", [a, b]);
+        var heardSign = b.SignsHeard.Dequeue();
+        if (heardSign.X != 11 || heardSign.Lines[0] != "cave" || heardSign.Lines[2].Length > SignBank.MaxChars || heardSign.Lines[3] != "bell")
+            faults.Add($"A's sign reached B as ({heardSign.X},{heardSign.Y},{heardSign.Z}) [{string.Join(" | ", heardSign.Lines)}]");
+        if (!hostState.Signs.All.Any(sign => sign.Key == (11, 66, 11) && sign.Value[1] == "\u2193 down \u2193")) faults.Add("the host did not keep A's sign");
+        if (hostState.Signs.All.Any(sign => sign.Key == (400, 66, 400)) || b.SignsHeard.Count > 0) faults.Add("a sign 400 blocks from A was kept or passed on");
+        if (a.SignsHeard.Count > 0) faults.Add("A's own sign was echoed back to A");
+        host.SendSign(new SignMessage(2, 66, 2, ["from", "the host", "", ""]));
+        pumpUntil(() => a.SignsHeard.Count > 0 && b.SignsHeard.Count > 0, "the host's sign to reach both", [a, b]);
+        said.Add("signs: A's words kept by the host and passed to B (trimmed, nothing unprintable); a far one refused; the host's reach both");
+
         // ── Kills ────────────────────────────────────────────────────────────────────────────────
         host.CreditKill(a.MyId, new KillMessage("netcheck-kill", "zombie", Grown: true, Hostile: true));
         pumpUntil(() => a.KillsHeard.Count > 0, "A's share of a kill", [a, b]);
@@ -623,6 +640,13 @@ public static class NetCheck
                     refusal = "no stands here";
                     return null;
             }
+        }
+
+        public bool AcceptSign(int guest, Vector3 guestAt, SignMessage sign)
+        {
+            if (!CoopRules.InReach(guestAt + new Vector3(0f, 1.6f, 0f), sign.X, sign.Y, sign.Z)) return false;
+            state.Signs.Set(sign.X, sign.Y, sign.Z, [.. sign.Lines]);
+            return true;
         }
 
         public bool WriteContainer(int guest, ContainerAt at, byte[] contents)
@@ -990,5 +1014,7 @@ public static class NetCheck
         }
 
         public bool WriteContainer(int guest, ContainerAt at, byte[] contents) => false;
+
+        public bool AcceptSign(int guest, Vector3 guestAt, SignMessage sign) => false;
     }
 }

@@ -346,6 +346,7 @@ public sealed partial class ClientHost
             InteractionParticleEffects.ItemPickup(_particles, middle, 1);
         }
         while (guest.KillsHeard.TryDequeue(out var kill)) TakeKillCredit(kill);
+        while (guest.SignsHeard.TryDequeue(out var sign)) _signs.Set(sign.X, sign.Y, sign.Z, [.. sign.Lines]);
         StepGuestContainers(guest);
         StepCoopProbe(dt);
 
@@ -493,8 +494,9 @@ public sealed partial class ClientHost
     }
 
     /// <summary>
-    /// What is not shared in co-op yet (a cart's hold — carts are N7): a guest is told so rather than
-    /// shown something that only exists on its own screen.
+    /// What is not shared in co-op yet (carts, boats, ships — N7): a guest is told so rather than left
+    /// with something that only exists on its own machine — a placed cart would take the item with it
+    /// when the guest left, and breaking its copy of the host's would make a second one on the host.
     /// </summary>
     private bool GuestCannot(string what)
     {
@@ -945,6 +947,14 @@ public sealed partial class ClientHost
                 default:
                     return ContainerCodec.Write(game._brewing.Open(at.X, at.Y, at.Z));
             }
+        }
+
+        public bool AcceptSign(int guest, Vector3 guestAt, SignMessage sign)
+        {
+            if (!CoopRules.InReach(guestAt + new Vector3(0f, 1.6f, 0f), sign.X, sign.Y, sign.Z)) return false;
+            if (StarterBlocks.SignOf(game._registry[game._streamer.World.GetBlock(sign.X, sign.Y, sign.Z)].Name) is null) return false;
+            game._signs.Set(sign.X, sign.Y, sign.Z, [.. sign.Lines]);
+            return true;
         }
 
         public bool WriteContainer(int guest, ContainerAt at, byte[] contents)
