@@ -86,6 +86,29 @@ public static class EosCheck
         start.Environment["DRIFTWOOD_EOS_CONFIG"] = MeetingPlaces.FindConfig(configFolder);
         start.RedirectStandardOutput = true;
         start.RedirectStandardError = true;
+
+        // ⛳ On Windows Epic keeps the device identity in the Credential Manager, which belongs to the
+        // Windows ACCOUNT: no folder or variable gives a second process its own (seen 2026-11-05 on the
+        // Windows gate: the guest signed in as the host). So there the guest runs as another account,
+        // named by the caller — the Windows gate makes a throwaway one — as two machines would be.
+        if (OperatingSystem.IsWindows())
+        {
+            var user = Environment.GetEnvironmentVariable("DRIFTWOOD_EOS_GUEST_USER");
+            var password = Environment.GetEnvironmentVariable("DRIFTWOOD_EOS_GUEST_PASSWORD");
+            if (string.IsNullOrEmpty(user) || password is null)
+            {
+                faults.Add("on Windows the guest needs a second Windows account (Epic's identity is per account): "
+                           + "set DRIFTWOOD_EOS_GUEST_USER and DRIFTWOOD_EOS_GUEST_PASSWORD");
+                return null;
+            }
+
+            start.UserName = user;
+            start.PasswordInClearText = password;
+            start.LoadUserProfile = true;
+            start.WorkingDirectory = AppContext.BaseDirectory;
+            start.Environment.Remove("DRIFTWOOD_EOS_GUEST_PASSWORD");
+        }
+
         var guest = Process.Start(start)!;
         var guestSaid = new System.Collections.Concurrent.ConcurrentQueue<string>();
         guest.OutputDataReceived += (_, line) => { if (line.Data is { } text) guestSaid.Enqueue(text); };
