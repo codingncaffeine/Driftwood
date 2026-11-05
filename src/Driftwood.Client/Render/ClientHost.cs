@@ -200,6 +200,9 @@ public sealed record ClientOptions
     /// <summary>Co-op: opens the world to friends on this port as it loads (<c>--host</c>, <c>--port</c>). 0 = alone.</summary>
     public int HostPort { get; init; }
 
+    /// <summary>Co-op: with <see cref="HostPort"/>, open by join code only (<c>--code</c>).</summary>
+    public bool HostWithCode { get; init; }
+
     /// <summary>Co-op: the name other players see (<c>--name</c>). Null = the login name.</summary>
     public string? PlayerName { get; init; }
 
@@ -1280,6 +1283,7 @@ public sealed partial class ClientHost : IDisposable
             _settings.CompanionWindowX, _settings.CompanionWindowY);
         _spellbookWindowOffset = new Vector2(
             _settings.SpellbookWindowX, _settings.SpellbookWindowY);
+        if (_options.UiCheck || _options.ShotPath is not null) s_noMeeting = true;
         if (_options.UiCheck || _options.ShotPath is not null)
         {
             // Framebuffer instruments must exercise the shipped visual path, not inherit a local
@@ -1478,7 +1482,7 @@ public sealed partial class ClientHost : IDisposable
 
         // Co-op: a guest walks straight into the host's world; a host opens its own to friends.
         if (IsGuest) StartPlaying();
-        else if (_options.HostPort > 0) StartHosting(_options.HostPort);
+        else if (_options.HostPort > 0) StartHosting(_options.HostPort, _options.HostWithCode);
 
         // Last, because it wants the camera, the window and the audio device to all exist. Doing
         // it here rather than in half a dozen constructors also means there is exactly one place
@@ -7118,6 +7122,10 @@ public sealed partial class ClientHost : IDisposable
                         return;
                     case OpenToFriendsRow:
                         StartHosting(TcpTransport.DefaultPort);
+                        RefreshScreen();
+                        return;
+                    case OpenWithCodeRow:
+                        StartHosting(TcpTransport.DefaultPort, withCode: true);
                         RefreshScreen();
                         return;
                     default: return;
@@ -17391,6 +17399,7 @@ public sealed partial class ClientHost : IDisposable
         Start,
         Create,
         Browse,
+        CoopCode,
     }
 
     /// <summary>
@@ -17532,6 +17541,8 @@ public sealed partial class ClientHost : IDisposable
         // ⛳ N6's browser (2026-11-04, the user's multiplayer.jpg): five friends' worlds in the panel
         // grid, one picked, Cancel | Confirm Join under them — without Epic, from a fixed list.
         new(4500, "52-browse", "stick", ViewMode.First, false, ShotScreen.Browse),
+        // The pause menu of a world opened with a join code: the code where the host reads it out.
+        new(4700, "53-coop-code", "stick", ViewMode.First, false, ShotScreen.CoopCode),
     ];
 
     /// <summary>
@@ -17882,6 +17893,12 @@ public sealed partial class ClientHost : IDisposable
 
             case ShotScreen.CoopMenu:
                 StartHosting(0);
+                OpenGame(GameTab.Menu);
+                break;
+
+            case ShotScreen.CoopCode:
+                LeaveCoop(); // the shot before it opened the world to everyone
+                StartHosting(0, withCode: true);
                 OpenGame(GameTab.Menu);
                 break;
 

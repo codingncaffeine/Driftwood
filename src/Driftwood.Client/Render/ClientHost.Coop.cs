@@ -80,9 +80,15 @@ public sealed partial class ClientHost
         {
             Console.WriteLine($"co-op       joining {address} as {name}");
             INetTransport link;
+            var code = JoinCodes.Read(address);
             try
             {
-                if (EpicAddressIn(address) is { } epicHost)
+                if (code is not null)
+                {
+                    using var meeting = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                    link = await ConnectByCode(code, name, meeting.Token).ConfigureAwait(false);
+                }
+                else if (EpicAddressIn(address) is { } epicHost)
                 {
                     // Signing in and finding a way between the machines can take a while on a slow link.
                     using var meeting = new CancellationTokenSource(TimeSpan.FromSeconds(30));
@@ -96,12 +102,14 @@ public sealed partial class ClientHost
             }
             catch (Exception error)
             {
-                return ((CoopGuest?)null, (string?)(EpicAddressIn(address) is not null
+                return ((CoopGuest?)null, (string?)(code is not null
+                    ? error.GetBaseException().Message
+                    : EpicAddressIn(address) is not null
                     ? $"could not reach your friend through Epic: {error.GetBaseException().Message}"
                     : $"could not reach {address}: {error.Message}"));
             }
 
-            var guest = new CoopGuest(link, new HelloMessage(Protocol.Version, build.GameVersion, build.Registry, key, name));
+            var guest = new CoopGuest(link, new HelloMessage(Protocol.Version, build.GameVersion, build.Registry, key, name, code ?? ""));
             var clock = Stopwatch.StartNew();
             while (guest.Welcome is null && guest.Ended is null && clock.Elapsed < TimeSpan.FromSeconds(60))
             {
@@ -169,7 +177,8 @@ public sealed partial class ClientHost
     }
 
     /// <summary>Opens this world to friends on a port. From the menu or <c>--host</c>.</summary>
-    private void StartHosting(int port)
+    /// <param name="withCode">Open by join code only: not listed, and only guests with the code get in.</param>
+    private void StartHosting(int port, bool withCode = false)
     {
         if (_coopHost is not null || IsGuest) return;
         if (_worldName.Length == 0)
@@ -184,12 +193,21 @@ public sealed partial class ClientHost
             _hostPort = tcp.Port;
             var link = HostLinks(tcp);
             var records = new GuestRecords(GuestRecords.FolderFor(WorldSave.PathFor(_worldName)));
+            _coopCode = withCode ? JoinCodes.New() : null;
             _coopHost = new CoopHost(
                 link, new HostedWorld(this), records, BuildIdentity.Of(ProductVersion, _registry, _items),
-                MyCoopName());
+                MyCoopName()) { Code = _coopCode };
             Console.WriteLine(
                 $"co-op       hosting '{_worldName}' on port {tcp.Port}; {records.Count} visitors remembered");
-            PushToast("Open to friends", s_meeting is null ? $"Port {tcp.Port}" : $"Port {tcp.Port}, and listed on Epic");
+            if (_coopCode is { } code)
+            {
+                Console.WriteLine($"co-op       join code {JoinCodes.Show(code)}");
+                PushToast("Open with a code", $"{JoinCodes.Show(code)} — friends type it under Multiplayer");
+            }
+            else
+            {
+                PushToast("Open to friends", s_meeting is null ? $"Port {tcp.Port}" : $"Port {tcp.Port}, and listed on Epic");
+            }
         }
         catch (Exception error)
         {
@@ -412,6 +430,7 @@ public sealed partial class ClientHost
         }
 
         CloseEpicRoom();
+        _coopCode = null;
     }
 
     /// <summary>The host is gone: back to this machine's own start screen, by the relaunch every world change uses.</summary>
@@ -446,6 +465,7 @@ public sealed partial class ClientHost
     private const string JoinAddressRow = "Friend's Address";
     private const string JoinRow = "Join";
     private const string OpenToFriendsRow = "Open to Friends";
+    private const string OpenWithCodeRow = "Open with a Code";
     private const string OpenYourWorldRow = "Open Your World";
 
     private bool _startFriends;
@@ -478,7 +498,7 @@ public sealed partial class ClientHost
             Note: "The name over your head that other players see"));
         _hudScreen.Rows.Add(new MenuRow(
             JoinAddressRow, Edits: _joinBox, Art: MenuButtonArt.FieldAddress,
-            Note: "The address your friend's game shows when they open their world, like 192.168.1.20 or name:port"));
+            Note: "The address your friend's game shows when they open their world, like 192.168.1.20 or name:port — or the join code they sent you, like K7MQ-3XHD"));
         _hudScreen.Rows.Add(new MenuRow(
             JoinRow, "", Art: MenuButtonArt.Join,
             Note: _joinBox.Text.Trim().Length == 0
@@ -602,20 +622,33 @@ public sealed partial class ClientHost
             _hudScreen.Rows.Add(new MenuRow(
                 OpenToFriendsRow, "",
                 Note: _worldName.Length > 0
-                    ? MeetingPlaces.FindConfig(UserFolders.Config) is not null && File.Exists(Path.Combine(AppContext.BaseDirectory, MeetingPlaces.ModuleFile))
+                    ? EpicHere()
                         ? $"Lists this world for friends to pick from Multiplayer, Join. They can also type your address, port {TcpTransport.DefaultPort}"
                         : $"Lets friends join this world at your address, port {TcpTransport.DefaultPort}"
                     : "This world isn't being kept, so it can't be opened to friends"));
+            // A code is found through Epic, so it is offered only where Epic is.
+            if (_worldName.Length > 0 && EpicHere())
+                _hudScreen.Rows.Add(new MenuRow(
+                    OpenWithCodeRow, "",
+                    Note: "Not listed for everyone: you get a code to send your friends, and only they can join"));
             return;
         }
 
-        _hudScreen.Rows.Add(new MenuRow(
-            "open at", string.Join("  ", LocalAddresses().Take(2).Select(a => _hostPort == TcpTransport.DefaultPort ? a : $"{a}:{_hostPort}")),
-            Note: "Friends on your network type this. Over the internet, forward this port on your router to this machine"));
+        if (_coopCode is { } joinCode)
+            _hudScreen.Rows.Add(new MenuRow(
+                "join code", JoinCodes.Show(joinCode),
+                Note: "Send this to your friends: they type it in Multiplayer's address box. Nobody gets in without it"));
+        // A coded world is joined by its code alone: an address would only be turned away at the door.
+        if (_coopCode is null)
+            _hudScreen.Rows.Add(new MenuRow(
+                "open at", string.Join("  ", LocalAddresses().Take(2).Select(a => _hostPort == TcpTransport.DefaultPort ? a : $"{a}:{_hostPort}")),
+                Note: "Friends on your network type this. Over the internet, forward this port on your router to this machine"));
         if (_epicRoomStatus is { } epic)
             _hudScreen.Rows.Add(new MenuRow(
-                "Epic", epic.StartsWith("listed") ? $"listed as {_worldName}" : epic,
-                Note: "Friends anywhere pick this world from Multiplayer, Join — no address or port needed"));
+                "Epic", epic == "listed on Epic" ? $"listed as {_worldName}" : epic,
+                Note: _coopCode is null
+                    ? "Friends anywhere pick this world from Multiplayer, Join — no address or port needed"
+                    : "Hidden from the list: friends type the join code instead"));
         if (host.Players.Count == 0)
             _hudScreen.Rows.Add(new MenuRow("nobody yet", "", Note: "Players who join appear here"));
         foreach (var player in host.Players.Values)

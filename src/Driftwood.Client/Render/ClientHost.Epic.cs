@@ -28,6 +28,9 @@ public sealed partial class ClientHost
     private static IMeetingPlace? s_meeting;
     private static string? s_meetingWhy;
     private static bool s_meetingTried;
+
+    /// <summary>Set by <c>--shot</c> runs: no Epic at all.</summary>
+    internal static bool s_noMeeting;
     private static readonly object s_meetingLock = new();
 
     private CombinedTransport? _hostLinks;
@@ -41,6 +44,7 @@ public sealed partial class ClientHost
     private double _sinceBrowse = BrowseInterval;
     private bool _roomsSearched;
     private string? _roomPick;
+    private string? _coopCode;
 
     /// <summary>The shot instrument's browser: a fixed list, no Epic, no status line.</summary>
     private bool _browseShot;
@@ -52,6 +56,13 @@ public sealed partial class ClientHost
         {
             if (s_meetingTried) return s_meeting;
             s_meetingTried = true;
+            // ⛔ Photographs never sign in to Epic: a shot that hosts would list a test world for real players.
+            if (s_noMeeting)
+            {
+                s_meetingWhy = "not for instrument runs";
+                return null;
+            }
+
             s_meeting = MeetingPlaces.Start(
                 UserFolders.Config, Path.Combine(UserFolders.Cache, "epic"), playerName, out var why);
             if (s_meeting is null)
@@ -67,6 +78,35 @@ public sealed partial class ClientHost
     /// <summary>Why there is no meeting place, or what went wrong with it, for the menus.</summary>
     private static string? MeetingTrouble() =>
         s_meeting is null ? s_meetingWhy : s_meeting.State == MeetingState.Failed ? s_meeting.Fault : null;
+
+    /// <summary>This build can meet through Epic: the module is beside it and credentials are found.</summary>
+    private static bool EpicHere() =>
+        s_meeting?.State is MeetingState.Starting or MeetingState.Ready
+        || (!s_meetingTried
+            && File.Exists(Path.Combine(AppContext.BaseDirectory, MeetingPlaces.ModuleFile))
+            && MeetingPlaces.FindConfig(UserFolders.Config) is not null);
+
+    /// <summary>A guest's link to the host of the world opened with <paramref name="code"/>. Off the game thread.</summary>
+    private static async Task<INetTransport> ConnectByCode(string code, string playerName, CancellationToken cancel)
+    {
+        var place = Meeting(playerName)
+                    ?? throw new InvalidOperationException($"join codes need Epic, which is not available here ({s_meetingWhy})");
+        if (!await place.WhenReady(cancel).ConfigureAwait(false))
+            throw new InvalidOperationException(place.Fault ?? "could not sign in to Epic");
+
+        // ⚠ A world listed a moment ago can take a few seconds to show in Epic's search.
+        for (var tries = 0; ; tries++)
+        {
+            if (await place.FindRoomByCodeAsync(code, cancel).ConfigureAwait(false) is { } room)
+            {
+                Console.WriteLine($"co-op       code {JoinCodes.Show(code)} is {room.HostName}'s '{room.World}'");
+                return await place.ConnectAsync(room.HostAddress, cancel).ConfigureAwait(false);
+            }
+
+            if (tries >= 4) throw new InvalidOperationException($"no world is open with the code {JoinCodes.Show(code)}");
+            await Task.Delay(1500, cancel).ConfigureAwait(false);
+        }
+    }
 
     /// <summary>"epic:PUID" → the Epic player address; anything else → null.</summary>
     private static string? EpicAddressIn(string address) =>
@@ -130,10 +170,12 @@ public sealed partial class ClientHost
             _epicRoomPlayers = 1 + (_coopHost?.Players.Count ?? 0);
             _epicRoomStatus = "listing on Epic…";
             var world = _worldName;
-            place.OpenRoomAsync(world, MyCoopName(), _epicRoomPlayers, ProductVersion).ContinueWith(opened =>
+            var code = _coopCode;
+            place.OpenRoomAsync(world, MyCoopName(), _epicRoomPlayers, ProductVersion, code).ContinueWith(opened =>
             {
                 var fault = opened.IsCompletedSuccessfully ? opened.Result : opened.Exception?.GetBaseException().Message;
-                _epicRoomStatus = fault is null ? "listed on Epic" : $"not listed on Epic: {fault}";
+                _epicRoomStatus = fault is not null ? $"not on Epic: {fault}"
+                    : code is not null ? "found on Epic by its code" : "listed on Epic";
                 Console.WriteLine($"epic        {_epicRoomStatus} as '{world}'");
             }, TaskScheduler.Default);
             return;

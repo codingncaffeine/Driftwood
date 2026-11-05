@@ -116,6 +116,9 @@ public sealed class CoopHost : IDisposable
 
     public string HostName { get; }
 
+    /// <summary>A world opened with a code lets in only guests who give it (normalized, see <see cref="JoinCodes"/>).</summary>
+    public string? Code { get; set; }
+
     /// <summary>Totals for the leave line in the log: what actually crossed the wire.</summary>
     public int PosesHeard { get; private set; }
     public int CellsHeard { get; private set; }
@@ -237,6 +240,10 @@ public sealed class CoopHost : IDisposable
             refusal = $"this host is running Driftwood {_build.GameVersion} and you are on {hello.GameVersion} — both need the same version";
         else if (hello.Registry != _build.Registry)
             refusal = "this host's blocks do not match yours — both need the same version of Driftwood";
+        else if (Code is not null && JoinCodes.Read(hello.Code) != Code)
+            refusal = hello.Code.Length == 0
+                ? "this world is open by join code only — ask the host for it"
+                : "that join code is not this world's";
         else if (_players.Count >= MaxGuests)
             refusal = "this world is full";
         else if (!GuestRecords.IsKey(hello.PlayerKey))

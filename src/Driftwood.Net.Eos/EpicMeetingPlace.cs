@@ -30,6 +30,8 @@ public sealed class EpicMeetingPlace : IMeetingPlace
     private const string AttrHostName = "HOSTNAME";
     private const string AttrPlayers = "PLAYERS";
     private const string AttrVersion = "VERSION";
+    private const string AttrHidden = "HIDDEN";
+    private const string AttrCode = "CODE";
 
     private static readonly object s_initLock = new();
     private static bool s_initialized;
@@ -211,7 +213,7 @@ public sealed class EpicMeetingPlace : IMeetingPlace
         _ready.TrySetResult(false);
     }
 
-    public Task<string?> OpenRoomAsync(string world, string hostName, int players, string version)
+    public Task<string?> OpenRoomAsync(string world, string hostName, int players, string version, string? code = null)
     {
         var done = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
         Post(() =>
@@ -239,13 +241,16 @@ public sealed class EpicMeetingPlace : IMeetingPlace
                 }
 
                 _lobbyId = made.LobbyId?.ToString();
+                // ⛳ Every listing says whether it is hidden, so the open list can ask Epic for
+                // HIDDEN = 0 and a coded world never leaves Epic's side on an ordinary search.
                 SetAttributes(new()
                 {
                     [AttrHost] = _myAddress ?? "",
                     [AttrWorld] = world,
                     [AttrHostName] = hostName,
                     [AttrVersion] = version,
-                }, players, done);
+                    [AttrCode] = code ?? "",
+                }, players, done, hidden: code is not null);
             });
         });
         return done.Task;
@@ -258,7 +263,8 @@ public sealed class EpicMeetingPlace : IMeetingPlace
 
     public void CloseRoom() => Post(DestroyLobby);
 
-    private void SetAttributes(Dictionary<string, string> text, int players, TaskCompletionSource<string?>? done)
+    private void SetAttributes(Dictionary<string, string> text, int players, TaskCompletionSource<string?>? done,
+        bool? hidden = null)
     {
         var lobbies = _platform!.GetLobbyInterface();
         var open = new UpdateLobbyModificationOptions { LocalUserId = _me, LobbyId = _lobbyId };
@@ -271,6 +277,7 @@ public sealed class EpicMeetingPlace : IMeetingPlace
         foreach (var (key, value) in text)
             Add(change, key, new AttributeDataValue { AsUtf8 = value });
         Add(change, AttrPlayers, new AttributeDataValue { AsInt64 = players });
+        if (hidden is { } isHidden) Add(change, AttrHidden, new AttributeDataValue { AsInt64 = isHidden ? 1 : 0 });
 
         var update = new UpdateLobbyOptions { LobbyModificationHandle = change };
         lobbies.UpdateLobby(ref update, null, (ref UpdateLobbyCallbackInfo updated) =>
@@ -296,7 +303,14 @@ public sealed class EpicMeetingPlace : IMeetingPlace
         _lobbyId = null;
     }
 
-    public Task<IReadOnlyList<MeetingRoom>> FindRoomsAsync(CancellationToken cancel)
+    public Task<IReadOnlyList<MeetingRoom>> FindRoomsAsync(CancellationToken cancel) =>
+        Search(new() { [AttrHidden] = 0L }, 50, cancel);
+
+    public async Task<MeetingRoom?> FindRoomByCodeAsync(string code, CancellationToken cancel) =>
+        (await Search(new() { [AttrCode] = code }, 2, cancel).ConfigureAwait(false)).FirstOrDefault();
+
+    /// <summary>Epic's lobby search in Driftwood's bucket, filtered on Epic's side by <paramref name="equal"/>.</summary>
+    private Task<IReadOnlyList<MeetingRoom>> Search(Dictionary<string, object> equal, uint most, CancellationToken cancel)
     {
         var done = new TaskCompletionSource<IReadOnlyList<MeetingRoom>>(TaskCreationOptions.RunContinuationsAsynchronously);
         Post(() =>
@@ -304,19 +318,18 @@ public sealed class EpicMeetingPlace : IMeetingPlace
             if (_state != MeetingState.Ready) { done.TrySetResult([]); return; }
 
             var lobbies = _platform!.GetLobbyInterface();
-            var make = new CreateLobbySearchOptions { MaxResults = 50 };
+            var make = new CreateLobbySearchOptions { MaxResults = most };
             if (lobbies.CreateLobbySearch(ref make, out var search) != Result.Success || search is null)
             {
                 done.TrySetResult([]);
                 return;
             }
 
-            var bucket = new LobbySearchSetParameterOptions
-            {
-                Parameter = new AttributeData { Key = "bucket", Value = new AttributeDataValue { AsUtf8 = Bucket } },
-                ComparisonOp = ComparisonOp.Equal,
-            };
-            search.SetParameter(ref bucket);
+            Where(search, "bucket", new AttributeDataValue { AsUtf8 = Bucket });
+            foreach (var (key, value) in equal)
+                Where(search, key, value is long number ? new AttributeDataValue { AsInt64 = number }
+                    : new AttributeDataValue { AsUtf8 = (string)value });
+
             var find = new LobbySearchFindOptions { LocalUserId = _me };
             search.Find(ref find, null, (ref LobbySearchFindCallbackInfo found) =>
             {
@@ -346,6 +359,16 @@ public sealed class EpicMeetingPlace : IMeetingPlace
             });
         });
         return done.Task.WaitAsync(cancel);
+
+        static void Where(LobbySearch search, string key, AttributeDataValue value)
+        {
+            var parameter = new LobbySearchSetParameterOptions
+            {
+                Parameter = new AttributeData { Key = key, Value = value },
+                ComparisonOp = ComparisonOp.Equal,
+            };
+            search.SetParameter(ref parameter);
+        }
 
         static string Text(LobbyDetails details, string key) =>
             Read(details, key)?.Value.AsUtf8?.ToString() ?? "";

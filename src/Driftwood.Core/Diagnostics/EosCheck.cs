@@ -100,6 +100,8 @@ public static class EosCheck
         var gone = false;
         var nextSmall = TimeSpan.Zero;
         var smallSent = 0;
+        string? coded = null;
+        Task<string?>? recoding = null;
         var until = clock.Elapsed + TimeSpan.FromSeconds(120);
         while (!guest.HasExited && clock.Elapsed < until)
         {
@@ -110,6 +112,11 @@ public static class EosCheck
                     case NetEventKind.Connected: guestPeer = happened.Peer; break;
                     case NetEventKind.Disconnected: gone = true; break;
                     case NetEventKind.Message when heardBig is null: heardBig = happened.Data; break;
+                    case NetEventKind.Message when heardThree is not null && happened.Data is [9]:
+                        // The guest's turn to look for a world opened with a code: the same world, hidden.
+                        coded = JoinCodes.New();
+                        recoding = place.OpenRoomAsync(world + "-coded", HostName, 2, gameVersion, coded);
+                        break;
                     case NetEventKind.Message: heardThree ??= happened.Data; break;
                 }
             }
@@ -122,6 +129,13 @@ public static class EosCheck
                 SHA256.HashData(heardBig!).CopyTo(reply, 0);
                 new Random(11).NextBytes(reply.AsSpan(32));
                 link.Send(peer, reply, Delivery.Reliable);
+            }
+
+            if (recoding is { IsCompleted: true } reopened && guestPeer is { } codePeer)
+            {
+                recoding = null;
+                if (reopened.Result is { } recodeFault) faults.Add($"reopening the world with a code failed: {recodeFault}");
+                else link.Send(codePeer, System.Text.Encoding.UTF8.GetBytes("CODE:" + coded), Delivery.Reliable);
             }
 
             // Then poses' worth of unreliable messages, twenty a second, the way a game sends them:
@@ -259,6 +273,45 @@ public static class EosCheck
             if (heardSmall == 0) Fault("no unreliable message arrived");
             var seconds = (clock.Elapsed - sendAt).TotalSeconds;
             Console.WriteLine($"3 MB there and 1 MB back, then {heardSmall} unreliable, in {seconds:F1} s");
+
+            // A world opened with a code: found by the code, never in the open list.
+            link.Send(INetTransport.HostPeer, [9], Delivery.Reliable);
+            string? code = null;
+            var codeUntil = clock.Elapsed + TimeSpan.FromSeconds(20);
+            while (code is null && clock.Elapsed < codeUntil)
+            {
+                while (link.TryPoll(out var happened))
+                    if (happened.Kind == NetEventKind.Message && happened.Data!.Length > 5
+                        && System.Text.Encoding.UTF8.GetString(happened.Data).StartsWith("CODE:"))
+                        code = System.Text.Encoding.UTF8.GetString(happened.Data)[5..];
+                Thread.Sleep(5);
+            }
+
+            if (code is null) Fault("the host never reopened its world with a code");
+            else
+            {
+                MeetingRoom? byCode = null;
+                var tries = 0;
+                while (byCode is null && tries++ < 10)
+                {
+                    byCode = place.FindRoomByCodeAsync(code, timeout.Token).GetAwaiter().GetResult();
+                    if (byCode is null) Thread.Sleep(1000);
+                }
+
+                if (byCode is null) Fault($"the coded world was never found by its code ({tries} tries)");
+                else
+                {
+                    if (byCode.World != world + "-coded" || byCode.HostAddress != hostAddress)
+                        Fault($"the code found the wrong world: {byCode}");
+                    var open = place.FindRoomsAsync(timeout.Token).GetAwaiter().GetResult();
+                    if (open.Any(r => r.World.StartsWith(world))) Fault("the coded world shows in the open list");
+                    var wrong = place.FindRoomByCodeAsync(code == "23456789" ? "98765432" : "23456789", timeout.Token)
+                        .GetAwaiter().GetResult();
+                    if (wrong is not null && wrong.HostAddress == hostAddress) Fault("another code found this world");
+                    Console.WriteLine($"found by its code {JoinCodes.Show(code)} after {tries} search(es); "
+                                      + $"not among the {open.Count} open world(s); another code finds nothing of it");
+                }
+            }
             link.Drain(TimeSpan.FromSeconds(1));
         }
         catch (Exception error)

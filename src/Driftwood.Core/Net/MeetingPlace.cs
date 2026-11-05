@@ -50,7 +50,12 @@ public interface IMeetingPlace : IDisposable
     Task<bool> WhenReady(CancellationToken cancel);
 
     /// <summary>Lists this world so friends can find it. Null on success, else why not.</summary>
-    Task<string?> OpenRoomAsync(string world, string hostName, int players, string version);
+    /// <param name="code">A join code (normalized): the world is then kept out of <see cref="FindRoomsAsync"/>
+    /// and found only by <see cref="FindRoomByCodeAsync"/>.</param>
+    Task<string?> OpenRoomAsync(string world, string hostName, int players, string version, string? code = null);
+
+    /// <summary>The world opened with this code (normalized), or null when none is open.</summary>
+    Task<MeetingRoom?> FindRoomByCodeAsync(string code, CancellationToken cancel);
 
     /// <summary>Keeps the listed head count right as people come and go.</summary>
     void UpdateRoom(int players);
@@ -58,7 +63,7 @@ public interface IMeetingPlace : IDisposable
     /// <summary>Takes the listing down (hosting stopped, or the world closed).</summary>
     void CloseRoom();
 
-    /// <summary>The worlds open right now.</summary>
+    /// <summary>The worlds open to everyone right now (never one opened with a code).</summary>
     Task<IReadOnlyList<MeetingRoom>> FindRoomsAsync(CancellationToken cancel);
 
     /// <summary>The link a host listens on for guests who come through here.</summary>

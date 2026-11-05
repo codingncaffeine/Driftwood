@@ -51,7 +51,7 @@ public enum Msg : byte
 /// </remarks>
 public static class Protocol
 {
-    public const int Version = 1;
+    public const int Version = 2;
 
     public static byte[] Build(Msg kind, Action<BinaryWriter> fields)
     {
@@ -111,7 +111,9 @@ public static class Protocol
 }
 
 /// <summary>Guest → host, the first thing said.</summary>
-public sealed record HelloMessage(int ProtocolVersion, string GameVersion, string Registry, string PlayerKey, string Name)
+/// <param name="Code">The join code the guest was given (v2), or empty.</param>
+public sealed record HelloMessage(
+    int ProtocolVersion, string GameVersion, string Registry, string PlayerKey, string Name, string Code = "")
 {
     public byte[] Encode() => Protocol.Build(Msg.Hello, w =>
     {
@@ -120,10 +122,16 @@ public sealed record HelloMessage(int ProtocolVersion, string GameVersion, strin
         w.Write(Registry);
         w.Write(PlayerKey);
         w.Write(Name);
+        w.Write(Code);
     });
 
-    public static HelloMessage Decode(BinaryReader r) =>
-        new(r.ReadInt32(), r.ReadString(), r.ReadString(), r.ReadString(), r.ReadString());
+    /// <remarks>⚠ A v1 hello ends after the name: it is read whole, and then refused for its version
+    /// with a reason, rather than failing to read.</remarks>
+    public static HelloMessage Decode(BinaryReader r)
+    {
+        var hello = new HelloMessage(r.ReadInt32(), r.ReadString(), r.ReadString(), r.ReadString(), r.ReadString());
+        return r.BaseStream.Position < r.BaseStream.Length ? hello with { Code = r.ReadString() } : hello;
+    }
 }
 
 /// <summary>Someone in the session, as everybody else sees them.</summary>

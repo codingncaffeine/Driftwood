@@ -94,10 +94,10 @@ public static class NetCheck
             }
         }
 
-        CoopGuest Dial(string key, string name, BuildIdentity as_)
+        CoopGuest Dial(string key, string name, BuildIdentity as_, string code = "")
         {
             var link = TcpTransport.ConnectAsync($"127.0.0.1:{listener.Port}", CancellationToken.None).GetAwaiter().GetResult();
-            return new CoopGuest(link, new HelloMessage(Protocol.Version, as_.GameVersion, as_.Registry, key, name));
+            return new CoopGuest(link, new HelloMessage(Protocol.Version, as_.GameVersion, as_.Registry, key, name, code));
         }
 
         var keyA = new string('a', 32);
@@ -119,6 +119,37 @@ public static class NetCheck
                 if (wrong.Welcome is not null) faults.Add("a guest with other blocks was sent the world");
                 said.Add("different block list refused");
             }
+
+            // 1b. Join codes: what a player types is read as a code only when it is one, and a world
+            // opened with a code turns away a guest without it or with another, with a reason.
+            var code = JoinCodes.New();
+            if (JoinCodes.Read(JoinCodes.Show(code)) != code || JoinCodes.Read(JoinCodes.Show(code).ToLowerInvariant()) != code)
+                faults.Add($"the code {JoinCodes.Show(code)} does not read back as itself");
+            foreach (var address in new[] { "192.168.1.20", "pine", "myhost:47790", "[::1]:47790", "localhost", "12345678", "pine-4821" })
+                if (JoinCodes.Read(address) is { } mistaken) faults.Add($"the address '{address}' was taken for the code {mistaken}");
+            host.Code = code;
+            using (var none = Dial(new string('d', 32), "NoCode", build))
+            {
+                PumpUntil(() => none.Ended is not null, "a guest without the code to be refused", none);
+                if (none.Welcome is not null) faults.Add("a guest without the code was sent the world");
+                said.Add($"no code refused: \"{none.Ended}\"");
+            }
+            var other = code == "23456789" ? "98765432" : "23456789";
+            using (var wrongCode = Dial(new string('d', 32), "WrongCode", build, JoinCodes.Show(other)))
+            {
+                PumpUntil(() => wrongCode.Ended is not null, "a guest with another code to be refused", wrongCode);
+                if (wrongCode.Welcome is not null) faults.Add("a guest with the wrong code was sent the world");
+                said.Add($"wrong code refused: \"{wrongCode.Ended}\"");
+            }
+            using (var right = Dial(new string('e', 32), "RightCode", build, JoinCodes.Show(code).ToLowerInvariant()))
+            {
+                PumpUntil(() => right.Welcome is not null || right.Ended is not null, "a guest with the code to be let in", right);
+                if (right.Welcome is null) faults.Add($"a guest with the right code was turned away: {right.Ended}");
+                else said.Add($"the right code ({JoinCodes.Show(code)}, typed in lower case) let in");
+                right.Leave(TimeSpan.FromSeconds(1));
+            }
+            PumpUntil(() => host.Players.Count == 0, "the coded guest to leave");
+            host.Code = null;
 
             // 2. A first visit: the world arrives, the host's character does not.
             using var guestA = Dial(keyA, "Ash", build);

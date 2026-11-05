@@ -806,6 +806,9 @@ public static class Program
                 case "--host":
                     options = options with { HostPort = options.HostPort > 0 ? options.HostPort : TcpTransport.DefaultPort };
                     break;
+                case "--code":
+                    options = options with { HostWithCode = true };
+                    break;
                 case "--port":
                     options = options with { HostPort = ParseInt(Next(args, ref i, "--port"), 1, 65535) };
                     break;
@@ -949,6 +952,7 @@ public static class Program
               --sound-log       every ten seconds, print which sounds played and how often
               --host            open this world to friends as it loads (port 47790)
               --port <n>        host on this port instead
+              --code            with --host: open by join code only (not listed; the code is printed)
               --join <address>  join a friend's world at host or host:port instead of opening one here
               --name <name>     the name other players see
               --net-check       run a host and guests over this machine's network, check them, then exit
