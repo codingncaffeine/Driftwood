@@ -127,7 +127,7 @@ jobs:
           ./Driftwood.exe --net-check
           # Epic keeps its device identity per Windows ACCOUNT, so the check's guest runs as a second,
           # throwaway one (two machines' worth of identity on one runner).
-          password="Dw-$(openssl rand -hex 12)-Aa9"
+          password="Dw-$(od -An -N12 -tx1 /dev/urandom | tr -d " \n")-Aa9"
           echo "::add-mask::$password"
           net user dwguest "$password" /add > /dev/null
           icacls "$(cygpath -w "$GAME")" /grant "dwguest:(OI)(CI)RX" /T /Q > /dev/null
