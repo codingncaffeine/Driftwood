@@ -1,0 +1,105 @@
+# The Windows release gate. The Windows zip is built on Linux (packaging/windows/build-zip.sh, the last
+# step of publish-release.sh) and attached to a DRAFT release; this job downloads exactly that zip,
+# checks its sha256, and runs the game's own instruments on a real Windows machine. The release is
+# published only when every shard passes, so the bytes that were checked are the bytes that ship.
+#
+# Run: gh workflow run windows-gate.yml -f release=vX.Y.Z   (the draft's tag name)
+# Shards run side by side so no single job goes past a few minutes.
+name: Windows gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: Tag name of the (draft) release that holds the Windows zip
+        required: true
+
+# Drafts are visible only to a token that can write the repository's contents.
+permissions:
+  contents: write
+
+concurrency:
+  group: windows-gate-${{ inputs.release }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    name: ${{ matrix.shard }}
+    runs-on: windows-2025
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [basics, audit, ui-400x480, ui-1600x900, ui-1920x1440, coop]
+    defaults:
+      run:
+        shell: bash
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE: ${{ inputs.release }}
+      # The null device: OpenAL starts, nothing plays (the runner has no sound card anyway).
+      ALSOFT_DRIVERS: null
+      DRIFTWOOD_TRACE: "1"
+      # Mesa's software rasteriser for the interface check: the runner has no OpenGL 3.3 driver.
+      MESA_VERSION: 26.2.4
+      MESA_SHA256: 351fc8c8b695878ffb3eaa044b3ead08672a48b1a045e3c3e3975811df0f6695
+    steps:
+      - name: Fetch the release's Windows zip
+        run: |
+          set -euo pipefail
+          releases=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=30")
+          asset() { jq -r --arg tag "$RELEASE" --arg end "$1" \
+            '.[] | select(.tag_name == $tag) | .assets[] | select(.name | endswith($end)) | .url' <<<"$releases" | head -1; }
+          zip_url=$(asset "-win-x64.zip"); sum_url=$(asset "-win-x64.zip.sha256")
+          [ -n "$zip_url" ] && [ -n "$sum_url" ] || { echo "no Windows zip + .sha256 on release $RELEASE"; exit 1; }
+          mkdir -p dl && cd dl
+          gh api -H "Accept: application/octet-stream" "$zip_url" > release.zip
+          gh api -H "Accept: application/octet-stream" "$sum_url" > release.zip.sha256
+          want=$(cut -d' ' -f1 release.zip.sha256); got=$(sha256sum release.zip | cut -d' ' -f1)
+          echo "zip $(awk '{print $2}' release.zip.sha256)  sha256 $got"
+          [ "$want" = "$got" ] || { echo "sha256 mismatch: want $want"; exit 1; }
+          unzip -q release.zip
+          dir=$(ls -d Driftwood-v*-win-x64)
+          echo "GAME=$PWD/$dir" >> "$GITHUB_ENV"
+          echo "VERSION=$(sed -E 's/^Driftwood-v(.*)-win-x64$/\1/' <<<"$dir")" >> "$GITHUB_ENV"
+
+      - name: Software OpenGL beside the exe (gate copy only, never shipped)
+        if: startsWith(matrix.shard, 'ui-')
+        run: |
+          set -euo pipefail
+          curl -fsSL -o mesa.7z "https://github.com/pal1000/mesa-dist-win/releases/download/$MESA_VERSION/mesa3d-$MESA_VERSION-release-msvc.7z"
+          echo "$MESA_SHA256  mesa.7z" | sha256sum -c -
+          7z x -y -omesa mesa.7z x64/opengl32.dll x64/libgallium_wgl.dll > /dev/null
+          cp mesa/x64/opengl32.dll mesa/x64/libgallium_wgl.dll "$GAME/"
+          echo "GALLIUM_DRIVER=llvmpipe" >> "$GITHUB_ENV"
+
+      - name: Identity, audio, magic, controller
+        if: matrix.shard == 'basics'
+        run: |
+          set -euo pipefail
+          cd "$GAME"
+          said=$(./Driftwood.exe --version)
+          echo "$said"
+          [ "$said" = "Driftwood v$VERSION" ] || { echo "the exe does not report Driftwood v$VERSION"; exit 1; }
+          ./Driftwood.exe --audio-check
+          ./Driftwood.exe --magic-check
+          ./Driftwood.exe --controller-check
+
+      - name: World audit
+        if: matrix.shard == 'audit'
+        run: cd "$GAME" && ./Driftwood.exe --audit --seed driftwood --chunks 12
+
+      - name: Every interface reaches the screen
+        if: startsWith(matrix.shard, 'ui-')
+        run: |
+          set -euo pipefail
+          size=${{ matrix.shard }}; size=${size#ui-}
+          cd "$GAME" && ./Driftwood.exe --ui-check --chunks 6 --seed driftwood --width "${size%x*}" --height "${size#*x}"
+
+      - name: Co-op over the network and through Epic
+        if: matrix.shard == 'coop'
+        run: |
+          set -euo pipefail
+          cd "$GAME"
+          ./Driftwood.exe --net-check
+          ./Driftwood.exe --eos-check

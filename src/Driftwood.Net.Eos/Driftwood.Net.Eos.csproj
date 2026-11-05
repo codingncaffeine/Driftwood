@@ -16,6 +16,10 @@
     <EosPlatform Condition="'$(EosPlatform)' == ''">Linux</EosPlatform>
     <DefineConstants Condition="'$(EosPlatform)' == 'Linux'">EOS_PLATFORM_LINUX;$(DefineConstants)</DefineConstants>
     <DefineConstants Condition="'$(EosPlatform)' == 'Windows64'">EOS_PLATFORM_WINDOWS_64;$(DefineConstants)</DefineConstants>
+    <!-- ⚠ One folder per platform: a release builds the Linux and the Windows module back to back, and
+         in one shared folder the second overwrote the first's DLL (same name, other library). -->
+    <OutputPath>bin/$(Configuration)/$(EosPlatform)/</OutputPath>
+    <IntermediateOutputPath>obj/$(Configuration)/$(EosPlatform)/</IntermediateOutputPath>
     <!-- Epic's generated source trips nullable/obsolete analyzers; our own files stay strict. -->
     <NoWarn>$(NoWarn);CS0618;CS8600;CS8601;CS8602;CS8603;CS8604;CS8605;CS8618;CS8625;CS8629;CS8765;CS8767;CS0219;CS0414;CS0649;CS0169</NoWarn>
   </PropertyGroup>

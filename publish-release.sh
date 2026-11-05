@@ -18,7 +18,7 @@ OUT=artifacts/Driftwood-$RID
 
 fail() { echo; echo "$1"; exit 1; }
 
-for tool in dotnet xvfb-run dbus-run-session tar sha256sum objdump; do
+for tool in dotnet xvfb-run dbus-run-session tar sha256sum objdump zip unzip; do
   command -v "$tool" >/dev/null 2>&1 || fail "MISSING TOOL - $tool is needed to build and gate a release."
 done
 
@@ -28,7 +28,7 @@ STEM=Driftwood-v$VERSION-$RID
 PACKAGE=artifacts/$STEM.tar.gz
 CHECKSUM=artifacts/$STEM.sha256
 
-echo "[1/8] building Release..."
+echo "[1/9] building Release..."
 dotnet build Driftwood.sln -c Release -v quiet --nologo || fail "BUILD FAILED."
 
 # dotnet publish does not clear its output directory, so an old loose file could ride along into a
@@ -43,7 +43,7 @@ for key in product_id sandbox_id deployment_id client_id client_secret; do
     || fail "EPIC MISSING - $EOS_CREDS has no $key."
 done
 
-echo "[2/8] publishing a self-contained $RID build..."
+echo "[2/9] publishing a self-contained $RID build..."
 case "$OUT" in artifacts/Driftwood-linux-x64) ;; *) fail "PUBLISH FAILED - refusing to clean an unexpected path." ;; esac
 rm -rf -- "$OUT"
 dotnet publish src/Driftwood.Client/Driftwood.Client.csproj -c Release -r "$RID" --self-contained true \
@@ -97,21 +97,21 @@ run() { "$ROOT/$OUT/Driftwood" "$@"; }
 
 # Gate on the published binary, not the build output: this is the thing that ships, and it catches
 # a publish that dropped a native dependency the build had sitting beside it.
-echo "[3/8] checking release identity, embedded offline audio and magic..."
+echo "[3/9] checking release identity, embedded offline audio and magic..."
 [ "$(run --version)" = "Driftwood v$VERSION" ] || fail "VERSION FAILED - the executable does not report Driftwood v$VERSION."
 run --audio-check || fail "AUDIO CHECK FAILED - the executable cannot decode its offline fallback."
 run --magic-check || fail "MAGIC CHECK FAILED - progression, spells, companions or persistence drifted."
 
-echo "[4/8] checking bundled SDL3 and controller interop..."
+echo "[4/9] checking bundled SDL3 and controller interop..."
 run --controller-check || fail "CONTROLLER CHECK FAILED - bundled SDL3 is unavailable."
 
-echo "[5/8] auditing the published build..."
+echo "[5/9] auditing the published build..."
 run --audit --seed driftwood --chunks 12 || fail "AUDIT FAILED - not shipping this build."
 
 # A hidden OpenGL window whose pixels are read back off the framebuffer, in a private X server on a
 # private session bus. Mesa's software rasteriser draws it, so the gate needs no GPU and runs the
 # same on any machine; it still exercises the exact shaders and every screen state.
-echo "[6/8] checking every interface reaches the screen..."
+echo "[6/9] checking every interface reaches the screen..."
 for size in "400 480" "1600 900" "1920 1440"; do
   set -- $size
   # Each size starts from empty folders: the check expects a fresh world, and the size before it
@@ -125,7 +125,7 @@ for size in "400 480" "1600 900" "1920 1440"; do
 done
 
 # The icon theme comes from the committed .ico, the same pixels the Windows build wears.
-echo "[7/8] staging the desktop entry, icons and licence..."
+echo "[7/9] staging the desktop entry, icons and licence..."
 STAGE=$GATE/stage/$STEM
 mkdir -p "$STAGE"
 cp -a "$OUT"/. "$STAGE/"
@@ -136,7 +136,7 @@ chmod 755 "$STAGE/Driftwood" "$STAGE/install.sh"
 chmod 644 "$STAGE"/lib*.so* "$STAGE"/*.desktop "$STAGE"/*.xml "$STAGE/LICENSE" "$STAGE/Driftwood.Net.Eos.dll" "$STAGE/eos.txt"
 find "$STAGE/icons" -type d -exec chmod 755 {} + && find "$STAGE/icons" -type f -exec chmod 644 {} +
 
-echo "[8/8] packaging the public release asset..."
+echo "[8/9] packaging the public release asset..."
 rm -f -- "$PACKAGE" "$CHECKSUM"
 tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="@$(git log -1 --format=%ct)" \
   -C "$GATE/stage" -czf "$PACKAGE" "$STEM" || fail "PACKAGE FAILED - the tarball was not written."
@@ -146,9 +146,15 @@ staged=$(cd "$GATE/stage" && find "$STEM" -type f | sort)
 [ "$listed" = "$staged" ] || fail "PACKAGE FAILED - the tarball does not match the staged files."
 (cd artifacts && sha256sum "$STEM.tar.gz" > "$STEM.sha256")
 
+# The Windows download is built HERE, from the same commit, and gated on a real Windows machine by
+# .github/workflows/windows-gate.yml before the release goes public: one build is what ships.
+echo "[9/9] building, checking and packaging the Windows download..."
+packaging/windows/build-zip.sh "$VERSION" || fail "WINDOWS FAILED - see above."
+
 echo
 echo "OK  $PACKAGE"
 echo "    $CHECKSUM"
+echo "    artifacts/Driftwood-v$VERSION-win-x64.zip (+ .sha256)"
 echo
 echo "Next: packaging/check-packages.sh (both packages built and co-op started from each), test the"
 echo "tarball on the distro containers, publish the GitHub release with both files, then run"
