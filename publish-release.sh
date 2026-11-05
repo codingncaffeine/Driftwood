@@ -77,8 +77,10 @@ file "$OUT/Driftwood" 2>/dev/null | grep -q 'ELF 64-bit LSB.*x86-64' || fail "PU
 
 # The oldest systems the release promises: Ubuntu 22.04 (glibc 2.35) and Debian 12 (2.36). One file
 # built against a newer glibc quietly drops them, so every shipped binary is read for it.
+# ⚠ A file with no glibc symbols (eos.txt, the managed Epic module) finds nothing, and under pipefail
+# a grep that finds nothing ended the whole script without a word (2026-11-05): nothing is no floor.
 for binary in "$OUT"/*; do
-  floor=$(objdump -T "$binary" 2>/dev/null | grep -oE 'GLIBC_[0-9.]+' | sort -Vu | tail -1)
+  floor=$(objdump -T "$binary" 2>/dev/null | grep -oE 'GLIBC_[0-9.]+' | sort -Vu | tail -1 || true)
   case "$floor" in ""|GLIBC_2.3[0-5]|GLIBC_2.[12]*) ;;
     *) fail "PUBLISH FAILED - $(basename "$binary") needs $floor; the release must run on glibc 2.35." ;;
   esac

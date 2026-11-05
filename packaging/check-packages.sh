@@ -62,7 +62,10 @@ cp "$TARBALL" "$WORK/aur/"
 (cd "$WORK/aur" && BUILDDIR="$WORK/aur" PKGDEST="$WORK/aur" SRCDEST="$WORK/aur" \
   makepkg -f --nodeps --noarchive >"$WORK/aur/makepkg.log" 2>&1) \
   || { tail -20 "$WORK/aur/makepkg.log"; fail "makepkg could not build the AUR package"; }
-check "AUR package" "$WORK/aur/pkg/driftwood-game-bin" /usr/bin/driftwood-game
+# makepkg puts the tree under BUILDDIR/pkgbase when BUILDDIR is not the recipe's own folder.
+AUR_ROOT=$(find "$WORK/aur" -type d -path '*/pkg/driftwood-game-bin' -print -quit)
+[ -n "$AUR_ROOT" ] || fail "makepkg built no package tree"
+check "AUR package" "$AUR_ROOT" /usr/bin/driftwood-game
 
 # Debian/Ubuntu.
 packaging/deb/build-deb.sh >/dev/null || fail "the .deb could not be built"
