@@ -4,10 +4,9 @@ Driftwood is an open-world survival crafting game built from scratch in C# and O
 empty hands, gather materials, make tools and workstations, build, explore, fight, trade, learn
 magic, command companions, and return to the same persistent procedurally generated world later.
 
-[**Download v0.7.2 for Linux**](https://github.com/codingncaffeine/Driftwood/releases/tag/v0.7.2)
-· [**v0.3.0 for Windows**](https://github.com/codingncaffeine/Driftwood/releases/tag/v0.3.0)
+[**Download v0.8.0 for Linux and Windows**](https://github.com/codingncaffeine/Driftwood/releases/tag/v0.8.0)
 · [**Player handbook**](https://github.com/codingncaffeine/Driftwood/wiki)
-· [Release notes](https://github.com/codingncaffeine/Driftwood/releases/tag/v0.7.2)
+· [Release notes](https://github.com/codingncaffeine/Driftwood/releases/tag/v0.8.0)
 
 ## What is in the game?
 
@@ -28,9 +27,10 @@ magic, command companions, and return to the same persistent procedurally genera
   radial hotbar selection, target assist, rumble, and controller navigation throughout the UI.
 - Local and Modrinth-backed shelves for texture and sound packs, plus local and online player skins.
 
-Driftwood is a playable single-player game for Linux and Windows on x64. The current release is v0.7.2
-for Linux; Windows players stay on v0.3.0 for now.
-Multiplayer is planned but is not included yet. Exact current content and control counts are
+Driftwood is a playable game for Linux and Windows on x64; the current release is v0.8.0 on both.
+Play alone, or open your world to friends for co-op: they join by address, by a join code you send
+them, or from the Friends' Worlds list, with no server to run. The host's machine keeps the world,
+and each friend's character is kept there for their next visit. Exact current content and control counts are
 generated from the game registries in the
 [live reference](https://github.com/codingncaffeine/Driftwood/wiki/Live-Registry-Reference).
 
@@ -38,13 +38,13 @@ generated from the game registries in the
 
 ### Linux
 
-On Debian or Ubuntu, download `driftwood-game_0.7.2-1_amd64.deb` from the
-[release page](https://github.com/codingncaffeine/Driftwood/releases/tag/v0.7.2) and install it with
-`sudo apt install ./driftwood-game_0.7.2-1_amd64.deb`; it adds Driftwood to the application menu and a
+On Debian or Ubuntu, download `driftwood-game_0.8.0-1_amd64.deb` from the
+[release page](https://github.com/codingncaffeine/Driftwood/releases/tag/v0.8.0) and install it with
+`sudo apt install ./driftwood-game_0.8.0-1_amd64.deb`; it adds Driftwood to the application menu and a
 `driftwood-game` command. On Arch, install `driftwood-game-bin` from the AUR.
 
-Anywhere else, download `Driftwood-v0.7.2-linux-x64.tar.gz` from the
-[release page](https://github.com/codingncaffeine/Driftwood/releases/tag/v0.7.2), extract it anywhere, and run
+Anywhere else, download `Driftwood-v0.8.0-linux-x64.tar.gz` from the
+[release page](https://github.com/codingncaffeine/Driftwood/releases/tag/v0.8.0), extract it anywhere, and run
 `./Driftwood` from the extracted folder. Run `./install.sh` once to add Driftwood to your application
 menu (`./install.sh --uninstall` removes it again). The build is self-contained: it does not need .NET,
 and it brings its own GLFW, OpenAL and SDL. It runs on Ubuntu 22.04, Debian 12, Fedora, Arch, or
@@ -53,11 +53,19 @@ Worlds, packs and skins live in `~/.local/share/Driftwood`, settings in `~/.conf
 
 ### Windows
 
-Download `Driftwood-v0.3.0-win-x64.zip` from the
-[release page](https://github.com/codingncaffeine/Driftwood/releases/tag/v0.3.0), extract it, and run
-`Driftwood.exe`. The build is portable and self-contained; playing does not require .NET or an
-installer. The executable is not code-signed, so Windows may show an unfamiliar-app warning. Worlds,
-packs, skins and settings live in `%APPDATA%\Driftwood`.
+Download `Driftwood-v0.8.0-win-x64-setup.exe` from the
+[release page](https://github.com/codingncaffeine/Driftwood/releases/tag/v0.8.0) and run it. It installs
+for your account only (no administrator prompt) into `%LOCALAPPDATA%\Programs\Driftwood`, adds Start
+menu and optional desktop shortcuts, and can be removed from **Settings › Apps**; uninstalling keeps
+your worlds. If you would rather not install anything, `Driftwood-v0.8.0-win-x64.zip` is the same game:
+extract it anywhere and run `Driftwood.exe`. Either way it is self-contained and needs no .NET, on
+Windows 10 or 11 with an OpenGL 3.3 driver. Worlds, packs, skins and settings live in
+`%APPDATA%\Driftwood`.
+
+Driftwood is not code-signed, so the first time you run the installer (or the exe) Windows may show
+"Windows protected your PC". Choose **More info**, then **Run anyway**. Each download has a `.sha256`
+beside it on the release page if you want to check the file first. The first time you open a world to
+friends, Windows Firewall asks whether Driftwood may use the network; allow it on private networks.
 
 On a first day:
 
@@ -124,9 +132,10 @@ The source build requires the .NET 11 SDK. On Linux:
 ```
 
 On Windows, `build-release.bat`. Either runs `dotnet build Driftwood.sln -c Release`, and the client
-lands under `src/Driftwood.Client/bin/Release/net11.0`. `./publish-release.sh` (Linux) and
-`publish-release.bat` (Windows) build, gate and package a release; the Linux gate also needs
-`xvfb-run` and `dbus-run-session`. Release packaging, audits, visual checks, command-line tools, and
+lands under `src/Driftwood.Client/bin/Release/net11.0`. `./publish-release.sh` builds, gates and
+packages every release download on Linux, the Windows zip and installer included (it needs `xvfb-run`,
+`dbus-run-session`, `zip`, and podman or docker); the `Windows gate` workflow then runs that same
+Windows build's checks on a Windows machine before the release is published. Release packaging, audits, visual checks, command-line tools, and
 the source layout are documented in
 [Developer Tools and Architecture](https://github.com/codingncaffeine/Driftwood/wiki/Developer-Tools-and-Architecture).
 
